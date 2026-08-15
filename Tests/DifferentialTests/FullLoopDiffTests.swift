@@ -1,0 +1,148 @@
+import BitcoinCore
+import BitcoinP2P
+import Foundation
+import Testing
+import WalletCore
+
+/// The whole pipeline against the dev node over real P2P with custom-signet
+/// params: mine a funding block to a btc-swift address → bury it under 100
+/// blocks (coinbase maturity) → discover it via FilterSync (BIP157) →
+/// build+sign a spend with WalletCore → testmempoolaccept → relay via
+/// TxBroadcaster → mine a confirmation → see it confirmed through our own
+/// filter match.
+///
+/// Two environment quirks this test is built around:
+/// - Core 31 does not sign custom-signet blocks, so the harness mines via
+///   GBT + BIP325 signature + bitcoin-util grind + submitblock (SignetMiner).
+/// - A background miner on this node produces a block every ~10 minutes, so
+///   every mined block is checked to have become the tip (re-mined on a lost
+///   race) and confirmation is detected by scanning, whoever mined the block.
+@Suite("full-loop differential", .enabled(if: diffEnabled))
+struct FullLoopDiffTests {
+    private let endpoint = PeerEndpoint(host: BitcoinCLI.nodeHost, port: BitcoinCLI.p2pPort)
+
+    /// Mines one block paying `script`, retrying while a racing block wins
+    /// the tip instead of ours.
+    private func mineOntoTip(payingTo script: Data) async throws -> String {
+        while true {
+            let hash = try await SignetMiner.mineBlock(payingTo: script)
+            if try BitcoinCLI.bestBlockHash() == hash { return hash }
+            // Lost a race against the background miner: our block sits on a
+            // shorter fork; mine again on the winner.
+        }
+    }
+
+    @Test("mine → mature → filter-discover → sign → relay → confirm")
+    func fullLoop() async throws {
+        func trace(_ step: String) { FileHandle.standardError.write(Data("fullloop: \(step)\n".utf8)) }
+        let params = NetworkParams.customSignet(challenge: BitcoinCLI.challenge,
+                                                defaultPort: BitcoinCLI.p2pPort)
+
+        // 1. Tip at start; a fresh wallet whose creation height is that tip.
+        let startTip = try UInt32(BitcoinCLI.blockCount())
+        let wallet = try await Wallet.create(network: .signet, keyStore: InMemoryKeyStore(),
+                                             storageURL: tempFileURL("wallet.json"),
+                                             creationHeight: startTip)
+        _ = try await wallet.freshReceiveAddress()
+        let fundingScript = try await wallet.scriptPubKey(chain: .receive, index: 0)
+
+        // 2. Mine the funding block, then 100 maturity blocks (coinbase
+        //    maturity is 100): our coinbase becomes spendable at tip+101.
+        let burnScript = try BIP86.scriptPubKey(
+            internalKey: BIP86.xonlyPublicKey(of: testMaster().derived(path: "m/86'/1'/9'/0/1")))
+        let fundingHash = try await mineOntoTip(payingTo: fundingScript)
+        trace("funding block \(fundingHash.prefix(16))…")
+        for _ in 0 ..< 100 {
+            _ = try await mineOntoTip(payingTo: burnScript)
+        }
+        let fundingBlock = try BitcoinCLI.runObject(["getblock", fundingHash])
+        #expect(try BitcoinCLI.int(fundingBlock, "confirmations") >= 100, "funding matured")
+        trace("maturity done, tip \(try BitcoinCLI.blockCount())")
+
+        // 3. P2P: header chain + FilterSync over the custom-signet network
+        //    discovers the payment. (Built after mining so the local chain
+        //    adopts the node's best chain in one sync, race-free.)
+        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [endpoint])
+        await pool.start()
+        defer { Task { await pool.stop() } }
+        let peers = await pool.connectedPeers()
+        let peer = try #require(peers.first, "no connection to \(BitcoinCLI.nodeHost):\(BitcoinCLI.p2pPort)")
+        let chain = try HeaderChain(params: params, storageURL: tempFileURL("headers.bin"))
+        try await chain.sync(using: peer, timeout: .seconds(60))
+        let tip = try UInt32(BitcoinCLI.blockCount())
+        #expect(await chain.height == tip, "header sync tip")
+        #expect(await chain.tipHash.displayHex == (try BitcoinCLI.bestBlockHash()), "tip hash")
+
+        let sync = try FilterSync(pool: pool, chain: chain, startHeight: startTip,
+                                  storageURL: tempFileURL("filters.json"),
+                                  requiredCheckpointPeers: 1)
+        try await wallet.scan(using: sync)
+        trace("first scan done")
+        let fundingUTXO = try await #require(wallet.utxos.first, "filter match found no funding UTXO")
+        #expect(fundingUTXO.amount == 5_000_000_000, "signet subsidy") // 50 BTC
+        #expect(fundingUTXO.height == startTip + 1, "funded in the first mined block")
+        let fundingTx = try BitcoinCLI.runObject(["getrawtransaction",
+                                                  fundingUTXO.txid.displayHex, "true"])
+        #expect(try BitcoinCLI.string(fundingTx, "blockhash") == fundingHash,
+                "funding txid lands in our mined block")
+
+        // 4. Build + sign a spend paying a throwaway BIP86 address 100k sats.
+        let throwaway = try BIP86.address(
+            internalKey: BIP86.xonlyPublicKey(of: testMaster().derived(path: "m/86'/1'/9'/0/0")),
+            hrp: "tb")
+        let built = try await wallet.send(
+            payments: [Payment(amount: 100_000, address: throwaway, network: .signet)],
+            feeRateSatPerVByte: 1)
+        let rawHex = built.transaction.serialized(includeWitness: true).hex
+        trace("spend signed")
+
+        // 5. Core's mempool policy check agrees the tx is valid.
+        let accepted = try BitcoinCLI.runJSON(["testmempoolaccept", "[\"\(rawHex)\"]"]) as? [[String: Any]]
+        let verdict = try #require(accepted?.first)
+        #expect(verdict["allowed"] as? Bool == true,
+                "testmempoolaccept rejected: \(verdict["reject-reason"] ?? "?")")
+        #expect(verdict["txid"] as? String == built.transaction.txid.displayHex)
+        #expect((verdict["vsize"] as? NSNumber)?.intValue == TransactionBuilder.vsize(of: built.transaction),
+                "vsize agreement")
+
+        // 6. Relay via our TxBroadcaster (inv → node's getdata → tx).
+        let broadcaster = TxBroadcaster(pool: pool, rebroadcastBaseInterval: .seconds(5))
+        let txid = try await broadcaster.broadcast(Data(hex: rawHex)!)
+        var inMempool = false
+        for _ in 0 ..< 15 {
+            if (try? BitcoinCLI.runObject(["getmempoolentry", txid.displayHex])) != nil {
+                inMempool = true
+                break
+            }
+            try await Task.sleep(for: .seconds(1))
+        }
+        #expect(inMempool, "node never requested/accepted our relayed tx")
+        trace("in mempool")
+
+        // 7. Mine blocks until the spend confirms; then see the confirmation
+        //    through our own filter match (whoever won the block race — the
+        //    background miner also picks up mempool transactions).
+        var confirmed = false
+        for _ in 0 ..< 6 {
+            _ = try await SignetMiner.mineBlock(payingTo: burnScript)
+            try await wallet.scan(using: sync)
+            if await wallet.history.first(where: { $0.txid == txid && $0.height > 0 }) != nil {
+                confirmed = true
+                break
+            }
+        }
+        #expect(confirmed, "spend never confirmed")
+        await broadcaster.markConfirmed(txid)
+
+        let history = await wallet.history
+        let sendEntry = try #require(history.first { $0.txid == txid }, "spend missing from history")
+        #expect(sendEntry.height > startTip + 101, "spend confirmed after maturity")
+        #expect(sendEntry.fee == built.fee, "wallet fee accounting")
+        let remaining = await wallet.utxos
+        #expect(remaining.count == 1, "only the change output remains")
+        #expect(remaining[0].height == sendEntry.height, "change confirmed via filter match")
+        #expect(remaining[0].amount == built.changeAmount)
+        #expect(await broadcaster.pendingTxids.isEmpty, "broadcaster settled")
+        trace("done")
+    }
+}

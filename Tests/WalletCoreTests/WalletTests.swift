@@ -1,0 +1,223 @@
+import BitcoinCore
+import BitcoinP2P
+import Foundation
+import P256K
+import Testing
+@testable import WalletCore
+
+@Suite("Wallet")
+struct WalletTests {
+    private func makeWallet(network: BitcoinNetwork = .signet,
+                            storageURL: URL? = nil,
+                            keyStore: KeyStore = InMemoryKeyStore()) async throws -> Wallet {
+        try await Wallet.create(network: network, keyStore: keyStore, storageURL: storageURL,
+                                entropy: testEntropy, creationHeight: 100)
+    }
+
+    @Test("create: mnemonic stored, descriptor shape, wallet ID = master fingerprint")
+    func create() async throws {
+        let keyStore = InMemoryKeyStore()
+        let wallet = try await makeWallet(keyStore: keyStore)
+        // The all-zero entropy mnemonic's master fingerprint (BIP32/BIP86 vectors).
+        let id = await wallet.id
+        #expect(id == "73c5da0a")
+        #expect(try keyStore.load(walletID: "73c5da0a") == .mnemonic(testMnemonic))
+
+        let text = await wallet.descriptor.serialized()
+        #expect(text.hasPrefix("tr([73c5da0a/86'/1'/0']tpub"))
+        #expect(text.contains("/<0;1>/*)#"))
+        // The descriptor round-trips through the BIP380 parser.
+        let descriptor = await wallet.descriptor
+        #expect(try Descriptor(text) == descriptor)
+    }
+
+    @Test("address derivation matches BIP86 (incl. the official mainnet vector)")
+    func addresses() async throws {
+        let master = try testMaster()
+        let wallet = try await makeWallet()
+        // Signet: coin type 1 — cross-checked against BitcoinCore's BIP86.
+        for index: UInt32 in [0, 1, 7] {
+            let internalKey = try BIP86.internalKey(from: master, coinType: 1, change: 0, index: index)
+            #expect(try await wallet.address(chain: .receive, index: index)
+                == BIP86.address(internalKey: internalKey, hrp: "tb"))
+            let changeInternal = try BIP86.internalKey(from: master, coinType: 1, change: 1, index: index)
+            #expect(try await wallet.address(chain: .change, index: index)
+                == BIP86.address(internalKey: changeInternal, hrp: "tb"))
+        }
+        // Mainnet: the official BIP86 vector for m/86'/0'/0'/0/0.
+        let mainnet = try await makeWallet(network: .mainnet)
+        #expect(try await mainnet.address(chain: .receive, index: 0)
+            == "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr")
+    }
+
+    @Test("freshReceiveAddress advances the index; watch list covers the gap window")
+    func gapLimit() async throws {
+        let wallet = try await makeWallet()
+        #expect(await wallet.nextReceiveIndex == 0)
+        let first = try await wallet.freshReceiveAddress()
+        #expect(first == (try await wallet.address(chain: .receive, index: 0)))
+        #expect(await wallet.nextReceiveIndex == 1)
+        // (1 used + 20 lookahead) receive + (0 used + 20 lookahead) change.
+        #expect(try await wallet.watchScripts().count == 21 + 20)
+    }
+
+    @Test("apply: a matched payment becomes a UTXO + history; a spend shrinks the set")
+    func applyMatches() async throws {
+        let wallet = try await makeWallet()
+        let script = try await wallet.scriptPubKey(chain: .receive, index: 0)
+        let funding = Transaction(version: 2, inputs: [coinbaseInput()], outputs: [
+            Transaction.Output(value: 200_000, scriptPubKey: script),
+        ], locktime: 0)
+        let effect = try await wallet.apply(match: fakeMatch(height: 100, transactions: [funding]))
+        #expect(effect.received.count == 1 && effect.spent.isEmpty)
+        #expect(await wallet.balance == 200_000)
+        #expect(await wallet.utxos.count == 1)
+        #expect(await wallet.history.count == 1)
+        #expect(await wallet.history[0].received == 200_000)
+
+        // Spending tx: one of our inputs + payment elsewhere; fee observable.
+        let utxo = try #require(await wallet.utxos.first)
+        var spend = Transaction(version: 2, inputs: [
+            Transaction.Input(previousOutput: utxo.outpoint, scriptSig: Data(), sequence: 0xFFFF_FFFD),
+        ], outputs: [
+            Transaction.Output(value: 199_000, scriptPubKey: Data([0x51, 0x20] + repeatElement(0x55, count: 32))),
+        ], locktime: 0)
+        spend.inputs[0].witness = [Data(repeating: 0, count: 64)] // fake sig for vsize math
+        let spendEffect = try await wallet.apply(match: fakeMatch(height: 101, transactions: [spend]))
+        #expect(spendEffect.spent.count == 1)
+        #expect(await wallet.balance == 0)
+        #expect(await wallet.utxos.isEmpty)
+        #expect(await wallet.history.count == 2)
+        #expect(await wallet.history[1].spent == 200_000)
+        #expect(await wallet.history[1].fee == 1_000) // all inputs ours → fee known
+        #expect(await wallet.observedFeeRates.count == 1)
+    }
+
+    @Test("payments beyond the gap-limit window are not detected; inside it, indices advance")
+    func gapWindow() async throws {
+        let wallet = try await makeWallet()
+        // Index 25 is outside the initial window (0 used + 20 lookahead).
+        let outside = try await wallet.scriptPubKey(chain: .receive, index: 25)
+        let txOutside = Transaction(version: 2, inputs: [coinbaseInput()], outputs: [
+            Transaction.Output(value: 5_000, scriptPubKey: outside),
+        ], locktime: 0)
+        let effect1 = try await wallet.apply(match: fakeMatch(height: 100, transactions: [txOutside]))
+        #expect(effect1.received.isEmpty)
+        #expect(await wallet.balance == 0)
+
+        // Index 3 is inside the window; the receive index advances past it.
+        let inside = try await wallet.scriptPubKey(chain: .receive, index: 3)
+        let txInside = Transaction(version: 2, inputs: [coinbaseInput()], outputs: [
+            Transaction.Output(value: 7_000, scriptPubKey: inside),
+        ], locktime: 0)
+        let effect2 = try await wallet.apply(match: fakeMatch(height: 101, transactions: [txInside]))
+        #expect(effect2.received.count == 1)
+        #expect(await wallet.nextReceiveIndex == 4)
+        #expect(await wallet.balance == 7_000)
+    }
+
+    @Test("send: coin selection → PSBT → signed tx whose witnesses verify")
+    func send() async throws {
+        let wallet = try await makeWallet()
+        // Two funding outputs: receive 0 and change 0 (received as change).
+        for (chain, index, amount) in [(AddressChain.receive, UInt32(0), Int64(150_000)),
+                                       (AddressChain.change, UInt32(0), Int64(80_000))] {
+            let script = try await wallet.scriptPubKey(chain: chain, index: index)
+            let funding = Transaction(version: 2, inputs: [coinbaseInput()], outputs: [
+                Transaction.Output(value: amount, scriptPubKey: script),
+            ], locktime: 0)
+            try await wallet.apply(match: fakeMatch(height: 100 + index, transactions: [funding]))
+        }
+        #expect(await wallet.balance == 230_000)
+        #expect(await wallet.nextChangeIndex == 1) // funding to change 0 advanced it
+
+        let destination = Data([0x51, 0x20] + repeatElement(0x99, count: 32))
+        let built = try await wallet.send(payments: [Payment(amount: 100_000, scriptPubKey: destination)],
+                                          feeRateSatPerVByte: 2)
+        let tx = built.transaction
+        #expect(tx.isSegwit)
+        #expect(built.changeAmount != nil) // largest-first picks the 150k UTXO
+        #expect(tx.inputs.count == 1)
+        #expect(built.fee == 150_000 - 100_000 - built.changeAmount!)
+
+        // Every witness verifies cryptographically against the spent scriptPubKey.
+        let spentScript = try await wallet.scriptPubKey(chain: .receive, index: 0)
+        let spent = [SighashBIP341.SpentOutput(amount: 150_000, scriptPubKey: spentScript)]
+        for index in tx.inputs.indices {
+            let sighash = try SighashBIP341.sighash(tx: tx, inputIndex: index, spentOutputs: spent)
+            let outputKey = P256K.Schnorr.XonlyKey(dataRepresentation: spentScript.suffix(32))
+            let signature = try P256K.Schnorr.SchnorrSignature(dataRepresentation: tx.inputs[index].witness[0])
+            var message = [UInt8](sighash)
+            #expect(outputKey.isValid(signature, for: &message), "input \(index) must verify")
+        }
+
+        // The selection is committed locally: the spent UTXO is gone, the
+        // change output is pending (height 0), the send is in history.
+        let changeScript = try await wallet.scriptPubKey(chain: .change, index: 1)
+        #expect(tx.outputs.contains { $0.scriptPubKey == changeScript })
+        #expect(await wallet.utxos.count == 2) // 80k untouched + pending change
+        #expect(await wallet.balance == 80_000 + built.changeAmount!)
+        let sendEntry = try await #require(wallet.history.first { $0.txid == tx.txid })
+        #expect(sendEntry.fee == built.fee)
+        #expect(sendEntry.height == 0) // unconfirmed
+
+        // When the send confirms in a matched block, heights update in place.
+        let confirmation = try await wallet.apply(match: fakeMatch(height: 150, transactions: [tx]))
+        #expect(confirmation.received.isEmpty) // change was already counted
+        let history = await wallet.history
+        #expect(history.count == 3) // two funding entries + the send
+        #expect(history.first { $0.txid == tx.txid }?.height == 150)
+        #expect(await wallet.utxos.allSatisfy { $0.height > 0 })
+    }
+
+    @Test("buildSend leaves wallet state untouched until commit (rollback safety)")
+    func buildSendDefersCommit() async throws {
+        let wallet = try await makeWallet()
+        let script = try await wallet.scriptPubKey(chain: .receive, index: 0)
+        let funding = Transaction(version: 2, inputs: [coinbaseInput()], outputs: [
+            Transaction.Output(value: 150_000, scriptPubKey: script),
+        ], locktime: 0)
+        try await wallet.apply(match: fakeMatch(height: 100, transactions: [funding]))
+        let utxosBefore = await wallet.utxos.count
+        let changeIndexBefore = await wallet.nextChangeIndex
+
+        let destination = Data([0x51, 0x20] + repeatElement(0x99, count: 32))
+        let prepared = try await wallet.buildSend(
+            payments: [Payment(amount: 100_000, scriptPubKey: destination)], feeRateSatPerVByte: 2)
+
+        // Nothing moved: had broadcast thrown here, no UTXO is stranded.
+        #expect(await wallet.balance == 150_000)
+        #expect(await wallet.utxos.count == utxosBefore)
+        #expect(await wallet.nextChangeIndex == changeIndexBefore)
+        #expect(await wallet.history.first { $0.txid == prepared.built.transaction.txid } == nil)
+
+        // commit applies exactly the selection the old send() did.
+        try await wallet.commit(prepared)
+        #expect(await wallet.utxos.count == 1) // 150k spent, pending change in
+        #expect(await wallet.balance == prepared.built.changeAmount!)
+        #expect(await wallet.history.contains { $0.txid == prepared.built.transaction.txid })
+    }
+
+    @Test("persistence: state round-trips through Wallet.open")
+    func persistence() async throws {
+        let url = tempFileURL("wallet.json")
+        let keyStore = InMemoryKeyStore()
+        let wallet = try await makeWallet(storageURL: url, keyStore: keyStore)
+        _ = try await wallet.freshReceiveAddress()
+        let script = try await wallet.scriptPubKey(chain: .receive, index: 0)
+        let funding = Transaction(version: 2, inputs: [coinbaseInput()], outputs: [
+            Transaction.Output(value: 42_000, scriptPubKey: script),
+        ], locktime: 0)
+        try await wallet.apply(match: fakeMatch(height: 100, transactions: [funding]))
+
+        let reopened = try await Wallet.open(storageURL: url, keyStore: keyStore)
+        let reopenedID = await reopened.id
+        #expect(reopenedID == "73c5da0a")
+        #expect(await reopened.balance == 42_000)
+        #expect(await reopened.nextReceiveIndex == 1)
+        #expect(await reopened.history.count == 1)
+        let reopenedDescriptor = await reopened.descriptor
+        let originalDescriptor = await wallet.descriptor
+        #expect(reopenedDescriptor == originalDescriptor)
+    }
+}

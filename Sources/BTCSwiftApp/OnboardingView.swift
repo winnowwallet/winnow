@@ -1,0 +1,226 @@
+import SwiftUI
+import UIKit
+import WalletCore
+
+/// Create a fresh wallet (mnemonic shown once) or import a bundle with its
+/// history (docs/import.md: there is no historical back-scan — the bundle
+/// *is* the history).
+struct OnboardingView: View {
+    @Environment(AppModel.self) private var model
+
+    @State private var busy: String?
+    @State private var error: String?
+    @State private var mnemonic: String?
+    @State private var writtenDown = false
+    @State private var showImport = false
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text("A Taproot-only wallet that syncs over the Bitcoin P2P network with compact block filters. No server learns your addresses. Payments appear once they confirm in a block — there is no “incoming” state. Sync runs while the app is open.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Section {
+                    Button {
+                        create()
+                    } label: {
+                        Label("Create new wallet", systemImage: "plus.circle")
+                    }
+                    .accessibilityIdentifier("createWalletButton")
+                    Button {
+                        showImport = true
+                    } label: {
+                        Label("Import wallet bundle", systemImage: "square.and.arrow.down")
+                    }
+                    .accessibilityIdentifier("importWalletButton")
+                } footer: {
+                    Text("Network: \(model.network.rawValue) (change in Settings). Creation first finds the chain tip over P2P — scanning runs forward from there.")
+                }
+                if let busy {
+                    Section { ProgressView(busy) }
+                }
+                if let error {
+                    Section {
+                        Text(error)
+                            .foregroundStyle(.red)
+                            .font(.footnote)
+                    }
+                }
+            }
+            .navigationTitle("btc-swift")
+            .sheet(isPresented: $showImport) {
+                ImportBundleView()
+            }
+            .sheet(item: mnemonicString) { words in
+                MnemonicBackupView(mnemonic: words.text, writtenDown: $writtenDown) {
+                    model.finishOnboarding()
+                }
+            }
+        }
+    }
+
+    /// Bridges the optional mnemonic String to an Identifiable sheet item.
+    private var mnemonicString: Binding<MnemonicItem?> {
+        Binding(
+            get: { mnemonic.map(MnemonicItem.init) },
+            set: { mnemonic = $0?.text }
+        )
+    }
+
+    private struct MnemonicItem: Identifiable {
+        var id: String { text }
+        let text: String
+    }
+
+    private func create() {
+        busy = "Finding the chain tip over P2P…"
+        error = nil
+        Task {
+            do {
+                let words = try await model.createWallet()
+                busy = nil
+                mnemonic = words
+            } catch {
+                busy = nil
+                self.error = error.localizedDescription
+            }
+        }
+    }
+}
+
+/// The 12 words, shown exactly once, with the written-down confirmation.
+private struct MnemonicBackupView: View {
+    let mnemonic: String
+    @Binding var writtenDown: Bool
+    let onFinish: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    private var words: [String] { mnemonic.split(separator: " ").map(String.init) }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text("Write these \(words.count) words down, in order, and keep them offline. They are the only backup of this wallet — they are stored in this device's Keychain and never leave it.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Section {
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                        ForEach(Array(words.enumerated()), id: \.offset) { index, word in
+                            Text("\(index + 1). \(word)")
+                                .font(.system(.body, design: .monospaced))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+                Section {
+                    Toggle("I have written the words down", isOn: $writtenDown)
+                        .accessibilityIdentifier("writtenDownToggle")
+                    Button("Done") {
+                        dismiss()
+                        onFinish()
+                    }
+                    .accessibilityIdentifier("backupDoneButton")
+                    .disabled(!writtenDown)
+                }
+            }
+            .navigationTitle("Wallet backup")
+            .interactiveDismissDisabled(!writtenDown)
+        }
+    }
+}
+
+/// Paste an ImportBundle JSON (WalletCore's format v1); verification scans
+/// forward from the bundle's height and its report is shown.
+private struct ImportBundleView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var json = ""
+    @State private var busy = false
+    @State private var error: String?
+    @State private var report: ImportReport?
+    @State private var imported = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextEditor(text: $json)
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(minHeight: 160)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .accessibilityIdentifier("importJSONEditor")
+                    Button("Paste from clipboard") {
+                        json = UIPasteboard.general.string ?? ""
+                    }
+                    .accessibilityIdentifier("importPasteButton")
+                } header: {
+                    Text("Import bundle (JSON)")
+                } footer: {
+                    Text("Exported by the previous wallet software: descriptor and/or mnemonic, known UTXOs and transactions, and the last scanned height. There is no back-scan — the bundle is the history; filters verify it from its height forward.")
+                }
+                if busy {
+                    Section { ProgressView("Importing and verifying…") }
+                }
+                if let error {
+                    Section { Text(error).foregroundStyle(.red).font(.footnote) }
+                }
+                if report != nil || imported {
+                    if let report {
+                        Section("Verification report") {
+                            LabeledContent("Scanned from block", value: "\(report.scannedFromHeight)")
+                            if let to = report.scannedToHeight {
+                                LabeledContent("Scanned to block", value: "\(to)")
+                            }
+                            LabeledContent("Claimed UTXOs confirmed", value: "\(report.confirmedUTXOs.count)")
+                            LabeledContent("Claimed but spent since", value: "\(report.spentSinceBundle.count)")
+                            LabeledContent("Discovered since bundle", value: "\(report.discoveredUTXOs.count)")
+                            if !report.matchesBundle {
+                                Text("Some claimed UTXOs were already spent — the bundle was stale or wrong. The chain won; check the report above.")
+                                    .foregroundStyle(.orange)
+                                    .font(.footnote)
+                            }
+                        }
+                        .accessibilityIdentifier("importReportSection")
+                    }
+                    Section {
+                        Button("Continue") {
+                            model.finishOnboarding()
+                            dismiss()
+                        }
+                        .accessibilityIdentifier("importContinueButton")
+                    }
+                } else {
+                    Section {
+                        Button("Import and verify") { importBundle() }
+                            .accessibilityIdentifier("importVerifyButton")
+                            .disabled(json.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || busy)
+                    }
+                }
+            }
+            .navigationTitle("Import wallet")
+        }
+    }
+
+    private func importBundle() {
+        busy = true
+        error = nil
+        Task {
+            do {
+                report = try await model.importWallet(bundleJSON: json)
+                imported = true
+                if report == nil {
+                    error = "Imported, but no peers were reachable for verification yet — the regular sync will verify from the bundle's height."
+                }
+            } catch {
+                self.error = error.localizedDescription
+            }
+            busy = false
+        }
+    }
+}

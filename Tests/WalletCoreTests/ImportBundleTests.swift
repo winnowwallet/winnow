@@ -1,0 +1,151 @@
+import BitcoinCore
+import BitcoinP2P
+import Foundation
+import Testing
+@testable import WalletCore
+
+/// Import bundle (docs/read-side.md §2.7.5): parsing, seeding, and the verify
+/// report — including the mismatch cases that must surface, never go silent.
+@Suite("Import bundle")
+struct ImportBundleTests {
+    /// A bundle for the test mnemonic with two claimed UTXOs (receive 0,
+    /// receive 1) as of height 500.
+    private func makeBundle() async throws -> ImportBundle {
+        let wallet = try await Wallet.create(network: .signet, keyStore: InMemoryKeyStore(),
+                                             entropy: testEntropy, creationHeight: 400)
+        func utxoJSON(_ index: UInt32, _ amount: Int64) async throws -> ImportBundle.UTXO {
+            try await ImportBundle.UTXO(txid: Data(repeating: UInt8(0x50 + index), count: 32).displayHex,
+                                        vout: 0, amount: amount,
+                                        scriptPubKey: wallet.scriptPubKey(chain: .receive, index: index).hex,
+                                        chain: 0, index: index, height: 490)
+        }
+        return try await ImportBundle(network: "signet",
+                                      descriptor: wallet.descriptor.serialized(),
+                                      mnemonic: testMnemonic,
+                                      lastKnownHeight: 500,
+                                      utxos: [utxoJSON(0, 100_000), utxoJSON(1, 50_000)],
+                                      transactions: [ImportBundle.KnownTransaction(
+                                          txid: Data(repeating: 0x50, count: 32).displayHex,
+                                          height: 490, received: 100_000, spent: 0)])
+    }
+
+    @Test("JSON round trip of the documented format")
+    func json() throws {
+        let json = """
+        {
+          "version": 1,
+          "network": "signet",
+          "mnemonic": "\(testMnemonic)",
+          "lastKnownHeight": 500,
+          "utxos": [{"txid": "\(Data(repeating: 0x51, count: 32).displayHex)", "vout": 0,
+                     "amount": 100000, "scriptPubKey": "5120ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                     "chain": 0, "index": 0, "height": 490}],
+          "transactions": []
+        }
+        """
+        let bundle = try JSONDecoder().decode(ImportBundle.self, from: Data(json.utf8))
+        #expect(bundle.version == 1)
+        #expect(bundle.network == "signet")
+        #expect(bundle.utxos.count == 1)
+        #expect(try JSONDecoder().decode(ImportBundle.self,
+                                         from: JSONEncoder().encode(bundle)) == bundle)
+    }
+
+    @Test("importing seeds the wallet state; scanning resumes after the bundle height")
+    func seeding() async throws {
+        let bundle = try await makeBundle()
+        let keyStore = InMemoryKeyStore()
+        let wallet = try Wallet.importing(bundle, keyStore: keyStore)
+        let id = await wallet.id
+        #expect(id == "73c5da0a")
+        #expect(await wallet.balance == 150_000)
+        #expect(await wallet.utxos.count == 2)
+        #expect(await wallet.history.count == 1)
+        #expect(await wallet.creationHeight == 500)
+        #expect(await wallet.nextScanHeight == 501)
+        #expect(await wallet.nextReceiveIndex == 2) // past the highest claimed index
+        // The secret enables spending.
+        #expect(try keyStore.load(walletID: "73c5da0a") == .mnemonic(testMnemonic))
+    }
+
+    @Test("descriptor/mnemonic disagreement and bad claims are rejected")
+    func rejection() async throws {
+        let bundle = try await makeBundle()
+        // A different mnemonic than the descriptor carries.
+        var mismatched = bundle
+        mismatched.mnemonic = "legal winner thank year wave sausage worth useful legal winner thank yellow"
+        #expect(throws: WalletError.descriptorMismatch) {
+            _ = try Wallet.importing(mismatched, keyStore: InMemoryKeyStore())
+        }
+        // A claimed scriptPubKey that isn't what the descriptor derives.
+        var bogus = bundle
+        bogus.utxos[0].scriptPubKey = "5120ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        #expect(throws: WalletError.self) { _ = try Wallet.importing(bogus, keyStore: InMemoryKeyStore()) }
+        // Neither descriptor nor mnemonic.
+        var empty = bundle
+        empty.descriptor = nil
+        empty.mnemonic = nil
+        #expect(throws: WalletError.invalidBundle("need a descriptor or a mnemonic")) {
+            _ = try Wallet.importing(empty, keyStore: InMemoryKeyStore())
+        }
+        // Unknown network / future version.
+        var badNetwork = bundle
+        badNetwork.network = " PlutoNet "
+        #expect(throws: WalletError.self) { _ = try Wallet.importing(badNetwork, keyStore: InMemoryKeyStore()) }
+        var future = bundle
+        future.version = 99
+        #expect(throws: WalletError.invalidBundle("unsupported version 99")) {
+            _ = try Wallet.importing(future, keyStore: InMemoryKeyStore())
+        }
+    }
+
+    @Test("verify report: confirmed, spent-since-bundle (mismatch), discovered")
+    func report() async throws {
+        let bundle = try await makeBundle()
+        let keyStore = InMemoryKeyStore()
+        let wallet = try Wallet.importing(bundle, keyStore: keyStore)
+        let claimed = try bundle.claimedUTXOs()
+
+        var effects: [MatchEffect] = []
+        // Block 501: claimed UTXO 0 gets spent by someone else; a new payment
+        // the bundle didn't know about arrives at receive index 2.
+        let spendTx = Transaction(version: 2, inputs: [
+            Transaction.Input(previousOutput: claimed[0].outpoint, scriptSig: Data(), sequence: 0xFFFF_FFFF),
+        ], outputs: [Transaction.Output(value: 99_000,
+                                        scriptPubKey: Data([0x51, 0x20] + repeatElement(0x77, count: 32)))],
+        locktime: 0)
+        let newScript = try await wallet.scriptPubKey(chain: .receive, index: 2)
+        let incomingTx = Transaction(version: 2, inputs: [coinbaseInput()], outputs: [
+            Transaction.Output(value: 25_000, scriptPubKey: newScript),
+        ], locktime: 0)
+        let match = fakeMatch(height: 501, transactions: [spendTx, incomingTx])
+        effects.append(try await wallet.apply(match: match))
+
+        let report = try await ImportReport.make(bundle: bundle, effects: effects,
+                                                 finalUTXOs: wallet.utxos,
+                                                 scannedFromHeight: 501, scannedToHeight: 501)
+        #expect(!report.matchesBundle)
+        #expect(report.spentSinceBundle.count == 1)
+        #expect(report.spentSinceBundle[0].txid == claimed[0].txid)
+        #expect(report.spentSinceBundle[0].spentBy == spendTx.txid)
+        #expect(report.spentSinceBundle[0].height == 501)
+        #expect(report.confirmedUTXOs.map(\.txid) == [claimed[1].txid])
+        #expect(report.discoveredUTXOs.count == 1)
+        #expect(report.discoveredUTXOs[0].amount == 25_000)
+        // The wallet state itself also reflects the spend and the discovery.
+        #expect(await wallet.balance == 75_000)
+        #expect(await wallet.nextReceiveIndex == 3)
+    }
+
+    @Test("a bundle exported at the tip verifies clean (empty scan)")
+    func cleanReport() async throws {
+        let bundle = try await makeBundle()
+        let wallet = try Wallet.importing(bundle, keyStore: InMemoryKeyStore())
+        let report = try await ImportReport.make(bundle: bundle, effects: [],
+                                                 finalUTXOs: wallet.utxos,
+                                                 scannedFromHeight: 501, scannedToHeight: nil)
+        #expect(report.matchesBundle)
+        #expect(report.confirmedUTXOs.count == 2)
+        #expect(report.discoveredUTXOs.isEmpty)
+    }
+}

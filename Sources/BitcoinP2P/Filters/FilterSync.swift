@@ -1,0 +1,340 @@
+import BitcoinCore
+import Foundation
+
+public enum FilterSyncError: Error, Equatable {
+    case noPeers
+    /// Peers (or a peer vs. our pinned chain) disagree on filter commitments.
+    case checkpointMismatch(String)
+    case badPeerResponse(String)
+    /// A cfilter's hash does not reproduce the pinned filter header chain.
+    case filterHeaderMismatch(height: UInt32)
+    /// A cfilter arrived for a block we did not ask about.
+    case unexpectedBlockHash
+}
+
+/// A block whose compact filter matched the watch list.
+public struct BlockMatch: Sendable, Equatable {
+    public let height: UInt32
+    public let blockHash: Data // internal byte order
+    public let block: Block
+
+    public init(height: UInt32, blockHash: Data, block: Block) {
+        self.height = height
+        self.blockHash = blockHash
+        self.block = block
+    }
+}
+
+/// BIP157 client-side filter sync, forward-only from a start height
+/// (fresh-wallet design: see docs/read-side.md).
+///
+/// Flow per `sync` run:
+/// 1. Sync the block-header chain to the peer tip (getheaders).
+/// 2. `getcfcheckpt` at the tip from up to 3 peers; peers that disagree with
+///    the majority answer are disconnected (BIP157 filters are not
+///    consensus-committed — cross-peer comparison is the mitigation).
+/// 3. `getcfheaders` per ≤1000-block batch; the announced previous filter
+///    header must equal our pinned header at batchStart-1 (zero at genesis),
+///    then the filter-hash chain is walked forward and pinned per height. On
+///    the first batch of a fresh progress file there is no pinned previous
+///    header, so the batch's cfheaders response is required to be byte-identical
+///    from two peers when two are available.
+/// 4. `getcfilters` (type 0x00) for the batch; each filter must reproduce the
+///    pinned header chain given the block hash from our PoW-checked header
+///    chain — this is what anchors filters to the block chain.
+/// 5. Each filter is matched locally against the watch list with BitcoinCore's
+///    GCSFilter; on a hit the full block is fetched (getdata MSG_WITNESS_BLOCK),
+///    its hash verified, and handed to `onMatch`.
+/// 6. Progress (next scan height + pinned filter headers) is persisted after
+///    every batch.
+public actor FilterSync {
+    public static let basicFilterType: UInt8 = 0
+    /// Bitcoin Core serves at most 1000 filters / 2000 filter headers per request.
+    public static let maxRangePerRequest: UInt32 = 1_000
+    /// BIP157 checkpoint interval in blocks.
+    public static let checkpointInterval: UInt32 = 1_000
+
+    /// Persisted sync progress.
+    public struct Progress: Codable, Sendable, Equatable {
+        /// Height of the next block whose filter must be scanned.
+        public var nextScanHeight: UInt32
+        /// Pinned filter headers: decimal height → hex (internal byte order).
+        public var filterHeaders: [String: String]
+
+        public init(nextScanHeight: UInt32, filterHeaders: [String: String] = [:]) {
+            self.nextScanHeight = nextScanHeight
+            self.filterHeaders = filterHeaders
+        }
+    }
+
+    public let pool: PeerPool
+    public let chain: HeaderChain
+    /// How many peers to consult for the cfcheckpt comparison (and for the
+    /// initial cfheaders cross-check). If fewer are connected, all connected
+    /// peers are used and the comparison simply covers those.
+    public let requiredCheckpointPeers: Int
+    private let storageURL: URL?
+    private var progress: Progress
+
+    public init(pool: PeerPool, chain: HeaderChain, startHeight: UInt32,
+                storageURL: URL? = nil, requiredCheckpointPeers: Int = 2) throws {
+        self.pool = pool
+        self.chain = chain
+        self.storageURL = storageURL
+        self.requiredCheckpointPeers = requiredCheckpointPeers
+        if let storageURL,
+           let data = try? Data(contentsOf: storageURL),
+           let stored = try? JSONDecoder().decode(Progress.self, from: data) {
+            progress = stored
+        } else {
+            progress = Progress(nextScanHeight: startHeight)
+        }
+    }
+
+    public var nextScanHeight: UInt32 { progress.nextScanHeight }
+    /// Highest fully-scanned height; nil when nothing has been scanned yet.
+    public var lastScannedHeight: UInt32? {
+        progress.nextScanHeight == 0 ? nil : progress.nextScanHeight - 1
+    }
+
+    public func filterHeader(at height: UInt32) -> Data? {
+        progress.filterHeaders[String(height)].flatMap { Data(hex: $0) }
+    }
+
+    public func sync(watchScripts: [Data],
+                     onMatch: @Sendable (BlockMatch) async throws -> Void) async throws {
+        var peers = await pool.connectedPeers()
+        guard !peers.isEmpty else { throw FilterSyncError.noPeers }
+
+        // 1. Headers to tip.
+        try await chain.sync(using: peers[0])
+        let tip = await chain.height
+        let tipHash = await chain.tipHash
+        guard tip >= progress.nextScanHeight else { try persist(); return }
+
+        // 2. cfcheckpt cross-peer comparison.
+        let checkpointPeers = Array(peers.prefix(max(1, min(3, requiredCheckpointPeers))))
+        var checkpoints: [(peer: PeerConnection, message: CFCheckptMessage)] = []
+        checkpoints.reserveCapacity(checkpointPeers.count)
+        for peer in checkpointPeers {
+            let response = try await peer.request(
+                .getcfcheckpt(GetCFCheckptRequest(stopHash: tipHash)),
+                expecting: ["cfcheckpt"])
+            guard case let .cfcheckpt(message) = response else {
+                throw FilterSyncError.badPeerResponse("expected cfcheckpt")
+            }
+            checkpoints.append((peer, message))
+        }
+        // Adopt the MAJORITY cfcheckpt answer — never checkpoints[0] by fiat, or
+        // a lying first peer could evict the honest ones and become the sole
+        // reference. Peers outside the majority are disconnected. With no strict
+        // majority (e.g. two peers that disagree) the lie is unattributable, so
+        // we drop every checkpoint peer and let the pool replenish and retry.
+        let reference: CFCheckptMessage
+        if checkpoints.count == 1 {
+            reference = checkpoints[0].message
+        } else {
+            var tally: [(message: CFCheckptMessage, count: Int)] = []
+            for entry in checkpoints {
+                if let index = tally.firstIndex(where: { $0.message == entry.message }) {
+                    tally[index].count += 1
+                } else {
+                    tally.append((entry.message, 1))
+                }
+            }
+            let best = tally.max { $0.count < $1.count }!
+            guard best.count * 2 > checkpoints.count else {
+                for (peer, _) in checkpoints {
+                    await pool.misbehaving(peer, reason: "cfcheckpt no majority")
+                }
+                throw FilterSyncError.checkpointMismatch("no cfcheckpt majority across \(checkpoints.count) peers")
+            }
+            for (peer, message) in checkpoints where message != best.message {
+                await pool.misbehaving(peer, reason: "cfcheckpt mismatch")
+            }
+            reference = best.message
+        }
+        // Core serves checkpoint headers at heights 1000, 2000, …, ascending
+        // (ProcessGetCFCheckPt: entry i is the header at (i+1)*1000; the stop
+        // block itself is included only when it is a multiple of 1000).
+        // Any already-pinned header at a checkpoint height must match.
+        for (index, header) in reference.filterHeaders.enumerated() {
+            let height = UInt32(index + 1) * Self.checkpointInterval
+            guard height <= tip else { break }
+            if let pinned = filterHeader(at: height), pinned != header {
+                throw FilterSyncError.checkpointMismatch("pinned header at \(height) disagrees with cfcheckpt")
+            }
+        }
+
+        // 3+4+5. Batches of ≤1000 blocks.
+        while progress.nextScanHeight <= tip {
+            let batchStart = progress.nextScanHeight
+            let batchStop = min(batchStart + Self.maxRangePerRequest - 1, tip)
+            guard let stopHash = await chain.blockHash(at: batchStop) else {
+                throw FilterSyncError.badPeerResponse("missing header at \(batchStop)")
+            }
+            try await pinFilterHeaders(batchStart: batchStart, batchStop: batchStop,
+                                       stopHash: stopHash, peers: peers)
+            try await scanFilters(batchStart: batchStart, batchStop: batchStop,
+                                  peer: peers[0], watchScripts: watchScripts, onMatch: onMatch)
+            progress.nextScanHeight = batchStop + 1
+            try persist()
+            peers = await pool.connectedPeers()
+            guard !peers.isEmpty else { throw FilterSyncError.noPeers }
+        }
+
+        // Final guard: the highest checkpoint header we computed must equal
+        // the one the checkpoint peers announced (Core's last cfcheckpt entry
+        // is the header at the greatest multiple of 1000 ≤ tip).
+        let lastCheckpoint = (tip / Self.checkpointInterval) * Self.checkpointInterval
+        if lastCheckpoint > 0, let pinned = filterHeader(at: lastCheckpoint),
+           let announced = reference.filterHeaders.last, pinned != announced {
+            throw FilterSyncError.checkpointMismatch("checkpoint filter header at \(lastCheckpoint) disagrees with cfcheckpt")
+        }
+    }
+
+    // MARK: - Internals
+
+    /// Fetches cfheaders for [batchStart, batchStop] and pins the filter
+    /// header chain to our block-header chain.
+    private func pinFilterHeaders(batchStart: UInt32, batchStop: UInt32, stopHash: Data,
+                                  peers: [PeerConnection]) async throws {
+        // Always cross-check cfheaders between two peers when the pool has
+        // them (paper §2.7: "fetch cfheaders from ≥2 independent peers and
+        // disconnect peers that disagree"). A single-peer pool degrades to one.
+        let queryPeers = Array(peers.prefix(min(2, peers.count)))
+
+        var decoded: CFHeadersMessage?
+        for peer in queryPeers {
+            let response = try await peer.request(
+                .getcfheaders(GetCFiltersRequest(startHeight: batchStart, stopHash: stopHash)),
+                expecting: ["cfheaders"])
+            guard case let .cfheaders(message) = response else {
+                throw FilterSyncError.badPeerResponse("expected cfheaders")
+            }
+            guard message.stopHash == stopHash else {
+                throw FilterSyncError.badPeerResponse("cfheaders stop hash mismatch")
+            }
+            if let existing = decoded, existing != message {
+                await pool.misbehaving(peer, reason: "cfheaders mismatch at \(batchStart)")
+                throw FilterSyncError.checkpointMismatch("cfheaders disagree at \(batchStart)")
+            }
+            decoded = message
+        }
+        guard let message = decoded else { throw FilterSyncError.noPeers }
+        guard message.filterHashes.count == Int(batchStop - batchStart + 1) else {
+            throw FilterSyncError.badPeerResponse("cfheaders count \(message.filterHashes.count) != \(batchStop - batchStart + 1)")
+        }
+
+        if batchStart == 0 {
+            // BIP157: the genesis block's previous filter header is zero.
+            guard message.previousFilterHeader == Data(repeating: 0, count: 32) else {
+                throw FilterSyncError.filterHeaderMismatch(height: batchStart)
+            }
+        } else if let pinned = filterHeader(at: batchStart - 1) {
+            // The announced chain must continue our pinned chain exactly.
+            guard message.previousFilterHeader == pinned else {
+                throw FilterSyncError.filterHeaderMismatch(height: batchStart)
+            }
+        } else {
+            // Fresh progress with a start height > 0: no pinned previous
+            // exists, so the peer-supplied previous header is the anchor —
+            // cross-checked byte-for-byte between two peers above when
+            // possible, and verified against cfcheckpt at checkpoint heights.
+            progress.filterHeaders[String(batchStart - 1)] = message.previousFilterHeader.hex
+        }
+
+        // Walk the BIP158 header chain: header[h] = SHA256d(filterHash[h] || header[h-1]).
+        var previous = message.previousFilterHeader
+        for (index, filterHash) in message.filterHashes.enumerated() {
+            let header = SHA256d.hash(filterHash + previous)
+            progress.filterHeaders[String(batchStart + UInt32(index))] = header.hex
+            previous = header
+        }
+    }
+
+    /// Fetches, verifies and matches all filters in [batchStart, batchStop].
+    private func scanFilters(batchStart: UInt32, batchStop: UInt32, peer: PeerConnection,
+                             watchScripts: [Data],
+                             onMatch: @Sendable (BlockMatch) async throws -> Void) async throws {
+        guard let stopHash = await chain.blockHash(at: batchStop) else {
+            throw FilterSyncError.badPeerResponse("missing header at \(batchStop)")
+        }
+        let count = Int(batchStop - batchStart + 1)
+        let responses = try await peer.requestMany(
+            .getcfilters(GetCFiltersRequest(startHeight: batchStart, stopHash: stopHash)),
+            expecting: "cfilter", count: count, timeout: .seconds(120))
+
+        var heightByHash: [Data: UInt32] = [:]
+        for height in batchStart ... batchStop {
+            if let hash = await chain.blockHash(at: height) { heightByHash[hash] = height }
+        }
+
+        var seen: Set<UInt32> = []
+        for response in responses {
+            guard case let .cfilter(message) = response else {
+                throw FilterSyncError.badPeerResponse("expected cfilter")
+            }
+            guard message.filterType == Self.basicFilterType else {
+                throw FilterSyncError.badPeerResponse("unexpected filter type \(message.filterType)")
+            }
+            guard let height = heightByHash[message.blockHash], !seen.contains(height) else {
+                throw FilterSyncError.unexpectedBlockHash
+            }
+            seen.insert(height)
+
+            // The filter must reproduce the pinned header chain (BIP158):
+            // header[h] == SHA256d(SHA256d(filter) || header[h-1]).
+            let filterHash = GCSFilter.filterHash(message.filter)
+            let previous = height == 0
+                ? Data(repeating: 0, count: 32)
+                : filterHeader(at: height - 1)
+            guard let pinned = filterHeader(at: height),
+                  SHA256d.hash(filterHash + (previous ?? Data(repeating: 0, count: 32))) == pinned
+            else {
+                throw FilterSyncError.filterHeaderMismatch(height: height)
+            }
+
+            guard !watchScripts.isEmpty else { continue }
+            let parsed = try message.parsedFilter()
+            let filter = try GCSFilter(p: GCSFilter.defaultP, m: GCSFilter.defaultM,
+                                       key: Data(message.blockHash.prefix(16)),
+                                       n: parsed.n, encoded: parsed.encoded)
+            guard filter.containsAny(watchScripts) else { continue }
+
+            // Possible hit (or BIP158 false positive): fetch the full block.
+            let blockResponse = try await peer.request(
+                .getdata(InventoryPayload([InventoryVector(type: .witnessBlock, hash: message.blockHash)])),
+                expecting: ["block", "notfound"], timeout: .seconds(120))
+            switch blockResponse {
+            case let .block(block):
+                guard block.hash == message.blockHash else {
+                    await pool.misbehaving(peer, reason: "block hash mismatch at \(height)")
+                    throw FilterSyncError.badPeerResponse("block hash mismatch at \(height)")
+                }
+                // The header hash only authenticates the 80-byte header. Verify
+                // the transaction set hashes to the header's committed merkle
+                // root before crediting anything from it — otherwise a peer can
+                // serve the real header with a fabricated (or pruned) tx list.
+                guard block.hasValidMerkleRoot else {
+                    await pool.misbehaving(peer, reason: "merkle root mismatch at \(height)")
+                    throw FilterSyncError.badPeerResponse("merkle root mismatch at \(height)")
+                }
+                try await onMatch(BlockMatch(height: height, blockHash: message.blockHash, block: block))
+            case .notfound:
+                throw FilterSyncError.badPeerResponse("peer lost block at \(height)")
+            default:
+                throw FilterSyncError.badPeerResponse("expected block")
+            }
+        }
+        guard seen.count == count else {
+            throw FilterSyncError.badPeerResponse("missing cfilters: \(seen.count)/\(count)")
+        }
+    }
+
+    private func persist() throws {
+        guard let storageURL else { return }
+        let data = try JSONEncoder().encode(progress)
+        try data.write(to: storageURL, options: .atomic)
+    }
+}

@@ -1,0 +1,7 @@
+.build/
+build/
+DerivedData/
+BTCSwiftApp.xcodeproj/
+Package.resolved
+*.xcuserstate
+.DS_Store

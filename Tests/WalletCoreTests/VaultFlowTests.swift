@@ -1,0 +1,229 @@
+import BitcoinCore
+import BitcoinP2P
+import Foundation
+import P256K
+import Testing
+@testable import WalletCore
+
+/// End-to-end vault flows (signet-format fixtures, fully offline): a 2-of-3
+/// `sortedmulti_a` script-path vault and a 2-of-2 MuSig2 key-path vault, each
+/// funded with a fabricated UTXO, spent via the PSBT workflow between
+/// cosigners, with the final witnesses verified cryptographically.
+@Suite("Vault end-to-end flows")
+struct VaultFlowTests {
+    /// Three cosigner HD masters (fixed entropy — deterministic fixtures).
+    static func masters() throws -> [HDKey] {
+        try [Data(repeating: 0xA1, count: 16), Data(repeating: 0xB2, count: 16),
+             Data(repeating: 0xC3, count: 16)]
+            .map { try HDKey(seed: BIP39.seed(mnemonic: BIP39.mnemonic(entropy: $0))) }
+    }
+
+    /// `[fp/86'/1'/0']tpub…/<0;1>/*` cosigner key expression text.
+    static func keyExpression(master: HDKey) throws -> String {
+        let account = try master.derived(path: "m/86'/1'/0'")
+        let fingerprint = String(format: "%08x", master.fingerprint)
+        return "[\(fingerprint)/86'/1'/0']\(account.neutered.serialized(network: .testnet))/<0;1>/*"
+    }
+
+    /// Bare `[fp/86'/1'/0']tpub…` — musig() participants carry no own
+    /// derivation when the musig has a suffix (BIP390).
+    static func bareKeyExpression(master: HDKey) throws -> String {
+        let account = try master.derived(path: "m/86'/1'/0'")
+        let fingerprint = String(format: "%08x", master.fingerprint)
+        return "[\(fingerprint)/86'/1'/0']\(account.neutered.serialized(network: .testnet))"
+    }
+
+    /// A fabricated funding UTXO paying the vault at (choice, index).
+    static func funding(vault: Vault, amount: Int64, choice: AddressChain = .receive,
+                        index: UInt32 = 0, height: UInt32 = 100) throws -> WalletUTXO {
+        try WalletUTXO(txid: Data(repeating: 0x5A, count: 32), vout: 0, amount: amount,
+                       scriptPubKey: vault.scriptPubKey(index: index, choice: choice.rawValue),
+                       chain: choice, index: index, height: height)
+    }
+
+    let destination = Data([0x51, 0x20] + repeatElement(0x77, count: 32)) // external P2TR
+
+    // MARK: - 2-of-3 multi_a script-path vault
+
+    @Test("2-of-3 multi_a vault: derive, fund, build, 2 cosigners, combine, finalize, verify")
+    func multiAVault() throws {
+        let masters = try Self.masters()
+        let descriptor = try Vault.multiADescriptor(threshold: 2,
+                                                    cosigners: masters.map { try Self.keyExpression(master: $0) })
+        let vault = try Vault(descriptor: descriptor, network: .signet)
+
+        // The vault commits to the NUMS internal key; addresses are bech32m.
+        #expect(vault.usesUnspendableInternalKey)
+        let address = try vault.address(index: 0)
+        #expect(address.hasPrefix("tb1p"))
+        #expect(try vault.watchScripts(upTo: 2).count == 4)
+        // Deterministic across constructions from the same text.
+        #expect(try Vault(descriptor.serialized(), network: .signet).address(index: 0) == address)
+
+        // Fund the vault and build the spend PSBT (creator role).
+        let utxo = try Self.funding(vault: vault, amount: 100_000)
+        let created = try vault.createSpend(utxos: [utxo], payments: [Payment(amount: 50_000, scriptPubKey: destination)],
+                                            changeIndex: 0, feeRateSatPerVByte: 2)
+        let input = created.inputs[0]
+        #expect(input.tapInternalKey == Taproot.unspendableInternalKey)
+        #expect(input.tapLeafScripts.count == 1)
+        #expect(input.tapScriptSignatures.isEmpty)
+        // BIP371 derivation entries carry the tapleaf hash for every cosigner.
+        #expect(input.tapBIP32Derivation.count == 3)
+        #expect(input.tapBIP32Derivation.values.allSatisfy { $0.leafHashes.count == 1 })
+        // Change output carries the vault's tap tree (receiving-side check).
+        let changeScript = try vault.scriptPubKey(index: 0, choice: 1)
+        let changeOutput = created.outputs.first { $0.script == changeScript }
+        #expect(changeOutput?.tapTree?.count == 1)
+        #expect(changeOutput?.tapInternalKey == Taproot.unspendableInternalKey)
+
+        // The PSBT travels between cosigners as Base64 (BIP174 interchange).
+        let base64 = created.base64
+        #expect(try PSBT(base64: base64) == created)
+
+        // Cosigners 0 and 2 each partial-sign their own copy (signer role).
+        var partialA = try PSBT(base64: base64)
+        try vault.partialSign(&partialA, master: masters[0])
+        var partialC = try PSBT(base64: base64)
+        try vault.partialSign(&partialC, master: masters[2])
+        #expect(partialA.inputs[0].tapScriptSignatures.count == 1)
+        #expect(partialC.inputs[0].tapScriptSignatures.count == 1)
+
+        // One partial alone is below threshold and cannot finalize.
+        var alone = partialA
+        #expect(throws: PSBTError.self) { try alone.finalize() }
+
+        // Combine (combiner role) → finalize → raw transaction.
+        var combined = try partialA.combined(with: [partialC])
+        #expect(combined.inputs[0].tapScriptSignatures.count == 2)
+        let signed = try vault.finalizeSpend(&combined)
+
+        // Verify the witness cryptographically (see the helper below).
+        let result = try verifyMultisigSpend(tx: signed, inputIndex: 0,
+                                             spentOutputs: [utxo.spentOutput])
+        #expect(result.validSignatures == 2)
+        #expect(result.threshold == 2)
+        #expect(result.keyCount == 3)
+    }
+
+    // MARK: - 2-of-2 MuSig2 key-path vault
+
+    @Test("2-of-2 musig vault: nonce round, partial sigs, aggregate, BIP340-verifiable")
+    func muSigVault() throws {
+        let masters = try Self.masters().prefix(2).map { $0 }
+        let keys = try masters.map { try Self.bareKeyExpression(master: $0) }
+        let text = "tr(musig(\(keys[0]),\(keys[1]))/<0;1>/*)"
+        let vault = try Vault(text, network: .signet)
+
+        let utxo = try Self.funding(vault: vault, amount: 80_000)
+        let created = try vault.createSpend(utxos: [utxo], payments: [Payment(amount: 50_000, scriptPubKey: destination)],
+                                            changeIndex: 0, feeRateSatPerVByte: 2)
+        let context = try vault.muSig2Context(choice: 0, index: 0)
+        #expect(context.participants.count == 2)
+        // The BIP373 participant field and the BIP328-derived internal key.
+        #expect(created.inputs[0].musig2ParticipantPubKeys[context.aggregate] == context.participants)
+        #expect(created.inputs[0].tapInternalKey == context.internalKey)
+        // The tweaked aggregate key is exactly the vault's output program.
+        #expect(utxo.scriptPubKey == Data([0x51, 0x20]) + context.outputKey)
+
+        // Round 1: each cosigner attaches its public nonce to its own copy.
+        let base64 = created.base64
+        var noncePSBT_A = try PSBT(base64: base64)
+        var secnoncesA = try vault.muSig2AttachNonce(&noncePSBT_A, input: 0, context: context,
+                                                     master: masters[0])
+        var noncePSBT_B = try PSBT(base64: base64)
+        var secnoncesB = try vault.muSig2AttachNonce(&noncePSBT_B, input: 0, context: context,
+                                                     master: masters[1])
+        #expect(noncePSBT_A.inputs[0].musig2PubNonces.count == 1)
+        #expect(secnoncesA.count == 1 && secnoncesB.count == 1)
+
+        // Combine nonces, then round 2: each cosigner partial-signs the
+        // combined PSBT.
+        let withNonces = try noncePSBT_A.combined(with: [noncePSBT_B])
+        #expect(withNonces.inputs[0].musig2PubNonces.count == 2)
+        var signedA = withNonces
+        try vault.muSig2Sign(&signedA, input: 0, context: context, master: masters[0],
+                             secretNonces: &secnoncesA)
+        var signedB = withNonces
+        try vault.muSig2Sign(&signedB, input: 0, context: context, master: masters[1],
+                             secretNonces: &secnoncesB)
+        // The secnonce was zeroed — reuse is rejected.
+        #expect(secnoncesA.values.first?.allSatisfy { $0 == 0 } == true)
+        #expect(signedA.inputs[0].musig2PartialSigs.count == 1)
+
+        // Combine partials, aggregate into the key-path signature, finalize.
+        var combined = try signedA.combined(with: [signedB])
+        try vault.muSig2Aggregate(&combined, input: 0, context: context)
+        #expect(combined.inputs[0].tapKeySignature?.count == 64)
+        let signed = try vault.finalizeSpend(&combined)
+
+        // The witness is a single 64-byte BIP340 signature over the key-path
+        // sighash, valid for the tweaked aggregate key.
+        #expect(signed.inputs[0].witness.count == 1)
+        let signature = signed.inputs[0].witness[0]
+        let sighash = try SighashBIP341.sighash(tx: signed, inputIndex: 0,
+                                                spentOutputs: [utxo.spentOutput], hashType: .default)
+        var message = [UInt8](sighash)
+        let parsed = try P256K.Schnorr.SchnorrSignature(dataRepresentation: signature)
+        #expect(P256K.Schnorr.XonlyKey(dataRepresentation: context.outputKey).isValid(parsed, for: &message))
+    }
+
+    @Test("musig vault rejects a partial signed with the wrong key")
+    func muSigWrongKey() throws {
+        let masters = try Self.masters().prefix(2).map { $0 }
+        let keys = try masters.map { try Self.bareKeyExpression(master: $0) }
+        let vault = try Vault("tr(musig(\(keys[0]),\(keys[1]))/<0;1>/*)", network: .signet)
+        let utxo = try Self.funding(vault: vault, amount: 80_000)
+        var psbt = try vault.createSpend(utxos: [utxo], payments: [Payment(amount: 50_000, scriptPubKey: destination)],
+                                         changeIndex: 0, feeRateSatPerVByte: 2)
+        let context = try vault.muSig2Context(choice: 0, index: 0)
+        // The third master is not a participant: no nonce, no signature.
+        let outsider = try Self.masters()[2]
+        #expect(throws: VaultError.noCosignerKey(input: 0)) {
+            _ = try vault.muSig2AttachNonce(&psbt, input: 0, context: context, master: outsider)
+        }
+    }
+
+    // MARK: - Verification helper
+
+    struct MultisigVerification {
+        var threshold: Int
+        var keyCount: Int
+        var validSignatures: Int
+    }
+
+    /// Replays BIP342 multi_a validation for a finalized input: the control
+    /// block must commit the leaf to the spent output key, then every witness
+    /// stack item is matched to its script key (reversed order, BIP387) and
+    /// each signature verified against the script-path sighash.
+    func verifyMultisigSpend(tx: Transaction, inputIndex: Int,
+                             spentOutputs: [SighashBIP341.SpentOutput]) throws -> MultisigVerification {
+        let witness = tx.inputs[inputIndex].witness
+        let leafScript = Script(witness[witness.count - 2])
+        let controlBlock = try Taproot.ControlBlock(serialized: witness[witness.count - 1])
+
+        // Control block: walk the path to the root, recompute the output key.
+        var root = Taproot.leafHash(version: controlBlock.leafVersion, script: leafScript)
+        for sibling in controlBlock.path { root = Taproot.branchHash(root, sibling) }
+        let (outputKey, parity) = try Taproot.tweakedOutputKey(internalKey: controlBlock.internalKey,
+                                                               merkleRoot: root)
+        #expect(outputKey == spentOutputs[inputIndex].scriptPubKey.suffix(32))
+        #expect(controlBlock.outputKeyParity == parity)
+
+        let (threshold, keys) = try #require(Multisig.parse(leafScript))
+        let sighash = try SighashBIP341.sighash(tx: tx, inputIndex: inputIndex,
+                                                spentOutputs: spentOutputs, hashType: .default,
+                                                scriptPath: .init(leafScript: leafScript))
+        var valid = 0
+        for (position, key) in keys.enumerated() {
+            let item = witness[keys.count - 1 - position] // reversed onto the stack
+            if item.isEmpty { continue } // placeholder for a non-signing key
+            var message = [UInt8](sighash)
+            let signature = try P256K.Schnorr.SchnorrSignature(dataRepresentation: item.prefix(64))
+            if P256K.Schnorr.XonlyKey(dataRepresentation: key).isValid(signature, for: &message) {
+                valid += 1
+            }
+        }
+        return MultisigVerification(threshold: threshold, keyCount: keys.count, validSignatures: valid)
+    }
+}
