@@ -1,6 +1,6 @@
 # A Private Bitcoin Wallet on a Phone
 
-*Framing paper for btc-swift. The other papers — [read](read-side.md), [write](write-side.md), [vaults](vaults.md), [import](import.md) — each own one job. This one owns the device.*
+*Framing paper for Winnow. The other papers — [read](read-side.md), [write](write-side.md), [vaults](vaults.md), [import](import.md) — each own one job. This one owns the device.*
 
 ---
 
@@ -20,7 +20,7 @@ This paper states the device constraints, the architecture they force, and which
 
 Constraints that are load-bearing, not stylistic:
 
-- **Outbound TCP only.** The app talks to full-node peers over `Network.framework`. No inbound ports, no hidden services, no background socket the OS will kill. Peers are a small outbound pool (default 3): manual endpoints first, then a persisted good-peers list, then DNS seeds. No addr gossip, no scoring buckets — a misbehaving peer is dropped and replaced.
+- **Outbound TCP only.** The app talks to full-node peers over `Network.framework`. No inbound ports, no hidden services, no background socket the OS will kill. Peers are a small outbound pool (default 3): manual endpoints first, then a persisted good-peers list, then a few hardcoded fallback peers (IP literals verified filter-serving; see `NetworkParams`) racing the DNS-seed results — dialed a batch at a time with a short per-attempt timeout, so a fresh launch fills the pool in seconds and reports exhaustion instead of spinning forever. No addr gossip, no scoring buckets — a misbehaving peer is dropped and replaced.
 - **Foreground only.** There is no `UIBackgroundModes` entry. Sync-while-active is the design, not a v1 omission. A payment you are not looking at waits for the next open, or for a confirmation the next time filters are scanned. Push notifications would require a server that knows your addresses or your txids.
 - **This-device keychain.** Secrets live in the iOS Keychain as `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, with iCloud Keychain sync off. They are not in the app's JSON state, not in iCloud backup, not in the mnemonic UI after the first screen. Signing loads the secret for the call and drops it.
 - **One runtime dependency.** [`swift-secp256k1`](https://github.com/21-DOT-DEV/swift-secp256k1) — Bitcoin Core's libsecp256k1. Swift never does raw curve math on secrets. Everything else (filters, headers, PSBT, descriptors, P2P) is in-tree.
@@ -79,7 +79,7 @@ What the user is asked to trust, stated as mechanisms rather than intentions:
 - **The peers you can reach.** Compact filters are not consensus-committed. Multi-peer `cfcheckpt` / `cfheaders` comparison detects disagreement; it cannot prove which peer lied, and a fully eclipsed phone can be shown a consistent lie. Manual peers exist so a user who *has* a node they trust can skip DNS seeds. The residual risk is [read-side](read-side.md) §2.7.1 and §2.9.
 - **No one, on the read path, by default.** No server is handed an address, an xpub, or a scripthash. A network observer sees a compact-filter client syncing from a height — the same bytes every such client downloads.
 
-What the user is *not* asked to trust: an indexer operator's retention policy, a push-notification vendor, iCloud Keychain, or the app target. Wallet, protocol, and crypto logic are forbidden from moving into `BTCSwiftApp`.
+What the user is *not* asked to trust: an indexer operator's retention policy, a push-notification vendor, iCloud Keychain, or the app target. Wallet, protocol, and crypto logic are forbidden from moving into `WinnowApp`.
 
 ---
 
