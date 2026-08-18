@@ -69,10 +69,169 @@ enum SignetMiner {
         return level[0]
     }
 
-    /// Mines one block paying the subsidy (+fees) to `payoutScript`.
-    /// Returns the accepted block hash (display hex).
+    /// `submitblock` answers for a block the node accepted but did not connect
+    /// as the tip — valid, just not on the most-work chain. That is a lost race
+    /// against the node's background miner, not a broken block.
+    private static let offChainAnswers: Set<String> = ["inconclusive", "duplicate-inconclusive"]
+
+    /// One `key=value` line per mining draw, on stderr. Emitted on the
+    /// success path as well as the failure one: a lost race that the retry
+    /// then won used to leave no trace at all, so a quiet log said nothing
+    /// about whether races were being lost — and a retry bound nobody can
+    /// measure is a bound nobody can justify (#28). `lost=0` means no race
+    /// was lost.
+    ///
+    /// **Every exit traces: `won`, `exhausted`, `threw`.** The third was
+    /// missing until CI run 31987164939, where `submitMinedBlock` threw at its
+    /// first `getblocktemplate` and `mineOntoTip` returned through an
+    /// untraced path — the call ran, entered the loop, and printed nothing.
+    /// The comment here previously claimed no output meant the code had not
+    /// run, and that run is the counterexample. Silence is only meaningful
+    /// once all exits are covered, which is what `result=threw` restores.
+    ///
+    /// The remaining caveat is delivery, not coverage: this writes to the
+    /// process's fd 2, and this copy runs inside the iOS-simulator test
+    /// runner, whose fd 2 relay to the step log is **unverified**. Simulator
+    /// fd 1 does arrive — run 31987164939's `UI tests` step carries the
+    /// `E2E send error:` line that `WinnowAppUITests.swift` `print`s — but
+    /// fd 2 has never been observed either way. So absent output from the UI
+    /// leg is a delivery question first and a coverage question second, and
+    /// switching this to `print` is the fix if fd 2 turns out not to relay.
+    private static func trace(_ fields: String) {
+        FileHandle.standardError.write(Data("signet-miner: \(fields)\n".utf8))
+    }
+
+    /// A duration as bare decimal seconds, so the trace lines aggregate with
+    /// awk without unit-stripping. The lines carry their own durations because
+    /// log timestamps do not: CI stamped all 102 lines of the first
+    /// instrumented run within 10ms of step end, so they are capture times,
+    /// not emit times, and every draw looked instantaneous.
+    ///
+    /// Two fields, because they answer different questions and only coincide
+    /// when no race is lost. `call_s` is the whole call — every attempt plus
+    /// the tip re-read between them. `draws_s` is `submitMinedBlock` time
+    /// only, summed over completed draws, which is the *exposure window*: a
+    /// competitor takes the tip only between our `getblocktemplate` and our
+    /// `submitblock`. Dividing `call_s` instead folds in the `bestBlockHash`
+    /// check, which sits outside the window and overstates it.
+    ///
+    /// **Divide by `drawn`, never by `attempts`.** They are equal on `won`
+    /// and `exhausted`, and they diverge on `threw` — where `attempts` alone
+    /// cannot tell you by how much, because two throw sources share the
+    /// label. `submitMinedBlock` throwing leaves the in-flight draw
+    /// uncounted (`drawn == attempts - 1`); a throw from the later
+    /// `bestBlockHash` leaves it counted (`drawn == attempts`). `drawn`
+    /// resolves which, so `draws_s / drawn` and `lost / Σ drawn` are exact
+    /// on every line shape instead of exact on two of three.
+    private static func seconds(_ duration: Duration) -> String {
+        String(format: "%.3f", Double(duration.components.seconds)
+            + Double(duration.components.attoseconds) * 1e-18)
+    }
+
+    /// An error as a single space-free token, because the trace lines are
+    /// parsed by splitting on spaces — a message like "bitcoin-cli not found"
+    /// would break every field after it. The type name is enough to route a
+    /// reader to the cause; the full text is already in the test failure.
+    private static func label(_ error: Error) -> String {
+        String(describing: type(of: error))
+    }
+
+    /// Mines one block paying the subsidy (+fees) to `payoutScript`. Returns
+    /// the accepted block hash (display hex) whether or not it became the tip;
+    /// callers that need the tip use `mineOntoTip`.
+    ///
+    /// `result=connected-at-submit` is exactly what a nil `submitblock` answer
+    /// licenses — the node accepted the block and connected it *then*. It is
+    /// not a tip claim: this path never re-reads `bestBlockHash`, so a block
+    /// reorged out a moment later still traces as connected-at-submit.
+    ///
+    /// `call_s` and `draws_s` are equal here by construction — the call is
+    /// exactly one draw and does nothing else. Both are emitted anyway so one
+    /// awk recipe reads either trace line.
     @discardableResult
     static func mineBlock(payingTo payoutScript: Data) async throws -> String {
+        let start = ContinuousClock.now
+        let submission: (hash: String, answer: String?)
+        do {
+            submission = try await submitMinedBlock(payingTo: payoutScript)
+        } catch {
+            // draws_s=0.000, not "-": no draw completed, so no exposure was
+            // accrued, and keeping the field numeric everywhere means one awk
+            // recipe reads every line shape without special cases.
+            trace("mineBlock result=threw attempts=1 drawn=0"
+                + " call_s=\(seconds(ContinuousClock.now - start)) draws_s=0.000"
+                + " error=\(label(error))")
+            throw error
+        }
+        let draw = ContinuousClock.now - start
+        trace("mineBlock result=\(submission.answer == nil ? "connected-at-submit" : "offchain")"
+            + " attempts=1 drawn=1 call_s=\(seconds(draw)) draws_s=\(seconds(draw))"
+            + " answer=\(submission.answer ?? "-")")
+        return submission.hash
+    }
+
+    /// Mines until one of our blocks is the tip. The dev node's background
+    /// miner produces a block every ~10 minutes, so losing a race is expected:
+    /// re-mine on the winner rather than failing the test.
+    ///
+    /// `maxAttempts` bounds one tip win, but the suites need long unbroken
+    /// runs of them — 101 in `FullLoopDiffTests`, 102 across the UI e2e — so
+    /// at a per-race loss probability `p` a suite survives with probability
+    /// `(1 - p^maxAttempts)^101`: 4.05% at p = 0.5 on the old bound of 5, and
+    /// 99.99% at 20. Extra attempts cost nothing on runs that lose no race,
+    /// which is what makes raising the bound safe *before* the measurement it
+    /// is waiting on; size it for real once the traces above give a p (#28).
+    ///
+    /// First measurement, uncontended: 0 losses in 101 draws, so p ≤ 2.9% at
+    /// 95% confidence. That is the regime with one suite on the node. The
+    /// contended p — two suites mining together — is still unobserved, and it
+    /// is the one this bound has to survive.
+    @discardableResult
+    static func mineOntoTip(payingTo payoutScript: Data,
+                            maxAttempts: Int = 20) async throws -> String {
+        let start = ContinuousClock.now
+        var draws = Duration.zero
+        var drawn = 0
+        var lastAnswer = "connected-then-reorged"
+        var lost = 0
+        for attempt in 0 ..< maxAttempts {
+            let drawStart = ContinuousClock.now
+            let submission: (hash: String, answer: String?)
+            let isTip: Bool
+            do {
+                submission = try await submitMinedBlock(payingTo: payoutScript)
+                // Both counters move here, together, after the draw returns:
+                // an incomplete draw is neither exposure nor a draw.
+                draws += ContinuousClock.now - drawStart
+                drawn += 1
+                isTip = try BitcoinCLI.bestBlockHash() == submission.hash
+            } catch {
+                trace("mineOntoTip result=threw attempts=\(attempt + 1) max=\(maxAttempts)"
+                    + " drawn=\(drawn) lost=\(lost) call_s=\(seconds(ContinuousClock.now - start))"
+                    + " draws_s=\(seconds(draws)) error=\(label(error))")
+                throw error
+            }
+            if isTip {
+                trace("mineOntoTip result=won attempts=\(attempt + 1) max=\(maxAttempts)"
+                    + " drawn=\(drawn) lost=\(lost) call_s=\(seconds(ContinuousClock.now - start))"
+                    + " draws_s=\(seconds(draws))"
+                    + " last=\(lost == 0 ? "-" : lastAnswer)")
+                return submission.hash
+            }
+            lost += 1
+            if let answer = submission.answer { lastAnswer = answer }
+        }
+        trace("mineOntoTip result=exhausted attempts=\(maxAttempts) max=\(maxAttempts)"
+            + " drawn=\(drawn) lost=\(lost) call_s=\(seconds(ContinuousClock.now - start))"
+            + " draws_s=\(seconds(draws)) last=\(lastAnswer)")
+        throw MinerError.rejected("lost \(maxAttempts) block races (last: \(lastAnswer))")
+    }
+
+    /// The mining cycle itself: the block hash plus the node's `submitblock`
+    /// answer, which is nil when the block connected as the new tip.
+    private static func submitMinedBlock(payingTo payoutScript: Data) async throws
+        -> (hash: String, answer: String?)
+    {
         let template = try BitcoinCLI.runObject(["getblocktemplate", #"{"rules":["segwit","signet"]}"#])
         let height = try BitcoinCLI.int(template, "height")
         let bitsText = try BitcoinCLI.string(template, "bits")
@@ -185,8 +344,11 @@ enum SignetMiner {
         for tx in txs { block.append(tx.serialized(includeWitness: true)) }
 
         let result = try BitcoinCLI.runJSON(["submitblock", block.hex])
-        if let rejection = result as? String { throw MinerError.rejected(rejection) }
-        return ground.hash.displayHex
+        if let answer = result as? String {
+            guard offChainAnswers.contains(answer) else { throw MinerError.rejected(answer) }
+            return (ground.hash.displayHex, answer)
+        }
+        return (ground.hash.displayHex, nil)
     }
 }
 

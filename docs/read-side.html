@@ -4,11 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Winnow</title>
+
+
+
+
+
 <style>
-  :root { --bg:#0b0d10; --fg:#e8e6e3; --dim:#9a958c; --acc:#f7931a; --card:#14171c; --line:#262b33; }
+  :root { color-scheme:light dark;--bg:#fcfbf9;--fg:#17140f;--dim:#625e54;--acc:#b35f05;--card:#f4f1ea;--line:#ded9cc; }
+  @media(prefers-color-scheme:dark){:root{--bg:#0b0d10;--fg:#e8e6e3;--dim:#aaa497;--acc:#f5a94b;--card:#14171c;--line:#302b20}}
   * { box-sizing:border-box; margin:0; }
-  body { background:var(--bg); color:var(--fg); font:-apple-system/1.65 system-ui, sans-serif; line-height:1.65; }
-  main { max-width:44rem; margin:0 auto; padding:3rem 1.25rem 5rem; }
+  body { background:var(--bg); color:var(--fg); font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif; font-size:17px; line-height:1.65; -webkit-font-smoothing:antialiased; }
+  main { max-width:48rem; margin:0 auto; padding:3rem 1.25rem 5rem; }
   h1, h2, h3 { line-height:1.25; margin:2rem 0 .6rem; letter-spacing:-.01em; }
   h1 { font-size:1.7rem; margin-top:0; }
   h2 { font-size:1.25rem; border-top:1px solid var(--line); padding-top:1.4rem; }
@@ -29,16 +35,22 @@
   th { color:var(--fg); background:var(--card); }
   td { color:var(--dim); }
   blockquote { border-left:3px solid var(--acc); padding-left:1rem; margin:1rem 0; }
-  nav.home { margin-bottom:1.5rem; font-size:.9rem; }
+  nav.home { margin-bottom:1.5rem; font-size:.9rem; display:flex;gap:1rem;flex-wrap:wrap; }
+  :focus-visible{outline:2px solid #f7931a;outline-offset:3px}
 </style>
 </head>
 <body>
 <main>
-<nav class="home"><a href="/">← Winnow</a></nav>
+<nav class="home"><a href="/">← Winnow</a><a href="/present">Presentation</a><a href="/architecture">Architecture</a><a href="/paper">Canonical paper</a></nav>
 <h1
 id="the-read-side-how-a-private-mobile-bitcoin-wallet-learns-whats-its-own">The
 Read Side: How a Private Mobile Bitcoin Wallet Learns What’s Its
 Own</h1>
+<blockquote>
+<p><strong>Archived technical note.</strong> Winnow’s current
+architecture, evidence, and limitations now live in the <a
+href="paper.md">canonical design paper</a>.</p>
+</blockquote>
 <p><em>One paper in the Winnow set. The phone itself is <a
 href="mobile.md">A phone wallet</a>; paying is <a
 href="write-side.md">the write side</a>; shared custody is <a
@@ -141,11 +153,12 @@ your history. (Partial mitigation exists: when <em>spending</em>, the
 BIP341 sighash commits to input amounts, so a server lying about a
 UTXO’s amount produces an invalid transaction rather than a theft — but
 a server can still hide payments from you or invent history.)</li>
-<li><strong>Role in this product:</strong> none by default. It exists in
-the app only as an <strong>opt-in fast path</strong>, off by default,
-enabled in settings with an explicit warning naming exactly what is
-traded away (address set, balances, counterparties, IP) and linking to
-this section. Informed consent, per user, per install.</li>
+<li><strong>Role in this product:</strong> external website links only.
+Settings selects mempool.space or a custom Esplora-compatible website.
+Winnow never queries it for wallet state, fees, or broadcast. A
+deliberate address/transaction tap shows the exact host and disclosure
+warning before iOS opens the URL; the website’s answer is not imported
+as wallet truth.</li>
 </ul>
 <h3 id="electrum-protocol">2.3 Electrum protocol</h3>
 <p>The Electrum server protocol (address scripthash subscriptions over
@@ -222,7 +235,7 @@ apart.</li>
 <li><strong>CPU/battery:</strong> hashing and matching a filter against
 a watch list of thousands of scripts is milliseconds of work per block
 on a modern phone. The signet UI suite measured mined→filter-detected at
-<strong>0.75s</strong> on an iPhone 17 simulator (2026-08-15,
+<strong>0.69s</strong> on an iPhone 17 Pro Max simulator (2026-08-17,
 <code>screenshots/timings.json</code>) — that figure includes
 mining-propagation and the match, not just GCS lookup, and is a
 measurement on signet, not a mainnet bandwidth claim.</li>
@@ -237,9 +250,9 @@ build a <em>server that can’t observe</em>? The candidates:</p>
 <li><strong>Self-hosting.</strong> Run your own indexer on your own
 hardware and query only it. Privacy: excellent (you trust yourself).
 Cost: hardware, setup, and maintenance — outside this product’s premise
-of a self-contained mobile client. (A user who <em>has</em> one can
-point the opt-in esplora setting at their own instance — the best of
-both worlds, at their initiative.)</li>
+of a self-contained mobile client. A user can select that instance for
+Winnow’s warned external links, but the app still does not make
+automatic wallet queries.</li>
 <li><strong>Tor / VPN to a public indexer.</strong> Hides the client’s
 IP from the operator. The operator still sees — and can correlate and
 log — the <em>content</em>: the set of addresses, which is itself the
@@ -302,13 +315,12 @@ confirmation-time visibility. But the client can open a <strong>bounded
 mempool window</strong> (§2.8): while the Receive screen is open — i.e.,
 while a payment is actively expected — the app subscribes to full
 transaction relay and matches locally, so the payment appears as
-<em>unconfirmed</em> within seconds of broadcast. The limits are owned
-in the UI: the window exists only while the screen is open, anything
-relayed before it opened is missed, and 0-conf is never final against
-RBF/double-spend — the app says “unconfirmed”, never “received”. (The
-opt-in esplora path shows mempool-stage transactions without these
-bounds — one of the things the warning dialog can honestly list as the
-trade.)</li>
+<em>unconfirmed</em> within seconds of broadcast. The window exists only
+while the screen is open, anything relayed before it opened is missed,
+and 0-conf is never final against RBF/double-spend — the app says
+“unconfirmed”, never “received”. A user who wants a second, faster
+manual check can open an address or transaction at the selected explorer
+after a warning; Winnow does not consume that answer.</li>
 <li><strong>Bandwidth is real, if modest.</strong> ~3 MB/day (approx.)
 steady state is trivial on Wi-Fi and fine on cellular, but it is not
 zero, and a phone that hasn’t synced in a month downloads ~100 MB
@@ -323,8 +335,7 @@ blowup returns through the back door). Mitigations: BIP133
 <em>minimum relay fee</em> floor; feerates of transactions in matched
 blocks give some signal; beyond that, conservative static presets with
 user override. The result is cruder than any mempool-aware estimator —
-the price of asking no one. Owned. (Again: the opt-in path gets real fee
-estimates.)</li>
+the price of asking no one. Owned.</li>
 <li><strong>Fresh-wallet scope is what makes this viable.</strong>
 Filters are cheap <em>because</em> scanning starts at creation and runs
 forward. Recovering an old wallet <em>privately from the chain</em>
@@ -409,9 +420,12 @@ provable</td>
 <td>Show a consistent false filter-header chain, hide payments, or stall
 the tip</td>
 <td>Manual peers (Settings) so a user who has a node they trust can skip
-DNS seeds; headers still need PoW + chainwork</td>
+DNS seeds; seeds themselves resolve over DoH (not on-path UDP) with
+<code>getaddrinfo</code> fallback, and RFC1918/loopback answers are
+dropped; headers still need PoW + chainwork</td>
 <td>A partitioned phone can be lied to — the standard light-client
-eclipse caveat</td>
+eclipse caveat. DoH removes the unauthenticated-UDP seed rewrite; it
+does not remove a determined eclipse.</td>
 </tr>
 <tr>
 <td>Network observer (not a peer)</td>
@@ -424,9 +438,8 @@ eclipse caveat</td>
 </table>
 <p>Filters are not consensus-committed. A future soft fork committing
 the filter header into the block would collapse the first three rows’
-residual column (<a
-href="#51-consensus-committed-block-filters">§5.1</a>). Until then this
-table is the honest one.</p>
+residual column (<a href="#consensus-committed-block-filters">§5.1</a>).
+Until then this table is the honest one.</p>
 <hr />
 <h2 id="use-case-walkthrough-what-serves-what-and-why">3. Use-case
 walkthrough: what serves what, and why</h2>
@@ -526,16 +539,39 @@ paper observes the confirmation.</td>
 </tr>
 <tr>
 <td>11</td>
-<td>Optional: everything, faster</td>
-<td>User opts into an esplora backend in settings, past a warning naming
-the leak (address set, balances, IP) and linking to §2.2</td>
-<td>It’s the user’s threat model; the app’s job is to make the trade
-explicit, not to make it for them.</td>
+<td>Optional manual check</td>
+<td>A warned tap opens one exact address or transaction at the selected
+external explorer; no response enters wallet state</td>
+<td>Useful while P2P sync catches up, but the explorer learns the IP and
+exact item. It is a user action, not a fast read path.</td>
+</tr>
+<tr>
+<td>12</td>
+<td>Experimental: silent-payment receive (BIP352)</td>
+<td>User opts into a per-block <strong>tweak index</strong> in settings;
+candidate output scripts are computed on-device from the index’s 33-byte
+per-tx points (<code>input_hash·A</code>, BIP352 Appendix A) and matched
+against the <strong>same filter stream as row 2</strong></td>
+<td>Existing BIP158 filters can test derived candidates, but ordinary
+peers do not yet provide the input-derived tweaks needed to create them.
+The operator learns an IP follows silent-payment blocks, never which
+outputs are yours; omission can still cause a missed payment.</td>
 </tr>
 </tbody>
 </table>
-<p>Two use cases are deliberately <strong>absent</strong> from the
-default path:</p>
+<p>On the trust model of row 12: the index steers <em>which blocks get
+fetched</em>, nothing else. Every credit is resolved against the
+merkle-verified block, and a matched output is spendable by construction
+(<code>b_spend + t_k</code> controls it or it wouldn’t have matched) —
+so a lying index can cause <strong>missed payments, never fake
+ones</strong>. Because the scan is forward-only on the same frontier as
+row 2, an index outage fails the sync loudly rather than silently
+skipping heights, and payments received while the toggle is off are not
+detected — the settings warning says so. Labeled addresses (BIP352
+labels) are out of v1 end-to-end; the wallet’s own change stays BIP86,
+so not even the change label is needed.</p>
+<p>One use case is deliberately <strong>absent</strong> from the default
+path:</p>
 <ul>
 <li><strong>Always-on mempool awareness</strong> (instant notification
 of <em>unexpected</em> payments, background 0-conf, live fee markets) —
@@ -544,11 +580,6 @@ cost the product rejects) or a server (privacy cost the product
 rejects). Bounded windows (§2.8) cover the cases where the user is
 present and expecting something; everything else waits for
 confirmation.</li>
-<li><strong>Silent-payment receive</strong> (BIP352 scan). Send-side is
-implemented (<a href="write-side.md">write-side</a> §6). Receive would
-mean tweak-checking every output in every block — a different, heavier
-read-side than matching a small watch list against BIP158 filters. Not
-in v1.</li>
 </ul>
 <hr />
 <h2 id="conclusion">4. Conclusion</h2>
@@ -556,22 +587,18 @@ in v1.</li>
 stream of ~3 MB/day (approx.) of compact filters, matched on-device,
 with full blocks fetched only on hits — plus bounded mempool windows
 (§2.8) for the moments a user is actively sending or expecting a
-payment. No server learns anything because no server is asked anything.
-The costs — confirmation-time visibility for unexpected payments, crude
-fee estimation, reliance on honest filter peers cross-checked by header
-comparison — are real, bounded, and stated to the user instead of
-hidden. Every server-based alternative either resurrects BIP37’s mistake
-(letting someone else match against your addresses) or requires
-operating trusted infrastructure (self-host, OHTTP pair, TEE+ORAM
-enclave); those are the user’s to choose, knowingly, one toggle away —
-never the default.</p>
+payment. No server learns anything because no server is asked anything
+automatically. The costs — confirmation-time visibility for unexpected
+payments, crude fee estimation, reliance on honest filter peers
+cross-checked by header comparison — are real, bounded, and stated to
+the user instead of hidden. Warned explorer links let the user make a
+one-off disclosure without turning it into wallet infrastructure.</p>
 <p><strong>v1 on the read side is therefore: block headers + BIP157/158
 compact filters + bounded mempool windows, over
 <code>Network.framework</code>, talking only to full-node peers that
-signal <code>NODE_COMPACT_FILTERS</code> — with an esplora fast path
-available strictly as an opt-in behind an explicit privacy
-warning.</strong> The phone those bytes land on, the spend, the vault,
-and the import are the other papers.</p>
+signal <code>NODE_COMPACT_FILTERS</code>. Esplora is an external, warned
+link—not a wallet backend.</strong> The phone those bytes land on, the
+spend, the vault, and the import are the other papers.</p>
 <hr />
 <h2 id="future-hardening">5. Future hardening</h2>
 <p>Three known paths would strengthen this design further. None is
@@ -634,8 +661,8 @@ surface: BIP39/32/86 (keys), BIP340 (Schnorr), BIP341 (Taproot trees,
 tweaks, control blocks, sighash — script-path vectors generated via
 Bitcoin Core’s own functional-test framework where the official file is
 silent), BIP350 (bech32m), BIP158 (GCS filters, byte-for-byte against
-real blocks), BIP327 (MuSig2), BIP352 (silent-payments sending),
-BIP380/387/389/390 (descriptors).</li>
+real blocks), BIP327 (MuSig2), BIP352 (silent-payment sending and
+receiving), BIP380/387/389/390 (descriptors).</li>
 <li><strong>Differential testing against Bitcoin Core</strong>
 (env-gated, against a local node): descriptor addresses vs
 <code>deriveaddresses</code>, transaction serialization vs

@@ -24,6 +24,7 @@ struct ReceiveView: View {
     }
 
     @State private var address: String?
+    @State private var silentPaymentAddress: String?
     @State private var error: String?
     @State private var unconfirmed: [UnconfirmedPayment] = []
     @State private var window: MempoolWindow?
@@ -49,6 +50,11 @@ struct ReceiveView: View {
                         Button("New address") { newAddress() }
                     }
                     .buttonStyle(.bordered)
+                    WarnedExplorerLink(
+                        title: "View address",
+                        url: model.esploraAddressURL(address),
+                        exposedItem: "address",
+                        accessibilityID: "explorerAddressButton")
                     ForEach(unconfirmed) { payment in
                         Label("Unconfirmed: +\(satsText(payment.amount)) — awaiting confirmation",
                               systemImage: "clock")
@@ -62,6 +68,27 @@ struct ReceiveView: View {
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal)
+                    if let silentPaymentAddress {
+                        Divider().padding(.horizontal)
+                        Text("Experimental · Silent payment address")
+                            .font(.subheadline.weight(.semibold))
+                        Text(silentPaymentAddress)
+                            .font(.system(.footnote, design: .monospaced))
+                            .multilineTextAlignment(.center)
+                            .textSelection(.enabled)
+                            .padding(.horizontal)
+                            .accessibilityIdentifier("silentPaymentAddress")
+                        HStack(spacing: 16) {
+                            Button("Copy") { UIPasteboard.general.string = silentPaymentAddress }
+                            ShareLink(item: silentPaymentAddress)
+                        }
+                        .buttonStyle(.bordered)
+                        Text("Static and reusable, but receiving is experimental. Payments are only found while silent payments and its configured tweak-data service remain available.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+                    }
                 } else if let error {
                     ContentUnavailableView("No address", systemImage: "exclamationmark.triangle",
                                            description: Text(error))
@@ -80,6 +107,9 @@ struct ReceiveView: View {
             .task {
                 address = try? await model.currentReceiveAddress()
                 if address == nil { error = "The wallet is not available." }
+                if model.spReceiveEnabled {
+                    silentPaymentAddress = try? await model.currentSilentPaymentAddress()
+                }
                 await openWindow()
             }
             .onDisappear { closeWindow() }
@@ -90,6 +120,14 @@ struct ReceiveView: View {
                 case .background: closeWindow()
                 case .active: Task { await openWindow() }
                 default: break
+                }
+            }
+            .onChange(of: model.status.history) { _, history in
+                // The mempool window owns only the temporary presentation.
+                // Once normal filter sync records the same tx in a block,
+                // remove its stale orange row immediately.
+                unconfirmed.removeAll { payment in
+                    history.contains { $0.txid == payment.txid && $0.height > 0 }
                 }
             }
         }

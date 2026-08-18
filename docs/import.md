@@ -1,5 +1,8 @@
 # Import: The Bundle Is the History
 
+> **Archived technical note.** Winnow's current architecture, evidence, and
+> limitations now live in the [canonical design paper](paper.md).
+
 *Design paper for Winnow. The no-back-scan rule is stated in [the read side](read-side.md) §2.7.5 and [the phone paper](mobile.md) §4.1. This is the format, the verification algorithm, and what a lying bundle can still do.*
 
 ---
@@ -14,13 +17,13 @@ The bundle is not a convenience file. **The bundle is the history.** Without it 
 
 ---
 
-## 2. Format (version 1)
+## 2. Format (version 2)
 
 JSON, one object:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "network": "signet",
   "descriptor": "tr([fp/86'/1'/0']tpub…/<0;1>/*)#checksum",
   "mnemonic": "word …",
@@ -33,7 +36,8 @@ JSON, one object:
       "scriptPubKey": "5120…",
       "chain": 0,
       "index": 3,
-      "height": 149000
+      "height": 149000,
+      "silentPaymentTweak": "<32-byte scalar hex; silent-payment outputs only>"
     }
   ],
   "transactions": [
@@ -41,7 +45,9 @@ JSON, one object:
       "txid": "<display hex>",
       "height": 149000,
       "received": 50000,
-      "spent": 0
+      "spent": 0,
+      "fee": 250,
+      "replacedBy": "<replacement transaction id, when fee-bumped>"
     }
   ]
 }
@@ -49,18 +55,20 @@ JSON, one object:
 
 Rules the importer enforces before any network call:
 
-- `version` must be `1`. Unknown versions fail closed.
+- `version` is `1` or `2`. Version 1 remains readable for existing descriptor-only exports; writers emit version 2. Unknown versions fail closed.
 - `network` is `signet` or `mainnet` (the two networks the app opens).
 - At least one of `descriptor` or `mnemonic` is present.
 - If both are present they must *agree*: the BIP86 descriptor derived from the mnemonic equals the bundle descriptor, or import throws `descriptorMismatch`.
 - Mnemonic-only: the app derives the canonical `tr([fp/86'/coin'/0']xpub/<0;1>/*)` and stores the mnemonic in the keychain (spendable).
-- Descriptor-only: watch-only. The descriptor must be that same single-sig shape. Signing is impossible until a secret is supplied by some later path (there is none in v1 — watch-only stays watch-only).
-- Every claimed UTXO's `scriptPubKey` must be exactly what the descriptor derives at `(chain, index)`. A bundle cannot attach an arbitrary output to this wallet by lying about coordinates.
+- Descriptor-only: watch-only. The descriptor must be that same single-sig shape. Signing is impossible until a secret is supplied by some later path (there is none today — watch-only stays watch-only).
+- For an ordinary UTXO, `silentPaymentTweak` is absent and `scriptPubKey` must be exactly what the descriptor derives at `(chain, index)`. A bundle cannot attach an arbitrary output to this wallet by lying about coordinates.
+- For a BIP352 UTXO, version 2 carries `silentPaymentTweak`: the 32-byte scalar added to the wallet's silent-payment spend key. The mnemonic is required because a BIP86 descriptor does not contain that key. The importer derives `b_spend + tweak`, checks the resulting output script, and persists the tweak for signing. Bad scalars, descriptor-only silent-payment claims, and script mismatches fail closed.
 - `txid` values are display (big-endian) hex on the wire and in the file; internally they are reversed to Bitcoin's byte order, same as the rest of the stack.
 - `chain` is `0` receive / `1` change (BIP44 external/internal, matching the multipath descriptor).
 - Scanning resumes at `lastKnownHeight + 1`. `creationHeight` of the new wallet state *is* `lastKnownHeight`.
+- `fee` on a history entry is optional. The writer includes it only when every input of that transaction was ours (the only case a filter client can compute the fee exactly). Older v1 files omit the key; readers treat absence as unknown. This is display state — omitting it does not create or destroy money. The on-device `observedFeeRates` samples FeePolicy uses are **not** in the bundle; a restored wallet falls back to the static presets until it observes new sends.
 
-The format is versioned so a future `proof` field (Utreexo, [read-side](read-side.md) §5.3) can be added without breaking v1 readers.
+Version 2 is the first schema change: it adds the recovery metadata that BIP352 outputs require while preserving version 1 reads. The version boundary leaves room for a future `proof` field (Utreexo, [read-side](read-side.md) §5.3) without silently changing old semantics.
 
 Vaults are not in this bundle. A vault is a separate descriptor the user adds in-app; its history follows the same forward-only rule ([vaults](vaults.md) §5).
 
@@ -79,7 +87,7 @@ Vaults are not in this bundle. A vault is a separate descriptor the user adds in
 
 `matchesBundle` is `spentSinceBundle.isEmpty`. A stale export (you spent after you wrote the file) is a report the user can see, not a silent rewrite. Discovered UTXOs are applied — the point of the forward scan is to catch up — but a claimed-and-spent coin is never left in the spendable set as if the bundle were current.
 
-The report core (`ImportReport.make`) is a pure function of the bundle plus the `MatchEffect`s of the scanned blocks, so it is unit-tested without a network. The e2e suite drives the real app through an import and captures the report screen (`14-import-report.png`); latest run spent 15.82s in verify (signet, 2026-08-15, `screenshots/timings.json`).
+The report core (`ImportReport.make`) is a pure function of the bundle plus the `MatchEffect`s of the scanned blocks, so it is unit-tested without a network. The e2e suite drives the real app through an import and captures the report screen (`14-import-report.png`); latest run spent 18.79s in verify (signet, iPhone 17 Pro Max simulator, 2026-08-17, `screenshots/timings.json`).
 
 Cost is proportional to how stale the bundle is, not to how old the wallet is. A bundle exported at the tip is a JSON parse and a zero-length scan.
 
@@ -107,16 +115,26 @@ This is the import analogue of [read-side](read-side.md) §2.7.1 (filters can li
 
 ---
 
-## 5. What this is not
+## 5. Export (the writer)
+
+Winnow writes version 2 JSON and reads versions 1 and 2. Settings → **Export wallet bundle** writes descriptor + known UTXOs + history (including `fee` when known) + `lastKnownHeight` = the live FilterSync frontier (`nextScanHeight − 1`). The app persists that frontier back into `WalletState` after each sync pass — `apply(match:)` alone does not move it — so an export after ordinary app use resumes where the phone actually stopped, not at the creation/import height. The mnemonic is **excluded by default**; including it is a hot backup and takes an explicit toggle plus a confirm. If the wallet holds a silent-payment UTXO, watch-only export is refused: omitting the BIP352 spend key would create an incomplete recovery artifact. The on-screen preview redacts the mnemonic line; the shared file is the real JSON. The share-sheet file is a unique, backup-excluded temp that is deleted when the sheet closes, the seed toggle flips, or the write fails. A missing keystore entry or an xprv-only wallet throws `mnemonicUnavailable` rather than a raw keystore error.
+
+A Winnow-native wallet that is never exported cannot be recovered here from the 12 words alone — that is the no-back-scan rule, not a missing feature of import. Export is the other half.
+
+Pending (height 0) change outputs stay in the UTXO set: they are live spendable state.
+
+---
+
+## 6. What this is not
 
 - **Not a BIP39-only import.** A 12-word phrase without history would force a back-scan. The onboarding UI does not offer "type your words and we'll find your coins."
-- **Not an xpub watcher that asks an indexer.** Descriptor-only import is watch-only and still uses filters, from the bundle height forward. The opt-in esplora path does not get to skip the bundle.
+- **Not an xpub watcher that asks an indexer.** Descriptor-only import is watch-only and still uses filters, from the bundle height forward. External explorer links never get to skip the bundle.
 - **Not SLIP-39 / Passport / SeedQR / output descriptors of every flavor.** v1 is the everyday BIP86 wallet this app itself creates. That is the export we can specify and the import we can verify. Broader descriptor import is a format-version bump, not a silent widening of `tr(KEY)`.
 
 ---
 
-## 6. Conclusion
+## 7. Conclusion
 
 Moving a wallet onto this phone is a data-portability problem, not a scanning problem. The previous wallet ships its answers; this wallet checks the answers it can check (spends after `lastKnownHeight`, script/descriptor agreement) and refuses to pretend the rest of history can be privately reconstructed on a radio.
 
-**v1 is therefore: a versioned JSON bundle (descriptor and/or mnemonic + UTXOs + history + height), seeded as claimed, verified by forward filter-scan, with omissions and too-high heights documented as residual risk rather than solved.**
+**The bundle is therefore: versioned JSON (descriptor and/or mnemonic + recoverable UTXOs + history + height), seeded as claimed, verified by forward filter-scan, with omissions and too-high heights documented as residual risk rather than solved.**

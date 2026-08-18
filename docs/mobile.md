@@ -1,5 +1,8 @@
 # A Private Bitcoin Wallet on a Phone
 
+> **Archived technical note.** Winnow's current architecture, evidence, and
+> limitations now live in the [canonical design paper](paper.md).
+
 *Framing paper for Winnow. The other papers — [read](read-side.md), [write](write-side.md), [vaults](vaults.md), [import](import.md) — each own one job. This one owns the device.*
 
 ---
@@ -10,7 +13,7 @@ A Bitcoin wallet is keys plus four questions about the chain (what's mine, where
 
 A phone is not a full node: it will not download, store, or validate the chain. A phone is also a poor thin client of someone else's node: it has a stable identity (an IP, an Apple ID, a push token), it is almost always on a network that can be logged, and the user will not read a privacy policy before tapping Receive.
 
-The product lives in the space between those two refusals. **The phone does the matching. Nobody is asked which addresses are yours. The chain is not stored. Work happens while the app is open.** Everything else — Taproot-only, fresh wallets, import-with-history, bounded mempool windows, an esplora toggle behind a warning — is a consequence of that sentence, not a feature list.
+The product lives in the space between those two refusals. **The phone does the matching. Nobody is asked which addresses are yours. The chain is not stored. Work happens while the app is open.** Everything else — Taproot-only, fresh wallets, import-with-history, bounded mempool windows, and warned external explorer links — is a consequence of that sentence, not a feature list.
 
 This paper states the device constraints, the architecture they force, and which paper answers which question. It does not re-argue compact filters; that is [the read side](read-side.md).
 
@@ -20,9 +23,9 @@ This paper states the device constraints, the architecture they force, and which
 
 Constraints that are load-bearing, not stylistic:
 
-- **Outbound TCP only.** The app talks to full-node peers over `Network.framework`. No inbound ports, no hidden services, no background socket the OS will kill. Peers are a small outbound pool (default 3): manual endpoints first, then a persisted good-peers list, then a few hardcoded fallback peers (IP literals verified filter-serving; see `NetworkParams`) racing the DNS-seed results — dialed a batch at a time with a short per-attempt timeout, so a fresh launch fills the pool in seconds and reports exhaustion instead of spinning forever. No addr gossip, no scoring buckets — a misbehaving peer is dropped and replaced.
+- **Outbound TCP only.** The app talks to full-node peers over `Network.framework`. No inbound ports, no hidden services, no background socket the OS will kill. Peers are a small outbound pool (default 3): manual endpoints first, then a persisted good-peers list, then a few hardcoded fallback peers (IP literals verified filter-serving; see `NetworkParams`) racing the DNS-seed results — seeds resolve over DNS-over-HTTPS (Cloudflare dns-json at 1.1.1.1, configurable) and fall back to `getaddrinfo` if DoH is empty or down; RFC1918/loopback answers are dropped on public networks. Dials race a batch of candidates at a time with a short per-attempt timeout, so a fresh launch fills the pool in seconds and reports exhaustion instead of spinning forever. No addr gossip, no scoring buckets — a misbehaving peer is dropped and replaced.
 - **Foreground only.** There is no `UIBackgroundModes` entry. Sync-while-active is the design, not a v1 omission. A payment you are not looking at waits for the next open, or for a confirmation the next time filters are scanned. Push notifications would require a server that knows your addresses or your txids.
-- **This-device keychain.** Secrets live in the iOS Keychain as `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, with iCloud Keychain sync off. They are not in the app's JSON state, not in iCloud backup, not in the mnemonic UI after the first screen. Signing loads the secret for the call and drops it.
+- **This-device keychain.** Secrets live in the iOS Keychain as `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, with iCloud Keychain sync off. They are not in the app's JSON state and not in iCloud backup. After the first screen the words reappear only behind an explicit control gated on device-owner authentication (Settings → Backup → Show recovery phrase, fail-closed when no passcode is set). Both recovery screens offer an explicit copy action; its pasteboard item is local-only, expires after two minutes, and warns that paper is more private. Signing loads the secret for the call and drops it.
 - **One runtime dependency.** [`swift-secp256k1`](https://github.com/21-DOT-DEV/swift-secp256k1) — Bitcoin Core's libsecp256k1. Swift never does raw curve math on secrets. Everything else (filters, headers, PSBT, descriptors, P2P) is in-tree.
 - **App Store reality.** No embedded full node, no always-on VPN, no custom kernel. iOS 17+, iPhone only, portrait. The app target is a thin SwiftUI shell; if the UI needs a capability, a library exposes it. That split is an architecture invariant, not a directory preference: tests run against the SPM package, not against views.
 
@@ -42,7 +45,7 @@ Bandwidth and battery are real but secondary. Steady-state compact filters are a
 | Shared custody? | MuSig2 n-of-n or `multi_a` k-of-n, coordinated by PSBTv2, no server | [vaults](vaults.md) |
 | Moving a wallet in? | A history bundle. There is no back-scan. | [import](import.md) |
 
-One opt-in crosses several rows: an esplora backend, off by default, named in Settings with exactly what it learns. It is a user-initiated exception, never the default path.
+One user-controlled escape hatch crosses several rows: a selected external explorer website. Opening an exact address or transaction requires a warning; its response never becomes wallet state.
 
 ---
 
@@ -50,7 +53,7 @@ One opt-in crosses several rows: an esplora backend, off by default, named in Se
 
 ### 4.1 Fresh, and forward-only
 
-A new wallet is created in the app. It has no history, so scanning starts at the tip (or the height at creation) and runs forward. Recovering an old wallet *privately from the chain* would mean gigabytes of historical filters on a radio the user pays for. The product does not do that. Import requires the previous wallet's answers to come along — descriptor, UTXOs, history, a last-known height — and the phone verifies them by scanning *forward* from that height. The argument and the bundle format are [import](import.md).
+A new wallet and its recovery phrase are created immediately, offline. Header synchronization continues while the user secures the phrase; the wallet starts scanning from the last already-validated height so the interval cannot be missed. Recovering an old wallet *privately from the chain* would mean gigabytes of historical filters on a radio the user pays for. The product does not do that. Import requires the previous wallet's answers to come along — descriptor, UTXOs, history, a last-known height — and the phone verifies them by scanning *forward* from that height. The argument and the bundle format are [import](import.md).
 
 This is the constraint that makes the rest cheap. It is not a v1 shortcut.
 
@@ -58,7 +61,7 @@ This is the constraint that makes the rest cheap. It is not a v1 shortcut.
 
 Receiving is BIP86 P2TR. There is no legacy / nested-segwit / P2WPKH path, and no ECDSA signing path. One output type means one watch-list shape, one sighash, one witness size for fee math (66 bytes for a key-path spend), and no "which address type did this contact use?" branch in the UI.
 
-The phone can *pay* any standard address (bech32/bech32m, base58 P2PKH/P2SH) and can *send to* BIP352 silent-payment codes (`sp1…` / `tsp1…`). It cannot *receive* silent payments — that scan is a different, heavier read-side, and is a deliberate absence ([read-side](read-side.md) §3).
+The phone can *pay* any standard address (bech32/bech32m, base58 P2PKH/P2SH). BIP352 silent payments (`sp1…` / `tsp1…`) are explicitly **experimental**. Sending is self-contained. Receiving is off by default because ordinary compact-filter peers do not yet supply the transaction tweaks needed to derive filter candidates; the current implementation follows a user-chosen per-block tweak source, then matches locally against the normal filters and verifies full blocks from P2P peers ([read-side](read-side.md) §3). The warning names IP disclosure, forward-only detection, and the risk that omitted tweak data can hide a payment.
 
 ### 4.3 Two modern multisig flavors, same read path
 
@@ -89,7 +92,7 @@ These are product decisions, not missing tickets:
 
 - Always-on mempool / background 0-conf / live fee histograms
 - Historical filter back-scan
-- Silent-payment receive
+- Silent-payment labels and historical backfill for periods when receive scanning was off
 - BIP37, Electrum, or any "ask a node about my address"
 - An embedded consensus engine or fraud-proof verifier
 - A vault coordinator server
@@ -101,7 +104,7 @@ Each absence has a paper that says what you get instead. The landing page lists 
 
 ## 7. How the implementation is checked
 
-The validation appendix of [the read side](read-side.md) covers the stack. The mobile-specific claim — that the *app* does what the libraries promise — is the signet UI suite: it drives the real binary, mines to it, spends from it, cosigns a vault, verifies an import, and writes the screenshots on this site plus `screenshots/timings.json`. Latest run (iPhone 17 simulator, 2026-08-15): wallet create 1.78s, address shown 2.17s, mined→filter-detected 0.75s, form→broadcast 0.67s.
+The validation appendix of [the read side](read-side.md) covers the stack. The mobile-specific claim — that the *app* does what the libraries promise — is the signet UI suite: it drives the real binary, mines to it, spends from it, cosigns a vault, verifies an import, and writes the screenshots on this site plus `screenshots/timings.json`. Latest run (iPhone 17 Pro Max simulator, 2026-08-17): wallet create 2.74s, address shown 2.16s, mined→filter-detected 0.69s, form→broadcast 0.66s.
 
 The suite is ~200 tests plus those UI scenarios, on every push.
 
@@ -109,6 +112,6 @@ The suite is ~200 tests plus those UI scenarios, on every push.
 
 ## 8. Status
 
-Protocol core, both vault schemes, silent-payment send, and the P2P read/write path are complete and vector-tested. The app runs on signet. Mainnet is available and treated as needing more care than a picker flip.
+Protocol core, both vault schemes, silent-payment send and opt-in receive, and the P2P read/write path are complete and vector-tested. The app runs on signet. Mainnet is available and treated as needing more care than a picker flip.
 
 **v1 is therefore: a foreground iOS client, Taproot-only, fresh-wallet, one dependency, talking only to `NODE_COMPACT_FILTERS` peers unless the user opts into a named server — with the four jobs split across the papers that follow.**
