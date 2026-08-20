@@ -735,3 +735,107 @@ claims, presentation accessibility, and CI. If you find a merge blocker, leave
 one consolidated review for Codex to resolve. If the head and checks are clean,
 please merge that integration PR. Do not run or publish any recovery media, and
 do not expose protected story state in review output.
+
+---
+
+## 2026-08-19 · Hermes — internal Markdown moved out of the published tree
+
+The owner handed the remaining publication cleanup to Hermes. I moved the five
+unlinked/internal Markdown files out of `docs/`, whose top-level files are
+published by the site workflow:
+
+- `docs/README.md` → `.github/internal/design-papers.md`
+- `docs/launch-handoff.md` → `.github/internal/launch-handoff.md`
+- `docs/mainnet-test-plan.md` → `.github/internal/mainnet-test-plan.md`
+- `docs/app-store-screenshots.md` → `.github/internal/app-store-screenshots.md`
+- `docs/story-run.md` → `.github/internal/story-run.md`
+
+This deliberately removes the old Codex/Kimi-owned paths; their prose is
+preserved byte-for-byte except for links that had to change after relocation.
+The root README now points to the new internal locations, and the launch and
+screenshot references resolve from there. No public HTML page, design-paper
+claim, app source, screenshot, or story artifact was changed.
+
+---
+
+## 2026-08-19 · Claude (Opus) — the design papers became HTML, and pandoc is gone
+
+Owed under the rule at the top of this log: #73 deleted files this table
+assigns to Codex / Kimi. Recording it here rather than leaving it to be
+discovered.
+
+`docs/` was markdown rendered through pandoc and `_template.html` on every
+deploy. Eight pages are now hand-written HTML sharing `docs/site.css`, and
+the render step is deleted from the workflow:
+
+- `custody`, `evidence`, `privacy`, `mobile`, `read-side`, `write-side`,
+  `vaults`, `import` — `.md` deleted, `.html` committed in its place
+- `docs/_template.html` deleted
+- `docs/paper.md` **stays markdown** and is not rendered; Cloudflare serves
+  it as `text/markdown`. Its YAML front matter existed only for pandoc and
+  was stripped, and links that pointed at `/paper` now point at `/paper.md`
+
+**Do not restore the render loop.** Its removal is what permanently closes
+the `/agent-handoff` leak class recorded further up this log: the build no
+longer publishes every top-level Markdown file in `docs/`.
+
+The copy did not change. Each page was diffed word for word against what the
+old pipeline produced from the same source — 12,518 words, identical across
+all eight.
+
+Two consequences for whoever owns these next:
+
+- **The papers are now dual-purpose.** `project.yml` bundles `docs/site.css`
+  and five of the pages into the app as resources, and `Components.swift`
+  loads them into a `WKWebView`. Renaming or deleting one breaks `xcodegen`
+  and therefore `release.yml`. `.github/workflows/ci.yml` deliberately does
+  not ignore those six paths, so editing one still builds.
+- **The `docs/*.md` row in the table above is stale.** `paper.md` is the only
+  markdown page left under `docs/`.
+
+Separately, and for the record rather than as a precedent: the table says
+Claude does not edit `docs/index.html`, and I edited it three times on
+2026-08-19 at the owner's direction — the hero subhead, an `img` rule, and
+#69. Codex should treat the current file as the base rather than its own
+last copy.
+
+## 2026-08-19 — Claude — the chain no longer starts at block 0 (#89)
+
+A shipped checkpoint changes what the app claims, so this is worth flagging to
+whoever owns the copy rather than quietly landing.
+
+**What changed.** `NetworkParams` now carries a mainnet checkpoint at height
+900,000, and a fresh mainnet chain starts there instead of at genesis:
+**49 seconds to the tip instead of 8m28s**. Settings gains "Verify the chain
+from genesis" (off by default) to do it the old way.
+
+The constant is not asserted — `CheckpointGeneratorTests` regenerates it from a
+genesis-validated header file through the production loader, and the acceptance
+test in `CheckpointAgreementTests` requires a genesis-rooted and a
+checkpoint-rooted chain to agree on tip hash and cumulative work. The hash was
+also confirmed against three independent mainnet peers.
+
+**What it means for the pages.** Design-paper claims about the read side are
+still true — every header after the checkpoint is proof-of-work-checked, and
+nothing is asked of any server. What is new is that first launch begins from a
+value shipped in the binary rather than one the phone derived. That is a real
+change to the "asks nothing of anyone" framing and the copy should say so
+plainly, including that it is one setting away from the old behaviour.
+
+I have **not** edited the design papers or `docs/index.html` for this — they are
+Codex/Kimi's, and `docs/present.html` already has two PRs in flight (#90, #93).
+The in-app Settings footer states the trade-off; the site copy is yours to
+place. Winnow's own wording, for reuse:
+
+> Winnow normally starts from a block header built into the app, then verifies
+> every block after it. That header was produced by syncing this same code from
+> block 0, and anyone can reproduce it — but on your phone it begins as a value
+> you are taking from us rather than one you computed.
+
+**One correctness note worth knowing.** The checkpoint is a speed decision only.
+A wallet whose birthday predates it forces the whole chain back to genesis,
+whatever the setting says, because compact filters are fetched by block hash and
+a chain starting at 900,000 cannot ask about earlier blocks. Found by measuring:
+a birthday-0 wallet hit `FilterSyncError` outright. Failing loudly was the good
+case; the bad one is a wallet quietly reporting a balance short by whatever it
+holds down there.

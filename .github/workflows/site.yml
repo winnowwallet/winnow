@@ -1,30 +1,104 @@
 name: Site
 
-# Deploys docs/ to Cloudflare Pages on every push to main.
-# Requires repo secrets: CF_API_TOKEN (Account → Cloudflare Pages: Edit),
+# Deploys docs/ to Cloudflare Pages.
+#   push to main  -> production (winnowwallet.com)
+#   pull request  -> a per-PR preview URL, commented on the PR
+#
+# docs/ is hand-written HTML with no build step. Do not add one.
+# Requires repo secrets: CF_API_TOKEN (Account -> Cloudflare Pages: Edit),
 # CF_ACCOUNT_ID. Project name: winnow. Custom domain: winnowwallet.com.
 on:
   workflow_dispatch:
   push:
     branches: [main]
     paths: ["docs/**", ".github/workflows/site.yml"]
+  pull_request:
+    paths: ["docs/**", ".github/workflows/site.yml"]
 
 permissions:
   contents: read
 
+# Serialise deploys. Without this, merging several PRs in a row races their
+# deploys and the last one to *finish* wins even if it carries an older tree --
+# which is how production silently lost a paragraph on 2026-08-19.
+concurrency:
+  group: site-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # -- production ----------------------------------------------
   deploy:
+    # Never on pull_request: this job publishes to the live domain.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Render markdown pages to HTML (pandoc)
-        run: |
-          sudo apt-get install -y pandoc
-          cd docs
-          for f in *.md; do pandoc "$f" -s --template=_template.html -o "${f%.md}.html"; done
       - name: Deploy docs/ to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CF_API_TOKEN }}
           accountId: ${{ secrets.CF_ACCOUNT_ID }}
           command: pages deploy docs --project-name=winnow --branch=main
+
+  # -- per-PR preview ------------------------------------------
+  preview:
+    # Fork PRs cannot read CF_API_TOKEN, so skip instead of failing opaquely.
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # Any --branch other than main is a Cloudflare *preview* deployment:
+      # it never touches the production domain.
+      - name: Deploy preview to Cloudflare Pages
+        id: cf
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          command: >-
+            pages deploy docs --project-name=winnow
+            --branch=pr-${{ github.event.pull_request.number }}
+            --commit-dirty=true
+
+      - name: Comment the preview URL (one sticky comment, updated in place)
+        uses: actions/github-script@v7
+        env:
+          URL: ${{ steps.cf.outputs.deployment-url }}
+          PR: ${{ github.event.pull_request.number }}
+        with:
+          script: |
+            const marker = '<!-- site-preview -->';
+            // Derive the branch alias from the deployment URL rather than
+            // hardcoding it: the Pages subdomain is winnow-avs, not winnow,
+            // so a guessed "<pr>.winnow.pages.dev" 404s.
+            const url = process.env.URL || '';
+            const apex = (url.match(/^https:\/\/[^.]+\.(.+)$/) || [])[1] || 'winnow-avs.pages.dev';
+            const alias = `https://pr-${process.env.PR}.${apex}`;
+            const pages = ['/', '/custody', '/architecture', '/present', '/paper.md', '/evidence']
+              .map(p => `[\`${p}\`](${alias}${p})`).join(' · ');
+            const body = [
+              marker,
+              `### 🔎 Site preview for \`${context.sha.slice(0,7)}\``,
+              '',
+              `**Stable alias:** ${alias} — always the newest build of this PR.`,
+              `**This build:** ${process.env.URL}`,
+              '',
+              pages,
+              '',
+              '_Preview only; the production domain is untouched until this merges._',
+            ].join('\n');
+            const {owner, repo} = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const {data: comments} = await github.rest.issues.listComments({owner, repo, issue_number});
+            const mine = comments.find(c => c.body && c.body.includes(marker));
+            if (mine) {
+              await github.rest.issues.updateComment({owner, repo, comment_id: mine.id, body});
+            } else {
+              await github.rest.issues.createComment({owner, repo, issue_number, body});
+            }

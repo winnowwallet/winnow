@@ -137,6 +137,10 @@ final class AppModel {
     private(set) var esploraURLString: String
     private(set) var spReceiveEnabled: Bool
     private(set) var spIndexURLString: String
+    /// Off by default: a fresh chain starts from the shipped checkpoint (#89).
+    /// On means re-derive every block's work from block 0, which is what the
+    /// app did before the checkpoint existed.
+    private(set) var verifyFromGenesis: Bool
 
     private var syncTask: Task<Void, Never>?
     private var phaseTask: Task<Void, Never>?
@@ -153,6 +157,7 @@ final class AppModel {
         static let esploraURL = "esploraURL"
         static let spReceiveEnabled = "spReceiveEnabled"
         static let spIndexURL = "spIndexURL"
+        static let verifyFromGenesis = "verifyFromGenesis"
         /// Set at wallet creation, cleared only by the backup sheet's
         /// confirmed Done — a relaunch in between resumes the backup.
         static func backupPending(_ walletID: String) -> String { "backupPending.\(walletID)" }
@@ -175,6 +180,7 @@ final class AppModel {
         manualPeers = defaults.stringArray(forKey: DefaultsKey.manualPeers) ?? []
         esploraURLString = defaults.string(forKey: DefaultsKey.esploraURL) ?? ""
         spReceiveEnabled = defaults.bool(forKey: DefaultsKey.spReceiveEnabled)
+        verifyFromGenesis = defaults.bool(forKey: DefaultsKey.verifyFromGenesis)
         spIndexURLString = defaults.string(forKey: DefaultsKey.spIndexURL) ?? ""
         // Test mode preconfigures the local node as the (only) manual peer;
         // custom signets have no DNS seeds.
@@ -349,8 +355,19 @@ final class AppModel {
             // header's linkage/work is intentionally CPU-heavy. Keep that
             // validation intact but off the MainActor so relaunching during
             // backup never freezes the onboarding sheet.
+            let start = await chainStart()
             let chain = try await Task.detached(priority: .userInitiated) {
-                try HeaderChain(params: params, storageURL: headersURL)
+                do {
+                    return try HeaderChain(params: params, storageURL: headersURL, start: start)
+                } catch let error as HeaderChainError {
+                    // The stored chain starts somewhere this setting does not
+                    // ask for — the user just changed the setting. The file is
+                    // not damaged, it simply answers the other question, so
+                    // rebuild rather than try to reconcile the two.
+                    guard case .startMismatch = error else { throw error }
+                    try? FileManager.default.removeItem(at: headersURL)
+                    return try HeaderChain(params: params, storageURL: headersURL, start: start)
+                }
             }.value
             let broadcaster = TxBroadcaster(pool: pool, storageURL: dir.appending(path: "broadcast.json"))
             var newStack = SyncStack(pool: pool, chain: chain, filters: nil, broadcaster: broadcaster)
@@ -362,6 +379,17 @@ final class AppModel {
         } catch {
             status.lastSyncError = error.localizedDescription
         }
+    }
+
+    /// Where the header chain should begin for the wallet we actually have.
+    /// The rule itself lives in `HeaderChain.Start.forWallet` so it can be
+    /// tested; this only supplies the wallet's birthday.
+    private func chainStart() async -> HeaderChain.Start {
+        var birthday: UInt32?
+        if let wallet { birthday = min(await wallet.creationHeight, await wallet.nextScanHeight) }
+        return .forWallet(birthday: birthday,
+                          checkpoint: NetworkParams.params(for: network).checkpoint,
+                          verifyFromGenesis: verifyFromGenesis)
     }
 
     private func makeFilterSync(pool: PeerPool, chain: HeaderChain, startHeight: UInt32) throws -> FilterSync {
@@ -474,15 +502,39 @@ final class AppModel {
 
     // MARK: - Wallet creation / import (onboarding)
 
-    /// Creates a fresh wallet immediately at the last locally validated header.
+    /// A fresh wallet has no history, so its birthday is "now" — there is
+    /// nothing to find before it exists. Anchoring to the *peer* tip rather
+    /// than the local header height is what makes that true in practice: on a
+    /// first launch headers have not synced yet, so `chain.height` is genesis,
+    /// and a birthday of 0 sends filter scanning through the entire chain
+    /// looking for a descriptor generated seconds ago.
+    ///
+    /// Scanning still starts at or below the tip, so a payment made while the
+    /// user is writing down the phrase is covered.
+    private func creationHeightForNewWallet() async -> UInt32 {
+        guard let stack else { return 0 }
+        let local = await stack.chain.height
+        var advertised: UInt32 = 0
+        for peer in await stack.pool.connectedPeers() {
+            let height = await peer.peerStartHeight
+            if height > 0, UInt32(height) > advertised { advertised = UInt32(height) }
+        }
+        // Back off a little: peers can advertise a tip we would reorg away
+        // from, and rescanning a few hundred blocks is cheap insurance.
+        let margin: UInt32 = 500
+        let peerBirthday = advertised > margin ? advertised - margin : 0
+        // Never go backwards from what we have already validated locally, and
+        // fall back to it entirely when no peer has advertised a height yet.
+        return max(local, peerBirthday)
+    }
+
+    /// Creates a fresh wallet immediately, dated at the current chain tip.
     /// Peer/header catch-up continues through the regular sync loop while the
-    /// user backs up the phrase. Starting at the known height (rather than
-    /// jumping to the eventual peer tip) keeps the race safe: any payment made
-    /// while onboarding is visible will still be covered by filter scanning.
+    /// user backs up the phrase.
     func createWallet() async throws -> String {
         await buildStackIfNeeded()
         guard let stack else { throw AppError.noStack }
-        let knownHeight = await stack.chain.height
+        let knownHeight = await creationHeightForNewWallet()
         guard let walletURL = walletURL() else { throw AppError.noWallet }
         let wallet = try Wallet.create(network: network, keyStore: keyStore,
                                        storageURL: walletURL, entropy: e2e?.entropy,
@@ -559,7 +611,7 @@ final class AppModel {
         return report
     }
 
-    /// Live wallet as a v2 import-bundle JSON string (docs/import.md).
+    /// Live wallet as a v2 import-bundle JSON string (docs/import.html).
     /// Watch-only unless `includeMnemonic` is set; an xprv-only wallet
     /// throws ``WalletError/mnemonicUnavailable`` rather than a fake seed.
     func exportWalletBundle(includeMnemonic: Bool) async throws -> String {
@@ -598,9 +650,22 @@ final class AppModel {
         walletID = await wallet.id
         walletDescriptor = await wallet.descriptor
         if var stack {
-            stack.filters = try await makeFilterSync(pool: stack.pool, chain: stack.chain,
-                                                     startHeight: wallet.nextScanHeight)
-            self.stack = stack
+            // An imported wallet can be older than the chain we are holding —
+            // its filters live in blocks a checkpoint start skipped, and those
+            // filters are fetched by block hash, so they are simply not
+            // reachable. Drop the stack and rebuild from genesis rather than
+            // scan a range that cannot answer.
+            if await stack.chain.startHeight > (await wallet.nextScanHeight) {
+                syncTask?.cancel()
+                syncTask = nil
+                await stack.pool.stop()
+                self.stack = nil
+                await buildStackIfNeeded()
+            } else {
+                stack.filters = try await makeFilterSync(pool: stack.pool, chain: stack.chain,
+                                                         startHeight: wallet.nextScanHeight)
+                self.stack = stack
+            }
         }
         await refresh()
         if startSync, isActive { startSyncLoop() }
@@ -663,6 +728,67 @@ final class AppModel {
             "deviceAuthenticationRequired": String(e2e?.requireDeviceAuthentication == true),
         ])
         return words
+    }
+
+    /// Settings → irreversibly deletes this network's wallet so another can be
+    /// created or imported. Behind device-owner authentication, like the
+    /// phrase reveal: this destroys the key, and without a backup the money
+    /// goes with it.
+    ///
+    /// Deleted: the Keychain secret, the wallet and vault files, and the
+    /// filter scan progress. **The scan progress must go** — `FilterSync`
+    /// prefers stored progress over the start height it is constructed with,
+    /// so leaving it would make the next wallet inherit this one's scan
+    /// position and silently skip its own history.
+    ///
+    /// Kept: headers and known peers. Those describe the chain, not the
+    /// wallet, so a re-import does not pay for a fresh header sync.
+    func destroyWallet() async throws {
+        guard let walletID else { throw AppError.noWallet }
+        if e2e == nil || e2e?.requireDeviceAuthentication == true {
+            let context = LAContext()
+            var unavailable: NSError?
+            guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &unavailable) else {
+                throw AppError.deviceAuthUnavailable
+            }
+            let passed = try await context.evaluatePolicy(
+                .deviceOwnerAuthentication,
+                localizedReason: "Delete this wallet from this device")
+            guard passed else { throw AppError.deviceAuthFailed }
+        }
+
+        syncTask?.cancel()
+        syncTask = nil
+        await stack?.pool.stop()
+        stack = nil
+
+        // Key first: a throw after this must not leave a wallet file whose
+        // secret is already gone, which would look like a wallet and be
+        // unusable. Deleting an absent ID is a no-op, so retrying is safe.
+        try keyStore.delete(walletID: walletID)
+
+        // Same per-wallet set `adopt(wallet:)` clears when taking a wallet on,
+        // plus the wallet file itself. Keep the two lists together: anything
+        // that is one wallet's view must not survive into the next one.
+        if let dir = storageDirectory() {
+            for name in ["wallet.json", "filters.json", "broadcast.json", "vaults.json"] {
+                try? FileManager.default.removeItem(at: dir.appending(path: name))
+            }
+        }
+        defaults.removeObject(forKey: DefaultsKey.backupPending(walletID))
+
+        wallet = nil
+        self.walletID = nil
+        walletDescriptor = nil
+        status = Status()
+        syncPhase = .idle
+        await vaultStore.configure(storageURL: vaultsURL())
+        vaults = await vaultStore.all
+        stage = .onboarding
+        e2e?.journal("wallet.destroyed", fields: ["walletID": walletID])
+
+        if isActive { await activate() }
+        await refresh()
     }
 
     /// Polls the pool until a peer completes the handshake (or the timeout
@@ -746,7 +872,7 @@ final class AppModel {
             payments.append(try Payment(amount: amount, address: trimmed, network: network))
         }
         let sizingPayments = payments + silentPayments.map { Payment(amount: $0.amount, scriptPubKey: sizing) }
-        let utxos = await wallet.utxos
+        let utxos = await wallet.spendableUtxos
         let changeScript = try await wallet.scriptPubKey(chain: .change, index: wallet.nextChangeIndex)
         let selection = try CoinSelection.select(utxos: utxos, payments: sizingPayments,
                                                  changeScriptPubKey: changeScript,
@@ -1014,6 +1140,19 @@ final class AppModel {
         stack = nil
         await activate()
         await refresh()
+    }
+
+    /// Switching where the chain starts cannot be applied to a chain already
+    /// on disk, so this tears the stack down and rebuilds it. Turning the
+    /// setting on discards the stored headers and re-derives from block 0,
+    /// which takes minutes; turning it off keeps them, since a chain validated
+    /// from genesis already satisfies anything a checkpoint start would claim.
+    func setVerifyFromGenesis(_ enabled: Bool) async {
+        guard enabled != verifyFromGenesis else { return }
+        verifyFromGenesis = enabled
+        defaults.set(enabled, forKey: DefaultsKey.verifyFromGenesis)
+        e2e?.journal("setting.verifyFromGenesis", fields: ["enabled": String(enabled)])
+        await reconnect()
     }
 
     func setSilentPaymentsEnabled(_ enabled: Bool) {
