@@ -3,6 +3,17 @@ import Foundation
 import SwiftUI
 import WalletCore
 
+/// Immutable identity of the fields that produced a fee-bump preview. A late
+/// async result is accepted only while this request still matches the form.
+struct FeeBumpReviewInputs: Equatable {
+    let txid: Data
+    let targetRateText: String
+
+    var targetRate: Double? {
+        Double(targetRateText.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+}
+
 /// Balance (confirmed sats), sync status, and the local transaction history.
 /// History speaks in confirmed blocks only — a pending send we broadcast is
 /// labeled "awaiting confirmation", never "incoming" (docs/read-side.md §3.3).
@@ -46,8 +57,13 @@ struct HomeView: View {
                     }
                     // nextScanHeight is the NEXT block to scan, so a fully
                     // scanned tip reads "tip+1 of tip" — clamp the display.
-                    LabeledContent("Filter scan",
-                                   value: "block \(min(model.status.nextScanHeight, model.status.tipHeight)) of \(model.status.tipHeight)")
+                    LabeledContent(
+                        "Filter scan",
+                        value: model.syncPhase.filterScanText(
+                            fallbackScanned: model.status.nextScanHeight,
+                            fallbackTip: model.status.tipHeight
+                        )
+                    )
                     LabeledContent("Peers", value: "\(model.status.peerCount)")
                     if model.status.syncing, model.syncStatusText == nil {
                         ProgressView("Scanning filters…")
@@ -158,19 +174,28 @@ private struct HistoryRow: View {
 /// current effective rate; WalletCore may raise the actual result further to
 /// satisfy BIP125's incremental-relay-fee rule.
 private struct FeeBumpView: View {
+    private struct ReviewedFeeBump {
+        let request: FeeBumpReviewInputs
+        let preview: FeeBumpPreview
+    }
+
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
 
     let txid: Data
     @State private var currentRate: Double?
     @State private var targetRateText = ""
-    @State private var preview: FeeBumpPreview?
+    @State private var reviewedFeeBump: ReviewedFeeBump?
     @State private var error: String?
     @State private var bumping = false
     @State private var replacementTxid: Data?
 
     private var targetRate: Double? {
         Double(targetRateText.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private var reviewInputs: FeeBumpReviewInputs {
+        FeeBumpReviewInputs(txid: txid, targetRateText: targetRateText)
     }
 
     var body: some View {
@@ -198,7 +223,8 @@ private struct FeeBumpView: View {
                     }
                 }
 
-                if let preview, replacementTxid == nil {
+                if let reviewedFeeBump, replacementTxid == nil {
+                    let preview = reviewedFeeBump.preview
                     Section("Review") {
                         LabeledContent("Actual rate", value: feeRateText(preview.feeRateSatPerVByte))
                         LabeledContent("Replacement fee", value: satsText(preview.fee))
@@ -239,8 +265,8 @@ private struct FeeBumpView: View {
                     Button("Close") { dismiss() }
                 }
             }
-            .onChange(of: targetRateText) {
-                preview = nil
+            .onChange(of: reviewInputs) { _, _ in
+                reviewedFeeBump = nil
                 error = nil
             }
             .task { await load() }
@@ -253,35 +279,42 @@ private struct FeeBumpView: View {
             currentRate = rate
             let suggestedRate = ceil(rate + 1)
             targetRateText = String(format: "%.0f", suggestedRate)
-            preview = try await model.previewFeeBump(
-                txid: txid, feeRateSatPerVByte: suggestedRate)
+            let requested = reviewInputs
+            guard let targetRate = requested.targetRate else { return }
+            let candidate = try await model.previewFeeBump(
+                txid: requested.txid, feeRateSatPerVByte: targetRate)
+            guard requested == reviewInputs else { return }
+            reviewedFeeBump = ReviewedFeeBump(request: requested, preview: candidate)
         } catch {
             self.error = error.localizedDescription
         }
     }
 
     private func review() {
-        guard let targetRate else { return }
+        let requested = reviewInputs
+        guard let targetRate = requested.targetRate else { return }
         error = nil
-        preview = nil
+        reviewedFeeBump = nil
         Task {
             do {
-                preview = try await model.previewFeeBump(txid: txid,
-                                                         feeRateSatPerVByte: targetRate)
+                let candidate = try await model.previewFeeBump(
+                    txid: requested.txid, feeRateSatPerVByte: targetRate)
+                guard requested == reviewInputs else { return }
+                reviewedFeeBump = ReviewedFeeBump(request: requested, preview: candidate)
             } catch {
+                guard requested == reviewInputs else { return }
                 self.error = error.localizedDescription
             }
         }
     }
 
     private func bump() {
-        guard let targetRate else { return }
+        guard let reviewedFeeBump else { return }
         bumping = true
         error = nil
         Task {
             do {
-                replacementTxid = try await model.bumpFee(txid: txid,
-                                                         feeRateSatPerVByte: targetRate)
+                replacementTxid = try await model.bumpFee(preview: reviewedFeeBump.preview)
             } catch {
                 self.error = error.localizedDescription
             }

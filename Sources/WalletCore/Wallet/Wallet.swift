@@ -25,6 +25,9 @@ public enum WalletError: Error, Equatable, LocalizedError {
     /// send never confirms, a forward-only restore cannot see the original
     /// coins (their confirmation height is behind `lastKnownHeight`).
     case exportWhilePending
+    /// A matched transaction carried impossible output values or a total
+    /// beyond Bitcoin's consensus monetary range. Nothing is applied.
+    case invalidTransactionAmounts
 
     public var errorDescription: String? {
         switch self {
@@ -44,6 +47,8 @@ public enum WalletError: Error, Equatable, LocalizedError {
             "This wallet contains silent-payment funds. Include the recovery phrase so the exported bundle can validate and spend them."
         case .exportWhilePending:
             "Wait for pending transactions to confirm before exporting. A mid-send backup would drop the coins being spent."
+        case .invalidTransactionAmounts:
+            "A matched Bitcoin transaction contains invalid amounts. Wallet state was not changed."
         }
     }
 }
@@ -369,6 +374,49 @@ public struct WalletState: Codable, Equatable, Sendable {
         history = try container.decode([HistoryEntry].self, forKey: .history)
         observedFeeRates = try container.decodeIfPresent([Double].self, forKey: .observedFeeRates) ?? []
         pendingSends = try container.decodeIfPresent([PendingSend].self, forKey: .pendingSends) ?? []
+
+        func validateCoins(_ coins: [WalletUTXO], key: CodingKeys) throws {
+            var seen = Set<Transaction.Outpoint>()
+            var total: Int64 = 0
+            for coin in coins {
+                guard coin.txid.count == 32,
+                      !coin.scriptPubKey.isEmpty,
+                      coin.amount > 0,
+                      coin.amount <= BitcoinAmount.maximum,
+                      seen.insert(coin.outpoint).inserted
+                else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: key, in: container,
+                        debugDescription: "invalid or duplicate wallet coin")
+                }
+                let (next, overflow) = total.addingReportingOverflow(coin.amount)
+                guard !overflow, next <= BitcoinAmount.maximum else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: key, in: container,
+                        debugDescription: "wallet coin total exceeds Bitcoin's monetary range")
+                }
+                total = next
+            }
+        }
+        try validateCoins(utxos, key: .utxos)
+        for pending in pendingSends {
+            try validateCoins(pending.selected, key: .pendingSends)
+            guard pending.fee >= 0, pending.fee <= BitcoinAmount.maximum else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .pendingSends, in: container,
+                    debugDescription: "pending transaction has an invalid fee")
+            }
+        }
+        guard history.allSatisfy({ entry in
+            entry.txid.count == 32
+                && (0 ... BitcoinAmount.maximum).contains(entry.received)
+                && (0 ... BitcoinAmount.maximum).contains(entry.spent)
+                && entry.fee.map { (0 ... BitcoinAmount.maximum).contains($0) } ?? true
+        }), observedFeeRates.allSatisfy({ $0.isFinite && $0 > 0 && $0 <= 10_000 }) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .history, in: container,
+                debugDescription: "wallet history or fee samples contain invalid values")
+        }
     }
 }
 
@@ -396,14 +444,42 @@ public struct FeeBumpPreview: Equatable, Sendable {
     public var feeRateSatPerVByte: Double
     public var fee: Int64
     public var changeAmount: Int64?
+    /// Exact non-witness replacement the user reviewed. The signed result
+    /// must preserve every input, output, sequence, version, and locktime.
+    public var replacementTransaction: Transaction
 
     public init(originalTxid: Data, currentFeeRateSatPerVByte: Double,
-                feeRateSatPerVByte: Double, fee: Int64, changeAmount: Int64?) {
+                feeRateSatPerVByte: Double, fee: Int64, changeAmount: Int64?,
+                replacementTransaction: Transaction) {
         self.originalTxid = originalTxid
         self.currentFeeRateSatPerVByte = currentFeeRateSatPerVByte
         self.feeRateSatPerVByte = feeRateSatPerVByte
         self.fee = fee
         self.changeAmount = changeAmount
+        self.replacementTransaction = replacementTransaction
+    }
+
+    /// Binds the signed replacement to the complete reviewed transaction.
+    /// Witnesses are intentionally excluded: they are added by signing after
+    /// review, while all authorization-relevant transaction fields are fixed.
+    public func authorizes(_ built: BuiltTransaction) -> Bool {
+        let actual = built.transaction
+        let reviewed = replacementTransaction
+        guard built.fee == fee,
+              built.changeAmount == changeAmount,
+              actual.version == reviewed.version,
+              actual.locktime == reviewed.locktime,
+              actual.outputs == reviewed.outputs,
+              actual.inputs.count == reviewed.inputs.count,
+              zip(actual.inputs, reviewed.inputs).allSatisfy({ pair in
+                  pair.0.previousOutput == pair.1.previousOutput
+                      && pair.0.scriptSig == pair.1.scriptSig
+                      && pair.0.sequence == pair.1.sequence
+              })
+        else { return false }
+
+        let vsize = TransactionBuilder.vsize(of: actual)
+        return vsize > 0 && Double(built.fee) / Double(vsize) == feeRateSatPerVByte
     }
 }
 
@@ -540,6 +616,8 @@ public actor Wallet {
     public var nextScanHeight: UInt32 { state.nextScanHeight }
     public var nextReceiveIndex: UInt32 { state.nextReceiveIndex }
     public var nextChangeIndex: UInt32 { state.nextChangeIndex }
+    /// Safe because every state ingress validates individual coins and the
+    /// aggregate against `BitcoinAmount.maximum` before mutation.
     public var balance: Int64 { state.utxos.reduce(0) { $0 + $1.amount } }
     public var utxos: [WalletUTXO] { state.utxos }
     /// UTXOs consensus allows spending at the last scanned height.
@@ -691,6 +769,24 @@ public actor Wallet {
     /// any touching transaction lands in history. Idempotent per block.
     @discardableResult
     public func apply(match: BlockMatch) throws -> MatchEffect {
+        // Validate the whole matched block before changing a single coin. A
+        // merkle proof authenticates bytes under the header; it does not by
+        // itself enforce Bitcoin's transaction-value consensus rules for an
+        // SPV wallet. This also preserves atomicity when a later transaction
+        // in the block is malformed.
+        for tx in match.block.transactions {
+            var outputTotal: Int64 = 0
+            for output in tx.outputs {
+                guard output.value >= 0, output.value <= BitcoinAmount.maximum else {
+                    throw WalletError.invalidTransactionAmounts
+                }
+                let (next, overflow) = outputTotal.addingReportingOverflow(output.value)
+                guard !overflow, next <= BitcoinAmount.maximum else {
+                    throw WalletError.invalidTransactionAmounts
+                }
+                outputTotal = next
+            }
+        }
         let map = try watchMap()
         // Silent payments: resolve this height's cached filter-stage
         // candidates against the merkle-verified block. The index only
@@ -700,6 +796,14 @@ public actor Wallet {
             silentPaymentsByTxid = Dictionary(
                 grouping: try scanner.matches(in: match.block, candidates: candidates),
                 by: \.txid)
+        }
+        // Everything below is one state transition. If the matched block
+        // would violate the wallet-wide monetary invariant (or persistence
+        // fails), restore the exact pre-block state before returning an error.
+        let stateBeforeBlock = state
+        var committed = false
+        defer {
+            if !committed { state = stateBeforeBlock }
         }
         var effect = MatchEffect()
         for tx in match.block.transactions {
@@ -739,7 +843,12 @@ public actor Wallet {
             }
 
             for (vout, output) in tx.outputs.enumerated() {
-                guard let (chain, index) = map[output.scriptPubKey] else { continue }
+                // Zero-value outputs are consensus-valid. They are not coins,
+                // and admitting one would violate the positive-UTXO invariant
+                // below and wedge this forward-only scan at the same block.
+                guard output.value > 0,
+                      let (chain, index) = map[output.scriptPubKey]
+                else { continue }
                 if let existing = state.utxos.firstIndex(where: { $0.txid == txid && $0.vout == UInt32(vout) }) {
                     // Already known: either a re-applied block, or our own
                     // pending change output being confirmed — update its height.
@@ -767,7 +876,8 @@ public actor Wallet {
             // above, and folded into `receivedAmount` so a tx paying us both
             // ways still yields one merged history entry.
             for found in silentPaymentsByTxid[txid] ?? [] {
-                guard !state.utxos.contains(where: { $0.txid == found.txid && $0.vout == found.vout })
+                guard found.amount > 0,
+                      !state.utxos.contains(where: { $0.txid == found.txid && $0.vout == found.vout })
                 else { continue }
                 let utxo = WalletUTXO(txid: found.txid, vout: found.vout, amount: found.amount,
                                       scriptPubKey: found.scriptPubKey, chain: .receive,
@@ -808,7 +918,17 @@ public actor Wallet {
             }
             state.pendingSends.removeAll { $0.txid == txid }
         }
+        var walletTotal: Int64 = 0
+        for coin in state.utxos {
+            let (next, overflow) = walletTotal.addingReportingOverflow(coin.amount)
+            guard coin.amount > 0, coin.amount <= BitcoinAmount.maximum,
+                  !overflow, next <= BitcoinAmount.maximum else {
+                throw WalletError.invalidTransactionAmounts
+            }
+            walletTotal = next
+        }
         try persist()
+        committed = true
         return effect
     }
 
@@ -1029,7 +1149,8 @@ public actor Wallet {
         return FeeBumpPreview(originalTxid: txid,
                               currentFeeRateSatPerVByte: candidate.currentFeeRate,
                               feeRateSatPerVByte: candidate.replacementFeeRate,
-                              fee: candidate.fee, changeAmount: candidate.change?.amount)
+                              fee: candidate.fee, changeAmount: candidate.change?.amount,
+                              replacementTransaction: candidate.transaction)
     }
 
     /// Rebuilds and signs a BIP125 replacement with the same inputs and

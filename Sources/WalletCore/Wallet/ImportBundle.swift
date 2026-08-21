@@ -192,6 +192,47 @@ public struct ImportBundle: Codable, Equatable, Sendable {
         )
     }
 
+    // MARK: - Bounded decoding
+
+    /// A bundle is the one input a user is invited to paste from anywhere, so
+    /// it is decoded through here rather than by calling `JSONDecoder`
+    /// directly. Foundation already refuses deeply nested JSON and resolves a
+    /// duplicate key to its first occurrence, but both are undocumented
+    /// defaults; `ImportBundleBoundsTests` pins them so a Foundation change
+    /// cannot alter what a bundle means without a test failing.
+    ///
+    /// The explicit bounds are what Foundation does not provide: it will
+    /// happily decode a two-hundred-thousand-entry bundle, and every entry is
+    /// then materialised and scanned.
+    public static let maximumSerializedBytes = 8 * 1024 * 1024
+    public static let maximumEntries = 50_000
+
+    /// Decodes a bundle from untrusted text, refusing implausible sizes before
+    /// allocating anything proportional to them.
+    public static func decode(json: String) throws -> ImportBundle {
+        guard let data = json.data(using: .utf8) else {
+            throw WalletError.invalidBundle("not UTF-8")
+        }
+        return try decode(data)
+    }
+
+    public static func decode(_ data: Data) throws -> ImportBundle {
+        guard data.count <= maximumSerializedBytes else {
+            throw WalletError.invalidBundle(
+                "bundle is \(data.count) bytes, above the \(maximumSerializedBytes)-byte limit")
+        }
+        let bundle = try JSONDecoder().decode(ImportBundle.self, from: data)
+        guard bundle.utxos.count <= maximumEntries else {
+            throw WalletError.invalidBundle(
+                "bundle declares \(bundle.utxos.count) coins, above the \(maximumEntries) limit")
+        }
+        guard bundle.transactions.count <= maximumEntries else {
+            throw WalletError.invalidBundle(
+                "bundle declares \(bundle.transactions.count) transactions, above the \(maximumEntries) limit")
+        }
+        return bundle
+    }
+
     /// Pretty-printed, sorted-key JSON ready for a share sheet. Nil optionals
     /// (mnemonic / descriptor) are omitted rather than encoded as `null`.
     public func serialized() throws -> String {
@@ -236,7 +277,7 @@ public struct ImportBundle: Codable, Equatable, Sendable {
 
     /// The bundle's claimed UTXOs in wallet form.
     public func claimedUTXOs() throws -> [WalletUTXO] {
-        try utxos.map { utxo in
+        let claimed = try utxos.map { utxo in
             guard let txid = Data(hex: utxo.txid), txid.count == 32 else {
                 throw WalletError.invalidBundle("bad txid \(utxo.txid)")
             }
@@ -265,6 +306,25 @@ public struct ImportBundle: Codable, Equatable, Sendable {
                               height: utxo.height, silentPaymentTweak: silentPaymentTweak,
                               isCoinbase: utxo.isCoinbase ?? false)
         }
+        var seen = Set<Transaction.Outpoint>()
+        var total: Int64 = 0
+        for coin in claimed {
+            guard coin.amount > 0, coin.amount <= BitcoinAmount.maximum else {
+                throw WalletError.invalidBundle("invalid UTXO amount \(coin.amount)")
+            }
+            guard !coin.scriptPubKey.isEmpty else {
+                throw WalletError.invalidBundle("empty UTXO scriptPubKey")
+            }
+            guard seen.insert(coin.outpoint).inserted else {
+                throw WalletError.invalidBundle("duplicate UTXO outpoint")
+            }
+            let (next, overflow) = total.addingReportingOverflow(coin.amount)
+            guard !overflow, next <= BitcoinAmount.maximum else {
+                throw WalletError.invalidBundle("UTXO total exceeds Bitcoin's monetary range")
+            }
+            total = next
+        }
+        return claimed
     }
 }
 
@@ -437,6 +497,10 @@ extension Wallet {
             } else {
                 replacedBy = nil
             }
+            guard (0 ... BitcoinAmount.maximum).contains(known.received),
+                  (0 ... BitcoinAmount.maximum).contains(known.spent),
+                  known.fee.map({ (0 ... BitcoinAmount.maximum).contains($0) }) ?? true
+            else { throw WalletError.invalidBundle("transaction history has invalid amounts") }
             return HistoryEntry(txid: Data(txid.reversed()), height: known.height,
                                 received: known.received, spent: known.spent, fee: known.fee,
                                 replacedBy: replacedBy)

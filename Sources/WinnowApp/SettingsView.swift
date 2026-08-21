@@ -7,6 +7,7 @@ import WalletCore
 /// payments, and the live peer status list.
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var newPeer = ""
     @State private var peerError: String?
@@ -20,6 +21,8 @@ struct SettingsView: View {
     @State private var revealedMnemonic: String?
     @State private var revealError: String?
     @State private var revealing = false
+    @State private var revealEpoch = SensitivePresentationEpoch()
+    @State private var revealTask: Task<Void, Never>?
 
     struct PeerInfo: Equatable, Identifiable {
         var id: String { endpoint }
@@ -239,6 +242,10 @@ struct SettingsView: View {
             .sheet(isPresented: $showExport) {
                 ExportBundleView()
             }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .background { clearSensitivePresentations() }
+            }
+            .onDisappear { clearSensitivePresentations() }
         }
     }
 
@@ -256,18 +263,45 @@ struct SettingsView: View {
     }
 
     private func reveal() {
+        revealTask?.cancel()
+        let token = revealEpoch.begin()
         revealing = true
         revealError = nil
-        Task {
+        revealTask = Task { @MainActor in
             do {
-                revealedMnemonic = try await model.revealMnemonic()
+                let words = try await model.revealMnemonic()
+                try Task.checkCancellation()
+                guard revealEpoch.accepts(
+                    token, whilePresentationIsAllowed: scenePhase != .background
+                ) else { return }
+                revealedMnemonic = words
             } catch let error as LAError where error.code == .userCancel {
                 // Cancelling the auth prompt is a decision, not a failure.
+            } catch is CancellationError {
+                // Leaving the active scene is an intentional fail-closed exit.
             } catch {
-                revealError = error.localizedDescription
+                if revealEpoch.accepts(token, whilePresentationIsAllowed: scenePhase != .background) {
+                    revealError = error.localizedDescription
+                }
+            }
+            guard revealEpoch.accepts(
+                token, whilePresentationIsAllowed: scenePhase != .background
+            ) else {
+                return
             }
             revealing = false
+            revealTask = nil
         }
+    }
+
+    private func clearSensitivePresentations() {
+        revealEpoch.invalidate()
+        revealTask?.cancel()
+        revealTask = nil
+        revealedMnemonic = nil
+        revealError = nil
+        revealing = false
+        showExport = false
     }
 
     private func addPeer() {
@@ -301,14 +335,20 @@ struct SettingsView: View {
 private struct ExportBundleView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var includeMnemonic = false
     @State private var confirmSeed = false
-    @State private var json: String?
+    /// Display-only JSON. A seed-bearing export is redacted before it enters
+    /// view state; the complete value goes directly to the protected staging
+    /// file and is then released.
+    @State private var previewJSON: String?
     @State private var fileURL: URL?
     @State private var error: String?
     @State private var busy = false
     @State private var staging = ExportStagingFile()
+    @State private var exportEpoch = SensitivePresentationEpoch()
+    @State private var exportTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
@@ -330,10 +370,9 @@ private struct ExportBundleView: View {
                 if let error {
                     Section { Text(error).foregroundStyle(.red).font(.footnote) }
                 }
-                if let json {
+                if let previewJSON {
                     Section("Bundle") {
-                        CopyableTextBlock(text: includeMnemonic
-                                          ? ImportBundle.redactedPreview(json) : json)
+                        CopyableTextBlock(text: previewJSON)
                         if includeMnemonic {
                             Text("The recovery phrase is in the shared file, not shown here.")
                                 .font(.footnote)
@@ -363,7 +402,7 @@ private struct ExportBundleView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") {
-                        staging.remove()
+                        clearSensitiveExport()
                         dismiss()
                     }
                 }
@@ -374,34 +413,77 @@ private struct ExportBundleView: View {
             } message: {
                 Text("The file will contain the 12 words. Treat it as cash.")
             }
-            .onDisappear { staging.remove() }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .background else { return }
+                clearSensitiveExport()
+                dismiss()
+            }
+            .onDisappear { clearSensitiveExport() }
         }
     }
 
     private func resetExport() {
-        json = nil
+        exportEpoch.invalidate()
+        exportTask?.cancel()
+        exportTask = nil
+        previewJSON = nil
         fileURL = nil
         error = nil
+        busy = false
         staging.remove()
     }
 
+    private func clearSensitiveExport() {
+        confirmSeed = false
+        includeMnemonic = false
+        resetExport()
+    }
+
     private func export() {
+        exportTask?.cancel()
+        let token = exportEpoch.begin()
+        let seedBearing = includeMnemonic
         busy = true
         error = nil
-        Task {
+        exportTask = Task { @MainActor in
+            // Each operation owns its staging object. A cancelled, stale task
+            // can therefore delete only its own file, never a newer export.
+            let operationStaging = ExportStagingFile()
             do {
-                let text = try await model.exportWalletBundle(includeMnemonic: includeMnemonic)
+                let text = try await model.exportWalletBundle(includeMnemonic: seedBearing)
+                try Task.checkCancellation()
+                guard exportEpoch.accepts(
+                    token, whilePresentationIsAllowed: scenePhase != .background
+                ) else { return }
                 let name = "winnow-\(model.network.rawValue)-\(model.walletID ?? "wallet").json"
-                let url = try staging.write(text, suggestedName: name)
-                json = text
-                fileURL = url
-            } catch {
+                let url = try operationStaging.write(text, suggestedName: name)
+                guard exportEpoch.accepts(
+                    token, whilePresentationIsAllowed: scenePhase != .background
+                ) else {
+                    operationStaging.remove()
+                    return
+                }
                 staging.remove()
-                fileURL = nil
-                json = nil
-                self.error = error.localizedDescription
+                staging = operationStaging
+                previewJSON = seedBearing ? ImportBundle.redactedPreview(text) : text
+                fileURL = url
+            } catch is CancellationError {
+                operationStaging.remove()
+            } catch {
+                operationStaging.remove()
+                if exportEpoch.accepts(token, whilePresentationIsAllowed: scenePhase != .background) {
+                    fileURL = nil
+                    previewJSON = nil
+                    self.error = error.localizedDescription
+                }
+            }
+            guard exportEpoch.accepts(
+                token, whilePresentationIsAllowed: scenePhase != .background
+            ) else {
+                return
             }
             busy = false
+            exportTask = nil
         }
     }
 }
@@ -411,6 +493,7 @@ private struct ExportBundleView: View {
 private struct RevealPhraseView: View {
     let mnemonic: String
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
 
     private var words: [String] { mnemonic.split(separator: " ").map(String.init) }
 
@@ -425,6 +508,7 @@ private struct RevealPhraseView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
+                    .privacySensitive()
                     .accessibilityIdentifier("revealedPhraseGrid")
                 } footer: {
                     Text("These words are the wallet. Anyone who sees them can spend — keep them offline, on paper, and close this screen when done.")
@@ -442,6 +526,9 @@ private struct RevealPhraseView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
                 }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .background { dismiss() }
             }
         }
     }

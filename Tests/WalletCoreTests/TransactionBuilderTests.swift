@@ -52,6 +52,30 @@ struct TransactionBuilderTests {
         }
     }
 
+    @Test("unactivated witness versions cannot be funded")
+    func futureWitnessVersionsRejected() throws {
+        let p2mrShape = try SegwitAddress.encode(
+            hrp: "bc", version: 2, program: Data(repeating: 0x42, count: 32))
+        #expect(p2mrShape.hasPrefix("bc1z"))
+        #expect(throws: AddressError.unsupportedWitnessVersion(2)) {
+            _ = try AddressDecoder.scriptPubKey(for: p2mrShape, network: .mainnet)
+        }
+
+        let signet = try SegwitAddress.encode(
+            hrp: "tb", version: 2, program: Data(repeating: 0x42, count: 32))
+        #expect(throws: AddressError.unsupportedWitnessVersion(2)) {
+            _ = try AddressDecoder.scriptPubKey(for: signet, network: .signet)
+        }
+
+        // v1 is only activated as the 32-byte P2TR program. A different v1
+        // length is another unknown witness program, not a safe Taproot output.
+        let unknownV1 = try SegwitAddress.encode(
+            hrp: "bc", version: 1, program: Data(repeating: 0x24, count: 20))
+        #expect(throws: AddressError.unsupportedWitnessProgram(version: 1, length: 20)) {
+            _ = try AddressDecoder.scriptPubKey(for: unknownV1, network: .mainnet)
+        }
+    }
+
     // MARK: Building
 
     @Test("unsigned tx shape: version 2, empty scriptSigs, RBF sequence, change position")
@@ -94,5 +118,40 @@ struct TransactionBuilderTests {
             tx.inputs[index].witness = [Data(repeating: 0xAB, count: 64)] // SIGHASH_DEFAULT sig slot
         }
         #expect(TransactionBuilder.vsize(of: tx) == estimate)
+    }
+
+    @Test("builder rejects malformed inputs, positions, scripts, and monetary overflow")
+    func hostileBuilderInputs() {
+        let input = Transaction.Outpoint(txid: Data(repeating: 0x11, count: 32), vout: 0)
+        let script = Data([0x51, 0x20] + repeatElement(0x22, count: 32))
+        let payment = Payment(amount: 50_000, scriptPubKey: script)
+
+        #expect(throws: TxBuildError.duplicateInput) {
+            _ = try TransactionBuilder.build(inputs: [input, input], payments: [payment])
+        }
+        #expect(throws: TxBuildError.invalidOutpoint) {
+            _ = try TransactionBuilder.build(
+                inputs: [Transaction.Outpoint(txid: Data(repeating: 0x11, count: 31), vout: 0)],
+                payments: [payment])
+        }
+        #expect(throws: TxBuildError.invalidChangePosition(2)) {
+            _ = try TransactionBuilder.build(
+                inputs: [input], payments: [payment],
+                change: Payment(amount: 10_000, scriptPubKey: script), changePosition: 2)
+        }
+        #expect(throws: TxBuildError.emptyScript) {
+            _ = try TransactionBuilder.build(
+                inputs: [input], payments: [Payment(amount: 50_000, scriptPubKey: Data())])
+        }
+        #expect(throws: TxBuildError.invalidAmount(Int64.max)) {
+            _ = try TransactionBuilder.build(
+                inputs: [input], payments: [Payment(amount: Int64.max, scriptPubKey: script)])
+        }
+        #expect(throws: TxBuildError.amountOverflow) {
+            _ = try TransactionBuilder.build(inputs: [input], payments: [
+                Payment(amount: BitcoinAmount.maximum, scriptPubKey: script),
+                Payment(amount: 1, scriptPubKey: script),
+            ])
+        }
     }
 }

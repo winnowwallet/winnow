@@ -17,6 +17,7 @@ struct VaultSignView: View {
     let recordID: String
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
 
     enum SignError: LocalizedError {
         case unknownInput
@@ -32,10 +33,14 @@ struct VaultSignView: View {
 
     @State private var pasted = ""
     @State private var working: PSBT?
+    @State private var spendReview: Vault.SpendReview?
+    @State private var reviewedOutputLines: [OutputLine] = []
+    @State private var spendReviewError: String?
     @State private var output: String?
     @State private var error: String?
     @State private var broadcastTxid: Data?
     @State private var broadcasting = false
+    @State private var authorizing = false
     /// MuSig2 round-1 secret nonces per input (participant pubkey → secnonce).
     /// Never persisted, never shown — zeroed by round 2.
     @State private var secretNonces: [Int: [Data: Data]] = [:]
@@ -43,6 +48,8 @@ struct VaultSignView: View {
     /// second nonce or sign twice while this sheet remains open.
     @State private var nonceSessionStarted = false
     @State private var signedMuSig2ThisSession = false
+    @State private var operationEpoch = SensitivePresentationEpoch()
+    @State private var operationTask: Task<Void, Never>?
 
     private var record: VaultRecord? { model.vaults.first { $0.id == recordID } }
     private var vault: Vault? { record.flatMap { try? Vault($0.descriptor, network: model.network) } }
@@ -61,11 +68,21 @@ struct VaultSignView: View {
     private var minSignatures: Int { working?.inputs.map(\.tapScriptSignatures.count).min() ?? 0 }
     private var minNonces: Int { working?.inputs.map(\.musig2PubNonces.count).min() ?? 0 }
     private var minPartialSigs: Int { working?.inputs.map(\.musig2PartialSigs.count).min() ?? 0 }
-    private var workingInputsRemainAvailable: Bool {
-        guard let working, let record else { return false }
-        return working.inputs.allSatisfy { input in
-            guard let txid = input.previousTxid, let vout = input.outputIndex else { return false }
-            return record.utxos.contains { $0.txid == txid && $0.vout == vout }
+    private var workingInputsRemainAvailable: Bool { spendReview != nil }
+
+    /// A cheap identity for trusted local state. Imported/combined proposals
+    /// are reviewed synchronously once; this task only rechecks when the local
+    /// coin set or descriptor frontier changes.
+    private struct TrustedStateIdentity: Equatable {
+        var utxos: [WalletUTXO]
+        var nextReceiveIndex: UInt32
+        var nextChangeIndex: UInt32
+    }
+
+    private var trustedStateIdentity: TrustedStateIdentity? {
+        record.map {
+            TrustedStateIdentity(utxos: $0.utxos, nextReceiveIndex: $0.nextReceiveIndex,
+                                 nextChangeIndex: $0.nextChangeIndex)
         }
     }
 
@@ -84,7 +101,8 @@ struct VaultSignView: View {
                     .accessibilityIdentifier("psbtPasteButton")
                     Button("Add / combine PSBT") { addPasted() }
                         .accessibilityIdentifier("addPSBTButton")
-                        .disabled(pasted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(authorizing
+                            || pasted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 } footer: {
                     Text("The first PSBT becomes the working copy; further PSBTs are combined into it (BIP174 combiner role).")
                 }
@@ -119,11 +137,23 @@ struct VaultSignView: View {
                 }
             }
             .navigationTitle("Sign / combine")
+            .task(id: trustedStateIdentity) {
+                refreshSpendReview()
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Done") {
+                        clearSensitiveSigningState()
+                        dismiss()
+                    }
                 }
             }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .background else { return }
+                clearSensitiveSigningState()
+                dismiss()
+            }
+            .onDisappear { clearSensitiveSigningState() }
         }
     }
 
@@ -132,7 +162,7 @@ struct VaultSignView: View {
     private struct OutputLine {
         let destination: String
         let amount: Int64
-        let isChange: Bool
+        let isVaultOwned: Bool
     }
 
     private var hrp: String { model.network == .mainnet ? "bc" : "tb" }
@@ -151,75 +181,82 @@ struct VaultSignView: View {
         return address
     }
 
-    /// Outputs the spend pays. A non-empty output key-derivation marks the
-    /// vault's own change; everything else is money leaving the vault.
-    private var outputLines: [OutputLine] {
-        guard let working else { return [] }
-        return working.outputs.map {
-            OutputLine(destination: destination(forScript: $0.script ?? Data()),
-                       amount: $0.amount ?? 0,
-                       isChange: !$0.tapBIP32Derivation.isEmpty)
+    /// Outputs the spend pays, materialized once when review succeeds rather
+    /// than rebuilding every address during each SwiftUI body evaluation.
+    private func outputLines(for review: Vault.SpendReview) -> [OutputLine] {
+        review.outputs.map {
+            OutputLine(destination: destination(forScript: $0.scriptPubKey),
+                       amount: $0.amount, isVaultOwned: $0.isVaultOwned)
         }
-    }
-
-    /// Fee is known only when every input carries its witnessUTXO amount.
-    private var inputAmountsKnown: Bool {
-        (working?.inputs.allSatisfy { $0.witnessUTXO != nil }) ?? false
     }
 
     private var feeAmount: Int64? {
-        guard let working, inputAmountsKnown else { return nil }
-        let inputs = working.inputs.compactMap { $0.witnessUTXO?.amount }.reduce(0, +)
-        let outputs = outputLines.reduce(0) { $0 + $1.amount }
-        return inputs - outputs
+        spendReview?.fee
     }
 
-    private var sighashRaw: UInt32 { working?.inputs.first?.sighashType ?? 0 }
-    private var sighashSafe: Bool { sighashRaw == 0 || sighashRaw == 1 }
     private var sighashLabel: String {
-        switch sighashRaw {
-        case 0: "DEFAULT — commits to all outputs"
-        case 1: "ALL — commits to all outputs"
-        default: "UNUSUAL (0x\(String(sighashRaw, radix: 16))) — does not commit to all outputs"
+        guard let types = spendReview?.sighashTypes else { return "unavailable" }
+        let unique = Set(types)
+        if unique == Set([UInt32(0)]) { return "DEFAULT — all inputs commit to every output" }
+        if unique == Set([UInt32(1)]) { return "ALL — all inputs commit to every output" }
+        if unique == Set([UInt32(0), UInt32(1)]) {
+            return "DEFAULT / ALL — all inputs commit to every output"
         }
+        return "unavailable"
+    }
+
+    private var locktimeLabel: String {
+        guard let locktime = spendReview?.fallbackLocktime else { return "unavailable" }
+        return locktime == 0 ? "none" : String(locktime)
+    }
+
+    private var sequenceLabel: String {
+        guard let sequences = spendReview?.sequences else { return "unavailable" }
+        return sequences.contains(where: { $0 < 0xFFFF_FFFE }) ? "replaceable (RBF)" : "final"
     }
 
     @ViewBuilder
     private var reviewSection: some View {
         Section {
-            ForEach(outputLines.indices, id: \.self) { index in
-                let line = outputLines[index]
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack {
-                        Text(line.isChange ? "Change (this vault)" : "Pays")
-                            .font(.caption)
-                            .foregroundStyle(line.isChange ? Color.secondary : Color.primary)
-                        Spacer()
-                        Text("\(line.amount) sat")
-                            .font(.system(.callout, design: .monospaced))
+            if spendReview != nil {
+                ForEach(reviewedOutputLines.indices, id: \.self) { index in
+                    let line = reviewedOutputLines[index]
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack {
+                            Text(line.isVaultOwned ? "Vault-owned output" : "Pays")
+                                .font(.caption)
+                                .foregroundStyle(line.isVaultOwned ? Color.secondary : Color.primary)
+                            Spacer()
+                            Text("\(line.amount) sat")
+                                .font(.system(.callout, design: .monospaced))
+                        }
+                        Text(line.destination)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
                     }
-                    Text(line.destination)
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
+                    .padding(.vertical, 1)
                 }
-                .padding(.vertical, 1)
-            }
-            if let feeAmount {
-                LabeledContent("Fee", value: "\(feeAmount) sat")
+                if let feeAmount {
+                    LabeledContent("Fee", value: "\(feeAmount) sat")
+                }
+                LabeledContent("Sighash", value: sighashLabel)
+                LabeledContent("Version", value: String(spendReview?.transactionVersion ?? 0))
+                LabeledContent("Locktime", value: locktimeLabel)
+                LabeledContent("Sequence", value: sequenceLabel)
             } else {
-                LabeledContent("Fee", value: "unavailable (missing input amounts)")
-            }
-            LabeledContent("Sighash") {
-                Text(sighashLabel)
+                Label("Winnow cannot safely review this proposal", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+                Text(spendReviewError ?? "The vault or proposal is unavailable.")
                     .font(.footnote)
-                    .foregroundStyle(sighashSafe ? Color.secondary : Color.red)
-                    .multilineTextAlignment(.trailing)
+                    .foregroundStyle(.red)
             }
         } header: {
             Text("Review — what you are signing")
         } footer: {
-            Text("A cosigner can propose any transaction. Your signature authorizes exactly these outputs — verify every destination and the fee before signing.")
+            Text(spendReview == nil
+                 ? "Signing and broadcasting remain disabled until the proposal passes every check."
+                 : "A cosigner can propose any transaction. Winnow verifies known inputs and vault-owned output scripts; your signature authorizes exactly the destinations and fee shown here.")
         }
     }
 
@@ -247,12 +284,12 @@ struct VaultSignView: View {
         if let threshold {
             Section("Actions") {
                 Button("Sign with this device") { signMultiA() }
-                    .disabled(!workingInputsRemainAvailable || broadcastTxid != nil)
+                    .disabled(authorizing || !workingInputsRemainAvailable || broadcastTxid != nil)
                 Button(broadcasting ? "Broadcasting…" : "Finalize & broadcast") {
                     finalizeAndBroadcast()
                 }
                 .disabled(minSignatures < threshold || !workingInputsRemainAvailable
-                    || broadcasting || broadcastTxid != nil)
+                    || authorizing || broadcasting || broadcastTxid != nil)
                 if !workingInputsRemainAvailable {
                     stalePSBTMessage
                 }
@@ -262,16 +299,17 @@ struct VaultSignView: View {
                 Button("Round 1 — attach this device's nonce") { attachNonces() }
                     .disabled(nonceSessionStarted || minNonces >= participantCount
                         || minPartialSigs > 0 || !workingInputsRemainAvailable
-                        || broadcastTxid != nil)
+                        || authorizing || broadcastTxid != nil)
                 Button("Round 2 — sign with this device") { signMuSig2() }
                     .disabled(!nonceSessionStarted || signedMuSig2ThisSession
                         || secretNonces.isEmpty || minNonces < participantCount
-                        || minPartialSigs >= participantCount || !workingInputsRemainAvailable)
+                        || minPartialSigs >= participantCount || !workingInputsRemainAvailable
+                        || authorizing)
                 Button(broadcasting ? "Broadcasting…" : "Aggregate & broadcast") {
                     aggregateAndBroadcast()
                 }
                 .disabled(minPartialSigs < participantCount || !workingInputsRemainAvailable
-                    || broadcasting || broadcastTxid != nil)
+                    || authorizing || broadcasting || broadcastTxid != nil)
                 if !workingInputsRemainAvailable {
                     stalePSBTMessage
                 }
@@ -280,16 +318,63 @@ struct VaultSignView: View {
     }
 
     private var stalePSBTMessage: some View {
-        Text("This PSBT's input is no longer available. It may already have been spent; create a new PSBT instead.")
+        Text("This PSBT is no longer a valid spend of the vault's available coins. It may be stale or altered; create or import a valid PSBT instead.")
             .font(.footnote)
             .foregroundStyle(.orange)
+    }
+
+    /// Reconstructs the authorization review from trusted local vault state.
+    /// Output BIP32 metadata is never used to decide that an output is change.
+    private func authorizationInputs() throws -> (vault: Vault, record: VaultRecord,
+                                                   coordinates: [Vault.OutputCoordinate]) {
+        guard let vault, let record else { throw SignError.unknownInput }
+        var coordinates = record.utxos.map {
+            Vault.OutputCoordinate(choice: $0.chain.rawValue, index: $0.index)
+        }
+        coordinates.append(Vault.OutputCoordinate(
+            choice: AddressChain.receive.rawValue, index: record.nextReceiveIndex))
+        coordinates.append(Vault.OutputCoordinate(
+            choice: AddressChain.change.rawValue, index: record.nextChangeIndex))
+        return (vault, record, coordinates)
+    }
+
+    private func validateSpend(_ psbt: PSBT) throws -> Vault.SpendReview {
+        let inputs = try authorizationInputs()
+        let vault = inputs.vault
+        let record = inputs.record
+        return try vault.reviewSpend(psbt, knownUTXOs: record.utxos,
+                                     ownedOutputCoordinates: inputs.coordinates)
+    }
+
+    private func refreshSpendReview() {
+        guard let working else {
+            spendReview = nil
+            reviewedOutputLines = []
+            spendReviewError = nil
+            return
+        }
+        do {
+            let review = try validateSpend(working)
+            spendReview = review
+            reviewedOutputLines = outputLines(for: review)
+            spendReviewError = nil
+        } catch {
+            spendReview = nil
+            reviewedOutputLines = []
+            spendReviewError = error.localizedDescription
+        }
     }
 
     private func addPasted() {
         error = nil
         do {
             let incoming = try PSBT(base64: pasted.trimmingCharacters(in: .whitespacesAndNewlines))
-            working = try working?.combined(with: [incoming]) ?? incoming
+            let candidate = try working?.combined(with: [incoming]) ?? incoming
+            let review = try validateSpend(candidate)
+            spendReview = review
+            reviewedOutputLines = outputLines(for: review)
+            spendReviewError = nil
+            working = candidate
             if let working { model.journalPSBT(stage: "vault-psbt-combined", psbt: working) }
             pasted = ""
         } catch {
@@ -309,97 +394,197 @@ struct VaultSignView: View {
     // MARK: - multi_a
 
     private func signMultiA() {
-        guard var psbt = working, let vault else { error = SignError.noWorkingPSBT.localizedDescription; return }
-        do {
-            try model.withMasterKey { try vault.partialSign(&psbt, master: $0) }
-            working = psbt
-            output = psbt.base64
-            model.journalPSBT(stage: "multi-a-partial-signed", psbt: psbt)
-        } catch {
-            self.error = error.localizedDescription
+        guard let initial = working else {
+            error = SignError.noWorkingPSBT.localizedDescription
+            return
+        }
+        operationTask?.cancel()
+        let token = operationEpoch.begin()
+        authorizing = true
+        error = nil
+        operationTask = Task { @MainActor in
+            do {
+                let psbt = try await model.withMasterKey(
+                    reason: "Sign this shared-vault transaction") { master in
+                    let inputs = try authorizationInputs()
+                    var candidate = initial
+                    try inputs.vault.partialSign(
+                        &candidate, master: master, knownUTXOs: inputs.record.utxos,
+                        ownedOutputCoordinates: inputs.coordinates)
+                    return candidate
+                }
+                try Task.checkCancellation()
+                guard accepts(token) else { return }
+                working = psbt
+                output = psbt.base64
+                model.journalPSBT(stage: "multi-a-partial-signed", psbt: psbt)
+            } catch is CancellationError {
+                // Inactive/background transitions deliberately abandon output.
+            } catch {
+                if accepts(token) { self.error = error.localizedDescription }
+            }
+            guard accepts(token) else { return }
+            authorizing = false
+            operationTask = nil
         }
     }
 
     private func finalizeAndBroadcast() {
         guard !broadcasting, broadcastTxid == nil,
               var psbt = working, let vault, let record else { return }
+        operationTask?.cancel()
+        let token = operationEpoch.begin()
         broadcasting = true
-        Task {
-            defer { broadcasting = false }
+        operationTask = Task { @MainActor in
             do {
-                let transaction = try vault.finalizeSpend(&psbt)
-                try await commitAndBroadcast(transaction, vault: vault, record: record)
+                try Task.checkCancellation()
+                let inputs = try authorizationInputs()
+                let transaction = try vault.finalizeSpend(
+                    &psbt, knownUTXOs: inputs.record.utxos,
+                    ownedOutputCoordinates: inputs.coordinates)
+                let txid = try await commitAndBroadcast(transaction, vault: vault, record: record)
+                guard accepts(token) else { return }
+                broadcastTxid = txid
+            } catch is CancellationError {
+                // Broadcast may already have crossed its external commit
+                // point; AppModel remains the source of truth after dismissal.
             } catch {
-                self.error = error.localizedDescription
+                if accepts(token) { self.error = error.localizedDescription }
             }
+            guard accepts(token) else { return }
+            broadcasting = false
+            operationTask = nil
         }
     }
 
     // MARK: - MuSig2
 
     private func attachNonces() {
-        guard var psbt = working, let vault, let record else { error = SignError.noWorkingPSBT.localizedDescription; return }
-        do {
-            var nonces: [Int: [Data: Data]] = [:]
-            for index in psbt.inputs.indices {
-                let context = try context(for: psbt.inputs[index], vault: vault, record: record)
-                nonces[index] = try model.withMasterKey {
-                    try vault.muSig2AttachNonce(&psbt, input: index, context: context, master: $0)
+        guard let initial = working else {
+            error = SignError.noWorkingPSBT.localizedDescription
+            return
+        }
+        operationTask?.cancel()
+        let token = operationEpoch.begin()
+        authorizing = true
+        error = nil
+        operationTask = Task { @MainActor in
+            do {
+                let result = try await model.withMasterKey(
+                    reason: "Start signing this MuSig2 vault transaction") { master in
+                    let inputs = try authorizationInputs()
+                    var psbt = initial
+                    var nonces: [Int: [Data: Data]] = [:]
+                    for index in psbt.inputs.indices {
+                        let signingContext = try context(
+                            for: psbt.inputs[index], vault: inputs.vault, record: inputs.record)
+                        nonces[index] = try inputs.vault.muSig2AttachNonce(
+                            &psbt, input: index, context: signingContext, master: master,
+                            knownUTXOs: inputs.record.utxos,
+                            ownedOutputCoordinates: inputs.coordinates)
+                    }
+                    return (psbt, nonces)
                 }
+                try Task.checkCancellation()
+                guard accepts(token) else { return }
+                secretNonces = result.1
+                nonceSessionStarted = true
+                working = result.0
+                output = result.0.base64
+                model.journalPSBT(stage: "musig2-public-nonces", psbt: result.0)
+            } catch is CancellationError {
+                // Secret nonces produced for an invalidated presentation are
+                // never installed into view state or exposed for round two.
+            } catch {
+                if accepts(token) { self.error = error.localizedDescription }
             }
-            secretNonces = nonces
-            nonceSessionStarted = true
-            working = psbt
-            output = psbt.base64
-            model.journalPSBT(stage: "musig2-public-nonces", psbt: psbt)
-        } catch {
-            self.error = error.localizedDescription
+            guard accepts(token) else { return }
+            authorizing = false
+            operationTask = nil
         }
     }
 
     private func signMuSig2() {
-        guard var psbt = working, let vault, let record else { return }
-        do {
-            // Stage the nonce mutations alongside the PSBT. If a later input
-            // fails, the visible working copy and the in-memory nonce session
-            // both remain retryable instead of becoming half-consumed.
-            var stagedNonces = secretNonces
-            for index in psbt.inputs.indices {
-                let context = try context(for: psbt.inputs[index], vault: vault, record: record)
-                var nonces = stagedNonces[index] ?? [:]
-                try model.withMasterKey {
-                    try vault.muSig2Sign(&psbt, input: index, context: context, master: $0,
-                                         secretNonces: &nonces)
+        guard let initial = working else { return }
+        let initialNonces = secretNonces
+        operationTask?.cancel()
+        let token = operationEpoch.begin()
+        authorizing = true
+        error = nil
+        operationTask = Task { @MainActor in
+            do {
+                let psbt = try await model.withMasterKey(
+                    reason: "Complete signing this MuSig2 vault transaction") { master in
+                    let inputs = try authorizationInputs()
+                    // Stage nonce mutations beside the PSBT. Authentication
+                    // cancellation or any later failure leaves the live nonce
+                    // session untouched and retryable.
+                    var psbt = initial
+                    var stagedNonces = initialNonces
+                    for index in psbt.inputs.indices {
+                        let signingContext = try context(
+                            for: psbt.inputs[index], vault: inputs.vault, record: inputs.record)
+                        var nonces = stagedNonces[index] ?? [:]
+                        try inputs.vault.muSig2Sign(
+                            &psbt, input: index, context: signingContext, master: master,
+                            secretNonces: &nonces, knownUTXOs: inputs.record.utxos,
+                            ownedOutputCoordinates: inputs.coordinates)
+                        stagedNonces[index] = nonces
+                    }
+                    return psbt
                 }
-                stagedNonces[index] = nonces // zeroed by partialSign
+                try Task.checkCancellation()
+                guard accepts(token) else { return }
+                working = psbt
+                output = psbt.base64
+                secretNonces.removeAll(keepingCapacity: false)
+                signedMuSig2ThisSession = true
+                model.journalPSBT(stage: "musig2-partial-signed", psbt: psbt)
+            } catch is CancellationError {
+                // The presentation was invalidated; the session cannot be
+                // resumed with the old nonce material.
+            } catch {
+                if accepts(token) { self.error = error.localizedDescription }
             }
-            working = psbt
-            output = psbt.base64
-            secretNonces.removeAll(keepingCapacity: false)
-            signedMuSig2ThisSession = true
-            model.journalPSBT(stage: "musig2-partial-signed", psbt: psbt)
-        } catch {
-            self.error = error.localizedDescription
+            guard accepts(token) else { return }
+            authorizing = false
+            operationTask = nil
         }
     }
 
     private func aggregateAndBroadcast() {
         guard !broadcasting, broadcastTxid == nil,
               var psbt = working, let vault, let record else { return }
+        operationTask?.cancel()
+        let token = operationEpoch.begin()
         broadcasting = true
-        Task {
-            defer { broadcasting = false }
+        operationTask = Task { @MainActor in
             do {
+                try Task.checkCancellation()
+                let inputs = try authorizationInputs()
                 for index in psbt.inputs.indices {
                     let context = try context(for: psbt.inputs[index], vault: vault, record: record)
-                    try vault.muSig2Aggregate(&psbt, input: index, context: context)
+                    try vault.muSig2Aggregate(
+                        &psbt, input: index, context: context,
+                        knownUTXOs: inputs.record.utxos,
+                        ownedOutputCoordinates: inputs.coordinates)
                 }
                 model.journalPSBT(stage: "musig2-aggregated", psbt: psbt)
-                let transaction = try vault.finalizeSpend(&psbt)
-                try await commitAndBroadcast(transaction, vault: vault, record: record)
+                let transaction = try vault.finalizeSpend(
+                    &psbt, knownUTXOs: inputs.record.utxos,
+                    ownedOutputCoordinates: inputs.coordinates)
+                let txid = try await commitAndBroadcast(transaction, vault: vault, record: record)
+                guard accepts(token) else { return }
+                broadcastTxid = txid
+            } catch is CancellationError {
+                // See finalizeAndBroadcast: the persistent model reconciles
+                // an operation that crossed the broadcast boundary.
             } catch {
-                self.error = error.localizedDescription
+                if accepts(token) { self.error = error.localizedDescription }
             }
+            guard accepts(token) else { return }
+            broadcasting = false
+            operationTask = nil
         }
     }
 
@@ -408,12 +593,32 @@ struct VaultSignView: View {
     /// Broadcasts the finalized spend and commits it to the vault's local
     /// UTXO set (inputs out, change in pending — the `Wallet.send` rule).
     private func commitAndBroadcast(_ transaction: BitcoinTransaction, vault: Vault,
-                                    record: VaultRecord) async throws {
+                                    record: VaultRecord) async throws -> Data {
         let txid = try await model.broadcast(transaction)
         let changeIndex = record.nextChangeIndex
         let changeScript = try? vault.scriptPubKey(index: changeIndex, choice: AddressChain.change.rawValue)
         _ = await model.recordVaultSpend(id: record.id, transaction: transaction,
                                          changeScriptPubKey: changeScript, changeIndex: changeIndex)
-        broadcastTxid = txid
+        return txid
+    }
+
+    private func accepts(_ token: SensitivePresentationEpoch.Token) -> Bool {
+        operationEpoch.accepts(token, whilePresentationIsAllowed: scenePhase != .background)
+    }
+
+    private func clearSensitiveSigningState() {
+        operationEpoch.invalidate()
+        operationTask?.cancel()
+        operationTask = nil
+        pasted = ""
+        working = nil
+        output = nil
+        error = nil
+        broadcastTxid = nil
+        broadcasting = false
+        authorizing = false
+        secretNonces.removeAll(keepingCapacity: false)
+        nonceSessionStarted = false
+        signedMuSig2ThisSession = false
     }
 }

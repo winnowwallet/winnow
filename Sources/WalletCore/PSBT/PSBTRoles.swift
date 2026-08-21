@@ -422,9 +422,11 @@ extension PSBT {
     public mutating func finalize() throws {
         let tx = try unsignedTransaction()
         let spentOutputs = try spentOutputs()
+        var witnesses: [[Data]] = []
         for index in inputs.indices {
             if let signature = inputs[index].tapKeySignature {
-                inputs[index].finalScriptWitness = [signature]
+                witnesses.append(try validatedKeyPathWitness(
+                    input: index, signature: signature, tx: tx, spentOutputs: spentOutputs))
             } else if !inputs[index].tapLeafScripts.isEmpty {
                 var witness: [Data]?
                 for leaf in inputs[index].tapLeafScripts {
@@ -435,16 +437,58 @@ extension PSBT {
                 guard let witness else {
                     throw PSBTError.missingField("input \(index) tap script sigs below threshold")
                 }
-                inputs[index].finalScriptWitness = witness
+                witnesses.append(witness)
             } else {
                 throw PSBTError.missingField("input \(index) tap key sig")
             }
+        }
+        // Commit only after every input validates. A bad later input must not
+        // leave the PSBT half-finalized with earlier partial fields erased.
+        for index in inputs.indices {
+            inputs[index].finalScriptWitness = witnesses[index]
             inputs[index].pairs.removeAll {
                 $0.type == InType.tapKeySignature || $0.type == InType.sighashType
                     || $0.type == InType.tapScriptSignature || $0.type == InType.tapLeafScript
                     || $0.type == InType.musig2PubNonce || $0.type == InType.musig2PartialSig
             }
         }
+    }
+
+    /// Validates an imported key-path signature against the PSBT's declared
+    /// P2TR witness UTXO before moving it into the final witness. Trusted
+    /// wallet policy must separately bind that declaration to the real coin;
+    /// finalization proves document self-consistency, not chain ownership.
+    private func validatedKeyPathWitness(input index: Int, signature: Data,
+                                         tx: Transaction,
+                                         spentOutputs: [SighashBIP341.SpentOutput]) throws -> [Data] {
+        let hashType: SighashBIP341.HashType
+        switch signature.count {
+        case 64:
+            hashType = .default
+        case 65:
+            hashType = SighashBIP341.HashType(rawValue: signature.last!)
+        default:
+            throw PSBTError.malformed("input \(index) tap key signature length")
+        }
+        guard hashType.commitsToAllOutputs,
+              hashType != .default || signature.count == 64
+        else { throw PSBTError.malformed("input \(index) unsafe tap key sighash type") }
+
+        let script = spentOutputs[index].scriptPubKey
+        guard script.count == 34, script[script.startIndex] == 0x51,
+              script[script.index(after: script.startIndex)] == 0x20
+        else { throw PSBTError.malformed("input \(index) witness utxo is not P2TR") }
+        let sighash = try SighashBIP341.sighash(
+            tx: tx, inputIndex: index, spentOutputs: spentOutputs, hashType: hashType)
+        guard let parsed = try? P256K.Schnorr.SchnorrSignature(
+            dataRepresentation: signature.prefix(64))
+        else { throw PSBTError.malformed("input \(index) tap key signature encoding") }
+        var message = [UInt8](sighash)
+        let outputKey = P256K.Schnorr.XonlyKey(dataRepresentation: script.suffix(32))
+        guard outputKey.isValid(parsed, for: &message) else {
+            throw PSBTError.malformed("input \(index) invalid tap key signature")
+        }
+        return [signature]
     }
 
     /// The BIP387 witness for one multi_a leaf, or nil when fewer valid
@@ -454,9 +498,24 @@ extension PSBT {
     private func finalizedScriptPathWitness(input index: Int, leaf: TapLeafScript,
                                             tx: Transaction,
                                             spentOutputs: [SighashBIP341.SpentOutput]) throws -> [Data]? {
-        guard let (threshold, leafKeys) = Multisig.parse(Script(leaf.script)) else {
-            throw PSBTError.malformed("input \(index) leaf script")
+        guard leaf.leafVersion == leaf.controlBlock.leafVersion else { return nil }
+        let spentScript = spentOutputs[index].scriptPubKey
+        guard spentScript.count == 34, spentScript[spentScript.startIndex] == 0x51,
+              spentScript[spentScript.index(after: spentScript.startIndex)] == 0x20
+        else { throw PSBTError.malformed("input \(index) witness utxo is not P2TR") }
+        var merkleRoot = leaf.leafHash
+        for sibling in leaf.controlBlock.path {
+            guard sibling.count == 32 else { return nil }
+            merkleRoot = Taproot.branchHash(merkleRoot, sibling)
         }
+        guard let committed = try? Taproot.tweakedOutputKey(
+            internalKey: leaf.controlBlock.internalKey, merkleRoot: merkleRoot)
+        else { return nil }
+        guard committed.key == spentScript.suffix(32),
+              committed.parity == leaf.controlBlock.outputKeyParity
+        else { return nil }
+
+        guard let (threshold, leafKeys) = Multisig.parse(Script(leaf.script)) else { return nil }
         var valid: [Data: Data] = [:]
         for (id, signature) in inputs[index].tapScriptSignatures where id.leafHash == leaf.leafHash {
             guard leafKeys.contains(id.publicKey) else { continue }

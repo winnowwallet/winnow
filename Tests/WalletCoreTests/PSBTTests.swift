@@ -113,6 +113,19 @@ struct PSBTTests {
         #expect(try PSBT(base64: psbt.base64) == psbt)
     }
 
+    @Test("wire map order is normalized without changing PSBT semantics")
+    func mapOrderNormalization() throws {
+        // Minimized deterministic-fuzz regression: the valid global fields
+        // arrive in reverse-ish order (version before tx version/counts).
+        let wire = try #require(Data(hex:
+            "70736274ff01fb0402000000010204029f0000010401000105010000"))
+        let parsed = try PSBT(serialized: wire)
+        let canonical = parsed.serialized
+        #expect(canonical != wire)
+        #expect(try PSBT(serialized: canonical) == parsed)
+        #expect(try PSBT(base64: parsed.base64) == parsed)
+    }
+
     @Test("signer → finalizer → extractor produces the fully-signed raw tx")
     func roles() throws {
         let fixture = try Fixture()
@@ -151,6 +164,29 @@ struct PSBTTests {
         #expect(signed == direct)
     }
 
+    @Test("finalizer verifies key-path signatures and fails atomically")
+    func finalizerRejectsInvalidKeyPathSignature() throws {
+        let fixture = try Fixture()
+        var psbt = try PSBT(unsignedTx: fixture.tx, inputs: fixture.inputs, outputs: fixture.outputs)
+        for index in fixture.tweakedKeys.indices {
+            try psbt.signKeyPath(input: index, tweakedPrivateKey: fixture.tweakedKeys[index],
+                                 auxiliaryRand: Data(repeating: 0, count: 32))
+        }
+        var corrupt = try #require(psbt.inputs[1].tapKeySignature)
+        corrupt[corrupt.startIndex] ^= 0x01
+        psbt.inputs[1].tapKeySignature = corrupt
+        let before = psbt
+
+        #expect(throws: PSBTError.self) { try psbt.finalize() }
+        #expect(psbt == before, "a failed later input must not finalize or erase earlier input fields")
+
+        var unsafe = before
+        var encodedDefault = try #require(unsafe.inputs[0].tapKeySignature)
+        encodedDefault.append(0x00) // 65-byte DEFAULT encoding is invalid under BIP341.
+        unsafe.inputs[0].tapKeySignature = encodedDefault
+        #expect(throws: PSBTError.self) { try unsafe.finalize() }
+    }
+
     @Test("unsignedTransaction/extractor enforce presence of required fields")
     func validation() throws {
         let fixture = try Fixture()
@@ -167,5 +203,81 @@ struct PSBTTests {
         var duplicate = Data([0x70, 0x73, 0x62, 0x74, 0xFF])
         duplicate.append(contentsOf: [0x01, 0xFB, 0x01, 0x02, 0x01, 0xFB, 0x01, 0x02, 0x00])
         #expect(throws: PSBTError.duplicateKey(Data([0xFB]))) { _ = try PSBT(serialized: duplicate) }
+    }
+
+    @Test("hostile PSBT lengths and fixed-width fields fail closed")
+    func hostileLengths() throws {
+        let oversized = Data(repeating: 0, count: PSBT.maxSerializedSize + 1)
+        #expect(throws: PSBTError.malformed("document exceeds \(PSBT.maxSerializedSize) bytes")) {
+            _ = try PSBT(serialized: oversized)
+        }
+        let oversizedBase64 = String(repeating: "A", count: PSBT.maxBase64Length + 1)
+        #expect(throws: PSBTError.malformed("Base64 text exceeds \(PSBT.maxBase64Length) bytes")) {
+            _ = try PSBT(base64: oversizedBase64)
+        }
+
+        // A CompactSize UInt64.max used to trap while converting to Int.
+        var impossibleKey = Data([0x70, 0x73, 0x62, 0x74, 0xFF, 0xFF])
+        impossibleKey.append(contentsOf: repeatElement(UInt8(0xFF), count: 8))
+        #expect(throws: PSBTError.malformed("map key length \(UInt64.max) is out of bounds")) {
+            _ = try PSBT(serialized: impossibleKey)
+        }
+
+        // Fixed-width fields are validated before any computed property can
+        // load beyond the supplied bytes.
+        var badVersion = Data([0x70, 0x73, 0x62, 0x74, 0xFF])
+        badVersion.append(contentsOf: [0x01, PSBT.GlobalType.version, 0x00, 0x00])
+        #expect(throws: PSBTError.malformed("global version must be four bytes")) {
+            _ = try PSBT(serialized: badVersion)
+        }
+
+        let fixture = try Fixture()
+        var malformedInput = try PSBT(unsignedTx: fixture.tx, inputs: fixture.inputs, outputs: fixture.outputs)
+        let outputIndex = try #require(malformedInput.inputs[0].pairs.firstIndex {
+            $0.type == PSBT.InType.outputIndex
+        })
+        malformedInput.inputs[0].pairs[outputIndex].value = Data()
+        #expect(malformedInput.inputs[0].outputIndex == nil)
+        #expect(throws: PSBTError.malformed("input field \(PSBT.InType.outputIndex) must be 4 bytes")) {
+            _ = try PSBT(serialized: malformedInput.serialized)
+        }
+
+        // Public in-memory construction and mutable pairs cannot turn a
+        // short fixed-width field into an out-of-bounds load either.
+        func replaceInput(_ type: UInt8, with value: Data, in psbt: inout PSBT) throws {
+            let index = try #require(psbt.inputs[0].pairs.firstIndex { $0.type == type })
+            psbt.inputs[0].pairs[index].value = value
+        }
+        var shortFields = try PSBT(unsignedTx: fixture.tx, inputs: fixture.inputs, outputs: fixture.outputs)
+        try replaceInput(PSBT.InType.previousTxid, with: Data(repeating: 0, count: 31), in: &shortFields)
+        try replaceInput(PSBT.InType.sequence, with: Data(repeating: 0, count: 3), in: &shortFields)
+        try replaceInput(PSBT.InType.sighashType, with: Data(repeating: 0, count: 3), in: &shortFields)
+        let amountIndex = try #require(shortFields.outputs[0].pairs.firstIndex {
+            $0.type == PSBT.OutType.amount
+        })
+        shortFields.outputs[0].pairs[amountIndex].value = Data(repeating: 0, count: 7)
+        #expect(shortFields.inputs[0].previousTxid == nil)
+        #expect(shortFields.inputs[0].sequence == nil)
+        #expect(shortFields.inputs[0].sighashType == nil)
+        #expect(shortFields.outputs[0].amount == nil)
+    }
+
+    @Test("a map at the field-count limit parses without quadratic duplicate scans")
+    func denseMapBudget() throws {
+        let fixture = try Fixture()
+        var psbt = try PSBT(unsignedTx: fixture.tx, inputs: fixture.inputs, outputs: fixture.outputs)
+        let existingCount = psbt.inputs[0].pairs.count
+        for index in 0 ..< (PSBT.maxMapPairs - existingCount) {
+            let keyData = Data([
+                UInt8(truncatingIfNeeded: index),
+                UInt8(truncatingIfNeeded: index >> 8),
+                UInt8(truncatingIfNeeded: index >> 16),
+                UInt8(truncatingIfNeeded: index >> 24),
+            ])
+            psbt.inputs[0].pairs.append(.init(type: 0xFC, keyData: keyData, value: Data()))
+        }
+
+        let parsed = try PSBT(serialized: psbt.serialized)
+        #expect(parsed.inputs[0].pairs.count == PSBT.maxMapPairs)
     }
 }

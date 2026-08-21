@@ -3,6 +3,23 @@ import SwiftUI
 import UIKit
 import WalletCore
 
+/// Immutable identity of the fields that produced a send preview. Equality is
+/// the authorization boundary for async preview results: a result created for
+/// older text or a different network must never re-enable the signing button.
+struct SendReviewInputs: Equatable {
+    let destination: String
+    let amountText: String
+    let priority: FeePolicy.Priority
+    let overrideText: String
+    let network: BitcoinNetwork
+
+    var trimmedDestination: String {
+        destination.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var amount: Int64? { Int64(amountText) }
+}
+
 /// Send to any standard address or an sp1…/tsp1… silent payment code: fee
 /// selection (FeePolicy presets + the peers' feefilter floor + override), a
 /// review step, then sign + broadcast via TxBroadcaster. Relay status comes
@@ -33,6 +50,12 @@ struct SendView: View {
     private var destinationIsSilentPayment: Bool {
         let trimmed = destination.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return trimmed.hasPrefix("sp1") || trimmed.hasPrefix("tsp1")
+    }
+
+    private var reviewInputs: SendReviewInputs {
+        SendReviewInputs(destination: destination, amountText: amountText,
+                         priority: priority, overrideText: overrideText,
+                         network: model.network)
     }
 
     var body: some View {
@@ -106,9 +129,9 @@ struct SendView: View {
 
                 if let preview, sentTxid == nil {
                     Section("Review") {
-                        LabeledContent("Pays", value: destinationIsSilentPayment
+                        LabeledContent("Pays", value: !preview.silentPayments.isEmpty
                                        ? "silent payment (derived P2TR output)"
-                                       : String(destination.trimmingCharacters(in: .whitespacesAndNewlines).prefix(24)) + "…")
+                                       : abbreviated(preview.destination))
                         LabeledContent("Amount", value: satsText(preview.payments.map(\.amount).reduce(0, +)
                                                                    + preview.silentPayments.map(\.amount).reduce(0, +)))
                         LabeledContent("Fee", value: satsText(preview.fee))
@@ -169,6 +192,12 @@ struct SendView: View {
             .task(id: sentTxid) {
                 await watchBroadcastEvents()
             }
+            .onChange(of: reviewInputs) { _, _ in
+                // Any edit invalidates the authorization review immediately.
+                // The async request guard in review() also prevents an older
+                // request from restoring it after this change.
+                preview = nil
+            }
             .onChange(of: model.status.history) { _, history in
                 guard let sentTxid, confirmedHeight == nil,
                       let entry = history.first(where: { $0.txid == sentTxid }), entry.height > 0
@@ -183,25 +212,41 @@ struct SendView: View {
         "\(priority.rawValue)|\(overrideText)|\(model.status.feeFloorSatPerVByte ?? -1)"
     }
 
+    private func abbreviated(_ destination: String) -> String {
+        guard destination.count > 32 else { return destination }
+        return "\(destination.prefix(16))…\(destination.suffix(12))"
+    }
+
     private func review() {
         error = nil
         preview = nil
-        guard let amount = Int64(amountText), amount > 0 else {
+        let requested = reviewInputs
+        guard let amount = requested.amount, amount > 0 else {
             error = "Enter an amount in sats."
             return
         }
         Task {
             do {
-                preview = try await model.previewSend(destination: destination, amount: amount,
-                                                      priority: priority, override: override)
+                let candidate = try await model.previewSend(
+                    destination: requested.destination, amount: amount,
+                    priority: requested.priority,
+                    override: Double(requested.overrideText.trimmingCharacters(in: .whitespaces)))
+                guard requested == reviewInputs else { return }
+                preview = candidate
             } catch {
+                guard requested == reviewInputs else { return }
                 self.error = error.localizedDescription
             }
         }
     }
 
     private func send() {
-        guard let preview else { return }
+        // The button is disabled while `sending`, but that is presentation:
+        // it does not survive a double tap delivered before the disabled
+        // state renders. AppModel.exclusively is the real guarantee; this
+        // check just keeps an accidental second tap from surfacing an error
+        // banner instead of doing nothing.
+        guard let preview, !sending else { return }
         sending = true
         error = nil
         Task {

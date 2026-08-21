@@ -112,6 +112,31 @@ struct WalletTests {
         #expect(await wallet.observedFeeRates.count == 1)
     }
 
+    @Test("block application rejects wallet-wide monetary overflow atomically")
+    func applyRejectsAggregateOverflow() async throws {
+        let wallet = try await makeWallet()
+        let script = try await wallet.scriptPubKey(chain: .receive, index: 0)
+        let first = Transaction(version: 2, inputs: [coinbaseInput()], outputs: [
+            .init(value: BitcoinAmount.maximum, scriptPubKey: script),
+        ], locktime: 0)
+        try await wallet.apply(match: fakeMatch(height: 100, transactions: [first]))
+        #expect(await wallet.balance == BitcoinAmount.maximum)
+
+        let second = Transaction(version: 2, inputs: [coinbaseInput()], outputs: [
+            .init(value: BitcoinAmount.maximum, scriptPubKey: script),
+        ], locktime: 1)
+        do {
+            _ = try await wallet.apply(match: fakeMatch(height: 101, transactions: [second]))
+            Issue.record("a wallet total above Bitcoin's monetary range was accepted")
+        } catch let error as WalletError {
+            #expect(error == .invalidTransactionAmounts)
+        }
+
+        #expect(await wallet.balance == BitcoinAmount.maximum)
+        #expect(await wallet.utxos.count == 1)
+        #expect(await wallet.history.count == 1)
+    }
+
     @Test("payments beyond the gap-limit window are not detected; inside it, indices advance")
     func gapWindow() async throws {
         let wallet = try await makeWallet()
@@ -296,6 +321,23 @@ struct WalletTests {
         #expect(replacement.built.fee >= original.built.fee + Int64(replacementVSize))
         #expect(preview.fee == replacement.built.fee)
         #expect(preview.feeRateSatPerVByte > currentRate)
+        #expect(preview.authorizes(replacement.built))
+
+        var changedFee = replacement.built
+        changedFee.fee += 1
+        #expect(!preview.authorizes(changedFee))
+
+        var changedOutput = replacement.built
+        changedOutput.transaction.outputs[0].value -= 1
+        #expect(!preview.authorizes(changedOutput))
+
+        var changedInput = replacement.built
+        changedInput.transaction.inputs[0].previousOutput.vout += 1
+        #expect(!preview.authorizes(changedInput))
+
+        var changedSequence = replacement.built
+        changedSequence.transaction.inputs[0].sequence -= 1
+        #expect(!preview.authorizes(changedSequence))
         #expect(replacementTx.inputs.map(\.previousOutput) == originalTx.inputs.map(\.previousOutput))
         #expect(replacementTx.outputs.contains { $0.value == 100_000 && $0.scriptPubKey == destination })
         #expect(replacement.built.changeAmount! < original.built.changeAmount!)
@@ -576,6 +618,75 @@ struct WalletTests {
         let reopenedDescriptor = await reopened.descriptor
         let originalDescriptor = await wallet.descriptor
         #expect(reopenedDescriptor == originalDescriptor)
+    }
+
+    @Test("corrupt persisted coin totals fail closed instead of trapping balance")
+    func corruptPersistedAmounts() async throws {
+        let url = tempFileURL("corrupt-amount-wallet.json")
+        let keyStore = InMemoryKeyStore()
+        let wallet = try await makeWallet(storageURL: url, keyStore: keyStore)
+        let script = try await wallet.scriptPubKey(chain: .receive, index: 0)
+        let funding = Transaction(version: 2, inputs: [coinbaseInput()], outputs: [
+            Transaction.Output(value: 42_000, scriptPubKey: script),
+        ], locktime: 0)
+        try await wallet.apply(match: fakeMatch(height: 100, transactions: [funding]))
+
+        let data = try Data(contentsOf: url)
+        var json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var coins = try #require(json["utxos"] as? [[String: Any]])
+        coins[0]["amount"] = BitcoinAmount.maximum
+        var second = coins[0]
+        second["vout"] = 1
+        coins.append(second)
+        json["utxos"] = coins
+        try JSONSerialization.data(withJSONObject: json).write(to: url, options: .atomic)
+
+        #expect(throws: (any Error).self) {
+            _ = try Wallet.open(storageURL: url, keyStore: keyStore)
+        }
+    }
+
+    @Test("invalid block amounts are rejected atomically before wallet mutation")
+    func invalidBlockAmounts() async throws {
+        let wallet = try await makeWallet()
+        let script = try await wallet.scriptPubKey(chain: .receive, index: 0)
+        let valid = Transaction(version: 2, inputs: [coinbaseInput()], outputs: [
+            Transaction.Output(value: 42_000, scriptPubKey: script),
+        ], locktime: 0)
+        let invalid = Transaction(version: 2, inputs: [coinbaseInput()], outputs: [
+            Transaction.Output(value: BitcoinAmount.maximum, scriptPubKey: script),
+            Transaction.Output(value: 1, scriptPubKey: Data([0x51])),
+        ], locktime: 0)
+
+        await #expect(throws: WalletError.invalidTransactionAmounts) {
+            _ = try await wallet.apply(match: fakeMatch(
+                height: 100, transactions: [valid, invalid]))
+        }
+        #expect(await wallet.balance == 0)
+        #expect(await wallet.history.isEmpty)
+    }
+
+    @Test("zero-value watched outputs are ignored without wedging later blocks")
+    func zeroValueWatchedOutputDoesNotWedgeScan() async throws {
+        let wallet = try await makeWallet()
+        let script = try await wallet.scriptPubKey(chain: .receive, index: 0)
+        let zero = Transaction(version: 2, inputs: [coinbaseInput()], outputs: [
+            Transaction.Output(value: 0, scriptPubKey: script),
+        ], locktime: 0)
+
+        let effect = try await wallet.apply(match: fakeMatch(height: 100, transactions: [zero]))
+        #expect(effect.received.isEmpty)
+        #expect(await wallet.balance == 0)
+        #expect(await wallet.utxos.isEmpty)
+        #expect(await wallet.history.isEmpty)
+        #expect(await wallet.nextReceiveIndex == 0)
+
+        let positive = Transaction(version: 2, inputs: [coinbaseInput()], outputs: [
+            Transaction.Output(value: 42_000, scriptPubKey: script),
+        ], locktime: 0)
+        _ = try await wallet.apply(match: fakeMatch(height: 101, transactions: [positive]))
+        #expect(await wallet.balance == 42_000)
+        #expect(await wallet.nextReceiveIndex == 1)
     }
 
     @Test("wallet state from before fee-bump metadata remains readable")
