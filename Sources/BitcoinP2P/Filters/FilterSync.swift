@@ -3,6 +3,9 @@ import Foundation
 
 public enum FilterSyncError: LocalizedError, Equatable, Sendable {
     case noPeers
+    /// Every peer is briefly resting after a slow reply — transient, unlike
+    /// `noPeers`, which means there is nothing to dial at all.
+    case peersCoolingDown(Int)
     /// Peers (or a peer vs. our pinned chain) disagree on filter commitments.
     case checkpointMismatch(String)
     case badPeerResponse(String)
@@ -15,6 +18,8 @@ public enum FilterSyncError: LocalizedError, Equatable, Sendable {
         switch self {
         case .noPeers:
             "No Bitcoin peers are available for compact-filter synchronization."
+        case let .peersCoolingDown(count):
+            "\(count) Bitcoin peer\(count == 1 ? " is" : "s are") resting briefly after a slow reply. Scanning will resume on its own."
         case let .checkpointMismatch(reason):
             "Bitcoin peers disagreed about compact-filter checkpoints (\(reason))."
         case let .badPeerResponse(reason):
@@ -159,15 +164,44 @@ public actor FilterSync {
     /// advances. Continuing a batch without its extra scripts would let a
     /// forward-only scan skip those payments permanently and invisibly — an
     /// index outage must surface as a sync error instead.
+    /// `onReorg` is called with the fork height when the header sync replaced a
+    /// branch, and is awaited **before** any filter work resumes.
+    ///
+    /// The ordering is the requirement, not a convenience. Scanning forward
+    /// from a frontier that describes the orphaned branch is precisely the bug
+    /// being fixed, so the rollback has to finish first, and a throw from it
+    /// aborts the sync rather than proceeding with state that is known stale
+    /// (#127).
     public func sync(watchScripts: [Data],
                      extraScripts: (@Sendable (ClosedRange<UInt32>) async throws -> [UInt32: [Data]])? = nil,
+                     onReorg: (@Sendable (UInt32) async throws -> Void)? = nil,
                      onMatch: @Sendable (BlockMatch) async throws -> Void) async throws {
         var peers = await pool.connectedPeers()
-        guard !peers.isEmpty else { throw FilterSyncError.noPeers }
+        guard !peers.isEmpty else {
+            // Same distinction as `PeerPool.syncHeaders`: since transport
+            // failures cool peers off rather than banning them, an empty pool
+            // is routinely a transient state rather than a peerless one, and
+            // saying "no peers are available" would be untrue (#82).
+            let cooling = await pool.coolingEndpoints.count
+            throw cooling > 0 ? FilterSyncError.peersCoolingDown(cooling) : FilterSyncError.noPeers
+        }
 
         // 1. Headers to tip. A stale or broken peer is evicted and the pool
         // retries another peer without discarding already-persisted progress.
-        try await pool.syncHeaders(chain)
+        let headerOutcome = try await pool.syncHeaders(chain)
+
+        // 1a. A branch was replaced, so everything derived from the old one is
+        // wrong. Roll back to the lowest fork the sync saw before reading a
+        // single filter: the frontier below is the thing that would otherwise
+        // carry the orphaned branch forward.
+        if let forkHeight = headerOutcome.minForkHeight {
+            // The caller goes first because it owns the crash marker: nothing
+            // may change in any store until the target height is recorded, or
+            // a crash leaves stores disagreeing with no way to know a rollback
+            // was ever in progress.
+            try await onReorg?(forkHeight)
+            try rollBack(to: forkHeight)
+        }
         peers = await pool.connectedPeers()
         guard !peers.isEmpty else { throw FilterSyncError.noPeers }
         let tip = await chain.height
@@ -186,7 +220,32 @@ public actor FilterSync {
             guard case let .cfcheckpt(message) = response else {
                 throw FilterSyncError.badPeerResponse("expected cfcheckpt")
             }
+            // The reply must answer the question we asked. Without this the
+            // stop hash is only ever compared peer-to-peer in the tally below,
+            // so a single peer — or peers that agree — could answer about a
+            // different chain entirely and be believed. `pinFilterHeaders`
+            // has always checked its own stop hash; this path had not.
+            //
+            // Evict and carry on rather than throw. The other peers may be
+            // answering honestly, and refusing the whole sync on one bad reply
+            // would hand any single hostile peer a denial of service — the
+            // opposite of what cross-peer comparison is for. The majority rule
+            // below then runs on whoever answered about the chain we asked
+            // about.
+            //
+            // An honest peer cannot trip this. It echoes the stop hash we sent
+            // in `getcfcheckpt`, so a tip that advances mid-loop does not cause
+            // a mismatch — we simply scan to the tip we asked about and catch
+            // the rest on the next run.
+            guard message.stopHash == tipHash else {
+                await pool.misbehaving(peer, reason: "cfcheckpt stop hash mismatch")
+                continue
+            }
             checkpoints.append((peer, message))
+        }
+        guard !checkpoints.isEmpty else {
+            throw FilterSyncError.badPeerResponse(
+                "no peer answered the cfcheckpt request for our chain tip")
         }
         // Adopt the MAJORITY cfcheckpt answer — never checkpoints[0] by fiat, or
         // a lying first peer could evict the honest ones and become the sole
@@ -195,6 +254,27 @@ public actor FilterSync {
         // we drop every checkpoint peer and let the pool replenish and retry.
         let reference: CFCheckptMessage
         if checkpoints.count == 1 {
+            // A lone survivor is accepted even when more peers were asked for,
+            // and that is deliberate — refusing here would be strictly worse.
+            //
+            // A peer only leaves this set by being evicted, and the two ways
+            // out lead somewhere harmless. The stop-hash guard evicts the peer
+            // that *replied*, and an honest peer never sends a stop hash we did
+            // not ask about, so an attacker spraying garbage only evicts his own
+            // peers and hands the sync to one he does not control. Reaching the
+            // bad case — his peer as sole survivor — means the honest ones lost
+            // the tally, which already requires him to hold a majority; the
+            // downgrade adds nothing he did not already have.
+            //
+            // Refusing, by contrast, would hand him something new: a repeatable
+            // abort. Sending one bad reply per attempt would stall every sync
+            // indefinitely, which is the denial of service this whole path is
+            // written to avoid.
+            //
+            // Corroboration here is defence in depth rather than the load-
+            // bearing check. A sole survivor still cannot fabricate filter
+            // commitments past the checkpoint-boundary comparison below or the
+            // final guard at the end of this function.
             reference = checkpoints[0].message
         } else {
             var tally: [(message: CFCheckptMessage, count: Int)] = []
@@ -217,6 +297,26 @@ public actor FilterSync {
             }
             reference = best.message
         }
+
+        // Only peers whose cfcheckpt matched the answer we adopted may go on to
+        // serve filters, and `peers` has to be rebuilt from them.
+        //
+        // Two separate problems are being solved here. The list was captured
+        // before any eviction, and the batch loop sends to `peers[0]` and the
+        // first two entries — so evicting a liar that sat at the front tore
+        // down the connection the next request used, and a sync that correctly
+        // identified the liar died on a transport timeout anyway.
+        //
+        // But simply re-reading the pool is not sound either: `misbehaving`
+        // triggers `replenish`, so `connectedPeers()` can hand back brand-new
+        // peers that never went through this comparison at all. Serving filters
+        // from those bypasses the only multi-peer checkpoint consensus the
+        // client has — the eviction would be cosmetic, replacing a known liar
+        // with an unvetted stranger. Hence the intersection rather than a
+        // refresh.
+        let approvedEndpoints = await Self.endpoints(
+            of: checkpoints.filter { $0.message == reference }.map(\.peer))
+        peers = try await approved(peers: approvedEndpoints)
         // Core serves checkpoint headers at heights 1000, 2000, …, ascending
         // (ProcessGetCFCheckPt: entry i is the header at (i+1)*1000; the stop
         // block itself is included only when it is a multiple of 1000).
@@ -250,8 +350,12 @@ public actor FilterSync {
             candidate.nextScanHeight = batchStop + 1
             try persist(candidate)
             progress = candidate
-            peers = await pool.connectedPeers()
-            guard !peers.isEmpty else { throw FilterSyncError.noPeers }
+            // Same intersection as above, for the same reason: a long sync
+            // must not drift onto replacements dialled mid-scan whose
+            // checkpoints were never compared against anyone's. If every
+            // approved peer has gone, stop rather than continue unvetted —
+            // the next `sync` redoes the comparison from scratch.
+            peers = try await approved(peers: approvedEndpoints)
         }
 
         // Final guard: the highest checkpoint header we computed must equal
@@ -265,6 +369,29 @@ public actor FilterSync {
     }
 
     // MARK: - Internals
+
+    /// Endpoint descriptions of `connections`, for comparing peer identity
+    /// across a pool that may have been replenished underneath us.
+    private static func endpoints(of connections: [PeerConnection]) async -> Set<String> {
+        var result: Set<String> = []
+        for connection in connections { result.insert(connection.endpoint.description) }
+        return result
+    }
+
+    /// The still-connected peers whose cfcheckpt answer we adopted.
+    ///
+    /// Throws rather than falling back to the full pool: a peer that never had
+    /// its checkpoints compared is exactly what the cross-peer check exists to
+    /// exclude, so continuing without an approved peer would silently drop the
+    /// protection instead of failing closed.
+    private func approved(peers approvedEndpoints: Set<String>) async throws -> [PeerConnection] {
+        var result: [PeerConnection] = []
+        for peer in await pool.connectedPeers() {
+            if approvedEndpoints.contains(peer.endpoint.description) { result.append(peer) }
+        }
+        guard !result.isEmpty else { throw FilterSyncError.noPeers }
+        return result
+    }
 
     /// Fetches cfheaders for [batchStart, batchStop] and pins the filter
     /// header chain to our block-header chain.
@@ -482,6 +609,46 @@ public actor FilterSync {
                 stored: progress.nextScanHeight, tip: tip)
         }
     }
+
+    /// Rewinds filter progress to a fork height, so scanning resumes from the
+    /// first block the surviving branch does not share with the old one.
+    ///
+    /// A pure function of `forkHeight`, which is what makes the whole rollback
+    /// safe to repeat: running it twice is indistinguishable from running it
+    /// once, so a crash part-way through needs no partial-state reasoning.
+    ///
+    /// Pinned filter headers above the fork are dropped rather than kept. They
+    /// commit to filters for blocks that are no longer on the chain, and a
+    /// later cross-check against them would compare the surviving branch to
+    /// the orphaned one and reject honest peers.
+    ///
+    /// Never moves the frontier forward: a fork at or above the current
+    /// frontier means nothing scanned is affected, and advancing here would
+    /// skip blocks that have never been read.
+    public func rollBack(to forkHeight: UInt32) throws {
+        let resumeFrom = forkHeight == UInt32.max ? forkHeight : forkHeight + 1
+        var candidate = progress
+        candidate.nextScanHeight = min(progress.nextScanHeight, resumeFrom)
+        candidate.filterHeaders = progress.filterHeaders.filter { key, _ in
+            guard let height = UInt32(key) else { return false }
+            return height <= forkHeight
+        }
+        guard candidate != progress else { return }
+        try persist(candidate)
+        progress = candidate
+    }
+
+    /// Test seam: sets progress directly so a rollback can be exercised without
+    /// running a whole sync against loopback peers.
+    func recordProgressForTest(nextScanHeight: UInt32,
+                               filterHeaders: [String: String] = [:]) throws {
+        let candidate = Progress(nextScanHeight: nextScanHeight, filterHeaders: filterHeaders)
+        try persist(candidate)
+        progress = candidate
+    }
+
+    /// Test seam: the pinned filter headers a rollback prunes.
+    var pinnedFilterHeadersForTest: [String: String] { progress.filterHeaders }
 
     private func persist(_ candidate: Progress) throws {
         guard let storageURL else { return }

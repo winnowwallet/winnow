@@ -51,7 +51,7 @@ struct SilentPaymentReceiveFlowTests {
         _ = try await Wallet.create(network: .signet, keyStore: store, storageURL: storageURL,
                                     entropy: testEntropy, creationHeight: 100)
         var state = try JSONDecoder().decode(WalletState.self, from: Data(contentsOf: storageURL))
-        state.utxos.append(WalletUTXO(txid: Data(repeating: 0xD2, count: 32), vout: 0,
+        state.allUtxos.append(WalletUTXO(txid: Data(repeating: 0xD2, count: 32), vout: 0,
                                       amount: amount, scriptPubKey: script,
                                       chain: .receive, index: 0, height: 101,
                                       silentPaymentTweak: tweak))
@@ -102,7 +102,7 @@ struct SilentPaymentReceiveFlowTests {
         let address = try await receiver.silentPaymentAddress()
         let built = try await sender.send(
             payments: [], feeRateSatPerVByte: 2,
-            silentPayments: [try SilentPayment(amount: 100_000, address: address, network: .signet)])
+            silentPayments: [try SilentPayment(amount: 100_000, address: address, network: .signet)], chainTip: testChainTip, randomness: { 0.5 })
         let tx = built.transaction
 
         // Receive-side scan from the raw transaction — the same quantities the
@@ -140,7 +140,7 @@ struct SilentPaymentReceiveFlowTests {
         // re-open (the pipeline chunk will route this through the wallet; the
         // schema and signing path are what's under test).
         var state = try JSONDecoder().decode(WalletState.self, from: Data(contentsOf: storageURL))
-        state.utxos.append(WalletUTXO(txid: tx.txid, vout: UInt32(vout),
+        state.allUtxos.append(WalletUTXO(txid: tx.txid, vout: UInt32(vout),
                                       amount: tx.outputs[vout].value,
                                       scriptPubKey: tx.outputs[vout].scriptPubKey,
                                       chain: .receive, index: 0, height: 101,
@@ -153,7 +153,7 @@ struct SilentPaymentReceiveFlowTests {
         // silent-payment output key (no TapTweak).
         let destination = try await sender.scriptPubKey(chain: .receive, index: 1)
         let prepared = try await reopened.buildSend(
-            payments: [Payment(amount: 60_000, scriptPubKey: destination)], feeRateSatPerVByte: 2)
+            payments: [Payment(amount: 60_000, scriptPubKey: destination)], feeRateSatPerVByte: 2, chainTip: testChainTip, randomness: { 0.5 })
         let spend = prepared.built.transaction
         #expect(spend.inputs.count == 1)
         #expect(spend.inputs[0].previousOutput == Transaction.Outpoint(txid: tx.txid,
@@ -223,7 +223,7 @@ struct SilentPaymentReceiveFlowTests {
                                     storageURL: storageURL, entropy: testEntropy,
                                     creationHeight: 100)
         var state = try JSONDecoder().decode(WalletState.self, from: Data(contentsOf: storageURL))
-        state.utxos.append(WalletUTXO(txid: txid, vout: 0, amount: 150_000, scriptPubKey: script,
+        state.allUtxos.append(WalletUTXO(txid: txid, vout: 0, amount: 150_000, scriptPubKey: script,
                                       chain: .receive, index: 0, height: 101,
                                       silentPaymentTweak: tweak))
         try JSONEncoder().encode(state).write(to: storageURL, options: .atomic)
@@ -234,7 +234,7 @@ struct SilentPaymentReceiveFlowTests {
         let recipient = try SilentPaymentAddress(scanKey: scanKey, spendKey: spendKey, hrp: "tsp")
         let built = try await wallet.send(payments: [], feeRateSatPerVByte: 2,
                                           silentPayments: [SilentPayment(amount: 100_000,
-                                                                         address: recipient)])
+                                                                         address: recipient)], chainTip: testChainTip, randomness: { 0.5 })
 
         // Independently derive the recipient's expected output script with
         // d = b_spend + tweak as the input key — if the wallet keyed the
@@ -263,7 +263,7 @@ struct SilentPaymentReceiveFlowTests {
 
         let destination = Data([0x51, 0x20] + repeatElement(0x99, count: 32))
         let original = try await wallet.buildSend(
-            payments: [Payment(amount: 60_000, scriptPubKey: destination)], feeRateSatPerVByte: 2)
+            payments: [Payment(amount: 60_000, scriptPubKey: destination)], feeRateSatPerVByte: 2, chainTip: testChainTip, randomness: { 0.5 })
         try await wallet.commit(original)
         let originalTxid = original.built.transaction.txid
 

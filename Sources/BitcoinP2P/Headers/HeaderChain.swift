@@ -67,6 +67,11 @@ public actor HeaderChain {
     private var chainwork: [UInt256]
     /// Absolute heights, not indices.
     private var heightByHash: [Data: UInt32]
+    /// How many headers the file on disk currently claims. Tracked so an
+    /// append knows where the record area ends without re-reading the file,
+    /// and so any divergence falls back to a full rewrite rather than writing
+    /// at a guessed offset (#83).
+    private var persistedCount: Int = 0
     /// Height of `headers[0]`. Zero when syncing from genesis; a checkpoint
     /// height when starting from one (#89). Every index/height conversion in
     /// this type goes through it.
@@ -130,6 +135,7 @@ public actor HeaderChain {
             chainwork = loaded.chainwork
             heightByHash = loaded.heightByHash
             baseHeight = loaded.baseHeight
+            persistedCount = loaded.headers.count
         } else if let checkpoint {
             let header = try BlockHeader.decode(checkpoint.header)
             // PoW-check it like any other header. A checkpoint is a starting
@@ -240,10 +246,11 @@ public actor HeaderChain {
     /// Connects a batch of headers received from a peer. The first header must
     /// build on a block already in the chain (usually the tip; an earlier
     /// height means a reorg, accepted only with strictly more total work).
-    /// Returns the number of headers appended.
+    /// Reports what the batch did, including the fork height when it replaced
+    /// an existing branch -- the one fact a consumer needs in order to rewind.
     @discardableResult
-    public func connect(_ newHeaders: [BlockHeader]) throws -> Int {
-        guard !newHeaders.isEmpty else { return 0 }
+    public func connect(_ newHeaders: [BlockHeader]) throws -> ConnectOutcome {
+        guard !newHeaders.isEmpty else { return ConnectOutcome(appended: 0) }
         guard let forkHeight = heightByHash[newHeaders[0].previousHash] else {
             throw HeaderChainError.doesNotConnect
         }
@@ -276,8 +283,11 @@ public actor HeaderChain {
             for (offset, header) in appended.enumerated() {
                 heightByHash[header.hash] = firstNewHeight + UInt32(offset)
             }
-            try persist()
-            return newHeaders.count
+            // Appending is the whole point of the fast path, so the write is
+            // incremental too. A reorg cannot reach here.
+            try persistAppended(from: headers.count - appended.count)
+            // The fast path is by definition an extension, so no fork height.
+            return ConnectOutcome(appended: newHeaders.count)
         }
 
         let forkIndex = Int(forkHeight - baseHeight)
@@ -300,9 +310,6 @@ public actor HeaderChain {
         }
 
         let disconnected = headers.count - 1 - forkIndex
-        if disconnected > 0 {
-            lastReorg = Reorg(forkHeight: forkHeight, disconnectedHeaders: disconnected)
-        }
         headers = stagedHeaders
         chainwork = stagedWork
         heightByHash = heightByHash.filter { $0.value <= forkHeight }
@@ -310,11 +317,16 @@ public actor HeaderChain {
             heightByHash[header.hash] = baseHeight + UInt32(index)
         }
         try persist()
-        return newHeaders.count
+        return ConnectOutcome(appended: newHeaders.count,
+                              forkHeight: disconnected > 0 ? forkHeight : nil,
+                              disconnectedHeaders: disconnected)
     }
 
     /// Syncs from the current tip to the peer's best tip via getheaders.
-    public func sync(using peer: PeerConnection, timeout: Duration = .seconds(30)) async throws {
+    @discardableResult
+    public func sync(using peer: PeerConnection,
+                     timeout: Duration = .seconds(30)) async throws -> SyncOutcome {
+        var outcome = SyncOutcome()
         while true {
             let request = GetHeadersMessage(version: PeerConnection.protocolVersion,
                                             locatorHashes: blockLocator())
@@ -324,9 +336,9 @@ public actor HeaderChain {
             guard case let .headers(batch) = message else {
                 throw HeaderChainError.badPeerResponse("expected headers")
             }
-            if batch.isEmpty { return }
-            try connect(batch)
-            if batch.count < Self.maxHeadersPerRequest { return }
+            if batch.isEmpty { return outcome }
+            outcome.absorb(try connect(batch))
+            if batch.count < Self.maxHeadersPerRequest { return outcome }
         }
     }
 
@@ -340,6 +352,12 @@ public actor HeaderChain {
     /// carries a base height and base work before the count.
     private static let formatMarker: UInt32 = 0xFFFF_FFFF
     private static let formatVersion: UInt32 = 1
+
+    /// Bytes before the first header: a bare count for the genesis layout,
+    /// marker + version + baseHeight + baseWork + count for the other.
+    private var prefixSize: Int { baseHeight == 0 ? 4 : 4 + 4 + 4 + 32 + 4 }
+    /// Offset of the mutable header count within the prefix.
+    private var countOffset: Int { baseHeight == 0 ? 0 : 4 + 4 + 4 + 32 }
 
     private func persist() throws {
         guard let storageURL else { return }
@@ -363,6 +381,60 @@ public actor HeaderChain {
             throw HeaderChainError.storageUnavailable(
                 "could not save the header file: \(error.localizedDescription)")
         }
+        persistedCount = headers.count
+    }
+
+    /// Writes only the headers appended since the last save.
+    ///
+    /// Rewriting the whole file on every batch is what made mainnet header
+    /// sync get slower as it ran: 963,000 headers is 77 MB, re-serialised and
+    /// re-written 460 times over a first sync (#83). The layout is a
+    /// fixed-size prefix followed by fixed 80-byte records in height order, so
+    /// the new headers go straight onto the end and the only field that
+    /// changes is the count.
+    ///
+    /// **Payload first, then the count.** That order is the whole crash-safety
+    /// argument. A crash between the two leaves a file whose count is stale
+    /// and whose tail is bytes nothing refers to — recoverable, and the tail is
+    /// ignored on load. The reverse order would leave a count claiming headers
+    /// that are not there, which is indistinguishable from real truncation.
+    /// Each write is followed by `synchronize()` so the order survives the
+    /// filesystem, not just the process.
+    ///
+    /// Falls back to a full rewrite whenever the file is not in the state this
+    /// assumes — a different persisted count, or no file at all.
+    private func persistAppended(from oldCount: Int) throws {
+        guard let storageURL else { return }
+        guard oldCount == persistedCount, oldCount > 0,
+              FileManager.default.fileExists(atPath: storageURL.path)
+        else {
+            try persist()
+            return
+        }
+        var payload = Data()
+        payload.reserveCapacity((headers.count - oldCount) * BlockHeader.serializedSize)
+        for header in headers[oldCount...] { payload.append(header.serialized) }
+
+        do {
+            let handle = try FileHandle(forWritingTo: storageURL)
+            defer { try? handle.close() }
+            try handle.seek(toOffset: UInt64(prefixSize + oldCount * BlockHeader.serializedSize))
+            try handle.write(contentsOf: payload)
+            // Drop anything a previously interrupted append left beyond the
+            // new end, so the file is exactly the length its count implies.
+            try handle.truncate(atOffset: UInt64(prefixSize + headers.count * BlockHeader.serializedSize))
+            try handle.synchronize()
+
+            var count = Data()
+            count.appendUInt32(UInt32(headers.count))
+            try handle.seek(toOffset: UInt64(countOffset))
+            try handle.write(contentsOf: count)
+            try handle.synchronize()
+        } catch {
+            throw HeaderChainError.storageUnavailable(
+                "could not append to the header file: \(error.localizedDescription)")
+        }
+        persistedCount = headers.count
     }
 
     /// The most recent reorg this chain applied.
@@ -374,16 +446,46 @@ public actor HeaderChain {
     /// forward-only scan never revisits a height it has passed. Without this
     /// the swap is silent and downstream state keeps describing the orphaned
     /// branch.
-    public struct Reorg: Equatable, Sendable {
-        /// The last height the old and new branches agree on. Everything above
-        /// it was disconnected.
-        public var forkHeight: UInt32
+    /// What one batch of headers did to the chain.
+    public struct ConnectOutcome: Equatable, Sendable {
+        /// Headers this batch added.
+        public var appended: Int
+        /// The last height the old and new branches agree on, when the batch
+        /// replaced an existing branch. nil for an ordinary extension.
+        public var forkHeight: UInt32?
         /// How many headers the swap removed.
-        public var disconnectedHeaders: Int
+        public var disconnectedHeaders: Int = 0
     }
 
-    /// Nil until a reorg happens; thereafter the latest one.
-    public private(set) var lastReorg: Reorg?
+    /// What a whole sync did.
+    ///
+    /// This replaced a sticky `lastReorg` property, which was the wrong shape
+    /// twice over: a poller could read the same value after later ordinary
+    /// syncs and roll back a second time, and two swaps inside one sync
+    /// collapsed into whichever happened last, losing the deeper one.
+    ///
+    /// Reporting the *lowest* fork height of the sync fixes both, and it can
+    /// because a rollback is a pure function of the height it rolls back to.
+    /// Rolling back to the lowest fork covers every swap the sync performed,
+    /// so collapsing becomes harmless rather than lossy, and no event identity
+    /// or acknowledgement protocol is needed. The value is per-sync and is not
+    /// retained, so it cannot be replayed.
+    public struct SyncOutcome: Equatable, Sendable {
+        /// Headers added across the whole sync.
+        public var connected: Int = 0
+        /// The lowest fork height of any branch swap during this sync, or nil
+        /// if the chain only ever extended.
+        public var minForkHeight: UInt32?
+        /// Headers disconnected across the whole sync.
+        public var disconnectedHeaders: Int = 0
+
+        mutating func absorb(_ batch: ConnectOutcome) {
+            connected += batch.appended
+            disconnectedHeaders += batch.disconnectedHeaders
+            guard let fork = batch.forkHeight else { return }
+            minForkHeight = min(minForkHeight ?? fork, fork)
+        }
+    }
 
     /// A header file is bounded before it is read, the way the compact-filter
     /// progress file already is.
@@ -431,7 +533,24 @@ public actor HeaderChain {
             count = stored
             prefix = 4 + 4 + 4 + 32 + 4
         }
-        guard data.count == prefix + Int(count) * BlockHeader.serializedSize else {
+        // A file SHORTER than its count claims is truncation — bytes the count
+        // says are there and are not — and stays a refusal.
+        //
+        // A file LONGER is the interrupted-append case, and is read up to the
+        // count with the tail ignored. Headers are appended before the count
+        // that admits them (#83), so a crash between the two writes leaves
+        // exactly this shape, and refusing it would turn every crash during
+        // header sync into a corrupt-file error requiring a full resync.
+        //
+        // This does relax a check that previously refused any trailing bytes.
+        // What it costs is small: the count gates how many records are read,
+        // so bytes past it are never decoded, and an attacker who can write
+        // the file can write a consistent count just as easily — padding was
+        // never the barrier. The barrier is that every header up to the count
+        // is independently proof-of-work and linkage checked below, and that
+        // is unchanged.
+        let expectedLength = prefix + Int(count) * BlockHeader.serializedSize
+        guard data.count >= expectedLength else {
             throw HeaderChainError.storageCorrupt("bad length")
         }
         let genesis = HeaderChain.genesisHeader(for: params)

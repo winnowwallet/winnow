@@ -17,6 +17,10 @@ actor LoopbackNode {
     let services: UInt64
     /// Height-indexed blocks served over getheaders/getdata (empty: headers-disabled node).
     let chain: [Block]
+    /// Completes the handshake, then never answers `getheaders` — a peer that
+    /// is reachable and well-behaved but too slow to reply, which is the shape
+    /// that used to get an endpoint banned for the session (#82).
+    let withholdHeaders: Bool
     /// When set, the filter served for this height is bit-flipped (lying node).
     let corruptFilterAtHeight: Int?
     /// Serves filter *commitments* that disagree with the honest chain while
@@ -24,6 +28,15 @@ actor LoopbackNode {
     /// headers rather than about the chain itself. This is the shape the
     /// cfcheckpt majority rule exists to defend against.
     let lieAboutFilterCommitments: Bool
+    /// Answers every getcfcheckpt with this stop hash instead of the one the
+    /// client asked about — a peer replying about a different chain (#129).
+    let cfcheckptStopHashOverride: Data?
+    /// Distinguishes one liar's fabricated commitment chain from another's.
+    /// The lie is a byte-flip on every filter hash; with a fixed flip, two
+    /// lying nodes fabricate *identical* chains and form a majority for the
+    /// lie instead of a three-way split. Varying the salt makes each liar
+    /// wrong in its own self-consistent way (#129).
+    let lieSalt: UInt8
     /// When set, the node answers inv announcements of transactions with a
     /// getdata after this delay (nil = never request, the silent peer).
     let autoRequestDelay: Duration?
@@ -50,15 +63,20 @@ actor LoopbackNode {
     private var filterHeaders: [Data] = []
 
     init(params: NetworkParams, services: UInt64 = PeerConnection.nodeCompactFilters,
-         chain: [Block] = [], corruptFilterAtHeight: Int? = nil,
-         lieAboutFilterCommitments: Bool = false,
+         chain: [Block] = [], withholdHeaders: Bool = false,
+         corruptFilterAtHeight: Int? = nil,
+         lieAboutFilterCommitments: Bool = false, lieSalt: UInt8 = 0xFF,
+         cfcheckptStopHashOverride: Data? = nil,
          autoRequestDelay: Duration? = nil, transactions: [Transaction] = [],
          listenPort: UInt16? = nil, versionDelay: Duration = .zero) {
         self.params = params
         self.services = services
         self.chain = chain
+        self.withholdHeaders = withholdHeaders
         self.corruptFilterAtHeight = corruptFilterAtHeight
         self.lieAboutFilterCommitments = lieAboutFilterCommitments
+        self.lieSalt = lieSalt
+        self.cfcheckptStopHashOverride = cfcheckptStopHashOverride
         self.autoRequestDelay = autoRequestDelay
         self.transactions = Dictionary(uniqueKeysWithValues: transactions.map { ($0.txid, $0) })
         self.versionDelay = versionDelay
@@ -71,7 +89,13 @@ actor LoopbackNode {
     var endpoint: PeerEndpoint { PeerEndpoint(host: "127.0.0.1", port: port) }
 
     func start() async throws {
-        let listener = try NWListener(using: .tcp,
+        // Local endpoint reuse: `retryAfterExhaustion` deliberately closes a
+        // listener and rebinds the same port, and without SO_REUSEADDR the
+        // kernel can still be holding it — which surfaces on a loaded CI
+        // machine as "Address already in use" and nowhere else (#144).
+        let parameters = NWParameters.tcp
+        parameters.allowLocalEndpointReuse = true
+        let listener = try NWListener(using: parameters,
                                       on: listenPort.flatMap { NWEndpoint.Port(rawValue: $0) } ?? .any)
         self.listener = listener
         listener.newConnectionHandler = { connection in
@@ -158,7 +182,7 @@ actor LoopbackNode {
         // comparing against another peer.
         var lyingPrevious = Data(repeating: 0, count: 32)
         for index in filterHashes.indices {
-            filterHashes[index][0] ^= 0xFF
+            filterHashes[index][0] ^= lieSalt
             let header = SHA256d.hash(filterHashes[index] + lyingPrevious)
             filterHeaders[index] = header
             lyingPrevious = header
@@ -260,6 +284,7 @@ actor LoopbackNode {
             try await send(.pong(nonce))
 
         case let .getheaders(request):
+            if withholdHeaders { return } // reachable, but never answers
             // First matching locator wins; no match → from height 1.
             var start = 1
             for hash in request.locatorHashes {
@@ -283,7 +308,8 @@ actor LoopbackNode {
                 headers.append(filterHeaders[height])
                 height += Int(FilterSync.checkpointInterval)
             }
-            try await send(.cfcheckpt(CFCheckptMessage(stopHash: request.stopHash, filterHeaders: headers)))
+            try await send(.cfcheckpt(CFCheckptMessage(
+                stopHash: cfcheckptStopHashOverride ?? request.stopHash, filterHeaders: headers)))
 
         case let .getcfheaders(request):
             guard let stop = height(ofHash: request.stopHash) else { return }

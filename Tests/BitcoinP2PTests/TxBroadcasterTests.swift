@@ -200,8 +200,14 @@ struct TxBroadcasterTests {
         var schedule: [Date] = []
         if let first = await broadcaster.nextAttemptDate(txid) { schedule.append(first) }
         for attempt in 1 ... 3 {
+            // `>=`, not `==`. The counter advances every 100-250ms for as long
+            // as the broadcaster runs, so equality asks the poll to observe it
+            // inside one interval. A contended runner that misses that window
+            // can never satisfy the check again -- the counter is already past
+            // it -- so the test burned the full hang-guard three times and
+            // failed with the schedule assertions below still passing (#144).
             let reached = await pollUntil {
-                await broadcaster.attemptCount(txid) == attempt
+                await broadcaster.attemptCount(txid) ?? 0 >= attempt
             }
             #expect(reached)
             if let date = await broadcaster.nextAttemptDate(txid) { schedule.append(date) }
@@ -209,13 +215,21 @@ struct TxBroadcasterTests {
         #expect(schedule.count == 4)
         guard schedule.count == 4 else { return }
         let gaps = zip(schedule, schedule.dropFirst()).map { $1.timeIntervalSince($0) }
-        // Attempt 1 doubles the base (≈200ms); attempts 2+ are capped (≈250ms).
-        // Upper bounds are generous: on loaded CI runners a poll can observe a
-        // later schedule entry, inflating the computed gap. What matters is
-        // the doubling-then-cap shape and positivity, not wall-clock precision.
-        #expect(gaps[0] > 0.15 && gaps[0] < 1.0)
-        #expect(gaps[1] > 0.20 && gaps[1] < 1.0)
-        #expect(gaps[2] > 0.20 && gaps[2] < 1.0)
+        // What this test can honestly prove is that attempts fire and that the
+        // schedule only ever moves forward. It cannot prove the *size* of a
+        // step, nor that any single sample caught its own step: the schedule is
+        // sampled by polling, so a loaded runner can advance the counter twice
+        // between two samples (leaving a zero gap) or read an already-advanced
+        // entry (inflating one). Asserting per-step movement is therefore an
+        // assertion about scheduling luck, which is what made this a flaky
+        // release gate (#138, #144).
+        //
+        // So: never backwards, forward overall, and the attempts really fired.
+        // The doubling-then-cap shape is checked exhaustively and without a
+        // clock in "TxBroadcaster backoff schedule".
+        #expect(gaps.allSatisfy { $0 >= 0 }, "the schedule must never move backwards")
+        #expect(schedule.last! > schedule.first!, "three attempts must push the schedule forward")
+        #expect(await broadcaster.attemptCount(txid) ?? 0 >= 3, "three attempts must have fired")
 
         await pool.stop()
     }
@@ -232,26 +246,35 @@ struct TxBroadcasterTests {
         let rawTx = tx.serialized(includeWitness: true)
         let txid = try await broadcaster.broadcast(rawTx, feeRateSatPerVByte: 2.5)
 
-        // Let one backoff attempt fire so `attempt` advances past 0.
-        #expect(await pollUntil { await broadcaster.attemptCount(txid) == 1 })
+        // Let at least one backoff attempt fire so `attempt` advances past 0.
+        #expect(await pollUntil { await broadcaster.attemptCount(txid) ?? 0 >= 1 })
+
+        // Then stop the loop before sampling anything. While the broadcaster
+        // runs, `attempt` advances every 100ms, so reading the file and the
+        // live counter are two different moments and pinning either to a
+        // literal 1 is a race, not an invariant (#144).
+        await broadcaster.shutdown()
 
         // The store carries the raw tx, feerate and next-attempt time.
         let json = try JSONSerialization.jsonObject(with: Data(contentsOf: store)) as? [String: Any]
         let record = (json?["transactions"] as? [String: Any])?[txid.hex] as? [String: Any]
+        let persistedAttempt = record?["attempt"] as? Int
         #expect(record?["rawTx"] as? String == rawTx.hex)
         #expect(record?["feeRateSatPerVByte"] as? Double == 2.5)
-        #expect(record?["attempt"] as? Int == 1)
+        #expect(persistedAttempt ?? 0 >= 1, "the fired attempt must reach the store")
         #expect(record?["nextAttemptAt"] as? Double != nil)
         #expect(json?["version"] as? Int == 1)
 
-        // A fresh broadcaster restores tx, feerate and schedule.
+        // A fresh broadcaster restores tx, feerate and schedule. The claim is
+        // that what comes back equals what went to disk -- comparing against
+        // the persisted value rather than a literal is what makes this a
+        // round-trip assertion instead of a timing one.
         let restored = try TxBroadcaster(pool: pool, storageURL: store,
                                      rebroadcastBaseInterval: .milliseconds(100))
         #expect(await restored.pendingTxids == [txid])
-        #expect(await restored.attemptCount(txid) == 1)
+        #expect(await restored.attemptCount(txid) == persistedAttempt)
         #expect(await restored.nextAttemptDate(txid) != nil)
 
-        try await broadcaster.cancel(txid)
         try await restored.cancel(txid)
 
         // The pre-backoff format (txid → rawTx) still loads, due immediately.
@@ -287,7 +310,17 @@ struct TxBroadcasterTests {
         let txid1 = try await broadcaster.broadcast(makeFakeSegwitTx().serialized(includeWitness: true))
         #expect(await node.nextMessage(command: "inv") != nil)
         try await broadcaster.markConfirmed(txid1)
+        // The pending entry is gone, so no further attempt can be scheduled.
+        // That is the claim, and it is deterministic.
         #expect(await broadcaster.pendingTxids.isEmpty)
+        // The wire check is about what happens *after* that. Rebroadcasts
+        // already sent when the confirmation landed are still sitting in the
+        // node's inbox — the interval here is 150ms and the node buffers, so
+        // there can be several — and none of them is a counter-example. Drain
+        // whatever is queued, then require quiet for longer than the maximum
+        // rebroadcast interval, which is the window in which a *new* one would
+        // have to appear (#144).
+        await drainQueuedInvs(from: node)
         #expect(await node.nextMessage(command: "inv", timeout: .milliseconds(700)) == nil)
         #expect(seen.events.contains { $0 == .confirmed(txid: txid1) })
 
@@ -296,6 +329,8 @@ struct TxBroadcasterTests {
         #expect(await node.nextMessage(command: "inv") != nil)
         try await broadcaster.cancel(txid2)
         #expect(await broadcaster.pendingTxids.isEmpty)
+        // Same as the confirmation branch above, for the same reason.
+        await drainQueuedInvs(from: node)
         #expect(await node.nextMessage(command: "inv", timeout: .milliseconds(700)) == nil)
         #expect(seen.events.contains { $0 == .cancelled(txid: txid2) })
 
@@ -527,7 +562,14 @@ struct TxBroadcasterTests {
 }
 
 /// Polls `condition` every 10ms until it holds or `timeout` elapses.
-private func pollUntil(_ timeout: Duration = .seconds(10),
+/// Waits for `condition`, and gives up eventually so a hung test fails instead
+/// of hanging forever.
+///
+/// The timeout is a HANG-GUARD, not a performance claim. Nothing here asserts
+/// that the condition is met within it — on a contended CI runner a short
+/// deadline turns into an assertion nobody wrote, which is how these became
+/// intermittent (#144). Keep it generous: a real hang fails either way.
+private func pollUntil(_ timeout: Duration = .seconds(60),
                        _ condition: () async -> Bool) async -> Bool {
     let deadline = ContinuousClock.now + timeout
     while ContinuousClock.now < deadline {
@@ -552,5 +594,17 @@ private final class EventCollector: @unchecked Sendable {
         lock.lock()
         storage.append(event)
         lock.unlock()
+    }
+}
+
+/// Consumes every inv already queued on `node`, so a following assertion is
+/// about what arrives *next* rather than what was already in flight.
+///
+/// Bounded so a broadcaster that never stops fails the test instead of hanging
+/// it — the drain is meant to remove a finite backlog, not to wait out an
+/// unbounded stream.
+private func drainQueuedInvs(from node: LoopbackNode, limit: Int = 20) async {
+    for _ in 0 ..< limit {
+        if await node.nextMessage(command: "inv", timeout: .milliseconds(250)) == nil { return }
     }
 }

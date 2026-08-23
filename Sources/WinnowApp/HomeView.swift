@@ -57,13 +57,15 @@ struct HomeView: View {
                     }
                     // nextScanHeight is the NEXT block to scan, so a fully
                     // scanned tip reads "tip+1 of tip" — clamp the display.
-                    LabeledContent(
-                        "Filter scan",
-                        value: model.syncPhase.filterScanText(
-                            fallbackScanned: model.status.nextScanHeight,
-                            fallbackTip: model.status.tipHeight
-                        )
-                    )
+                    // Absent when no scan has produced a position yet: the
+                    // status line above is already saying what is happening,
+                    // and a zeroed row said "block 0 of 0" (#99).
+                    if let filterScan = model.syncPhase.filterScanText(
+                        fallbackScanned: model.status.nextScanHeight,
+                        fallbackTip: model.status.tipHeight
+                    ) {
+                        LabeledContent("Filter scan", value: filterScan)
+                    }
                     LabeledContent("Peers", value: "\(model.status.peerCount)")
                     if model.status.syncing, model.syncStatusText == nil {
                         ProgressView("Scanning filters…")
@@ -72,6 +74,13 @@ struct HomeView: View {
                         Text(error)
                             .font(.footnote)
                             .foregroundStyle(.red)
+                    }
+                    // A relay problem, not a sync failure — sync is running.
+                    if let quarantined = model.status.relayStoreQuarantined {
+                        Text(quarantined)
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                            .accessibilityIdentifier("relayStoreQuarantined")
                     }
                     Button("Sync now") {
                         Task { await model.syncNow() }
@@ -123,9 +132,8 @@ private struct HistoryRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(net >= 0 ? "Received" : "Sent")
                     .font(.headline)
-                Text(entry.txid.displayHex.prefix(16) + "…")
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                CopyableIdentifier(value: entry.txid.displayHex, abbreviated: true,
+                                   accessibilityID: "copyTransactionIDButton")
                 WarnedExplorerLink(
                     title: "View transaction",
                     url: model.esploraTransactionURL(entry.txid),
@@ -202,9 +210,8 @@ private struct FeeBumpView: View {
         NavigationStack {
             Form {
                 Section("Transaction") {
-                    Text(txid.displayHex)
-                        .font(.system(.caption2, design: .monospaced))
-                        .textSelection(.enabled)
+                    CopyableIdentifier(value: txid.displayHex,
+                                       accessibilityID: "copyOriginalTransactionIDButton")
                     LabeledContent("Current rate", value: currentRate.map(feeRateText) ?? "—")
                 }
 
@@ -243,9 +250,8 @@ private struct FeeBumpView: View {
                     Section("Replacement broadcast") {
                         Label("Original marked replaced", systemImage: "arrow.triangle.2.circlepath")
                             .foregroundStyle(.green)
-                        Text(replacementTxid.displayHex)
-                            .font(.system(.caption2, design: .monospaced))
-                            .textSelection(.enabled)
+                        CopyableIdentifier(value: replacementTxid.displayHex,
+                                           accessibilityID: "copyReplacementTransactionIDButton")
                         Button("Done") { dismiss() }
                     }
                 }

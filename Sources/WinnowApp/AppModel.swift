@@ -58,6 +58,8 @@ final class AppModel {
         case deviceAuthUnavailable
         case deviceAuthFailed
         case spendAlreadyInFlight
+        /// No storage directory, so a rollback target cannot be recorded.
+        case noStorage
 
         var errorDescription: String? {
             switch self {
@@ -73,6 +75,7 @@ final class AppModel {
             case .deviceAuthUnavailable: "Set a device passcode first — sensitive wallet actions require device authentication."
             case .deviceAuthFailed: "Device authentication failed."
             case .spendAlreadyInFlight: "Another payment is already being signed and broadcast. Wait for it to finish."
+            case .noStorage: "Winnow could not reach its storage, so a chain reorganisation could not be recorded. Syncing has stopped rather than continue on stale data."
             }
         }
     }
@@ -91,6 +94,9 @@ final class AppModel {
         var nextScanHeight: UInt32 = 0
         var syncing = false
         var lastSyncError: String?
+        /// A damaged relay store was set aside so sync could continue (#150).
+        /// Distinct from `lastSyncError`: sync is fine, relay lost its queue.
+        var relayStoreQuarantined: String?
         /// BIP133 feefilter floor across connected peers (sat/vB).
         var feeFloorSatPerVByte: Double?
     }
@@ -116,16 +122,39 @@ final class AppModel {
         /// Peer discovery ran out of candidates with zero connections.
         case peerDiscoveryFailed
 
-        /// The filter row uses actor-polled progress while a scan is active,
-        /// falling back to the last committed wallet snapshot in other phases.
-        func filterScanText(fallbackScanned: UInt32, fallbackTip: UInt32) -> String {
+        /// Where the filter scan has actually reached, or `nil` when there is
+        /// no honest number to give.
+        ///
+        /// Outside a running scan the only source is the committed wallet
+        /// snapshot, and for a wallet that has never scanned that is zeroed --
+        /// which is where "block 0 of 0" came from. #87 fixed the phase the
+        /// report came from; the same string was still reachable in every
+        /// other phase (#99), because `status` is refreshed by events rather
+        /// than by the once-a-second phase poll.
+        ///
+        /// Rendering a zero as progress is worse than rendering nothing: the
+        /// status line above already says what the wallet is doing, so the
+        /// screen is not silent when this returns nil.
+        func filterScanText(fallbackScanned: UInt32, fallbackTip: UInt32) -> String? {
             let progress: (scanned: UInt32, tip: UInt32)
             switch self {
             case let .filters(scanned, tip):
                 progress = (scanned, tip)
-            default:
+            case .synced:
+                // The scan finished, so the snapshot is the truth -- and it is
+                // the durable readout, since the status line above disappears
+                // at .synced.
                 progress = (fallbackScanned, fallbackTip)
+            case .idle, .connecting, .headers, .peerDiscoveryFailed:
+                // No scan is running, so the snapshot is either zeroed (never
+                // scanned) or a completed scan from a previous launch. Neither
+                // is this scan's position. `.idle` means there is no stack at
+                // all, so there is nothing to report by construction.
+                return nil
             }
+            // A tip of zero is the same absence one step further in: the chain
+            // height has not been read yet, so there is no denominator.
+            guard progress.tip > 0 else { return nil }
             return "block \(min(progress.scanned, progress.tip).formatted()) of \(progress.tip.formatted())"
         }
     }
@@ -463,7 +492,7 @@ final class AppModel {
                     return try HeaderChain(params: params, storageURL: headersURL, start: start)
                 }
             }.value
-            let broadcaster = try TxBroadcaster(
+            let broadcaster = try makeBroadcaster(
                 pool: pool, storageURL: dir.appending(path: "broadcast.json"))
             var newStack = SyncStack(pool: pool, chain: chain, filters: nil, broadcaster: broadcaster)
             if let wallet {
@@ -472,9 +501,133 @@ final class AppModel {
             }
             stack = newStack
             observeBroadcasterFailures(broadcaster)
+            // Before anything scans: a marker here means a previous rollback
+            // was interrupted, and the state it was repairing is exactly the
+            // state a scan would otherwise build on.
+            //
+            // Fails closed. Swallowing this would leave the marker stuck and
+            // then scan on state already known to be stale, which is the one
+            // thing every other damaged-state path in this app refuses to do.
+            try await resumeInterruptedRollback()
         } catch {
             status.lastSyncError = error.localizedDescription
         }
+    }
+
+    /// Where a quarantined relay store is set aside. A fixed name, so the most
+    /// recent damaged file is kept and older ones do not accumulate unbounded
+    /// in a directory the user cannot see.
+    static let quarantinedRelayStoreName = "broadcast.damaged.json"
+
+    /// Builds the transaction broadcaster, setting a damaged store aside
+    /// rather than letting it take the whole sync stack down with it.
+    ///
+    /// The three stores are not equally important, and constructing this one
+    /// inside the stack build inverted their priority. Rebroadcast state is
+    /// best-effort -- it exists so a pending transaction keeps being
+    /// announced, and the wallet's own history remains the source of truth for
+    /// balance and confirmations. Headers and filters are what make the wallet
+    /// work at all. So one damaged record in the least important store stopped
+    /// the most important functions, and because nothing repaired the file,
+    /// every relaunch failed identically until the user deleted it by hand --
+    /// which they had no way of knowing to do, since it surfaced as a sync
+    /// error (#150).
+    ///
+    /// The file is renamed rather than deleted. It is the only evidence of
+    /// what went wrong, and it may hold transactions worth recovering by hand.
+    ///
+    /// Deliberately not solved by making `load` skip bad records and keep the
+    /// rest: the record most likely to carry a corrupt field is the
+    /// longest-pending transaction, the one most in need of rebroadcast, so
+    /// "keep the rest" would quietly discard exactly the record that mattered
+    /// most. The loader stays strict; the call site stops being brittle.
+    func makeBroadcaster(pool: PeerPool, storageURL: URL) throws -> TxBroadcaster {
+        do {
+            return try TxBroadcaster(pool: pool, storageURL: storageURL)
+        } catch let error as TxBroadcasterStorageError {
+            let quarantine = storageURL.deletingLastPathComponent()
+                .appending(path: Self.quarantinedRelayStoreName)
+            try? FileManager.default.removeItem(at: quarantine)
+            do {
+                try FileManager.default.moveItem(at: storageURL, to: quarantine)
+            } catch {
+                // The file could not be moved, so a fresh broadcaster would
+                // read the same damage next launch. Better to fail loudly than
+                // to loop: rethrow the original storage error.
+                throw error
+            }
+            status.relayStoreQuarantined =
+                "Pending transactions could not be read (\(error.localizedDescription)). "
+                + "The file was set aside as \(Self.quarantinedRelayStoreName) and relay started fresh. "
+                + "Your balance and history are unaffected."
+            return try TxBroadcaster(pool: pool, storageURL: storageURL)
+        }
+    }
+
+    /// Names the height an interrupted rollback was heading for.
+    static let rollbackMarkerName = "rollback.height"
+
+    /// Rolls the wallet and vaults back to a fork height, recording the target
+    /// before touching either.
+    ///
+    /// The four stores persist independently -- wallet JSON, vaults.json,
+    /// filters.json, broadcast.json -- so a crash mid-rollback leaves them
+    /// disagreeing. Because a rollback is a pure function of the height, it is
+    /// idempotent, and that turns recovery into a redo rather than a repair:
+    /// write the target first, roll each store back, clear the target once the
+    /// whole sync has finished. A surviving marker at launch means run it
+    /// again, and running it twice is indistinguishable from running it once.
+    ///
+    /// The marker is deliberately not cleared here. Filter progress rewinds
+    /// after this returns, and clearing before that would leave a window where
+    /// a crash loses the rollback that had already started.
+    func rollBackStores(to forkHeight: UInt32) async throws {
+        // Throwing, and first. `try?` here defeated the whole mechanism: a
+        // failed write proceeded into the rollbacks unprotected, and a crash
+        // then left the stores disagreeing with no marker to trigger the redo
+        // -- precisely the state the marker exists to prevent. If the target
+        // cannot be recorded, nothing may change.
+        guard let marker = storageDirectory()?.appending(path: Self.rollbackMarkerName) else {
+            throw AppError.noStorage
+        }
+        try Data(String(forkHeight).utf8).write(to: marker, options: .atomic)
+        try await wallet?.rollBack(to: forkHeight)
+        try await vaultStore.rollBack(to: forkHeight)
+    }
+
+    /// Clears the marker once a sync that included a rollback has completed.
+    func finishRollback() {
+        guard let marker = storageDirectory()?.appending(path: Self.rollbackMarkerName) else { return }
+        try? FileManager.default.removeItem(at: marker)
+    }
+
+    /// Redoes a rollback that a crash interrupted.
+    ///
+    /// Runs before any scanning, because the state it repairs is exactly the
+    /// state scanning would otherwise build on.
+    func resumeInterruptedRollback() async throws {
+        guard let marker = storageDirectory()?.appending(path: Self.rollbackMarkerName),
+              let text = try? String(contentsOf: marker, encoding: .utf8),
+              let forkHeight = UInt32(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        else { return }
+        try await wallet?.rollBack(to: forkHeight)
+        try await vaultStore.rollBack(to: forkHeight)
+        try await stack?.filters?.rollBack(to: forkHeight)
+        finishRollback()
+    }
+
+    /// The signed bytes of a still-pending transaction, hex-encoded.
+    ///
+    /// Winnow relays over its own peer connections and has no fallback
+    /// submission path. When relay is not working, the transaction itself is
+    /// the only thing that can leave the device, so the user is given it
+    /// rather than left with a txid for something no one has seen.
+    ///
+    /// nil once it confirms and leaves the pending set -- at that point it is
+    /// on the chain and the txid is the useful handle.
+    func rawTransactionHex(_ txid: Data) async -> String? {
+        guard let broadcaster = stack?.broadcaster else { return nil }
+        return await broadcaster.rawTransaction(txid)?.hex
     }
 
     /// Scheduled relay retries happen independently of the foreground send
@@ -551,7 +704,11 @@ final class AppModel {
             let broadcaster = stack.broadcaster
             let network = network
             let vaultStore = vaultStore
-            try await filters.sync(watchScripts: scripts, extraScripts: extraScripts) { match in
+            try await filters.sync(watchScripts: scripts, extraScripts: extraScripts,
+                                   onReorg: { [weak self] forkHeight in
+                guard let self else { return }
+                try await self.rollBackStores(to: forkHeight)
+            }) { match in
                 let walletEffect = try await wallet.apply(match: match)
                 for discarded in walletEffect.discardedReplacements {
                     try await broadcaster.cancel(discarded)
@@ -566,6 +723,12 @@ final class AppModel {
             // authoritative here. Persist it so exportBundle() and the next
             // launch's startHeight match what the UI already shows.
             try await wallet.recordScanHeight(await filters.nextScanHeight)
+            // Every store that a rollback touches has now been rewound and the
+            // scan that followed it has finished, so the target is no longer
+            // needed. Cleared only on the success path: a sync that threw may
+            // have left the rollback half-applied, and the marker is what gets
+            // it redone at the next launch.
+            finishRollback()
             status.lastSyncError = nil
         } catch {
             // A later batch may have thrown after earlier ones persisted
@@ -606,6 +769,12 @@ final class AppModel {
         }
         snapshot.syncing = status.syncing
         snapshot.lastSyncError = status.lastSyncError
+        // Carried like lastSyncError: `refresh` rebuilds the snapshot from the
+        // stores, and a quarantine is a fact about the launch rather than
+        // something any store reports. Dropping it here would wipe the notice
+        // on the refresh that runs moments after the stack is built, leaving
+        // the user's relay queue silently gone.
+        snapshot.relayStoreQuarantined = status.relayStoreQuarantined
         status = snapshot
         vaults = await vaultStore.all
         journalSnapshotIfChanged()
@@ -622,6 +791,21 @@ final class AppModel {
     ///
     /// Scanning still starts at or below the tip, so a payment made while the
     /// user is writing down the phrase is covered.
+    /// The validated header-chain tip, which is what a newly built transaction
+    /// stamps as its `nLockTime` (#139).
+    ///
+    /// Deliberately the local chain height rather than any peer's advertised
+    /// one: a locktime above the real tip is not final and would not relay, so
+    /// the only safe error is to be behind. A wallet with no stack cannot
+    /// broadcast anyway -- `broadcast` refuses without one -- so the zero here
+    /// is never what actually goes out.
+    var chainTipHeight: UInt32 {
+        get async {
+            guard let stack else { return 0 }
+            return await stack.chain.height
+        }
+    }
+
     private func creationHeightForNewWallet() async -> UInt32 {
         guard let stack else { return 0 }
         let local = await stack.chain.height
@@ -982,6 +1166,50 @@ final class AppModel {
 
     /// What a send will look like at the resolved feerate (coin selection run
     /// without committing — `Wallet.send` itself commits on success).
+    /// The fee measured against the payment it is paying for.
+    ///
+    /// Winnow refuses a payment below dust and refuses a fee rate outside its
+    /// band, but nothing looked at the relationship *between* the two. A
+    /// one-input, two-output Taproot spend is 143 vB, so at an unremarkable
+    /// 5 sat/vB it costs 715 sat -- and a 500 sat payment clears dust, at a
+    /// cheap market rate, with coin selection succeeding and value conserved.
+    /// Every guard passes; the composition is what produces a transaction
+    /// nobody would knowingly authorise (#140).
+    struct FeeProportion: Equatable, Sendable {
+        let fee: Int64
+        let amount: Int64
+
+        /// The fee costs at least half as much as the payment delivers.
+        ///
+        /// A ratio rather than a number of sats, so it scales with the fee
+        /// market: the same transaction at 50 sat/vB costs 7,150 sat and the
+        /// threshold has to move with it. Half is deliberately loose -- a
+        /// payment smaller than its own fee must be caught, one several times
+        /// its fee must not be nagged about, and everything between is a
+        /// judgement about false positives on small deliberate sends, which
+        /// are legitimate. Integer arithmetic, so there is no rounding at the
+        /// boundary the tests pin.
+        var isDisproportionate: Bool { fee * 2 >= amount }
+
+        /// Whether it costs more to send than it delivers.
+        var exceedsAmount: Bool { fee > amount }
+
+        /// Fee as a percentage of the amount, rounded, for display.
+        var percentOfAmount: Int {
+            guard amount > 0 else { return 0 }
+            return Int((Double(fee) / Double(amount) * 100).rounded())
+        }
+
+        /// Names the actual numbers: a generic caution tells the user nothing
+        /// they can act on. `sats` is injected so the sentence is composed with
+        /// the same formatter the rest of the screen uses.
+        func message(sats: (Int64) -> String) -> String {
+            exceedsAmount
+                ? "This costs more to send than it delivers: sending \(sats(amount)) costs \(sats(fee)) in fees — \(percentOfAmount)% of the amount."
+                : "The fee is \(percentOfAmount)% of the amount: sending \(sats(amount)) costs \(sats(fee)) in fees."
+        }
+    }
+
     struct SendPreview: Equatable {
         struct ReviewedOutpoint: Equatable {
             var txid: Data
@@ -1002,35 +1230,79 @@ final class AppModel {
         var selectedOutpoints: [ReviewedOutpoint]
         var change: Payment?
 
-        func authorizes(_ built: BuiltTransaction) -> Bool {
+        /// The total leaving the wallet as payment, excluding change and fee.
+        ///
+        /// Silent payments are counted: the amount is known at review time even
+        /// though the output script is derived later, and it leaves the wallet
+        /// the same way.
+        var amountSent: Int64 {
+            payments.map(\.amount).reduce(0, +) + silentPayments.map(\.amount).reduce(0, +)
+        }
+
+        /// How large the fee is next to what is actually being sent, when that
+        /// ratio is worth saying out loud (#140).
+        ///
+        /// `nil` when the send is ordinary, so the review screen can render it
+        /// or not without repeating the rule.
+        var feeProportion: FeeProportion? {
+            let amount = amountSent
+            guard amount > 0 else { return nil }
+            let proportion = FeeProportion(fee: fee, amount: amount)
+            return proportion.isDisproportionate ? proportion : nil
+        }
+
+        /// Whether `built` is the transaction that was reviewed.
+        ///
+        /// `resolvedSilentPayments` has to come from the wallet: a BIP352
+        /// output script is derived from the selected inputs' private keys, so
+        /// the review layer cannot compute it and can only be handed it.
+        func authorizes(_ built: BuiltTransaction,
+                        resolvedSilentPayments: [Payment] = []) -> Bool {
             guard built.fee == fee,
                   built.changeAmount == changeAmount,
                   built.transaction.inputs.map({
                       ReviewedOutpoint(txid: $0.previousOutput.txid, vout: $0.previousOutput.vout)
                   }) == selectedOutpoints
             else { return false }
-            // Every reviewed payment must actually appear in the transaction.
-            // Fee and inputs are pinned above, which fixes the total output
-            // value but says nothing about who receives it: without this a
-            // build could pay the reviewed amount to a different script, or
-            // pay the right script one satoshi, and still satisfy every other
-            // constraint. Outputs are consumed as they are matched so one
-            // output cannot satisfy two reviewed entries.
+
+            // The reviewed outputs must account for the transaction exactly:
+            // every reviewed one present, and nothing else there.
+            //
+            // Presence alone is not enough. Fee and inputs are pinned above,
+            // which fixes the total output value but says nothing about who
+            // receives it, so a build could pay the reviewed amount to a
+            // different script, or pay the right script one satoshi. And
+            // exhaustion is not enough on its own either: an output the
+            // reviewer never saw must fail even when every reviewed one is
+            // present, which is why the count is pinned and `unmatched` has to
+            // end empty rather than merely contain the change.
+            //
+            // Silent payments are matched here on the scripts the wallet
+            // derived for them. What that binds is the amount, the presence of
+            // that script, and exhaustiveness — not that the script belongs to
+            // the `sp1…` code on screen, which cannot be checked without the
+            // input keys.
+            //
+            // Matching is order-independent throughout: `TransactionBuilder`
+            // inserts change at a random position to avoid a chain-analysis
+            // fingerprint, so nothing may assume payments-then-change.
+            guard resolvedSilentPayments.count == silentPayments.count,
+                  zip(silentPayments, resolvedSilentPayments)
+                      .allSatisfy({ $0.amount == $1.amount })
+            else { return false }
+            var expected = payments + resolvedSilentPayments
+            if let change { expected.append(change) }
+            guard built.transaction.outputs.count == expected.count else { return false }
+
             var unmatched = built.transaction.outputs
-            for payment in payments {
+            for payment in expected {
                 guard let index = unmatched.firstIndex(where: {
                     $0.value == payment.amount && $0.scriptPubKey == payment.scriptPubKey
                 }) else { return false }
                 unmatched.remove(at: index)
             }
-            switch change {
-            case nil:
-                return changeAmount == nil
-            case let expected?:
-                return unmatched.contains {
-                    $0.value == expected.amount && $0.scriptPubKey == expected.scriptPubKey
-                }
-            }
+            guard unmatched.isEmpty else { return false }
+            return (change == nil) == (changeAmount == nil)
         }
     }
 
@@ -1045,7 +1317,7 @@ final class AppModel {
         var silentPayments: [SilentPayment] = []
         // Sizing placeholder for the fee math: silent payment outputs are
         // always P2TR; the real script is derived at signing time (BIP352).
-        let sizing = Data([0x51, 0x20]) + Data(repeating: 0, count: 32)
+        let sizing = SilentPayment.sizingScriptPubKey
         if trimmed.lowercased().hasPrefix("sp1") || trimmed.lowercased().hasPrefix("tsp1") {
             silentPayments.append(try SilentPayment(amount: amount, address: trimmed, network: network))
         } else {
@@ -1105,8 +1377,11 @@ final class AppModel {
         // (no stack, disk error), nothing was spent locally — no stranded UTXOs.
         let prepared = try await wallet.buildSend(payments: preview.payments,
                                                   feeRateSatPerVByte: preview.feeRateSatPerVByte,
-                                                  silentPayments: preview.silentPayments)
-        guard preview.authorizes(prepared.built) else { throw AppError.sendReviewChanged }
+                                                  silentPayments: preview.silentPayments,
+                                                  chainTip: await chainTipHeight)
+        guard preview.authorizes(prepared.built,
+                                 resolvedSilentPayments: prepared.resolvedSilentPayments)
+        else { throw AppError.sendReviewChanged }
         let txid = try await broadcast(prepared.built.transaction,
                                        feeRateSatPerVByte: preview.feeRateSatPerVByte)
         try await wallet.commit(prepared)
@@ -1517,7 +1792,7 @@ final class AppModel {
     /// progress, peers, broadcasts, vaults. Excluded from backup: no secrets
     /// here (those are Keychain-only), and even the public state stays on the
     /// device.
-    private func storageDirectory() -> URL? {
+    func storageDirectory() -> URL? {
         guard let base = try? FileManager.default.url(for: .applicationSupportDirectory,
                                                       in: .userDomainMask,
                                                       appropriateFor: nil, create: true)
