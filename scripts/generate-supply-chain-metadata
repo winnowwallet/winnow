@@ -70,7 +70,7 @@ def main() -> None:
     parser.add_argument("--subject-name", default="winnow-source-tree")
     parser.add_argument(
         "--builder-id",
-        default="https://github.com/posix4e/winnow/.github/workflows/security.yml",
+        default="https://github.com/winnowwallet/winnow/.github/workflows/security.yml",
     )
     args = parser.parse_args()
 
@@ -89,7 +89,7 @@ def main() -> None:
             "SPDXID": root_id,
             "name": "winnow",
             "versionInfo": commit,
-            "downloadLocation": "https://github.com/posix4e/winnow",
+            "downloadLocation": "https://github.com/winnowwallet/winnow",
             "filesAnalyzed": False,
             "licenseConcluded": "NOASSERTION",
             "licenseDeclared": "NOASSERTION",
@@ -143,7 +143,7 @@ def main() -> None:
         "dataLicense": "CC0-1.0",
         "SPDXID": "SPDXRef-DOCUMENT",
         "name": f"winnow-{commit[:12]}",
-        "documentNamespace": f"https://github.com/posix4e/winnow/sbom/{commit}",
+        "documentNamespace": f"https://github.com/winnowwallet/winnow/sbom/{commit}",
         "creationInfo": {
             "created": commit_timestamp(root),
             "creators": ["Tool: winnow-generate-supply-chain-metadata-1"],
@@ -162,7 +162,7 @@ def main() -> None:
         subject = [{"name": args.subject_name, "digest": {"sha1": tree}}]
 
     materials = [
-        {"uri": "git+https://github.com/posix4e/winnow.git", "digest": {"sha1": commit}},
+        {"uri": "git+https://github.com/winnowwallet/winnow.git", "digest": {"sha1": commit}},
         {"uri": "file:Package.swift", "digest": {"sha256": sha256_file(package_path)}},
         {"uri": "file:Package.resolved", "digest": {"sha256": sha256_file(resolved_path)}},
         {"uri": "file:project.yml", "digest": {"sha256": sha256_file(project_path)}},
@@ -176,7 +176,7 @@ def main() -> None:
         "predicateType": "https://slsa.dev/provenance/v1",
         "predicate": {
             "buildDefinition": {
-                "buildType": "https://github.com/posix4e/winnow/build-types/swift-package-and-xcode/v1",
+                "buildType": "https://github.com/winnowwallet/winnow/build-types/swift-package-and-xcode/v1",
                 "externalParameters": {
                     "configuration": "release",
                     "packageLock": "Package.resolved",

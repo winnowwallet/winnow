@@ -388,7 +388,7 @@ spend.
 
 ## 10. Reproducible evidence
 
-The `winnow-story` command (its own repository, github.com/posix4e/winnow-story) creates an isolated simulator run,
+The `winnow-story` command (its own repository, github.com/winnowwallet/winnow-story) creates an isolated simulator run,
 records scenario and tool versions, launches named roles, preserves protected
 state for resume, monitors public signet, and emits a safe event journal. It
 does not require Bitcoin Core, RPC credentials, or an owner-machine daemon.
@@ -464,7 +464,7 @@ flows actually performed.
 - [BIP342 — Validation of Taproot Scripts](https://github.com/bitcoin/bips/blob/master/bip-0342.mediawiki)
 - [BIP352 — Silent Payments](https://github.com/bitcoin/bips/blob/master/bip-0352.mediawiki)
 - [BIP370 — PSBT Version 2](https://github.com/bitcoin/bips/blob/master/bip-0370.mediawiki)
-- [Winnow source and test suite](https://github.com/posix4e/winnow)
+- [Winnow source and test suite](https://github.com/winnowwallet/winnow)
 
 ## Attributed incident and market references
 
