@@ -42,7 +42,7 @@ jobs:
     runs-on: [self-hosted, macOS, btc-swift, node-e2e]
     timeout-minutes: 90
     env:
-      WINNOW_NODE_HOST: ${{ vars.BTC_SWIFT_NODE_HOST || '127.0.0.1' }}
+      WINNOW_NODE_HOST: '127.0.0.1'
       WINNOW_P2P_PORT: ${{ vars.BTC_SWIFT_P2P_PORT || '38401' }}
       WINNOW_RPC_PORT: ${{ vars.BTC_SWIFT_RPC_PORT || '38400' }}
       WINNOW_FIXTURE_DATADIR: ${{ vars.BTC_SWIFT_DATADIR || '' }}

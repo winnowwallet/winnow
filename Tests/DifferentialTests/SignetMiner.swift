@@ -193,6 +193,20 @@ enum SignetMiner {
     /// miner produces a block every ~10 minutes, so losing a race is expected:
     /// re-mine on the winner rather than failing the test.
     ///
+    /// Mines until the chain holds at least `target` blocks, paying an
+    /// unspendable burn key. The dedicated fixture starts at genesis, so a
+    /// suite that reads "the recent chain" ages it here instead of assuming
+    /// a previous run already did — the assumption that failed the first
+    /// differential run on a fresh runner, at height 0. Distinct from the
+    /// filter tests' outsider script (0xEE): mining to that one would turn
+    /// the false-positive control into a false negative.
+    static func ensureChainHeight(atLeast target: Int) async throws {
+        let burnScript = Data([0x51, 0x20]) + Data(repeating: 0xB0, count: 32)
+        while try BitcoinCLI.blockCount() < target {
+            try await mineOntoTip(payingTo: burnScript)
+        }
+    }
+
     /// `maxAttempts` bounds one tip win, but the suites need long unbroken
     /// runs of them — 101 in `FullLoopDiffTests`, 102 across the UI e2e — so
     /// at a per-race loss probability `p` a suite survives with probability
