@@ -124,6 +124,15 @@ public actor FilterSync {
     /// How many peers to consult for the cfcheckpt comparison (and for the
     /// initial cfheaders cross-check). If fewer are connected, all connected
     /// peers are used and the comparison simply covers those.
+    ///
+    /// Defaults to the whole pool rather than a subset of it. At two, the
+    /// comparison took the first two connected peers — and the pool's source
+    /// ceiling permits two peers to share a class, so the check that exists to
+    /// compare independent sources could run entirely inside one of them (#3).
+    /// Consulting every connected peer removes that: no class may hold the
+    /// whole pool, so a full-pool comparison necessarily spans more than one
+    /// source. It also uses all the evidence available instead of discarding a
+    /// third of it, at the cost of one extra round trip per sync.
     public let requiredCheckpointPeers: Int
     private let storageURL: URL?
     public nonisolated let persistenceState: PersistenceState
@@ -133,7 +142,7 @@ public actor FilterSync {
     private static let maximumPinnedHeaders = 2_000_000
 
     public init(pool: PeerPool, chain: HeaderChain, startHeight: UInt32,
-                storageURL: URL? = nil, requiredCheckpointPeers: Int = 2) throws {
+                storageURL: URL? = nil, requiredCheckpointPeers: Int = 3) throws {
         self.pool = pool
         self.chain = chain
         self.storageURL = storageURL
@@ -158,8 +167,9 @@ public actor FilterSync {
         progress.filterHeaders[String(height)].flatMap { Data(hex: $0) }
     }
 
-    /// `extraScripts` supplies per-height additions to the watch list (the
-    /// silent-payment candidate scripts, which change every block). It is
+    /// `extraScripts` supplies per-height additions to the watch list, for
+    /// payment types whose output scripts are not fixed by the descriptor and
+    /// so cannot be enumerated up front. It is
     /// deliberately fail-closed: a throw aborts the sync before the frontier
     /// advances. Continuing a batch without its extra scripts would let a
     /// forward-only scan skip those payments permanently and invisibly — an
@@ -395,6 +405,20 @@ public actor FilterSync {
 
     /// Fetches cfheaders for [batchStart, batchStop] and pins the filter
     /// header chain to our block-header chain.
+    /// Picks the cross-check pair: two peers from *different* source classes
+    /// when the pool holds them, any two otherwise, one when that is all
+    /// there is. Pure so the policy is testable without a network.
+    static func crossSourcePair(_ peers: [(peer: PeerConnection, source: PeerSource?)])
+        -> [PeerConnection]
+    {
+        guard let first = peers.first else { return [] }
+        guard peers.count > 1 else { return [first.peer] }
+        if let other = peers.dropFirst().first(where: { $0.source != first.source }) {
+            return [first.peer, other.peer]
+        }
+        return [first.peer, peers[1].peer]
+    }
+
     private func pinFilterHeaders(batchStart: UInt32, batchStop: UInt32, stopHash: Data,
                                   peers: [PeerConnection],
                                   startingFrom storedHeaders: [String: String]) async throws
@@ -403,7 +427,18 @@ public actor FilterSync {
         // Always cross-check cfheaders between two peers when the pool has
         // them (paper §2.7: "fetch cfheaders from ≥2 independent peers and
         // disconnect peers that disagree"). A single-peer pool degrades to one.
-        let queryPeers = Array(peers.prefix(min(2, peers.count)))
+        //
+        // The pair spans source classes when it can (#3). `prefix(2)` took
+        // whichever two connected first, and the diversity ceiling permits two
+        // seats from one class — so the cross-check could be a DNS seed's
+        // answer compared against the same DNS seed's other answer: one
+        // acquisition channel agreeing with itself. Same-class pairs remain
+        // the degraded mode, exactly as a single-peer pool is.
+        var sourced: [(peer: PeerConnection, source: PeerSource?)] = []
+        for peer in peers {
+            sourced.append((peer, await pool.source(of: peer.endpoint)))
+        }
+        let queryPeers = Self.crossSourcePair(sourced)
 
         var decoded: CFHeadersMessage?
         for peer in queryPeers {

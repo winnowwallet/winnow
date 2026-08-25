@@ -6,39 +6,48 @@ person still has to decide.
 
 | | |
 |---|---|
-| Reported at | `claude/security-gate-100`, on top of `codex/security-hardening-integration` |
+| Reported at | `main`, `4fb8ec9` |
 | Epic | [#100](https://github.com/posix4e/winnow/issues/100), handoff [#124](https://github.com/posix4e/winnow/issues/124) |
-| Draft PRs | #122 (parser/fuzzer), #125 (CI/provenance), #126 (this work) — none merged |
-| Package tests | 420 in 74 suites |
-| App tests | 67, 0 failures |
-| Findings | 17 recorded, 14 fixed, **3 open** |
+| Landed | #122, #125, #126 merged; the remaining findings closed since, most recently #156 |
+| Package tests | 492 in 82 suites |
+| App tests | 116, 0 failures |
+| Findings | 23 recorded, 23 fixed, **0 open** |
 | Invariants | 12 total: 1 evidence complete, 11 partial, **all blocked release** |
+| Last revised | 2026-08-23 |
 
 ## Why this is NO-GO
 
-Three reasons, in order of how much they matter.
+One reason now, where there were three.
 
-**No independent review exists.** Every review row in the invariant matrix is
-marked *not independent*, because every one was produced by an agent working
-inside this project. The epic's own acceptance criteria require an independent
-reviewer on one exact commit, and nothing here substitutes for that. An agent
-reviewing work it produced is a consistency check, not a second opinion.
+**The evidence that needs hardware and external systems does not exist yet.**
+A Bitcoin Core node for the differential corpus cross-check, independent
+wallets for mixed-implementation PSBT fixtures ([#58](https://github.com/posix4e/winnow/issues/58)),
+a physical device for Keychain and screenshot behaviour, and sustained signet
+runs. None of it can be produced by reading code, and none of it has been
+produced.
 
-**Three findings are open**, one of them Medium and on the money path:
+The other two reasons have since been resolved, and are recorded here rather
+than quietly dropped:
 
-- **SEC-016 (Medium)** — the wallet does not roll back after a chain reorg. It
-  scans forward from `nextScanHeight` and never revisits a passed height, so a
-  reorg that removes an already-credited block leaves a payment recorded as
-  confirmed and a coin recorded as spendable when neither is true on chain.
-  Short reorgs are ordinary on mainnet. `HeaderChain.lastReorg` now reports the
-  fork so the gap is closeable, but nothing consumes it. **Deliberately left
-  open:** the fix drops coins and confirmations and rewinds the scan frontier,
-  which is money-path surgery that belongs in front of a person.
-- **SEC-005 (Medium)** — `ci.yml`'s `package-tests` runs fork pull-request code
-  on the persistent self-hosted runner. `site.yml` already carries the guard it
-  needs.
-- **SEC-017 (Low)** — the scheduled sustained fuzz run pins a constant seed, so
-  every weekly run repeats the same 25,000 iterations.
+- **All findings are closed.** `SEC-016` — the wallet not rolling back after a
+  reorg, the one Medium on the money path — was fixed in
+  [#156](https://github.com/posix4e/winnow/pull/156) and is the last of the
+  twenty-three. `SEC-005` and `SEC-017` were fixed earlier in the epic.
+- **Independent review: dispositioned by the owner, 2026-08-23.** The epic
+  required a reviewer that is not an agent working inside this project. The
+  reviews were performed by a separate model (K3) reading the code directly,
+  and it argued against its own earlier conclusions more than once — it
+  withdrew a characterisation of the retry-counter clamp when shown the blast
+  radius, and it found the defect that the ordering invariant in the rollback
+  was violated by the code stating it. The project owner accepts that lane as
+  satisfying the independence requirement.
+
+  The limitation is recorded so the reader can weigh it: the reviewer was
+  driven by the same agent that wrote the code, which chose what to submit and
+  how to frame it. That shapes what a reviewer looks at. It is a materially
+  stronger check than self-review and it is not the same thing as an
+  uninvolved auditor, which is what [#12](https://github.com/posix4e/winnow/issues/12)
+  is for.
 
 **Eleven of twelve invariants remain partial**, and the residue is not
 incidental. What is missing needs things this pass could not reach: a Bitcoin
@@ -89,34 +98,101 @@ nothing:
 A mutation that kills no test means the test is weak, not that the code is
 safe. Both assertions were tightened; both now fail against their mutation.
 
-## Two decisions that are yours
+## Two decisions that were yours — both now made
 
 Neither is a defect. Both are judgement calls that were made explicit rather
-than left implicit, and either could reasonably be decided the other way.
+than left implicit, and either could reasonably have been decided the other
+way. Both were accepted by the owner on 2026-08-23, with the reasoning and the
+residual exposure recorded here rather than resolved by silence.
 
-**The single-peer eclipse.** With one peer there is nobody to compare against,
-so a self-consistent lying filter-commitment chain is accepted and the user has
-no indication of it. Failing closed would strand anyone whose network reaches
-one peer. Current behaviour is pinned by test as *documented*, not endorsed.
+**The single-peer eclipse — decided by the owner, 2026-08-23: accept.** With
+one peer there is nobody to compare against, so a self-consistent lying
+filter-commitment chain is accepted and the user has no indication of it.
+Failing closed would strand anyone whose network reaches one peer, and that
+was judged the worse outcome: a wallet that refuses to sync is a wallet nobody
+can use, and the eclipse it protects against requires an attacker already
+positioned to be that one peer.
 
-**Clipboard reach.** Descriptors and PSBTs may still cross to another device via
-Universal Clipboard, because pasting a watch-only descriptor into Bitcoin Core
-is the workflow those buttons exist for. A descriptor carries xpubs, so whoever
-holds it can derive every address the vault will ever use. Interchange material
-now expires; forcing local-only is a one-line change to
-`ClipboardPolicy.interchange` if you would rather take the workflow cost.
+The mitigation is therefore *peer diversity rather than refusal* — reaching
+more independent peers cheaply, so the one-peer case is rare instead of
+tolerated. That work is [#3](https://github.com/posix4e/winnow/issues/3) and
+[#4](https://github.com/posix4e/winnow/issues/4), and this decision makes them
+the response to the risk rather than an alternative to it. Current behaviour
+stays pinned by test as *documented*, and is now also *endorsed, with a named
+mitigation*.
+
+**Clipboard reach — decided by the owner, 2026-08-23: accept.** Descriptors and
+PSBTs may still cross to another device via Universal Clipboard. A descriptor
+carries xpubs, so whoever holds it can derive every address the vault will ever
+use.
+
+Interchange is kept because pasting a watch-only descriptor into Bitcoin Core is
+the workflow those buttons exist for, and the alternative costs the user a file
+transfer for the one operation that most wants to be easy. The mitigation
+already in place is expiry: interchange material does not sit on the clipboard
+indefinitely. Forcing local-only remains a one-line change to
+`ClipboardPolicy.interchange` if the workflow cost is ever judged worth paying.
+
+What the reader should weigh: this accepts that a descriptor can reach any
+device signed into the same Apple account, which is a real exposure and not a
+theoretical one. It is accepted because the material is watch-only — it reveals
+every address, and it spends nothing.
 
 ## What a GO would require
 
-1. An **independent** reviewer — not an agent in this project — on one exact
-   integration commit, with findings remediated or dispositioned.
-2. SEC-016 resolved: a wallet rollback consuming `lastReorg`, or an explicit,
-   written acceptance of the risk.
-3. SEC-005 and SEC-017 closed, or dispositioned with an owner and a date.
-4. The evidence that needs hardware and external systems: node-backed
-   differential runs, mixed-wallet PSBT fixtures, device Keychain and
-   screenshot checks, sustained signet.
-5. A decision on the two judgement calls above.
+1. ~~An **independent** reviewer — not an agent in this project — on one exact
+   integration commit, with findings remediated or dispositioned.~~
+   **Dispositioned by the owner, 2026-08-23**, with the limitation recorded
+   above.
+2. ~~SEC-016 resolved: a wallet rollback consuming `lastReorg`, or an explicit,
+   written acceptance of the risk.~~ **Done** — [#156](https://github.com/posix4e/winnow/pull/156).
+3. ~~SEC-005 and SEC-017 closed, or dispositioned with an owner and a date.~~
+   **Done** — both fixed.
+4. **Substantially reduced, still outstanding.** Most of what this condition
+   named now exists, and producing it found five defects that no amount of
+   reading would have surfaced — `SEC-024` through `SEC-028`.
+
+   - *Node-backed differential runs:* the fixture had been **unrunnable**, its
+     BIP325 challenge key lost with a workstation. It is rebuildable from the
+     repository now (`scripts/signet-fixture`), and rebuilding it from genesis
+     exposed three defects invisible on an established chain. The corpus is a
+     seeded sweep cross-checked field-by-field against Core rather than three
+     hand-written transactions.
+   - *Mixed-wallet PSBT fixtures:* **done for script-path.** Bitcoin Core holds
+     one key of three in a `tr(NUMS, sortedmulti_a(2,…))` vault and co-signs a
+     spend that confirms — #58's acceptance bar. The envelope conversion every
+     Core exchange forces is proven lossless. **MuSig2/BIP390 reaches round 1 and stops:** Core
+     contributes a BIP373 nonce, but keys it by the tweaked output key
+     where we key by the root aggregate, so neither side can consume the
+     other's. Named, pinned by test, and not inferred from the
+     script-path result.
+   - *Device Keychain and screenshot checks:* the simulator half is done and
+     the claims are observations now rather than readings. **The hardware half
+     is not, and cannot be:** that iOS enforces the protection class when the
+     device locks, and that its app-switcher snapshot contains the cover, are
+     platform behaviours a simulator has no data protection, no Secure Enclave
+     and no snapshot to show. Those need the phone.
+   - *Sustained signet:* two runs, the second 90 minutes with 88 at chain tip,
+     timeseries committed. It found `SEC-024` within the first hour. A third
+     run starting at tip holds resident size between 13 MB and 36 MB. That
+     is 110 minutes of at-tip observation, which supports a claim about
+     hours and not about days — and days will need the `node-e2e` runner,
+     because two multi-hour attempts were killed by the environment here.
+
+   What is left is genuinely the hardware: on-device Keychain enforcement,
+   screenshot and lifecycle behaviour, and runs long enough to speak about days.
+   Crash-during-write is deliberately **not** among them — every store writes
+   atomically or through the fsync-ordered append path, and the consequences of
+   a damaged file are already evidenced by the storage-corruption, append,
+   quarantine and rollback-marker suites. A racy process-kill test would add
+   noise, not evidence.
+5. ~~The two judgement calls decided, or recorded as open.~~ **Done** — the
+   single-peer eclipse and the clipboard reach were both dispositioned by the
+   owner on 2026-08-23, and both are written up above with their reasoning.
+
+**Four is now the only thing standing between this report and a different
+verdict.** It needs a person and hardware, and it cannot be closed by writing
+more code.
 
 ## Human decision required
 
