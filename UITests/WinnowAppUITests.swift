@@ -584,8 +584,9 @@ final class WinnowAppUITests: XCTestCase {
         Screenshots.capture(app, "15-vault-cosign", testCase: self)
 
         backgroundAndReturn(app)
-        XCTAssertFalse(review.waitForExistence(timeout: 3),
-                       "vault signing review survived backgrounding")
+        poll(timeout: 20, interval: 1, "vault signing review dismissed after backgrounding") {
+            !review.exists
+        }
         XCTAssertTrue(signButton.waitForExistence(timeout: 20),
                       "vault signing sheet was not dismissed on background")
     }
@@ -623,8 +624,9 @@ final class WinnowAppUITests: XCTestCase {
         // A background transition erases the phrase and dismisses its sheet;
         // resuming requires another explicit action (and production auth).
         backgroundAndReturn(resumed)
-        XCTAssertFalse(resumed.switches["writtenDownToggle"].waitForExistence(timeout: 3),
-                       "onboarding recovery phrase survived backgrounding")
+        poll(timeout: 20, interval: 1, "onboarding recovery phrase dismissed after backgrounding") {
+            !resumed.switches["writtenDownToggle"].exists
+        }
         let resumeBackup = resumed.buttons["resumeBackupButton"]
         XCTAssertTrue(resumeBackup.waitForExistence(timeout: 20),
                       "pending backup has no explicit resume action")
@@ -662,8 +664,9 @@ final class WinnowAppUITests: XCTestCase {
                       "Settings recovery screen does not offer phrase copy")
         Screenshots.capture(settled, "22-phrase-revealed", testCase: self)
         backgroundAndReturn(settled)
-        XCTAssertFalse(settled.staticTexts[firstWord].waitForExistence(timeout: 3),
-                       "Settings recovery phrase survived backgrounding")
+        poll(timeout: 20, interval: 1, "Settings recovery phrase dismissed after backgrounding") {
+            !settled.staticTexts[firstWord].exists
+        }
         XCTAssertTrue(scrollUntilExists(settled, revealButton, up: true),
                       "phrase sheet did not dismiss to Settings")
 
@@ -682,8 +685,9 @@ final class WinnowAppUITests: XCTestCase {
         let shareLink = settled.buttons["exportShareLink"]
         XCTAssertTrue(shareLink.waitForExistence(timeout: 30), "seed export was not staged")
         backgroundAndReturn(settled)
-        XCTAssertFalse(shareLink.waitForExistence(timeout: 3),
-                       "seed-bearing staged export survived backgrounding")
+        poll(timeout: 20, interval: 1, "seed-bearing staged export dismissed after backgrounding") {
+            !shareLink.exists
+        }
         XCTAssertTrue(scrollUntilExists(settled, exportButton, up: true),
                       "seed export sheet did not dismiss to Settings")
         settled.terminate()
@@ -782,8 +786,9 @@ final class WinnowAppUITests: XCTestCase {
         Screenshots.capture(app, "19-export-seed-redacted", testCase: self)
 
         backgroundAndReturn(app)
-        XCTAssertFalse(shareLink.waitForExistence(timeout: 3),
-                       "staged seed export survived backgrounding")
+        poll(timeout: 20, interval: 1, "staged seed export dismissed after backgrounding") {
+            !shareLink.exists
+        }
         XCTAssertTrue(scrollUntilExists(app, exportButton, up: true),
                       "seed export sheet did not dismiss to Settings")
     }
