@@ -76,6 +76,30 @@ jobs:
           ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
         run: scripts/ci-sign.sh
 
+      - name: Import the persistent development certificate
+        # The archive step signs with automatic signing, and an ephemeral
+        # runner has an empty keychain — so Xcode's -allowProvisioningUpdates
+        # minted a fresh Development certificate every release, whose private
+        # key died with the VM minutes later. Thirteen of those hit Apple's
+        # certificate cap on 2026-08-25 and failed a release with "choose a
+        # certificate to revoke". One persistent certificate lives in the repo
+        # secrets instead; with it present, Xcode reuses rather than mints.
+        env:
+          DEV_CERT_P12: ${{ secrets.DEV_CERT_P12 }}
+          DEV_CERT_P12_PASSWORD: ${{ secrets.DEV_CERT_P12_PASSWORD }}
+        run: |
+          KC="$RUNNER_TEMP/winnow-ci.keychain-db"
+          KCPW="$(uuidgen)"
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          printf '%s' "$DEV_CERT_P12" | base64 -D > "$RUNNER_TEMP/dev.p12"
+          security import "$RUNNER_TEMP/dev.p12" -k "$KC"             -P "$DEV_CERT_P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          rm "$RUNNER_TEMP/dev.p12"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KCPW" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" login.keychain
+          security find-identity -p codesigning "$KC" | head -3
+
       - name: Archive
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}

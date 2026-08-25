@@ -11,7 +11,7 @@ name: Node e2e (manual)
 #   WINNOW_NODE_HOST (default 127.0.0.1)
 #   WINNOW_P2P_PORT  (default 38401)
 #   WINNOW_RPC_PORT  (default 38400)
-#   WINNOW_DATADIR is always an ephemeral client-only directory. The runner's
+#   WINNOW_DATADIR points at the fixture datadir for cookie auth. The runner's
 #   BTC_SWIFT_DATADIR variable is probed only to document the fixture location.
 # The "Node reachability probe" step reports which of these the runners can
 # actually reach. Note: `xcodebuild test` does not forward its environment
@@ -87,28 +87,17 @@ jobs:
             exit 1
           }
 
-      - name: Materialize fixed node RPC credential
-        # BTC_SWIFT_RPC_COOKIE keeps its historical name, but its value is the
-        # dedicated winnow-ci username:password backed by rpcauth on the node.
-        # Writing it as a cookie file lets bitcoin-cli consume the credential
-        # without putting it on the command line. It survives node restarts.
-        env:
-          WINNOW_RPC_AUTH: ${{ secrets.BTC_SWIFT_RPC_COOKIE }}
+      - name: Verify the fixture node answers
+        # The dedicated runner provisions its own disposable custom signet via
+        # scripts/signet-fixture (winnowwallet/macos-ci-runners documents it).
+        # Cookie auth against the local datadir — no credential secret, and
+        # nothing here rewrites the fixture's bitcoin.conf: an earlier version
+        # of this step clobbered the signet challenge with a bare public-signet
+        # conf, which silently turned the fixture into a public-signet node.
         run: |
-          case "$WINNOW_RPC_AUTH" in
-            winnow-ci:*) ;;
-            *) echo "::error::BTC_SWIFT_RPC_COOKIE must contain the fixed winnow-ci rpcauth credential"; exit 1 ;;
-          esac
-          DD="$RUNNER_TEMP/winnow-node-client"
-          printf 'WINNOW_DATADIR=%s\n' "$DD" >> "$GITHUB_ENV"
-          mkdir -p "$DD/signet"
-          # bitcoin-cli derives the chain from the conf file; without it the
-          # CLI assumes mainnet and looks for $DD/.cookie instead of
-          # $DD/signet/.cookie — write both plus a minimal conf.
-          printf 'signet=1\nserver=1\n' > "$DD/bitcoin.conf"
-          printf '%s' "$WINNOW_RPC_AUTH" > "$DD/.cookie"
-          printf '%s' "$WINNOW_RPC_AUTH" > "$DD/signet/.cookie"
-          chmod 600 "$DD/.cookie" "$DD/signet/.cookie"
+          DD="${WINNOW_FIXTURE_DATADIR:-$HOME/.bitcoin-mysignet}"
+          bitcoin-cli -datadir="$DD" -rpcport="${WINNOW_RPC_PORT}" getblockchaininfo >/dev/null
+          echo "fixture height: $(bitcoin-cli -datadir="$DD" -rpcport="${WINNOW_RPC_PORT}" getblockcount)"
 
       - name: Locate developer tools
         id: devtools
