@@ -468,8 +468,7 @@ final class WinnowAppUITests: XCTestCase {
 
         // Imported JSON may contain the seed. Leaving the active scene must
         // erase it before the app can be foregrounded again.
-        XCUIDevice.shared.press(.home)
-        app.activate()
+        backgroundAndReturn(app)
         XCTAssertTrue(app.buttons["importPasteButton"].waitForExistence(timeout: 20),
                       "import sheet did not return after activation")
         XCTAssertFalse(((app.textViews["importJSONEditor"].value as? String) ?? "")
@@ -506,28 +505,45 @@ final class WinnowAppUITests: XCTestCase {
 
     /// Creator + reviewer roles for the "E2E Vault" from test04: rebuild its
     /// 2-of-3 descriptor in-process (device key + fixture cosigners 0xA1/0xB2,
-    /// same order test04 added them), build a spend PSBT against a fabricated
-    /// funding UTXO at the vault's receive index 0, load it in
-    /// "Sign / combine PSBTs" and capture the "Review — what you are signing"
-    /// section — exactly what a cosigner verifies before signing.
-    func test07VaultCosignReview() throws {
+    /// same order test04 added them), fund its receive index 0 on the node,
+    /// build a spend PSBT against that coin once the app has scanned it in,
+    /// load it in "Sign / combine PSBTs" and capture the "Review — what you
+    /// are signing" section — exactly what a cosigner verifies before signing.
+    ///
+    /// The funding is real because the review gate is: `reviewSpend` refuses
+    /// any input that is not one of the vault's own scanned coins, so the
+    /// fabricated outpoint this test used to stage could never reach the
+    /// review screen. It appeared to work for a year because the CI step
+    /// running this suite was itself being skipped.
+    func test07VaultCosignReview() async throws {
         let reviewStart = Date()
         let descriptor = try Vault.multiADescriptor(
             threshold: 2,
             cosigners: try [Self.deviceKeyExpression(), Self.fixtureCosigner(0xA1),
                             Self.fixtureCosigner(0xB2)])
         let vault = try Vault(descriptor: descriptor, network: .signet)
-        let utxo = try WalletUTXO(txid: Data(repeating: 0x5A, count: 32), vout: 0,
-                                  amount: 250_000,
-                                  scriptPubKey: vault.scriptPubKey(index: 0, choice: 0),
-                                  chain: .receive, index: 0, height: 1_500)
+
+        let fundingScript = try vault.scriptPubKey(index: 0, choice: 0)
+        let fundingBlock = try await SignetMiner.mineOntoTip(payingTo: fundingScript)
+        let fundingTxid = try BitcoinCLI.coinbaseTxid(blockHash: fundingBlock)
+        let funding = try BitcoinCLI.outputZero(txid: fundingTxid)
+        let fundingHeight = try BitcoinCLI.blockHeight(of: fundingBlock)
+        XCTAssertEqual(Data(hex: funding.scriptPubKey), fundingScript,
+                       "coinbase did not pay the vault's receive script")
+        let utxo = try WalletUTXO(txid: Data(Data(hex: fundingTxid)!.reversed()), vout: 0,
+                                  amount: funding.amount,
+                                  scriptPubKey: fundingScript,
+                                  chain: .receive, index: 0,
+                                  height: UInt32(fundingHeight))
         let psbt = try vault.createSpend(
             utxos: [utxo],
             payments: [Payment(amount: 100_000, address: Self.fixtureAddress(0xE5),
                                network: .signet)],
-            // A fixed tip and a draw that misses the lookback branch, so the
-            // fixture PSBT is byte-stable across runs (#139).
-            changeIndex: 0, feeRateSatPerVByte: 2, chainTip: 1_500, randomness: { 0.5 })
+            // A fixed tip and a draw that misses the lookback branch keep the
+            // PSBT deterministic given the chain (#139); the txid varies with
+            // the mined block, which the review never shows.
+            changeIndex: 0, feeRateSatPerVByte: 2, chainTip: UInt32(fundingHeight),
+            randomness: { 0.5 })
 
         let app = launchApp(clipboard: psbt.base64)
         app.tabBars.buttons["Vaults"].tap()
@@ -535,9 +551,21 @@ final class WinnowAppUITests: XCTestCase {
         XCTAssertTrue(vaultRow.waitForExistence(timeout: 30),
                       "vault from test04 missing — run the full suite")
         vaultRow.tap()
+
+        // The review gate consults the vault's scanned coin list, so the
+        // funding coin must be on the detail screen before the sheet opens.
+        // Its row prints the txid prefix; sync runs on its own, the nudge is
+        // only for the Home tab's button if a test left the app there.
+        let fundedRow = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "\(fundingTxid.prefix(16))")).firstMatch
+        poll(timeout: 300, interval: 5, "vault funding coin scanned in") {
+            self.nudgeSync(app)
+            return fundedRow.exists
+        }
         let signButton = app.buttons.matching(
             NSPredicate(format: "label BEGINSWITH 'Sign / combine'")).firstMatch
-        XCTAssertTrue(signButton.waitForExistence(timeout: 20), "vault detail did not load")
+        XCTAssertTrue(scrollUntilExists(app, signButton),
+                      "vault detail did not load")
         signButton.tap()
 
         // The PSBT is long Base64 — the app put it on its own pasteboard at
@@ -550,12 +578,12 @@ final class WinnowAppUITests: XCTestCase {
         let review = app.staticTexts["Review — what you are signing"]
         XCTAssertTrue(scrollUntilExists(app, review), "review section did not appear")
         XCTAssertTrue(app.staticTexts["Pays"].exists, "review lists no payment output")
-        XCTAssertTrue(app.staticTexts["Change (this vault)"].exists, "review lists no change output")
+        XCTAssertTrue(app.staticTexts["Vault-owned output"].exists,
+                      "review does not mark the change output as vault-owned")
         Timings.record("vault", step: "cosign-review", from: reviewStart)
         Screenshots.capture(app, "15-vault-cosign", testCase: self)
 
-        XCUIDevice.shared.press(.home)
-        app.activate()
+        backgroundAndReturn(app)
         XCTAssertFalse(review.waitForExistence(timeout: 3),
                        "vault signing review survived backgrounding")
         XCTAssertTrue(signButton.waitForExistence(timeout: 20),
@@ -594,8 +622,7 @@ final class WinnowAppUITests: XCTestCase {
 
         // A background transition erases the phrase and dismisses its sheet;
         // resuming requires another explicit action (and production auth).
-        XCUIDevice.shared.press(.home)
-        resumed.activate()
+        backgroundAndReturn(resumed)
         XCTAssertFalse(resumed.switches["writtenDownToggle"].waitForExistence(timeout: 3),
                        "onboarding recovery phrase survived backgrounding")
         let resumeBackup = resumed.buttons["resumeBackupButton"]
@@ -634,8 +661,7 @@ final class WinnowAppUITests: XCTestCase {
         XCTAssertTrue(settled.buttons["settingsCopyPhraseButton"].exists,
                       "Settings recovery screen does not offer phrase copy")
         Screenshots.capture(settled, "22-phrase-revealed", testCase: self)
-        XCUIDevice.shared.press(.home)
-        settled.activate()
+        backgroundAndReturn(settled)
         XCTAssertFalse(settled.staticTexts[firstWord].waitForExistence(timeout: 3),
                        "Settings recovery phrase survived backgrounding")
         XCTAssertTrue(scrollUntilExists(settled, revealButton, up: true),
@@ -655,8 +681,7 @@ final class WinnowAppUITests: XCTestCase {
         seedAlert.buttons["Export with phrase"].tap()
         let shareLink = settled.buttons["exportShareLink"]
         XCTAssertTrue(shareLink.waitForExistence(timeout: 30), "seed export was not staged")
-        XCUIDevice.shared.press(.home)
-        settled.activate()
+        backgroundAndReturn(settled)
         XCTAssertFalse(shareLink.waitForExistence(timeout: 3),
                        "seed-bearing staged export survived backgrounding")
         XCTAssertTrue(scrollUntilExists(settled, exportButton, up: true),
@@ -672,8 +697,7 @@ final class WinnowAppUITests: XCTestCase {
         importApp.typeInto("importJSONEditor", privateMarker)
         XCTAssertTrue(((importApp.textViews["importJSONEditor"].value as? String) ?? "")
             .contains(privateMarker), "import test marker was not entered")
-        XCUIDevice.shared.press(.home)
-        importApp.activate()
+        backgroundAndReturn(importApp)
         XCTAssertTrue(importApp.buttons["importPasteButton"].waitForExistence(timeout: 20),
                       "empty import sheet did not remain available")
         XCTAssertFalse(((importApp.textViews["importJSONEditor"].value as? String) ?? "")
@@ -757,8 +781,7 @@ final class WinnowAppUITests: XCTestCase {
             .exists, "no shared-file note")
         Screenshots.capture(app, "19-export-seed-redacted", testCase: self)
 
-        XCUIDevice.shared.press(.home)
-        app.activate()
+        backgroundAndReturn(app)
         XCTAssertFalse(shareLink.waitForExistence(timeout: 3),
                        "staged seed export survived backgrounding")
         XCTAssertTrue(scrollUntilExists(app, exportButton, up: true),

@@ -63,6 +63,33 @@ extension XCTestCase {
     }
 }
 
+extension XCTestCase {
+    /// Sends `app` through a real background transition and brings it back.
+    /// A bare home-press followed immediately by `activate()` can complete
+    /// before the scene ever reaches `.background` (observed on the iOS 26.5
+    /// simulator), and every dismissal invariant in the app keys on that
+    /// phase — so a test that skips the transition is not exercising the
+    /// invariant, just racing it.
+    func backgroundAndReturn(_ app: XCUIApplication) {
+        // Not a home-press: on the iOS 26.5 simulator a home-press leaves the
+        // scene fully foregrounded, so the `.background` phase the dismissal
+        // invariants key on never arrives. Foregrounding another app
+        // backgrounds ours for real. The transition is awaited on the
+        // Settings side because our app's `state` keeps reporting
+        // .runningForeground through the whole round trip on that simulator.
+        let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
+        settings.activate()
+        XCTAssertTrue(settings.wait(for: .runningForeground, timeout: 15),
+                      "Settings did not come to the foreground")
+        // The scene phase lands in the app just after it leaves the screen;
+        // give it a beat before returning.
+        Thread.sleep(forTimeInterval: 1)
+        app.activate()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15),
+                      "app did not return to the foreground")
+    }
+}
+
 extension XCUIApplication {
     /// Types into a field (TextField or TextEditor) and dismisses the
     /// software keyboard afterwards.
