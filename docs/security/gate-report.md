@@ -178,6 +178,19 @@ every address, and it spends nothing.
      is 110 minutes of at-tip observation, which supports a claim about
      hours and not about days — and days will need the `node-e2e` runner,
      because two multi-hour attempts were killed by the environment here.
+     That runner exists now. On 2026-08-25 the dedicated fixture VM ran
+     the full node-backed battery to green — package tests, differential
+     suite, and the complete UI e2e
+     ([run 32866916504](https://github.com/winnowwallet/winnow/actions/runs/32866916504)),
+     closing [#11](https://github.com/posix4e/winnow/issues/11). It was
+     the first run anywhere to execute the UI leg: every earlier green
+     had skipped those steps for want of Xcode on the VM, and the first
+     real execution surfaced three defects in the tests themselves that
+     a skipped step had been reporting as passing — a spend staged
+     against a coin no chain contained, an assertion on a label the UI
+     no longer renders, and backgrounding invariants that raced the
+     scene phase instead of exercising it. The days-long observation now
+     has a machine to run on; it has not run yet.
 
    What is left is genuinely the hardware: on-device Keychain enforcement,
    screenshot and lifecycle behaviour, and runs long enough to speak about days.
