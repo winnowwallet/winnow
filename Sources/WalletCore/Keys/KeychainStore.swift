@@ -41,6 +41,33 @@ public struct KeychainStore: KeyStore {
         return try WalletSecret(serialized: data)
     }
 
+    /// The `kSecAttrAccessible` value the Keychain reports for this wallet's
+    /// item, without returning the secret. `AppTests/KeychainAttributeTests`
+    /// asks the same question of a test item; this asks it of the real one,
+    /// so the on-device security check can show the configured class rather
+    /// than restate the source.
+    public func protectionAttribute(walletID: String) -> (status: OSStatus, accessible: String?) {
+        var query = baseQuery(walletID: walletID)
+        query[kSecReturnAttributes] = true
+        query[kSecMatchLimit] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        return (status, (item as? [CFString: Any])?[kSecAttrAccessible] as? String)
+    }
+
+    /// Attempts the read and reports only its OSStatus; the bytes, if the
+    /// platform hands them over, are released with this scope and never
+    /// surfaced. This exists for the on-device security check, whose whole
+    /// question is "was the read allowed while the device was locked" —
+    /// `errSecInteractionNotAllowed` is the answer it hopes to record.
+    public func readStatus(walletID: String) -> OSStatus {
+        var query = baseQuery(walletID: walletID)
+        query[kSecReturnData] = true
+        query[kSecMatchLimit] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        return SecItemCopyMatching(query as CFDictionary, &item)
+    }
+
     public func delete(walletID: String) throws {
         let status = SecItemDelete(baseQuery(walletID: walletID) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {

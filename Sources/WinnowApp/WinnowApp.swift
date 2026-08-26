@@ -7,6 +7,12 @@ struct WinnowApp: App {
     @State private var model = AppModel()
     @Environment(\.scenePhase) private var scenePhase
 
+    init() {
+        // Pin the uptime clock to launch; first touch from Settings would
+        // date it to the first visit instead.
+        _ = DeviceSecurityCheck.launchedAt
+    }
+
     var body: some Scene {
         WindowGroup {
             Group {

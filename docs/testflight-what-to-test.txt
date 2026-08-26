@@ -1,5 +1,15 @@
-Vault setup
+Device security check (Settings, near the bottom)
 
-Add and remove signer keys. Confirm Required signatures can move both up and down, never exceeds the total number of keys, and defaults to 2-of-2 once two keys are present.
+This build turns your phone into the evidence the release gate still needs: proof that iOS refuses to hand Winnow the wallet key while the phone is locked.
 
-Paste an invalid signer key. Winnow should keep it editable and explain what is wrong in plain language. Paste a private signer key and confirm Winnow refuses to add or save it.
+Open Settings and find "Device security check". Confirm "Protection class" reads "when unlocked, this device only" and "Unlocked read" reads "allowed". Then tap "Start locked-device check" and immediately lock the phone with the side button. Unlock after about twenty seconds and come back: "Locked read" should say "refused while locked — enforced", and the footnote should list four samples with status −25308 marked "(locked)". Screenshot that screen. If it says the phone never locked, you tapped and locked too slowly — just run it again.
+
+Also in that section: "App uptime" and "Memory". After the app has been resident for a day or more, screenshot those too — that is the long-soak reading.
+
+App switcher
+
+With the wallet on screen, swipe up into the app switcher and look at Winnow's card: it must show the privacy cover, not your balance or addresses. A screenshot of the switcher is evidence.
+
+Everything else
+
+Normal use: receive, send, vault flows, backup. Nothing else changed in this build; if anything feels different, that is worth a report.

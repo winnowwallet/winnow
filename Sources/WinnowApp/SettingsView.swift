@@ -1,5 +1,6 @@
 import BitcoinP2P
 import LocalAuthentication
+import Security
 import SwiftUI
 import WalletCore
 
@@ -22,6 +23,7 @@ struct SettingsView: View {
     @State private var revealing = false
     @State private var revealEpoch = SensitivePresentationEpoch()
     @State private var revealTask: Task<Void, Never>?
+    @State private var securityCheck = DeviceSecurityCheck()
 
     struct PeerInfo: Equatable, Identifiable {
         var id: String { endpoint }
@@ -149,6 +151,33 @@ struct SettingsView: View {
                 }
 
 
+                if let walletID = model.walletID,
+                   let keychain = model.keyStore as? KeychainStore {
+                    Section {
+                        LabeledContent("Protection class", value: protectionClassLabel)
+                        LabeledContent("Unlocked read", value: statusLabel(securityCheck.foregroundStatus))
+                        Button(securityCheck.running
+                            ? "Checking — lock the phone now"
+                            : "Start locked-device check") {
+                            securityCheck.startLockedProbe(store: keychain, walletID: walletID)
+                        }
+                        .accessibilityIdentifier("lockedCheckButton")
+                        .disabled(securityCheck.running)
+                        if let verdict = securityCheck.verdict, !securityCheck.running {
+                            LabeledContent("Locked read", value: verdictLabel(verdict))
+                        }
+                        LabeledContent("App uptime", value: uptimeLabel)
+                        LabeledContent("Memory", value: memoryLabel)
+                    } header: {
+                        Text("Device security check")
+                    } footer: {
+                        Text(securityCheckFooter)
+                    }
+                    .onAppear {
+                        securityCheck.runForegroundControl(store: keychain, walletID: walletID)
+                    }
+                }
+
                 Section("About") {
                     LabeledContent("WalletCore", value: WalletCore.version)
                     LabeledContent("BitcoinP2P", value: BitcoinP2P.version)
@@ -251,6 +280,59 @@ struct SettingsView: View {
             revealing = false
             revealTask = nil
         }
+    }
+
+    private var protectionClassLabel: String {
+        guard let accessible = securityCheck.accessible else { return "\u{2014}" }
+        return accessible == (kSecAttrAccessibleWhenUnlockedThisDeviceOnly as String)
+            ? "when unlocked, this device only"
+            : accessible
+    }
+
+    private func statusLabel(_ status: OSStatus?) -> String {
+        guard let status else { return "\u{2014}" }
+        return status == errSecSuccess ? "allowed" : "status \(status)"
+    }
+
+    private func verdictLabel(_ verdict: DeviceSecurityCheck.Verdict) -> String {
+        switch verdict {
+        case .enforced: "refused while locked \u{2014} enforced"
+        case .notEnforced: "ALLOWED while locked"
+        case .deviceNeverLocked: "the phone never locked \u{2014} try again"
+        case let .unexpected(status): "unexpected status \(status)"
+        }
+    }
+
+    private var uptimeLabel: String {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.day, .hour, .minute, .second]
+        formatter.maximumUnitCount = 2
+        formatter.unitsStyle = .abbreviated
+        return formatter.string(from: Date().timeIntervalSince(DeviceSecurityCheck.launchedAt))
+            ?? "\u{2014}"
+    }
+
+    private var memoryLabel: String {
+        guard let bytes = DeviceSecurityCheck.residentBytes() else { return "\u{2014}" }
+        return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .memory)
+    }
+
+    private var securityCheckFooter: String {
+        var lines = ["""
+        Tap start, lock the phone with the side button right away, and unlock \
+        after about twenty seconds. Winnow records whether iOS refused to hand \
+        over the wallet key while the phone was locked \u{2014} the key itself is \
+        never shown or stored. The simulator has no data protection, so the \
+        locked result is meaningful only on a real phone.
+        """]
+        if let result = securityCheck.lastResult, !result.samples.isEmpty {
+            let detail = result.samples.map { sample in
+                "\(Int(sample.secondsAfterStart))s \(sample.status)"
+                    + (sample.protectedDataAvailable ? "" : " (locked)")
+            }.joined(separator: " \u{00B7} ")
+            lines.append("Last check \(result.startedAt.formatted(date: .abbreviated, time: .shortened)): \(detail)")
+        }
+        return lines.joined(separator: "\n")
     }
 
     private func clearSensitivePresentations() {
