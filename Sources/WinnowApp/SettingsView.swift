@@ -154,6 +154,8 @@ struct SettingsView: View {
                 if let walletID = model.walletID,
                    let keychain = model.keyStore as? KeychainStore {
                     Section {
+                        LabeledContent("Passcode set",
+                                       value: DeviceSecurityCheck.passcodeSet() ? "yes" : "NO")
                         LabeledContent("Protection class", value: protectionClassLabel)
                         LabeledContent("Unlocked read", value: statusLabel(securityCheck.foregroundStatus))
                         Button(securityCheck.running
@@ -325,6 +327,14 @@ struct SettingsView: View {
         never shown or stored. The simulator has no data protection, so the \
         locked result is meaningful only on a real phone.
         """]
+        if !DeviceSecurityCheck.passcodeSet() {
+            lines.append("""
+            This device has no passcode, so iOS never locks the wallet key: \
+            the locked check cannot mean anything here, and the key is far \
+            weaker at rest. Set a passcode before trusting this wallet with \
+            money.
+            """)
+        }
         if let result = securityCheck.lastResult, !result.samples.isEmpty {
             let detail = result.samples.map { sample in
                 "\(Int(sample.secondsAfterStart))s \(sample.status)"

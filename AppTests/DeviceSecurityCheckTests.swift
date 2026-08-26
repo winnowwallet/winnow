@@ -52,6 +52,18 @@ final class DeviceSecurityCheckTests: XCTestCase {
         XCTAssertEqual(DeviceSecurityCheck.verdict(for: []), .deviceNeverLocked)
     }
 
+    /// The lock-edge notification contributes a sample at whatever moment
+    /// the lock landed — fractional, off the 5-second grid. The verdict
+    /// rules must treat it exactly like a scheduled one.
+    func testANotificationSampleOffTheGridCountsLikeAnyOther() {
+        let enforced = [sample(2.3, locked: true, status: errSecInteractionNotAllowed),
+                        sample(5, locked: false, status: errSecSuccess)]
+        XCTAssertEqual(DeviceSecurityCheck.verdict(for: enforced), .enforced)
+        let leaked = [sample(2.3, locked: true, status: errSecSuccess),
+                      sample(5, locked: true, status: errSecInteractionNotAllowed)]
+        XCTAssertEqual(DeviceSecurityCheck.verdict(for: leaked), .notEnforced)
+    }
+
     func testAnUnexpectedLockedStatusIsSurfacedNotSwallowed() {
         let samples = [sample(5, locked: true, status: errSecInteractionNotAllowed),
                        sample(10, locked: true, status: errSecItemNotFound)]

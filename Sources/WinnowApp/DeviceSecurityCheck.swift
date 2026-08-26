@@ -1,4 +1,5 @@
 import Foundation
+import LocalAuthentication
 import Security
 import UIKit
 import WalletCore
@@ -54,6 +55,7 @@ final class DeviceSecurityCheck {
     private var samples: [Sample] = []
     private var startedAt = Date()
     private var backgroundTask = UIBackgroundTaskIdentifier.invalid
+    private var lockObserver: NSObjectProtocol?
 
     private static let defaultsKey = "deviceSecurityCheck.lastResult"
 
@@ -105,18 +107,47 @@ final class DeviceSecurityCheck {
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "device-security-check") {
             Task { @MainActor [weak self] in self?.finish() }
         }
+        // The fixed schedule can lose a race: if iOS suspends the process
+        // before a timer fires, that sample runs only after unlock, reads a
+        // reopened Keychain, and proves nothing. The lock's own signal
+        // cannot lose it. UIKit's notification is *will* become unavailable
+        // — at that instant the class keys may still be open, so the sample
+        // waits two seconds for the lock to land before reading.
+        lockObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.protectedDataWillBecomeUnavailableNotification,
+            object: nil, queue: .main) { [weak self] _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                Task { @MainActor [weak self] in self?.sample(store: store, walletID: walletID) }
+            }
+        }
         let schedule: [Double] = [5, 10, 15, 20]
         for delay in schedule {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self, self.running else { return }
-                self.samples.append(Sample(
-                    secondsAfterStart: delay,
-                    protectedDataAvailable: UIApplication.shared.isProtectedDataAvailable,
-                    status: store.readStatus(walletID: walletID)))
-                self.persist()
+                self.sample(store: store, walletID: walletID)
                 if delay == schedule.last { self.finish() }
             }
         }
+    }
+
+    /// One reading: elapsed time, whether iOS says the device is effectively
+    /// locked, and the status the Keychain answered with.
+    private func sample(store: KeychainStore, walletID: String) {
+        guard running else { return }
+        samples.append(Sample(
+            secondsAfterStart: (Date().timeIntervalSince(startedAt) * 10).rounded() / 10,
+            protectedDataAvailable: UIApplication.shared.isProtectedDataAvailable,
+            status: store.readStatus(walletID: walletID)))
+        persist()
+    }
+
+    /// Whether this device has a passcode (or biometrics, which require
+    /// one). Without it iOS never derives the class keys that make
+    /// `WhenUnlockedThisDeviceOnly` mean anything: protected data stays
+    /// available forever, the locked check is unmeasurable, and the wallet
+    /// key is materially weaker at rest.
+    static func passcodeSet() -> Bool {
+        LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: nil)
     }
 
     private func persist() {
@@ -131,6 +162,10 @@ final class DeviceSecurityCheck {
         guard running else { return }
         running = false
         persist()
+        if let lockObserver {
+            NotificationCenter.default.removeObserver(lockObserver)
+            self.lockObserver = nil
+        }
         if backgroundTask != .invalid {
             UIApplication.shared.endBackgroundTask(backgroundTask)
             backgroundTask = .invalid
