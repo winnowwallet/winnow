@@ -43,13 +43,13 @@ jobs:
         run: |
           scripts/generate-supply-chain-metadata \
             --output-dir "$RUNNER_TEMP/supply-chain" \
-            --subject "$RUNNER_TEMP/winnow-production-build/release/WinnowFuzz" \
-            --subject-name WinnowFuzz \
+            --subject "$RUNNER_TEMP/winnow-production-build/release/WinnowSoak" \
+            --subject-name WinnowSoak \
             --builder-id "https://github.com/${{ github.repository }}/.github/workflows/security.yml@${{ github.workflow_sha }}"
           scripts/generate-supply-chain-metadata \
             --output-dir "$RUNNER_TEMP/supply-chain-replay" \
-            --subject "$RUNNER_TEMP/winnow-production-build/release/WinnowFuzz" \
-            --subject-name WinnowFuzz \
+            --subject "$RUNNER_TEMP/winnow-production-build/release/WinnowSoak" \
+            --subject-name WinnowSoak \
             --builder-id "https://github.com/${{ github.repository }}/.github/workflows/security.yml@${{ github.workflow_sha }}"
           diff -ru "$RUNNER_TEMP/supply-chain" "$RUNNER_TEMP/supply-chain-replay"
 
@@ -73,6 +73,15 @@ jobs:
         with:
           persist-credentials: false
 
+      # The harness lives in its own repository and consumes only winnow's
+      # public library products; WINNOW_PATH points it at this checkout so
+      # what gets fuzzed is the commit under test, not main.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: winnowwallet/winnow-fuzz
+          path: winnow-fuzz
+          persist-credentials: false
+
       # Deliberately a FIXED seed, unlike the sustained lane. This is the
       # regression evidence: every pull request fuzzes the identical 9,000
       # cases, so a newly-introduced parser bug shows up as this job turning
@@ -82,7 +91,8 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/winnow-fuzz-smoke"
           set -o pipefail
-          swift run --configuration release WinnowFuzz \
+          WINNOW_PATH="$GITHUB_WORKSPACE" swift run --package-path winnow-fuzz \
+            --configuration release WinnowFuzz \
             --iterations 1000 \
             --seed 0x57494e4e4f575055 \
             --max-input 16384 \
@@ -118,6 +128,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: winnowwallet/winnow-fuzz
+          path: winnow-fuzz
+          persist-credentials: false
+
       - name: Sustained deterministic fuzz under ${{ matrix.sanitizer }} sanitizer
         env:
           FUZZ_DIR: ${{ runner.temp }}/winnow-fuzz-${{ matrix.sanitizer }}
@@ -139,7 +155,8 @@ jobs:
           printf '%s\n' "$RESOLVED_SEED" > "$FUZZ_DIR/seed.txt"
           echo "sustained fuzz: sanitizer=${{ matrix.sanitizer }} seed=$RESOLVED_SEED"
           set -o pipefail
-          swift run --configuration release --sanitize "${{ matrix.sanitizer }}" WinnowFuzz \
+          WINNOW_PATH="$GITHUB_WORKSPACE" swift run --package-path winnow-fuzz \
+            --configuration release --sanitize "${{ matrix.sanitizer }}" WinnowFuzz \
             --iterations 25000 \
             --seed "$RESOLVED_SEED" \
             --max-input 65536 \
