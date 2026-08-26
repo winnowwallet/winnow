@@ -1,6 +1,5 @@
 import BitcoinCore
 import BitcoinP2P
-import BlockchainBackend
 import Foundation
 import LocalAuthentication
 import SwiftUI
