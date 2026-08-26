@@ -1,15 +1,13 @@
-Device security check (Settings, near the bottom)
+Device security check, round two (Settings, near the bottom)
 
-This build turns your phone into the evidence the release gate still needs: proof that iOS refuses to hand Winnow the wallet key while the phone is locked.
+The check now leads with a "Passcode set" row. If it says NO, that is the finding: without a passcode iOS never locks the wallet key, the locked check cannot mean anything, and the footer says so — set a passcode and come back.
 
-Open Settings and find "Device security check". Confirm "Protection class" reads "when unlocked, this device only" and "Unlocked read" reads "allowed". Then tap "Start locked-device check" and immediately lock the phone with the side button. Unlock after about twenty seconds and come back: "Locked read" should say "refused while locked — enforced", and the footnote should list four samples with status −25308 marked "(locked)". Screenshot that screen. If it says the phone never locked, you tapped and locked too slowly — just run it again.
+With a passcode set: tap "Start locked-device check", lock the phone with the side button in the same motion, unlock after about twenty seconds. The probe now also samples at the moment the lock lands (not just on a fixed schedule), so even a quick suspension cannot lose the reading. "Locked read" should say "refused while locked — enforced"; the footnote lists each sample. Screenshot that screen, plus the app switcher showing Winnow's cover, plus the App uptime / Memory rows once the app has been resident a few days.
 
-Also in that section: "App uptime" and "Memory". After the app has been resident for a day or more, screenshot those too — that is the long-soak reading.
+Vault coins now respect coinbase maturity
 
-App switcher
-
-With the wallet on screen, swipe up into the app switcher and look at Winnow's card: it must show the privacy cover, not your balance or addresses. A screenshot of the switcher is evidence.
+If a vault coin was mined directly to a vault address, its row in the vault detail says "matures in N blocks" and the Sign / combine review refuses to approve spending it early, with an error that counts the blocks remaining. Ordinary (non-coinbase) vault coins are unaffected.
 
 Everything else
 
-Normal use: receive, send, vault flows, backup. Nothing else changed in this build; if anything feels different, that is worth a report.
+Normal use: receive, send, vault flows, backup. Under the hood every function in the wallet now passes a decision-path budget; nothing should feel different — if it does, that is worth a report.
