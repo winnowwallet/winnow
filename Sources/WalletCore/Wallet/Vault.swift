@@ -263,7 +263,32 @@ public struct Vault: Sendable {
     /// can never make an attacker output appear to be vault change.
     public func reviewSpend(_ psbt: PSBT, knownUTXOs: [WalletUTXO],
                             ownedOutputCoordinates: [OutputCoordinate]) throws -> SpendReview {
-        let maxMoney: Int64 = 2_100_000_000_000_000
+        try checkSpendShape(psbt)
+        let inputs = try reviewedInputs(of: psbt, knownUTXOs: knownUTXOs)
+        let outputs = try reviewedOutputs(of: psbt, inputTotal: inputs.total,
+                                          ownedOutputCoordinates: ownedOutputCoordinates)
+        let fee = inputs.total - outputs.total
+        // A vault proposal is untrusted input. Refuse to sign away more than
+        // ten percent of the known coins as miner fee; the owner can construct
+        // a replacement proposal instead of approving an accidental drain.
+        guard fee <= inputs.total / 10 else {
+            throw VaultError.invalidSpend(
+                "the \(fee)-sat fee exceeds the 10% safety limit for these inputs")
+        }
+        return SpendReview(outputs: outputs.reviewed, inputTotal: inputs.total,
+                           outputTotal: outputs.total, fee: fee,
+                           sighashTypes: inputs.sighashTypes,
+                           transactionVersion: psbt.txVersion,
+                           fallbackLocktime: psbt.fallbackLocktime,
+                           sequences: inputs.sequences)
+    }
+
+    /// The Bitcoin supply cap, the ceiling on every amount and sum here.
+    private static let maxMoney: Int64 = 2_100_000_000_000_000
+
+    /// The document-level shape: something to spend, something paid, a
+    /// bounded output count, and a transaction version this vault signs.
+    private func checkSpendShape(_ psbt: PSBT) throws {
         guard !psbt.inputs.isEmpty else { throw VaultError.invalidSpend("it has no inputs") }
         guard !psbt.outputs.isEmpty else { throw VaultError.invalidSpend("it has no outputs") }
         guard psbt.outputs.count <= 1_000 else {
@@ -272,87 +297,111 @@ public struct Vault: Sendable {
         guard psbt.txVersion == 1 || psbt.txVersion == 2 else {
             throw VaultError.invalidSpend("transaction version \(psbt.txVersion) is not supported")
         }
+    }
 
+    /// Walks every input through the coin, policy, and sighash checks and
+    /// accumulates the total under the supply cap.
+    private func reviewedInputs(of psbt: PSBT, knownUTXOs: [WalletUTXO]) throws
+        -> (total: Int64, sighashTypes: [UInt32], sequences: [UInt32]) {
         var seenOutpoints: Set<Data> = []
-        var inputTotal: Int64 = 0
+        var total: Int64 = 0
         var sighashTypes: [UInt32] = []
         var sequences: [UInt32] = []
         for (inputIndex, input) in psbt.inputs.enumerated() {
-            guard let txid = input.previousTxid, txid.count == 32, let vout = input.outputIndex else {
-                throw VaultError.invalidSpend("input \(inputIndex + 1) has no complete outpoint")
-            }
-            let outpoint = Transaction.Outpoint(txid: txid, vout: vout)
-            var outpointID = txid
-            var littleEndianVout = vout.littleEndian
-            withUnsafeBytes(of: &littleEndianVout) { outpointID.append(contentsOf: $0) }
-            guard seenOutpoints.insert(outpointID).inserted else {
-                throw VaultError.invalidSpend("input \(inputIndex + 1) repeats an earlier outpoint")
-            }
-            guard let known = knownUTXOs.first(where: { $0.outpoint == outpoint }) else {
-                throw VaultError.invalidSpend("input \(inputIndex + 1) is not an available vault coin")
-            }
-            guard known.amount > 0, known.amount <= maxMoney,
-                  let claimed = input.witnessUTXO, claimed == known.spentOutput else {
-                throw VaultError.invalidSpend("input \(inputIndex + 1) has the wrong amount or locking script")
-            }
-            guard try scriptPubKey(index: known.index, choice: known.chain.rawValue) == known.scriptPubKey else {
-                throw VaultError.invalidSpend("input \(inputIndex + 1) does not belong to this descriptor")
-            }
-            let rawSighash = input.sighashType ?? 0
-            guard rawSighash == 0 || rawSighash == 1 else {
-                throw VaultError.invalidSpend("input \(inputIndex + 1) does not commit to every output")
-            }
-            sighashTypes.append(rawSighash)
-            sequences.append(input.sequence ?? 0xFFFF_FFFF)
-            try validatePolicyFields(input, inputIndex: inputIndex, utxo: known)
-            let (sum, overflow) = inputTotal.addingReportingOverflow(known.amount)
-            guard !overflow, sum <= maxMoney else {
+            let known = try knownCoin(for: input, inputIndex: inputIndex,
+                                      seenOutpoints: &seenOutpoints, knownUTXOs: knownUTXOs)
+            let checked = try checkedInputFields(input, inputIndex: inputIndex, utxo: known)
+            sighashTypes.append(checked.sighashType)
+            sequences.append(checked.sequence)
+            let (sum, overflow) = total.addingReportingOverflow(known.amount)
+            guard !overflow, sum <= Self.maxMoney else {
                 throw VaultError.invalidSpend("input amounts exceed Bitcoin's supply")
             }
-            inputTotal = sum
+            total = sum
         }
+        return (total, sighashTypes, sequences)
+    }
 
-        let coordinates = Array(Set(ownedOutputCoordinates.filter { (0 ... 1).contains($0.choice) }))
-        guard coordinates.count <= 1_024 else {
-            throw VaultError.invalidSpend("too many candidate vault output paths")
+    /// Resolves an input to one of the vault's own coins: a complete outpoint,
+    /// never repeated, present in the known set.
+    private func knownCoin(for input: PSBT.Input, inputIndex: Int,
+                           seenOutpoints: inout Set<Data>,
+                           knownUTXOs: [WalletUTXO]) throws -> WalletUTXO {
+        guard let txid = input.previousTxid, txid.count == 32, let vout = input.outputIndex else {
+            throw VaultError.invalidSpend("input \(inputIndex + 1) has no complete outpoint")
         }
-        var ownedScripts: Set<Data> = []
-        for coordinate in coordinates {
-            ownedScripts.insert(try scriptPubKey(index: coordinate.index, choice: coordinate.choice))
+        let outpoint = Transaction.Outpoint(txid: txid, vout: vout)
+        var outpointID = txid
+        var littleEndianVout = vout.littleEndian
+        withUnsafeBytes(of: &littleEndianVout) { outpointID.append(contentsOf: $0) }
+        guard seenOutpoints.insert(outpointID).inserted else {
+            throw VaultError.invalidSpend("input \(inputIndex + 1) repeats an earlier outpoint")
         }
+        guard let known = knownUTXOs.first(where: { $0.outpoint == outpoint }) else {
+            throw VaultError.invalidSpend("input \(inputIndex + 1) is not an available vault coin")
+        }
+        return known
+    }
 
-        var outputTotal: Int64 = 0
-        var reviewedOutputs: [SpendReview.Output] = []
+    /// The value, script, descriptor, and sighash checks for one resolved
+    /// input: the amounts and scripts the sighash will commit to must be the
+    /// ones the vault knows, and every signature must commit to all outputs.
+    private func checkedInputFields(_ input: PSBT.Input, inputIndex: Int, utxo known: WalletUTXO)
+        throws -> (sighashType: UInt32, sequence: UInt32) {
+        guard known.amount > 0, known.amount <= Self.maxMoney,
+              let claimed = input.witnessUTXO, claimed == known.spentOutput else {
+            throw VaultError.invalidSpend("input \(inputIndex + 1) has the wrong amount or locking script")
+        }
+        guard try scriptPubKey(index: known.index, choice: known.chain.rawValue) == known.scriptPubKey else {
+            throw VaultError.invalidSpend("input \(inputIndex + 1) does not belong to this descriptor")
+        }
+        let rawSighash = input.sighashType ?? 0
+        guard rawSighash == 0 || rawSighash == 1 else {
+            throw VaultError.invalidSpend("input \(inputIndex + 1) does not commit to every output")
+        }
+        try validatePolicyFields(input, inputIndex: inputIndex, utxo: known)
+        return (rawSighash, input.sequence ?? 0xFFFF_FFFF)
+    }
+
+    /// Classifies every output by actual script against the caller-supplied
+    /// derivations and totals them under the supply cap and the input total.
+    private func reviewedOutputs(of psbt: PSBT, inputTotal: Int64,
+                                 ownedOutputCoordinates: [OutputCoordinate]) throws
+        -> (reviewed: [SpendReview.Output], total: Int64) {
+        let ownedScripts = try ownedScripts(from: ownedOutputCoordinates)
+        var total: Int64 = 0
+        var reviewed: [SpendReview.Output] = []
         for (outputIndex, output) in psbt.outputs.enumerated() {
-            guard let amount = output.amount, amount > 0, amount <= maxMoney,
+            guard let amount = output.amount, amount > 0, amount <= Self.maxMoney,
                   let script = output.script, !script.isEmpty else {
                 throw VaultError.invalidSpend("output \(outputIndex + 1) has an invalid amount or script")
             }
-            let (sum, overflow) = outputTotal.addingReportingOverflow(amount)
-            guard !overflow, sum <= maxMoney else {
+            let (sum, overflow) = total.addingReportingOverflow(amount)
+            guard !overflow, sum <= Self.maxMoney else {
                 throw VaultError.invalidSpend("output amounts exceed Bitcoin's supply")
             }
-            outputTotal = sum
-            reviewedOutputs.append(SpendReview.Output(
+            total = sum
+            reviewed.append(SpendReview.Output(
                 amount: amount, scriptPubKey: script, isVaultOwned: ownedScripts.contains(script)))
         }
-        guard outputTotal <= inputTotal else {
+        guard total <= inputTotal else {
             throw VaultError.invalidSpend("outputs exceed its known inputs")
         }
-        let fee = inputTotal - outputTotal
-        // A vault proposal is untrusted input. Refuse to sign away more than
-        // ten percent of the known coins as miner fee; the owner can construct
-        // a replacement proposal instead of approving an accidental drain.
-        guard fee <= inputTotal / 10 else {
-            throw VaultError.invalidSpend(
-                "the \(fee)-sat fee exceeds the 10% safety limit for these inputs")
+        return (reviewed, total)
+    }
+
+    /// The scripts this vault would own at the caller-supplied coordinates —
+    /// bounded, deduplicated, and derived rather than trusted.
+    private func ownedScripts(from coordinates: [OutputCoordinate]) throws -> Set<Data> {
+        let candidates = Array(Set(coordinates.filter { (0 ... 1).contains($0.choice) }))
+        guard candidates.count <= 1_024 else {
+            throw VaultError.invalidSpend("too many candidate vault output paths")
         }
-        return SpendReview(outputs: reviewedOutputs, inputTotal: inputTotal,
-                           outputTotal: outputTotal, fee: fee,
-                           sighashTypes: sighashTypes,
-                           transactionVersion: psbt.txVersion,
-                           fallbackLocktime: psbt.fallbackLocktime,
-                           sequences: sequences)
+        var scripts: Set<Data> = []
+        for coordinate in candidates {
+            scripts.insert(try scriptPubKey(index: coordinate.index, choice: coordinate.choice))
+        }
+        return scripts
     }
 
     private func validatePolicyFields(_ input: PSBT.Input, inputIndex: Int,

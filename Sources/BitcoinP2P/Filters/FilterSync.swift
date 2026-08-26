@@ -219,125 +219,19 @@ public actor FilterSync {
         try Self.validate(progress: progress, againstTip: tip)
         guard tip >= progress.nextScanHeight else { return }
 
-        // 2. cfcheckpt cross-peer comparison.
-        let checkpointPeers = Array(peers.prefix(max(1, min(3, requiredCheckpointPeers))))
-        var checkpoints: [(peer: PeerConnection, message: CFCheckptMessage)] = []
-        checkpoints.reserveCapacity(checkpointPeers.count)
-        for peer in checkpointPeers {
-            let response = try await peer.request(
-                .getcfcheckpt(GetCFCheckptRequest(stopHash: tipHash)),
-                expecting: ["cfcheckpt"])
-            guard case let .cfcheckpt(message) = response else {
-                throw FilterSyncError.badPeerResponse("expected cfcheckpt")
-            }
-            // The reply must answer the question we asked. Without this the
-            // stop hash is only ever compared peer-to-peer in the tally below,
-            // so a single peer — or peers that agree — could answer about a
-            // different chain entirely and be believed. `pinFilterHeaders`
-            // has always checked its own stop hash; this path had not.
-            //
-            // Evict and carry on rather than throw. The other peers may be
-            // answering honestly, and refusing the whole sync on one bad reply
-            // would hand any single hostile peer a denial of service — the
-            // opposite of what cross-peer comparison is for. The majority rule
-            // below then runs on whoever answered about the chain we asked
-            // about.
-            //
-            // An honest peer cannot trip this. It echoes the stop hash we sent
-            // in `getcfcheckpt`, so a tip that advances mid-loop does not cause
-            // a mismatch — we simply scan to the tip we asked about and catch
-            // the rest on the next run.
-            guard message.stopHash == tipHash else {
-                await pool.misbehaving(peer, reason: "cfcheckpt stop hash mismatch")
-                continue
-            }
-            checkpoints.append((peer, message))
-        }
-        guard !checkpoints.isEmpty else {
-            throw FilterSyncError.badPeerResponse(
-                "no peer answered the cfcheckpt request for our chain tip")
-        }
-        // Adopt the MAJORITY cfcheckpt answer — never checkpoints[0] by fiat, or
-        // a lying first peer could evict the honest ones and become the sole
-        // reference. Peers outside the majority are disconnected. With no strict
-        // majority (e.g. two peers that disagree) the lie is unattributable, so
-        // we drop every checkpoint peer and let the pool replenish and retry.
-        let reference: CFCheckptMessage
-        if checkpoints.count == 1 {
-            // A lone survivor is accepted even when more peers were asked for,
-            // and that is deliberate — refusing here would be strictly worse.
-            //
-            // A peer only leaves this set by being evicted, and the two ways
-            // out lead somewhere harmless. The stop-hash guard evicts the peer
-            // that *replied*, and an honest peer never sends a stop hash we did
-            // not ask about, so an attacker spraying garbage only evicts his own
-            // peers and hands the sync to one he does not control. Reaching the
-            // bad case — his peer as sole survivor — means the honest ones lost
-            // the tally, which already requires him to hold a majority; the
-            // downgrade adds nothing he did not already have.
-            //
-            // Refusing, by contrast, would hand him something new: a repeatable
-            // abort. Sending one bad reply per attempt would stall every sync
-            // indefinitely, which is the denial of service this whole path is
-            // written to avoid.
-            //
-            // Corroboration here is defence in depth rather than the load-
-            // bearing check. A sole survivor still cannot fabricate filter
-            // commitments past the checkpoint-boundary comparison below or the
-            // final guard at the end of this function.
-            reference = checkpoints[0].message
-        } else {
-            var tally: [(message: CFCheckptMessage, count: Int)] = []
-            for entry in checkpoints {
-                if let index = tally.firstIndex(where: { $0.message == entry.message }) {
-                    tally[index].count += 1
-                } else {
-                    tally.append((entry.message, 1))
-                }
-            }
-            let best = tally.max { $0.count < $1.count }!
-            guard best.count * 2 > checkpoints.count else {
-                for (peer, _) in checkpoints {
-                    await pool.misbehaving(peer, reason: "cfcheckpt no majority")
-                }
-                throw FilterSyncError.checkpointMismatch("no cfcheckpt majority across \(checkpoints.count) peers")
-            }
-            for (peer, message) in checkpoints where message != best.message {
-                await pool.misbehaving(peer, reason: "cfcheckpt mismatch")
-            }
-            reference = best.message
-        }
-
-        // Only peers whose cfcheckpt matched the answer we adopted may go on to
-        // serve filters, and `peers` has to be rebuilt from them.
-        //
-        // Two separate problems are being solved here. The list was captured
-        // before any eviction, and the batch loop sends to `peers[0]` and the
-        // first two entries — so evicting a liar that sat at the front tore
-        // down the connection the next request used, and a sync that correctly
-        // identified the liar died on a transport timeout anyway.
-        //
-        // But simply re-reading the pool is not sound either: `misbehaving`
-        // triggers `replenish`, so `connectedPeers()` can hand back brand-new
-        // peers that never went through this comparison at all. Serving filters
-        // from those bypasses the only multi-peer checkpoint consensus the
-        // client has — the eviction would be cosmetic, replacing a known liar
-        // with an unvetted stranger. Hence the intersection rather than a
-        // refresh.
+        // 2. cfcheckpt cross-peer comparison: collect answers about our tip,
+        // adopt the majority, and only peers whose answer matched may go on
+        // to serve filters.
+        let checkpoints = try await collectedCheckpoints(from: peers, tipHash: tipHash)
+        let reference = try await majorityReference(of: checkpoints)
+        // The list was captured before any eviction, and `misbehaving`
+        // triggers `replenish`, so a plain re-read could hand back brand-new
+        // peers that never went through this comparison. Intersect, never
+        // refresh — see `approved(peers:)`.
         let approvedEndpoints = await Self.endpoints(
             of: checkpoints.filter { $0.message == reference }.map(\.peer))
         peers = try await approved(peers: approvedEndpoints)
-        // Core serves checkpoint headers at heights 1000, 2000, …, ascending
-        // (ProcessGetCFCheckPt: entry i is the header at (i+1)*1000; the stop
-        // block itself is included only when it is a multiple of 1000).
-        // Any already-pinned header at a checkpoint height must match.
-        for (index, header) in reference.filterHeaders.enumerated() {
-            let height = UInt32(index + 1) * Self.checkpointInterval
-            guard height <= tip else { break }
-            if let pinned = filterHeader(at: height), pinned != header {
-                throw FilterSyncError.checkpointMismatch("pinned header at \(height) disagrees with cfcheckpt")
-            }
-        }
+        try checkPinnedBoundaries(against: reference, tip: tip)
 
         // 3+4+5. Batches of ≤1000 blocks.
         while progress.nextScanHeight <= tip {
@@ -375,6 +269,104 @@ public actor FilterSync {
         if lastCheckpoint > 0, let pinned = filterHeader(at: lastCheckpoint),
            let announced = reference.filterHeaders.last, pinned != announced {
             throw FilterSyncError.checkpointMismatch("checkpoint filter header at \(lastCheckpoint) disagrees with cfcheckpt")
+        }
+    }
+
+    /// One cfcheckpt answer per peer that answered about our chain tip.
+    ///
+    /// The reply must answer the question we asked. Without this the stop
+    /// hash is only ever compared peer-to-peer in the majority tally, so a
+    /// single peer — or peers that agree — could answer about a different
+    /// chain entirely and be believed. `pinFilterHeaders` has always checked
+    /// its own stop hash; this path had not.
+    ///
+    /// A mismatch evicts that peer and carries on rather than throwing. The
+    /// other peers may be answering honestly, and refusing the whole sync on
+    /// one bad reply would hand any single hostile peer a denial of service —
+    /// the opposite of what cross-peer comparison is for. An honest peer
+    /// cannot trip this: it echoes the stop hash we sent, so a tip that
+    /// advances mid-loop simply means we scan to the tip we asked about and
+    /// catch the rest on the next run.
+    private func collectedCheckpoints(from peers: [PeerConnection], tipHash: Data)
+        async throws -> [(peer: PeerConnection, message: CFCheckptMessage)] {
+        let checkpointPeers = Array(peers.prefix(max(1, min(3, requiredCheckpointPeers))))
+        var checkpoints: [(peer: PeerConnection, message: CFCheckptMessage)] = []
+        checkpoints.reserveCapacity(checkpointPeers.count)
+        for peer in checkpointPeers {
+            let response = try await peer.request(
+                .getcfcheckpt(GetCFCheckptRequest(stopHash: tipHash)),
+                expecting: ["cfcheckpt"])
+            guard case let .cfcheckpt(message) = response else {
+                throw FilterSyncError.badPeerResponse("expected cfcheckpt")
+            }
+            guard message.stopHash == tipHash else {
+                await pool.misbehaving(peer, reason: "cfcheckpt stop hash mismatch")
+                continue
+            }
+            checkpoints.append((peer, message))
+        }
+        guard !checkpoints.isEmpty else {
+            throw FilterSyncError.badPeerResponse(
+                "no peer answered the cfcheckpt request for our chain tip")
+        }
+        return checkpoints
+    }
+
+    /// The MAJORITY cfcheckpt answer — never checkpoints[0] by fiat, or a
+    /// lying first peer could evict the honest ones and become the sole
+    /// reference. Peers outside the majority are disconnected. With no strict
+    /// majority (e.g. two peers that disagree) the lie is unattributable, so
+    /// every checkpoint peer is dropped and the pool replenishes and retries.
+    ///
+    /// A lone survivor is accepted even when more peers were asked for, and
+    /// that is deliberate — refusing would be strictly worse. A peer only
+    /// leaves this set by being evicted, and the stop-hash guard evicts the
+    /// peer that *replied*; an honest peer never sends a stop hash we did not
+    /// ask about, so an attacker spraying garbage only evicts his own peers
+    /// and hands the sync to one he does not control. Reaching the bad case —
+    /// his peer as sole survivor — already requires him to hold a majority;
+    /// the downgrade adds nothing. Refusing, by contrast, would hand him a
+    /// repeatable abort: one bad reply per attempt would stall every sync
+    /// indefinitely. Corroboration here is defence in depth — a sole survivor
+    /// still cannot fabricate filter commitments past the checkpoint-boundary
+    /// comparison and the final guard at the end of `sync`.
+    private func majorityReference(
+        of checkpoints: [(peer: PeerConnection, message: CFCheckptMessage)])
+        async throws -> CFCheckptMessage {
+        guard checkpoints.count > 1 else { return checkpoints[0].message }
+        var tally: [(message: CFCheckptMessage, count: Int)] = []
+        for entry in checkpoints {
+            if let index = tally.firstIndex(where: { $0.message == entry.message }) {
+                tally[index].count += 1
+            } else {
+                tally.append((entry.message, 1))
+            }
+        }
+        let best = tally.max { $0.count < $1.count }!
+        guard best.count * 2 > checkpoints.count else {
+            for (peer, _) in checkpoints {
+                await pool.misbehaving(peer, reason: "cfcheckpt no majority")
+            }
+            throw FilterSyncError.checkpointMismatch("no cfcheckpt majority across \(checkpoints.count) peers")
+        }
+        for (peer, message) in checkpoints where message != best.message {
+            await pool.misbehaving(peer, reason: "cfcheckpt mismatch")
+        }
+        return best.message
+    }
+
+    /// Core serves checkpoint headers at heights 1000, 2000, …, ascending
+    /// (ProcessGetCFCheckPt: entry i is the header at (i+1)*1000; the stop
+    /// block itself is included only when it is a multiple of 1000). Any
+    /// already-pinned header at a checkpoint height must match.
+    private func checkPinnedBoundaries(against reference: CFCheckptMessage,
+                                       tip: UInt32) throws {
+        for (index, header) in reference.filterHeaders.enumerated() {
+            let height = UInt32(index + 1) * Self.checkpointInterval
+            guard height <= tip else { break }
+            if let pinned = filterHeader(at: height), pinned != header {
+                throw FilterSyncError.checkpointMismatch("pinned header at \(height) disagrees with cfcheckpt")
+            }
         }
     }
 

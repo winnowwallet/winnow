@@ -39,6 +39,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The complexity budget from .swiftlint.yml, enforced: SwiftLint exits
+  # nonzero on error-level violations (over 15 decision paths) and green on
+  # warnings, which is the ratchet — the 11-14 band is visible pressure,
+  # not a failure, until it too comes down.
+  complexity:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Cyclomatic complexity budget
+        run: |
+          which swiftlint || brew install swiftlint
+          swiftlint lint --quiet
+
   # Runs for every event, including pull requests from forks, so it is
   # GitHub-hosted and ephemeral. A fork pull request is untrusted code, and
   # this repository is public: running it on the persistent self-hosted runner

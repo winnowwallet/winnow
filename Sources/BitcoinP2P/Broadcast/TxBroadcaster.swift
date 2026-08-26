@@ -388,6 +388,33 @@ public actor TxBroadcaster {
         guard FileManager.default.fileExists(atPath: storageURL.path) else {
             return (.missing, [:])
         }
+        let data = try readBoundedFile(at: storageURL)
+
+        let topLevel: [String: Any]
+        do {
+            guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw TxBroadcasterStorageError.damaged("the top level is not an object")
+            }
+            topLevel = object
+        } catch let error as TxBroadcasterStorageError {
+            throw error
+        } catch {
+            throw TxBroadcasterStorageError.damaged("the JSON is invalid")
+        }
+
+        let decoder = JSONDecoder()
+        if let rawVersion = topLevel["version"] {
+            let result = try loadVersioned(rawVersion, data: data, decoder: decoder, now: now)
+            return (.loaded(transactionCount: result.count), result)
+        }
+        let result = try loadUnversioned(data, decoder: decoder, now: now)
+        return (.loaded(transactionCount: result.count), result)
+    }
+
+    /// The file, read under the storage byte cap — checked against the
+    /// reported size before reading and against the bytes after, so a file
+    /// that grows between the two is still refused.
+    private static func readBoundedFile(at storageURL: URL) throws -> Data {
         let attributes: [FileAttributeKey: Any]
         do {
             attributes = try FileManager.default.attributesOfItem(atPath: storageURL.path)
@@ -410,43 +437,37 @@ public actor TxBroadcaster {
         guard !data.isEmpty else {
             throw TxBroadcasterStorageError.damaged("the file is empty")
         }
+        return data
+    }
 
-        let topLevel: [String: Any]
+    /// A record that declares its version must declare ours, exactly and as
+    /// an integer — a float or unknown version is damage, not tolerance.
+    private static func loadVersioned(_ rawVersion: Any, data: Data, decoder: JSONDecoder,
+                                      now: Date) throws -> [Data: Pending] {
+        guard let number = rawVersion as? NSNumber,
+              number.doubleValue.isFinite,
+              number.doubleValue.rounded(.towardZero) == number.doubleValue else {
+            throw TxBroadcasterStorageError.damaged("the format version is invalid")
+        }
+        let version = number.intValue
+        guard version == storageVersion else {
+            throw TxBroadcasterStorageError.unsupportedVersion(version)
+        }
+        let stored: StoredPending
         do {
-            guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                throw TxBroadcasterStorageError.damaged("the top level is not an object")
-            }
-            topLevel = object
-        } catch let error as TxBroadcasterStorageError {
-            throw error
+            stored = try decoder.decode(StoredPending.self, from: data)
         } catch {
-            throw TxBroadcasterStorageError.damaged("the JSON is invalid")
+            throw TxBroadcasterStorageError.damaged("a versioned relay record is invalid")
         }
+        return try validatedRecords(stored.transactions, now: now)
+    }
 
-        let decoder = JSONDecoder()
-        if let rawVersion = topLevel["version"] {
-            guard let number = rawVersion as? NSNumber,
-                  number.doubleValue.isFinite,
-                  number.doubleValue.rounded(.towardZero) == number.doubleValue else {
-                throw TxBroadcasterStorageError.damaged("the format version is invalid")
-            }
-            let version = number.intValue
-            guard version == storageVersion else {
-                throw TxBroadcasterStorageError.unsupportedVersion(version)
-            }
-            let stored: StoredPending
-            do {
-                stored = try decoder.decode(StoredPending.self, from: data)
-            } catch {
-                throw TxBroadcasterStorageError.damaged("a versioned relay record is invalid")
-            }
-            let result = try validatedRecords(stored.transactions, now: now)
-            return (.loaded(transactionCount: result.count), result)
-        }
-
+    /// The two pre-version formats, tried in order; anything else is not a
+    /// relay record.
+    private static func loadUnversioned(_ data: Data, decoder: JSONDecoder,
+                                        now: Date) throws -> [Data: Pending] {
         if let unversioned = try? decoder.decode(UnversionedStoredPending.self, from: data) {
-            let result = try validatedRecords(unversioned.transactions, now: now)
-            return (.loaded(transactionCount: result.count), result)
+            return try validatedRecords(unversioned.transactions, now: now)
         }
         if let legacy = try? decoder.decode(LegacyStoredPending.self, from: data) {
             guard legacy.transactions.count <= maximumStoredTransactions else {
@@ -461,7 +482,7 @@ public actor TxBroadcaster {
                                        feeRateSatPerVByte: nil, attempt: 0,
                                        nextAttemptAt: now)
             }
-            return (.loaded(transactionCount: result.count), result)
+            return result
         }
         throw TxBroadcasterStorageError.damaged("the relay record format is not recognized")
     }

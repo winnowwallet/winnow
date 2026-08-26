@@ -842,19 +842,7 @@ public actor Wallet {
         // itself enforce Bitcoin's transaction-value consensus rules for an
         // SPV wallet. This also preserves atomicity when a later transaction
         // in the block is malformed.
-        for tx in match.block.transactions {
-            var outputTotal: Int64 = 0
-            for output in tx.outputs {
-                guard output.value >= 0, output.value <= BitcoinAmount.maximum else {
-                    throw WalletError.invalidTransactionAmounts
-                }
-                let (next, overflow) = outputTotal.addingReportingOverflow(output.value)
-                guard !overflow, next <= BitcoinAmount.maximum else {
-                    throw WalletError.invalidTransactionAmounts
-                }
-                outputTotal = next
-            }
-        }
+        try checkBlockAmounts(match.block)
         let map = try watchMap()
         // Everything below is one state transition. If the matched block
         // would violate the wallet-wide monetary invariant (or persistence
@@ -877,58 +865,10 @@ public actor Wallet {
                     && $0.previousOutput.vout == 0xFFFF_FFFF
             } ?? false
             var spentAmount: Int64 = 0
-            var receivedAmount: Int64 = 0
             var allInputsOurs = !isCoinbase && !tx.inputs.isEmpty
-
             if !isCoinbase {
-                for input in tx.inputs {
-                    // Indexed into `allUtxos`, and only unspent rows count: a
-                    // tombstone is not a coin, and an index into the filtered
-                    // view would address the wrong row here.
-                    guard let index = state.allUtxos.firstIndex(where: {
-                        !$0.isSpent
-                            && $0.txid == input.previousOutput.txid
-                            && $0.vout == input.previousOutput.vout
-                    }) else {
-                        // A coin we already tombstoned at commit, now being
-                        // confirmed. The marker was written with no height
-                        // because the spend was only in flight; this is the
-                        // moment that stops being true, and it is the only
-                        // place the height can be learned.
-                        //
-                        // Without it every own spend leaves a row that pruning
-                        // can never reach -- pruning only measures depth, and
-                        // a nil height has none -- and a rollback cannot tell
-                        // "still in flight" from "confirmed and buried", which
-                        // is the whole reason the height is recorded.
-                        //
-                        // `spentBy` is rewritten to the confirming transaction
-                        // rather than kept: under RBF the replacement is what
-                        // confirms, and a marker naming the superseded txid
-                        // describes a transaction that no longer exists.
-                        if let pendingIndex = state.allUtxos.firstIndex(where: {
-                            $0.spent?.height == nil && $0.spent != nil
-                                && $0.txid == input.previousOutput.txid
-                                && $0.vout == input.previousOutput.vout
-                        }) {
-                            state.allUtxos[pendingIndex].spent =
-                                WalletUTXO.SpentMarker(spentBy: txid, height: match.height)
-                        }
-                        // Accounting is unchanged: before tombstones this row
-                        // was gone by now, so it never contributed here, and
-                        // the pending-send path below supplies the amounts.
-                        allInputsOurs = false
-                        continue
-                    }
-                    // Marked, not removed: rescanning forward from a fork
-                    // cannot recreate a coin created below it (#127).
-                    state.allUtxos[index].spent = WalletUTXO.SpentMarker(spentBy: txid,
-                                                                         height: match.height)
-                    let utxo = state.allUtxos[index]
-                    spentAmount += utxo.amount
-                    effect.spent.append(MatchEffect.Spend(txid: utxo.txid, vout: utxo.vout,
-                                                          spentBy: txid, height: match.height))
-                }
+                (spentAmount, allInputsOurs) = applySpends(of: tx, txid: txid,
+                                                           height: match.height, effect: &effect)
             }
             if conflictingPending != nil {
                 // The original inputs left the spendable set when its pending
@@ -937,37 +877,9 @@ public actor Wallet {
                 allInputsOurs = true
             }
 
-            for (vout, output) in tx.outputs.enumerated() {
-                // Zero-value outputs are consensus-valid. They are not coins,
-                // and admitting one would violate the positive-UTXO invariant
-                // below and wedge this forward-only scan at the same block.
-                guard output.value > 0,
-                      let (chain, index) = map[output.scriptPubKey]
-                else { continue }
-                if let existing = state.allUtxos.firstIndex(where: {
-                    $0.txid == txid && $0.vout == UInt32(vout)
-                }) {
-                    // Already known: either a re-applied block, or our own
-                    // pending change output being confirmed — update its height.
-                    state.allUtxos[existing].height = match.height
-                    continue
-                }
-                let utxo = WalletUTXO(txid: txid, vout: UInt32(vout), amount: output.value,
-                                      scriptPubKey: output.scriptPubKey, chain: chain,
-                                      index: index, height: match.height,
-                                      isCoinbase: isCoinbase)
-                state.allUtxos.append(utxo)
-                receivedAmount += output.value
-                effect.received.append(utxo)
-                switch chain {
-                case .receive where index >= state.nextReceiveIndex:
-                    state.nextReceiveIndex = index + 1
-                case .change where index >= state.nextChangeIndex:
-                    state.nextChangeIndex = index + 1
-                default:
-                    break
-                }
-            }
+            let receivedAmount = applyOutputs(of: tx, txid: txid, map: map,
+                                              height: match.height, isCoinbase: isCoinbase,
+                                              effect: &effect)
 
 
             let accountedSpent = conflictingPending?.selected.reduce(Int64(0)) {
@@ -977,29 +889,165 @@ public actor Wallet {
                 || state.history.contains(where: { $0.txid == txid })
             guard touchesWallet else { continue }
 
-            // Fee + feerate sample: exact only when every input was ours (the
-            // BIP341 sighash commits to amounts, so our own sends qualify).
-            var fee: Int64? = nil
-            if allInputsOurs, accountedSpent > 0 {
-                let candidate = accountedSpent - tx.outputs.reduce(0) { $0 + $1.value }
-                if candidate > 0 {
-                    fee = candidate
-                    let vsize = TransactionBuilder.vsize(of: tx)
-                    if vsize > 0 {
-                        state.observedFeeRates.append(Double(candidate) / Double(vsize))
-                        if state.observedFeeRates.count > 20 { state.observedFeeRates.removeFirst() }
-                    }
+            recordConfirmedHistory(of: tx, txid: txid, height: match.height,
+                                   received: receivedAmount, spent: accountedSpent,
+                                   feeIsExact: allInputsOurs)
+        }
+        try checkWalletTotalInvariant()
+        try persist()
+        committed = true
+        return effect
+    }
+
+    /// Confirms the transaction into history — updating a known pending send
+    /// or appending a new entry — retires its pending record, and samples the
+    /// feerate. The fee is exact only when every input was ours (the BIP341
+    /// sighash commits to amounts, so our own sends qualify).
+    private func recordConfirmedHistory(of tx: Transaction, txid: Data, height: UInt32,
+                                        received: Int64, spent: Int64, feeIsExact: Bool) {
+        var fee: Int64? = nil
+        if feeIsExact, spent > 0 {
+            let candidate = spent - tx.outputs.reduce(0) { $0 + $1.value }
+            if candidate > 0 {
+                fee = candidate
+                let vsize = TransactionBuilder.vsize(of: tx)
+                if vsize > 0 {
+                    state.observedFeeRates.append(Double(candidate) / Double(vsize))
+                    if state.observedFeeRates.count > 20 { state.observedFeeRates.removeFirst() }
                 }
             }
-            if let existing = state.history.firstIndex(where: { $0.txid == txid }) {
-                // Known pending send (height 0) reaching confirmation.
-                state.history[existing].height = match.height
-            } else {
-                state.history.append(HistoryEntry(txid: txid, height: match.height,
-                                                  received: receivedAmount, spent: accountedSpent, fee: fee))
-            }
-            state.pendingSends.removeAll { $0.txid == txid }
         }
+        if let existing = state.history.firstIndex(where: { $0.txid == txid }) {
+            // Known pending send (height 0) reaching confirmation.
+            state.history[existing].height = height
+        } else {
+            state.history.append(HistoryEntry(txid: txid, height: height,
+                                              received: received, spent: spent, fee: fee))
+        }
+        state.pendingSends.removeAll { $0.txid == txid }
+    }
+
+    /// Bitcoin's transaction-value rules for every output in the block,
+    /// checked before a single coin changes: a merkle proof authenticates
+    /// bytes under the header, it does not enforce consensus amounts.
+    private func checkBlockAmounts(_ block: Block) throws {
+        for tx in block.transactions {
+            var outputTotal: Int64 = 0
+            for output in tx.outputs {
+                guard output.value >= 0, output.value <= BitcoinAmount.maximum else {
+                    throw WalletError.invalidTransactionAmounts
+                }
+                let (next, overflow) = outputTotal.addingReportingOverflow(output.value)
+                guard !overflow, next <= BitcoinAmount.maximum else {
+                    throw WalletError.invalidTransactionAmounts
+                }
+                outputTotal = next
+            }
+        }
+    }
+
+    /// Tombstones every input that spends one of our coins and reports what
+    /// left the wallet — and whether every input was ours, which is what
+    /// makes the fee computable later.
+    private func applySpends(of tx: Transaction, txid: Data, height: UInt32,
+                             effect: inout MatchEffect) -> (spent: Int64, allInputsOurs: Bool) {
+        var spentAmount: Int64 = 0
+        var allInputsOurs = !tx.inputs.isEmpty
+        for input in tx.inputs {
+            // Indexed into `allUtxos`, and only unspent rows count: a
+            // tombstone is not a coin, and an index into the filtered
+            // view would address the wrong row here.
+            guard let index = state.allUtxos.firstIndex(where: {
+                !$0.isSpent
+                    && $0.txid == input.previousOutput.txid
+                    && $0.vout == input.previousOutput.vout
+            }) else {
+                confirmPendingTombstone(matching: input, spentBy: txid, height: height)
+                // Accounting is unchanged: before tombstones this row
+                // was gone by now, so it never contributed here, and
+                // the pending-send path supplies the amounts.
+                allInputsOurs = false
+                continue
+            }
+            // Marked, not removed: rescanning forward from a fork
+            // cannot recreate a coin created below it (#127).
+            state.allUtxos[index].spent = WalletUTXO.SpentMarker(spentBy: txid,
+                                                                 height: height)
+            let utxo = state.allUtxos[index]
+            spentAmount += utxo.amount
+            effect.spent.append(MatchEffect.Spend(txid: utxo.txid, vout: utxo.vout,
+                                                  spentBy: txid, height: height))
+        }
+        return (spentAmount, allInputsOurs)
+    }
+
+    /// A coin we already tombstoned at commit, now being confirmed. The
+    /// marker was written with no height because the spend was only in
+    /// flight; this is the moment that stops being true, and it is the only
+    /// place the height can be learned.
+    ///
+    /// Without it every own spend leaves a row that pruning can never reach
+    /// -- pruning only measures depth, and a nil height has none -- and a
+    /// rollback cannot tell "still in flight" from "confirmed and buried",
+    /// which is the whole reason the height is recorded.
+    ///
+    /// `spentBy` is rewritten to the confirming transaction rather than
+    /// kept: under RBF the replacement is what confirms, and a marker naming
+    /// the superseded txid describes a transaction that no longer exists.
+    private func confirmPendingTombstone(matching input: Transaction.Input,
+                                         spentBy txid: Data, height: UInt32) {
+        guard let pendingIndex = state.allUtxos.firstIndex(where: {
+            $0.spent?.height == nil && $0.spent != nil
+                && $0.txid == input.previousOutput.txid
+                && $0.vout == input.previousOutput.vout
+        }) else { return }
+        state.allUtxos[pendingIndex].spent =
+            WalletUTXO.SpentMarker(spentBy: txid, height: height)
+    }
+
+    /// Admits every watched output as a coin (or re-heights one already
+    /// known), advances gap-limit bookkeeping, and reports what arrived.
+    private func applyOutputs(of tx: Transaction, txid: Data,
+                              map: [Data: (AddressChain, UInt32)], height: UInt32,
+                              isCoinbase: Bool, effect: inout MatchEffect) -> Int64 {
+        var receivedAmount: Int64 = 0
+        for (vout, output) in tx.outputs.enumerated() {
+            // Zero-value outputs are consensus-valid. They are not coins,
+            // and admitting one would violate the positive-UTXO invariant
+            // below and wedge this forward-only scan at the same block.
+            guard output.value > 0,
+                  let (chain, index) = map[output.scriptPubKey]
+            else { continue }
+            if let existing = state.allUtxos.firstIndex(where: {
+                $0.txid == txid && $0.vout == UInt32(vout)
+            }) {
+                // Already known: either a re-applied block, or our own
+                // pending change output being confirmed — update its height.
+                state.allUtxos[existing].height = height
+                continue
+            }
+            let utxo = WalletUTXO(txid: txid, vout: UInt32(vout), amount: output.value,
+                                  scriptPubKey: output.scriptPubKey, chain: chain,
+                                  index: index, height: height,
+                                  isCoinbase: isCoinbase)
+            state.allUtxos.append(utxo)
+            receivedAmount += output.value
+            effect.received.append(utxo)
+            switch chain {
+            case .receive where index >= state.nextReceiveIndex:
+                state.nextReceiveIndex = index + 1
+            case .change where index >= state.nextChangeIndex:
+                state.nextChangeIndex = index + 1
+            default:
+                break
+            }
+        }
+        return receivedAmount
+    }
+
+    /// The wallet-wide monetary invariant, re-proved after every block: each
+    /// coin positive, each within the supply, and the sum within it too.
+    private func checkWalletTotalInvariant() throws {
         var walletTotal: Int64 = 0
         for coin in state.utxos {
             let (next, overflow) = walletTotal.addingReportingOverflow(coin.amount)
@@ -1009,9 +1057,6 @@ public actor Wallet {
             }
             walletTotal = next
         }
-        try persist()
-        committed = true
-        return effect
     }
 
     /// A replacement is only a proposal until one member of its conflict

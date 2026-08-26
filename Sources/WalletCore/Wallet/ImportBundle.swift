@@ -410,81 +410,11 @@ extension Wallet {
             throw WalletError.invalidBundle("need a descriptor or a mnemonic")
         }
 
-        var descriptor: Descriptor?
-        var accountKey: HDKey?
-        if let mnemonic = bundle.mnemonic {
-            try BIP39.validate(mnemonic: mnemonic)
-            let master = try HDKey(seed: BIP39.seed(mnemonic: mnemonic))
-            let coinType = Self.coinType(for: network)
-            let account = try BIP86.accountKey(from: master, coinType: coinType, account: 0)
-            let origin = Descriptor.KeyOrigin(fingerprint: master.fingerprint,
-                                              path: [86, coinType, 0].map { $0 + HDKey.hardenedOffset })
-            let derived = Self.makeDescriptor(accountKey: account, origin: origin, network: network)
-            if let bundleDescriptor = bundle.descriptor,
-               try Descriptor(bundleDescriptor) != derived
-            {
-                throw WalletError.descriptorMismatch
-            }
-            descriptor = derived
-            accountKey = account.neutered
-            let walletID = String(format: "%08x", master.fingerprint)
-            do {
-                try keyStore.store(.mnemonic(mnemonic), for: walletID)
-            } catch KeyStoreError.alreadyExists {
-                // Re-importing the same secret is fine; a different secret
-                // under the same ID (same fingerprint) is not.
-                guard try keyStore.load(walletID: walletID) == .mnemonic(mnemonic) else {
-                    throw KeyStoreError.alreadyExists(walletID: walletID)
-                }
-            }
-        } else if let bundleDescriptor = bundle.descriptor {
-            let parsed = try Descriptor(bundleDescriptor)
-            _ = try Self.origin(of: parsed)
-            guard case let .tr(.single(key), nil) = parsed.expression,
-                  case let .extended(account, _) = key.base
-            else { throw WalletError.invalidDescriptor(bundleDescriptor) }
-            descriptor = parsed
-            accountKey = account.neutered
-        }
-        guard let descriptor, let accountKey else {
-            throw WalletError.invalidBundle("no usable descriptor")
-        }
-
-        let utxos = try bundle.claimedUTXOs()
-        // Validate every claim from key material in the bundle: descriptor
-        // outputs are re-derived from their BIP86 coordinates.
-        for utxo in utxos {
-            let expected = try descriptor
-                .derived(index: utxo.index,
-                         network: Self.hdNetwork(for: network))[utxo.chain.rawValue]
-                .scriptPubKey
-            guard expected == utxo.scriptPubKey else {
-                throw WalletError.invalidBundle(
-                    "utxo \(utxo.txid.displayHex):\(utxo.vout) scriptPubKey does not match the descriptor")
-            }
-        }
-
-        let history = try bundle.transactions.map { known in
-            guard let txid = Data(hex: known.txid), txid.count == 32 else {
-                throw WalletError.invalidBundle("bad txid \(known.txid)")
-            }
-            let replacedBy: Data?
-            if let replacementHex = known.replacedBy {
-                guard let replacement = Data(hex: replacementHex), replacement.count == 32 else {
-                    throw WalletError.invalidBundle("bad replacement txid \(replacementHex)")
-                }
-                replacedBy = Data(replacement.reversed())
-            } else {
-                replacedBy = nil
-            }
-            guard (0 ... BitcoinAmount.maximum).contains(known.received),
-                  (0 ... BitcoinAmount.maximum).contains(known.spent),
-                  known.fee.map({ (0 ... BitcoinAmount.maximum).contains($0) }) ?? true
-            else { throw WalletError.invalidBundle("transaction history has invalid amounts") }
-            return HistoryEntry(txid: Data(txid.reversed()), height: known.height,
-                                received: known.received, spent: known.spent, fee: known.fee,
-                                replacedBy: replacedBy)
-        }
+        let (descriptor, accountKey) = try importedKeyMaterial(
+            of: bundle, network: network, keyStore: keyStore)
+        let utxos = try validatedClaimedUTXOs(of: bundle, descriptor: descriptor,
+                                              network: network)
+        let history = try validatedHistory(of: bundle)
 
         let fromReceiveUTXOs = (utxos.filter { $0.chain == .receive }
             .map(\.index).max().map { $0 + 1 }) ?? 0
@@ -509,6 +439,92 @@ extension Wallet {
             try JSONEncoder().encode(state).write(to: storageURL, options: .atomic)
         }
         return wallet
+    }
+
+    /// The bundle's key material, resolved and — when a mnemonic travels with
+    /// it — stored: the derived descriptor must match any descriptor the
+    /// bundle also claims, and re-importing the same secret is fine while a
+    /// different secret under the same fingerprint is not.
+    private static func importedKeyMaterial(of bundle: ImportBundle, network: BitcoinNetwork,
+                                            keyStore: any KeyStore)
+        throws -> (descriptor: Descriptor, accountKey: HDKey) {
+        if let mnemonic = bundle.mnemonic {
+            try BIP39.validate(mnemonic: mnemonic)
+            let master = try HDKey(seed: BIP39.seed(mnemonic: mnemonic))
+            let coinType = Self.coinType(for: network)
+            let account = try BIP86.accountKey(from: master, coinType: coinType, account: 0)
+            let origin = Descriptor.KeyOrigin(fingerprint: master.fingerprint,
+                                              path: [86, coinType, 0].map { $0 + HDKey.hardenedOffset })
+            let derived = Self.makeDescriptor(accountKey: account, origin: origin, network: network)
+            if let bundleDescriptor = bundle.descriptor,
+               try Descriptor(bundleDescriptor) != derived
+            {
+                throw WalletError.descriptorMismatch
+            }
+            let walletID = String(format: "%08x", master.fingerprint)
+            do {
+                try keyStore.store(.mnemonic(mnemonic), for: walletID)
+            } catch KeyStoreError.alreadyExists {
+                guard try keyStore.load(walletID: walletID) == .mnemonic(mnemonic) else {
+                    throw KeyStoreError.alreadyExists(walletID: walletID)
+                }
+            }
+            return (derived, account.neutered)
+        }
+        guard let bundleDescriptor = bundle.descriptor else {
+            throw WalletError.invalidBundle("no usable descriptor")
+        }
+        let parsed = try Descriptor(bundleDescriptor)
+        _ = try Self.origin(of: parsed)
+        guard case let .tr(.single(key), nil) = parsed.expression,
+              case let .extended(account, _) = key.base
+        else { throw WalletError.invalidDescriptor(bundleDescriptor) }
+        return (parsed, account.neutered)
+    }
+
+    /// Every claimed coin re-derived from its BIP86 coordinates: the
+    /// descriptor, not the bundle, says which scripts are the wallet's.
+    private static func validatedClaimedUTXOs(of bundle: ImportBundle,
+                                              descriptor: Descriptor,
+                                              network: BitcoinNetwork) throws -> [WalletUTXO] {
+        let utxos = try bundle.claimedUTXOs()
+        for utxo in utxos {
+            let expected = try descriptor
+                .derived(index: utxo.index,
+                         network: Self.hdNetwork(for: network))[utxo.chain.rawValue]
+                .scriptPubKey
+            guard expected == utxo.scriptPubKey else {
+                throw WalletError.invalidBundle(
+                    "utxo \(utxo.txid.displayHex):\(utxo.vout) scriptPubKey does not match the descriptor")
+            }
+        }
+        return utxos
+    }
+
+    /// The claimed history, with txids well-formed and amounts inside the
+    /// supply — bounded hostile input like everything else in a bundle.
+    private static func validatedHistory(of bundle: ImportBundle) throws -> [HistoryEntry] {
+        try bundle.transactions.map { known in
+            guard let txid = Data(hex: known.txid), txid.count == 32 else {
+                throw WalletError.invalidBundle("bad txid \(known.txid)")
+            }
+            let replacedBy: Data?
+            if let replacementHex = known.replacedBy {
+                guard let replacement = Data(hex: replacementHex), replacement.count == 32 else {
+                    throw WalletError.invalidBundle("bad replacement txid \(replacementHex)")
+                }
+                replacedBy = Data(replacement.reversed())
+            } else {
+                replacedBy = nil
+            }
+            guard (0 ... BitcoinAmount.maximum).contains(known.received),
+                  (0 ... BitcoinAmount.maximum).contains(known.spent),
+                  known.fee.map({ (0 ... BitcoinAmount.maximum).contains($0) }) ?? true
+            else { throw WalletError.invalidBundle("transaction history has invalid amounts") }
+            return HistoryEntry(txid: Data(txid.reversed()), height: known.height,
+                                received: known.received, spent: known.spent, fee: known.fee,
+                                replacedBy: replacedBy)
+        }
     }
 
     /// Verifies an imported bundle by forward-scanning from its height,
