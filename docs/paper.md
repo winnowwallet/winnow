@@ -66,7 +66,7 @@ background.
 
 **Coming soon · planned:** Taproot threshold and MuSig2 primitives are
 implemented. A polished ceremony with a different wallet implementation is not
-yet verified and is tracked in [issue 58](https://github.com/posix4e/winnow/issues/58).
+yet verified; it is on the custody roadmap below (§12).
 
 Winnow and a different Bitcoin wallet each generate independent seed material,
 derive one participant key, review the same proposed transaction, and provide
@@ -102,8 +102,8 @@ performed against the incident.
 ### 1.3 Three · Professionally stewarded
 
 **Coming soon · planned:** Generic 2-of-3 construction and two signing paths are
-verified on signet. Provider onboarding and institutional accounts are tracked
-in [issue 53](https://github.com/posix4e/winnow/issues/53).
+verified on signet. Provider onboarding and institutional accounts are on the
+custody roadmap below (§12).
 
 The Rivera cold reserve assigns three distinct roles:
 
@@ -286,8 +286,8 @@ request identity, acceptance or rejection, response, and polling status. A
 selected miner receives the raw transaction and connection metadata and may
 log, reject, delay, or disclose it. Direct submission is not anonymity.
 
-The miner API is **coming soon · planned** in
-[issue 59](https://github.com/posix4e/winnow/issues/59). The first pilot is
+The miner API is **coming soon · planned** on the custody roadmap
+below (§12). The first pilot is
 scoped around MARA Slipstream's documented beta API, whose
 published interface includes single transactions, transaction packages, status
 queries, fee requirements, and support statements for RBF and CPFP. That is
@@ -433,21 +433,21 @@ that recovery words never appear in a video frame.
 
 ## 12. Implementation roadmap
 
-[Epic 60](https://github.com/posix4e/winnow/issues/60) is the canonical program.
-Each item is a public contribution surface; the external-wallet, institutional,
-and miner-API issues are explicitly labeled `help wanted`:
+This roadmap is the canonical custody program. Each item is a public
+contribution surface, and the external-wallet, institutional, and miner-API
+items especially welcome outside hands:
 
-1. [Build the 1–2–3 custody-template UX and warnings](https://github.com/posix4e/winnow/issues/54).
-2. [Test descriptors and PSBTs across independent wallets](https://github.com/posix4e/winnow/issues/58).
-3. [Build the two-wallet setup, signing, backup, and rotation ceremony](https://github.com/posix4e/winnow/issues/50).
-4. [Research hardware transports, starting with Coldcard NFC and microSD](https://github.com/posix4e/winnow/issues/55).
-5. [Build the professional owner–exchange–trust template](https://github.com/posix4e/winnow/issues/53).
-6. [Specify a versioned provider signer package](https://github.com/posix4e/winnow/issues/49).
-7. [Decide provider-directory governance](https://github.com/posix4e/winnow/issues/52).
-8. [Decide referral disclosure, ranking, and click privacy](https://github.com/posix4e/winnow/issues/57).
-9. [Add submission modes and durable receipts](https://github.com/posix4e/winnow/issues/51).
-10. [Build the MARA Slipstream direct-miner pilot](https://github.com/posix4e/winnow/issues/59).
-11. [Extend the reproducible story](https://github.com/posix4e/winnow/issues/56).
+1. Build the 1–2–3 custody-template UX and warnings.
+2. Test descriptors and PSBTs across independent wallets.
+3. Build the two-wallet setup, signing, backup, and rotation ceremony.
+4. Research hardware transports, starting with Coldcard NFC and microSD.
+5. Build the professional owner–exchange–trust template.
+6. Specify a versioned provider signer package.
+7. Decide provider-directory governance.
+8. Decide referral disclosure, ranking, and click privacy.
+9. Add submission modes and durable receipts.
+10. Build the MARA Slipstream direct-miner pilot.
+11. Extend the reproducible story.
 
 No provider marketplace ships until the directory and referral decisions are
 recorded. P2P remains the default. New signet evidence must describe only the

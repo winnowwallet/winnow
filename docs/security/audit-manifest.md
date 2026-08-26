@@ -2,8 +2,8 @@
 
 Status: **Phase 0 baseline; not a mainnet approval**
 
-This file freezes the source and evidence boundary for security-hardening epic
-[#100](https://github.com/posix4e/winnow/issues/100). A checked box or passing
+This file freezes the source and evidence boundary for the
+security-hardening epic. A checked box or passing
 test proves only the named property. It is not a general wallet-safety claim.
 
 ## Frozen target

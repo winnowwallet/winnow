@@ -7,8 +7,7 @@ person still has to decide.
 | | |
 |---|---|
 | Reported at | `main`, `4fb8ec9` |
-| Epic | [#100](https://github.com/posix4e/winnow/issues/100), handoff [#124](https://github.com/posix4e/winnow/issues/124) |
-| Landed | #122, #125, #126 merged; the remaining findings closed since, most recently #156 |
+| Landed | the epic's three review waves merged; the remaining findings closed since, ending with the reorg rollback |
 | Package tests | 492 in 82 suites |
 | App tests | 116, 0 failures |
 | Findings | 23 recorded, 23 fixed, **0 open** |
@@ -21,7 +20,7 @@ One reason now, where there were three.
 
 **The evidence that needs hardware and external systems does not exist yet.**
 A Bitcoin Core node for the differential corpus cross-check, independent
-wallets for mixed-implementation PSBT fixtures ([#58](https://github.com/posix4e/winnow/issues/58)),
+wallets for mixed-implementation PSBT fixtures,
 a physical device for Keychain and screenshot behaviour, and sustained signet
 runs. None of it can be produced by reading code, and none of it has been
 produced.
@@ -30,9 +29,8 @@ The other two reasons have since been resolved, and are recorded here rather
 than quietly dropped:
 
 - **All findings are closed.** `SEC-016` — the wallet not rolling back after a
-  reorg, the one Medium on the money path — was fixed in
-  [#156](https://github.com/posix4e/winnow/pull/156) and is the last of the
-  twenty-three. `SEC-005` and `SEC-017` were fixed earlier in the epic.
+  reorg, the one Medium on the money path — was the last of the
+  twenty-three to close. `SEC-005` and `SEC-017` were fixed earlier in the epic.
 - **Independent review: dispositioned by the owner, 2026-08-23.** The epic
   required a reviewer that is not an agent working inside this project. The
   reviews were performed by a separate model (K3) reading the code directly,
@@ -46,8 +44,7 @@ than quietly dropped:
   driven by the same agent that wrote the code, which chose what to submit and
   how to frame it. That shapes what a reviewer looks at. It is a materially
   stronger check than self-review and it is not the same thing as an
-  uninvolved auditor, which is what [#12](https://github.com/posix4e/winnow/issues/12)
-  is for.
+  uninvolved auditor — engaging one remains open follow-up work.
 
 **Eleven of twelve invariants remain partial**, and the residue is not
 incidental. What is missing needs things this pass could not reach: a Bitcoin
@@ -115,9 +112,10 @@ positioned to be that one peer.
 
 The mitigation is therefore *peer diversity rather than refusal* — reaching
 more independent peers cheaply, so the one-peer case is rare instead of
-tolerated. That work is [#3](https://github.com/posix4e/winnow/issues/3) and
-[#4](https://github.com/posix4e/winnow/issues/4), and this decision makes them
-the response to the risk rather than an alternative to it. Current behaviour
+tolerated. That work — source-diverse peer slots with cross-source
+agreement, and addrman-style scoring with /16 diversity — is tracked, and
+this decision makes it the response to the risk rather than an
+alternative to it. Current behaviour
 stays pinned by test as *documented*, and is now also *endorsed, with a named
 mitigation*.
 
@@ -145,7 +143,7 @@ every address, and it spends nothing.
    **Dispositioned by the owner, 2026-08-23**, with the limitation recorded
    above.
 2. ~~SEC-016 resolved: a wallet rollback consuming `lastReorg`, or an explicit,
-   written acceptance of the risk.~~ **Done** — [#156](https://github.com/posix4e/winnow/pull/156).
+   written acceptance of the risk.~~ **Done** — fixed on `main`.
 3. ~~SEC-005 and SEC-017 closed, or dispositioned with an owner and a date.~~
    **Done** — both fixed.
 4. **Substantially reduced, still outstanding.** Most of what this condition
@@ -181,8 +179,7 @@ every address, and it spends nothing.
      That runner exists now. On 2026-08-25 the dedicated fixture VM ran
      the full node-backed battery to green — package tests, differential
      suite, and the complete UI e2e
-     ([run 32866916504](https://github.com/winnowwallet/winnow/actions/runs/32866916504)),
-     closing [#11](https://github.com/posix4e/winnow/issues/11). It was
+     ([run 32866916504](https://github.com/winnowwallet/winnow/actions/runs/32866916504)). It was
      the first run anywhere to execute the UI leg: every earlier green
      had skipped those steps for want of Xcode on the VM, and the first
      real execution surfaced three defects in the tests themselves that

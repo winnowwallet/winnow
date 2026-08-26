@@ -7,7 +7,7 @@ A private, opinionated, modern Bitcoin wallet for iOS — 100% Swift, one depend
 - **Pure P2P by default.** The read side is BIP157/158 compact block filters served by full-node peers — no server ever learns your addresses. Bounded **mempool windows** (short full-relay subscriptions while the Receive or Send screen is open) give 0-conf payment detection and propagation tracking without any server. Design papers, framed around the phone: [design-paper index](.github/internal/design-papers.md).
 - **Taproot only.** P2TR receiving (BIP86); no legacy address types, no ECDSA signing paths.
 - **Two modern multisig flavors.** MuSig2 (BIP327) n-of-n vaults and script-path k-of-n (`multi_a`, BIP387/388), coordinated over PSBTv2 (BIP370/371/373).
-- **Silent payments** (BIP352) live on the [`alpha`](../../tree/alpha) branch, not here. Receiving needs a per-block tweak-data server that does not exist as public infrastructure, which is the unsolved part; see `ALPHA.md` on that branch.
+- **Silent payments** (BIP352) are prototyped on a development branch, not here. Receiving needs a per-block tweak-data server that does not exist as public infrastructure, which is the unsolved part.
 - **One runtime dependency:** [`swift-secp256k1`](https://github.com/21-DOT-DEV/swift-secp256k1) (Bitcoin Core's libsecp256k1), pinned.
 - **Warned explorer links** — choose mempool.space or a custom Esplora website; Winnow opens it only after a tap and privacy warning, never as a wallet backend.
 

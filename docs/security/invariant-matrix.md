@@ -2,7 +2,6 @@
 
 Baseline: `98d90563a2c20b7137c708cb121e72b9b34552a3`
 
-Epic: [#100](https://github.com/posix4e/winnow/issues/100)
 
 Overall state: **incomplete — no mainnet go decision**. The written gate report is
 [`gate-report.md`](gate-report.md): NO-GO, pending an independent review, three open
