@@ -11,6 +11,9 @@ name: CI
 # A deny list fails safe: a page added later is not listed, so it runs CI
 # (slow but correct) rather than silently skipping it.
 on:
+  # Manual re-runs after dropped push events (e.g. an Actions outage
+  # swallowing the push that added a job).
+  workflow_dispatch:
   push:
     branches: [main]
     paths-ignore: &site-only
