@@ -164,7 +164,8 @@ struct VaultInteropDiffTests {
             changeIndex: 0, feeRateSatPerVByte: 2, chainTip: tip)
         let unsignedBase64 = psbt.base64
         try vault.partialSign(&psbt, master: ourMasters[0], knownUTXOs: [utxo],
-                              ownedOutputCoordinates: [.init(choice: 1, index: 0)])
+                              ownedOutputCoordinates: [.init(choice: 1, index: 0)],
+                              chainTip: tip)
         let ourSignatures = psbt.inputs[0].tapScriptSignatures.count
         #expect(ourSignatures == 1, "our own leg signed")
         trace("Winnow signed 1 leg")
@@ -201,7 +202,8 @@ struct VaultInteropDiffTests {
         // 7. Our finalizer combines them, and the network is the judge.
         var finalPSBT = psbt
         let transaction = try vault.finalizeSpend(&finalPSBT, knownUTXOs: [utxo],
-                                                  ownedOutputCoordinates: [.init(choice: 1, index: 0)])
+                                                  ownedOutputCoordinates: [.init(choice: 1, index: 0)],
+                                                  chainTip: tip)
         let raw = transaction.serialized(includeWitness: true).hex
         let accept = try BitcoinCLI.runJSON(["testmempoolaccept", "[\"\(raw)\"]"])
         let verdict = (accept as? [Any])?.first as? [String: Any]
@@ -289,7 +291,7 @@ struct VaultInteropDiffTests {
         let context = try vault.muSig2Context(choice: 0, index: 0)
         var secretNonces = try vault.muSig2AttachNonce(
             &psbt, input: 0, context: context, master: ourMaster, knownUTXOs: [utxo],
-            ownedOutputCoordinates: [.init(choice: 1, index: 0)])
+            ownedOutputCoordinates: [.init(choice: 1, index: 0)], chainTip: 600)
         _ = secretNonces
         let ourNonces = psbt.inputs[0].pairs.filter { $0.type == 0x1B }.count
         #expect(ourNonces == 1, "we did not attach our own nonce")

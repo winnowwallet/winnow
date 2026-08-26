@@ -172,65 +172,23 @@ actor VaultStore {
     private func applyValidated(match: BlockMatch, network: BitcoinNetwork) throws {
         var changed = false
         for recordIndex in records.indices {
-            let vault = try Vault(records[recordIndex].descriptor, network: network)
-            var owner: [Data: (choice: Int, index: UInt32)] = [:]
-            for index in 0 ..< watchCount(for: records[recordIndex]) {
-                for choice in 0 ..< 2 {
-                    owner[try vault.scriptPubKey(index: index, choice: choice)] = (choice, index)
-                }
-            }
-            for tx in match.block.transactions {
+            let owner = try ownerMap(for: records[recordIndex], network: network)
+            for (txIndex, tx) in match.block.transactions.enumerated() {
                 let txid = tx.txid
-                for input in tx.inputs {
-                    // Indexed into `allUtxos`, unspent rows only: an index into
-                    // the filtered view would address the wrong row.
-                    if let spent = records[recordIndex].allUtxos.firstIndex(where: {
-                        !$0.isSpent
-                            && $0.txid == input.previousOutput.txid
-                            && $0.vout == input.previousOutput.vout
-                    }) {
-                        // Marked, not removed, so a reorg can put it back.
-                        records[recordIndex].allUtxos[spent].spent =
-                            WalletUTXO.SpentMarker(spentBy: txid, height: match.height)
-                        changed = true
-                    } else if let pending = records[recordIndex].allUtxos.firstIndex(where: {
-                        $0.spent != nil && $0.spent?.height == nil
-                            && $0.txid == input.previousOutput.txid
-                            && $0.vout == input.previousOutput.vout
-                    }) {
-                        // Tombstoned when the spend was signed, now confirmed:
-                        // the only moment its height can be learned. Without
-                        // this the row is never prunable and a rollback cannot
-                        // tell an in-flight spend from a buried one.
-                        records[recordIndex].allUtxos[pending].spent =
-                            WalletUTXO.SpentMarker(spentBy: txid, height: match.height)
-                        changed = true
-                    }
-                }
-                for (vout, output) in tx.outputs.enumerated() {
-                    guard let (choice, index) = owner[output.scriptPubKey] else { continue }
-                    guard vout <= Int(UInt32.max) else {
-                        throw VaultStorageError.invalidState("transaction output index is out of range")
-                    }
-                    if let existing = records[recordIndex].allUtxos.firstIndex(where: {
-                        $0.txid == txid && $0.vout == UInt32(vout)
-                    }) {
-                        // Re-applied block or pending change confirming.
-                        records[recordIndex].allUtxos[existing].height = match.height
-                    } else {
-                        records[recordIndex].allUtxos.append(WalletUTXO(
-                            txid: txid, vout: UInt32(vout), amount: output.value,
-                            scriptPubKey: output.scriptPubKey,
-                            chain: AddressChain(rawValue: choice) ?? .receive,
-                            index: index, height: match.height))
-                    }
+                if applySpends(of: tx, txid: txid, height: match.height,
+                               recordIndex: recordIndex) {
                     changed = true
-                    if choice == AddressChain.receive.rawValue, index >= records[recordIndex].nextReceiveIndex {
-                        records[recordIndex].nextReceiveIndex = index + 1
-                    }
-                    if choice == AddressChain.change.rawValue, index >= records[recordIndex].nextChangeIndex {
-                        records[recordIndex].nextChangeIndex = index + 1
-                    }
+                }
+                if try applyOutputs(of: tx, txid: txid, owner: owner,
+                                    height: match.height,
+                                    // A block's first transaction is its
+                                    // coinbase, by consensus — and a coinbase
+                                    // coin is unspendable for its first
+                                    // `Wallet.coinbaseMaturity` confirmations,
+                                    // which the review gate now checks.
+                                    isCoinbase: txIndex == 0,
+                                    recordIndex: recordIndex) {
+                    changed = true
                 }
             }
         }
@@ -238,6 +196,88 @@ actor VaultStore {
             try Self.validate(records, network: network)
             try persist()
         }
+    }
+
+    /// script → (choice, index) for every address the record watches.
+    private func ownerMap(for record: VaultRecord, network: BitcoinNetwork)
+        throws -> [Data: (choice: Int, index: UInt32)] {
+        let vault = try Vault(record.descriptor, network: network)
+        var owner: [Data: (choice: Int, index: UInt32)] = [:]
+        for index in 0 ..< watchCount(for: record) {
+            for choice in 0 ..< 2 {
+                owner[try vault.scriptPubKey(index: index, choice: choice)] = (choice, index)
+            }
+        }
+        return owner
+    }
+
+    /// Tombstones the record's coins this transaction spends, and learns the
+    /// height of tombstones written while the spend was only in flight.
+    private func applySpends(of tx: Transaction, txid: Data, height: UInt32,
+                             recordIndex: Int) -> Bool {
+        var changed = false
+        for input in tx.inputs {
+            // Indexed into `allUtxos`, unspent rows only: an index into
+            // the filtered view would address the wrong row.
+            if let spent = records[recordIndex].allUtxos.firstIndex(where: {
+                !$0.isSpent
+                    && $0.txid == input.previousOutput.txid
+                    && $0.vout == input.previousOutput.vout
+            }) {
+                // Marked, not removed, so a reorg can put it back.
+                records[recordIndex].allUtxos[spent].spent =
+                    WalletUTXO.SpentMarker(spentBy: txid, height: height)
+                changed = true
+            } else if let pending = records[recordIndex].allUtxos.firstIndex(where: {
+                $0.spent != nil && $0.spent?.height == nil
+                    && $0.txid == input.previousOutput.txid
+                    && $0.vout == input.previousOutput.vout
+            }) {
+                // Tombstoned when the spend was signed, now confirmed:
+                // the only moment its height can be learned. Without
+                // this the row is never prunable and a rollback cannot
+                // tell an in-flight spend from a buried one.
+                records[recordIndex].allUtxos[pending].spent =
+                    WalletUTXO.SpentMarker(spentBy: txid, height: height)
+                changed = true
+            }
+        }
+        return changed
+    }
+
+    /// Admits every watched output as one of the record's coins (or
+    /// re-heights one already known) and advances gap-limit bookkeeping.
+    private func applyOutputs(of tx: Transaction, txid: Data,
+                              owner: [Data: (choice: Int, index: UInt32)],
+                              height: UInt32, isCoinbase: Bool,
+                              recordIndex: Int) throws -> Bool {
+        var changed = false
+        for (vout, output) in tx.outputs.enumerated() {
+            guard let (choice, index) = owner[output.scriptPubKey] else { continue }
+            guard vout <= Int(UInt32.max) else {
+                throw VaultStorageError.invalidState("transaction output index is out of range")
+            }
+            if let existing = records[recordIndex].allUtxos.firstIndex(where: {
+                $0.txid == txid && $0.vout == UInt32(vout)
+            }) {
+                // Re-applied block or pending change confirming.
+                records[recordIndex].allUtxos[existing].height = height
+            } else {
+                records[recordIndex].allUtxos.append(WalletUTXO(
+                    txid: txid, vout: UInt32(vout), amount: output.value,
+                    scriptPubKey: output.scriptPubKey,
+                    chain: AddressChain(rawValue: choice) ?? .receive,
+                    index: index, height: height, isCoinbase: isCoinbase))
+            }
+            changed = true
+            if choice == AddressChain.receive.rawValue, index >= records[recordIndex].nextReceiveIndex {
+                records[recordIndex].nextReceiveIndex = index + 1
+            }
+            if choice == AddressChain.change.rawValue, index >= records[recordIndex].nextChangeIndex {
+                records[recordIndex].nextChangeIndex = index + 1
+            }
+        }
+        return changed
     }
 
     /// Marks the next receive index used ("New address" in the UI).

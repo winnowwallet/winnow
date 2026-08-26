@@ -14,6 +14,15 @@ struct VaultDetailView: View {
 
     private var record: VaultRecord? { model.vaults.first { $0.id == recordID } }
 
+    /// " · matures in N blocks" for an immature coinbase coin — the review
+    /// gate will refuse to spend it until then, so the row says why first.
+    private func maturityNote(for utxo: WalletUTXO) -> String {
+        guard utxo.isCoinbase, utxo.height > 0 else { return "" }
+        let matureAt = utxo.height + Wallet.coinbaseMaturity - 1
+        guard model.status.tipHeight < matureAt else { return "" }
+        return " · matures in \(matureAt - model.status.tipHeight) blocks"
+    }
+
     var body: some View {
         List {
             if let record, let vault = try? Vault(record.descriptor, network: model.network) {
@@ -37,7 +46,7 @@ struct VaultDetailView: View {
                     ForEach(Array(record.utxos.enumerated()), id: \.offset) { _, utxo in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(satsText(utxo.amount))
-                            Text("\(utxo.txid.displayHex.prefix(16))…:\(utxo.vout) · \(utxo.height > 0 ? "block \(utxo.height)" : "awaiting confirmation")")
+                            Text("\(utxo.txid.displayHex.prefix(16))…:\(utxo.vout) · \(utxo.height > 0 ? "block \(utxo.height)" : "awaiting confirmation")\(maturityNote(for: utxo))")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }

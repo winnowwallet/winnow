@@ -131,6 +131,53 @@ final class VaultStoreSecurityTests: XCTestCase {
         }
     }
 
+    /// The maturity gate reads `isCoinbase` off the record's coins, so the
+    /// store must set it at admission — a block's first transaction is its
+    /// coinbase by consensus — and must keep it across a reload: the flag is
+    /// state, not something a later scan can rediscover.
+    func testCoinbaseOutputsAreFlaggedAndTheFlagSurvivesPersistence() async throws {
+        let fixture = try makeFixture()
+        let url = try write([fixture.record])
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = VaultStore()
+        _ = await store.configure(storageURL: url, network: .signet)
+
+        let vaultScript = try fixture.vault.scriptPubKey(index: 0)
+        let coinbase = Transaction(
+            version: 2,
+            inputs: [Transaction.Input(
+                previousOutput: Transaction.Outpoint(txid: Data(repeating: 0, count: 32),
+                                                     vout: 0xFFFF_FFFF),
+                scriptSig: Data([0x01, 0x02]), sequence: 0xFFFF_FFFF)],
+            outputs: [Transaction.Output(value: 5_000_000_000, scriptPubKey: vaultScript)],
+            locktime: 0)
+        let ordinary = Transaction(
+            version: 2,
+            inputs: [Transaction.Input(
+                previousOutput: Transaction.Outpoint(txid: Data(repeating: 9, count: 32), vout: 0),
+                scriptSig: Data(), sequence: 0xFFFF_FFFF)],
+            outputs: [Transaction.Output(value: 25_000, scriptPubKey: vaultScript)],
+            locktime: 0)
+        let header = BlockHeader(version: 1, previousHash: Data(repeating: 0, count: 32),
+                                 merkleRoot: coinbase.txid, time: 1_600_000_000,
+                                 bits: 0x207F_FFFF, nonce: 0)
+        let block = Block(header: header, transactions: [coinbase, ordinary])
+        try await store.apply(match: BlockMatch(height: 200, blockHash: header.hash,
+                                                block: block),
+                              network: .signet)
+
+        let applied = await store.all.first?.utxos ?? []
+        XCTAssertEqual(applied.count, 2)
+        XCTAssertEqual(applied.first { $0.txid == coinbase.txid }?.isCoinbase, true)
+        XCTAssertEqual(applied.first { $0.txid == ordinary.txid }?.isCoinbase, false)
+
+        let reloaded = VaultStore()
+        _ = await reloaded.configure(storageURL: url, network: .signet)
+        let persisted = await reloaded.all.first?.utxos ?? []
+        XCTAssertEqual(persisted.first { $0.txid == coinbase.txid }?.isCoinbase, true)
+        XCTAssertEqual(persisted.first { $0.txid == ordinary.txid }?.isCoinbase, false)
+    }
+
     private func makeFixture() throws -> (record: VaultRecord, vault: Vault) {
         let masters = try [Data(repeating: 0x31, count: 16), Data(repeating: 0x42, count: 16)]
             .map { try HDKey(seed: BIP39.seed(mnemonic: BIP39.mnemonic(entropy: $0))) }

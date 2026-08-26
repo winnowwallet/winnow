@@ -538,11 +538,15 @@ final class WinnowAppUITests: XCTestCase {
         let fundingHeight = try BitcoinCLI.blockHeight(of: fundingBlock)
         XCTAssertEqual(Data(hex: funding.scriptPubKey), fundingScript,
                        "coinbase did not pay the vault's receive script")
+        // The review gate refuses immature coinbase spends, so mine the coin
+        // to the consensus boundary before asking the app to review one.
+        try await SignetMiner.ensureChainHeight(
+            atLeast: fundingHeight + Int(Wallet.coinbaseMaturity) - 1)
         let utxo = try WalletUTXO(txid: Data(Data(hex: fundingTxid)!.reversed()), vout: 0,
                                   amount: funding.amount,
                                   scriptPubKey: fundingScript,
                                   chain: .receive, index: 0,
-                                  height: UInt32(fundingHeight))
+                                  height: UInt32(fundingHeight), isCoinbase: true)
         let psbt = try vault.createSpend(
             utxos: [utxo],
             payments: [Payment(amount: 100_000, address: Self.fixtureAddress(0xE5),

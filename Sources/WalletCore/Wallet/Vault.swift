@@ -261,10 +261,16 @@ public struct Vault: Sendable {
     /// Output ownership is determined only by matching the actual script to a
     /// descriptor derivation supplied by the caller. Untrusted BIP32 metadata
     /// can never make an attacker output appear to be vault change.
+    ///
+    /// `chainTip` is the caller's current height, for coinbase maturity: a
+    /// coinbase-funded coin is consensus-unspendable for its first
+    /// `Wallet.coinbaseMaturity` confirmations, and a review that approves
+    /// such a spend approves a transaction the network will reject.
     public func reviewSpend(_ psbt: PSBT, knownUTXOs: [WalletUTXO],
-                            ownedOutputCoordinates: [OutputCoordinate]) throws -> SpendReview {
+                            ownedOutputCoordinates: [OutputCoordinate],
+                            chainTip: UInt32) throws -> SpendReview {
         try checkSpendShape(psbt)
-        let inputs = try reviewedInputs(of: psbt, knownUTXOs: knownUTXOs)
+        let inputs = try reviewedInputs(of: psbt, knownUTXOs: knownUTXOs, chainTip: chainTip)
         let outputs = try reviewedOutputs(of: psbt, inputTotal: inputs.total,
                                           ownedOutputCoordinates: ownedOutputCoordinates)
         let fee = inputs.total - outputs.total
@@ -301,7 +307,8 @@ public struct Vault: Sendable {
 
     /// Walks every input through the coin, policy, and sighash checks and
     /// accumulates the total under the supply cap.
-    private func reviewedInputs(of psbt: PSBT, knownUTXOs: [WalletUTXO]) throws
+    private func reviewedInputs(of psbt: PSBT, knownUTXOs: [WalletUTXO],
+                                chainTip: UInt32) throws
         -> (total: Int64, sighashTypes: [UInt32], sequences: [UInt32]) {
         var seenOutpoints: Set<Data> = []
         var total: Int64 = 0
@@ -310,7 +317,8 @@ public struct Vault: Sendable {
         for (inputIndex, input) in psbt.inputs.enumerated() {
             let known = try knownCoin(for: input, inputIndex: inputIndex,
                                       seenOutpoints: &seenOutpoints, knownUTXOs: knownUTXOs)
-            let checked = try checkedInputFields(input, inputIndex: inputIndex, utxo: known)
+            let checked = try checkedInputFields(input, inputIndex: inputIndex,
+                                                 utxo: known, chainTip: chainTip)
             sighashTypes.append(checked.sighashType)
             sequences.append(checked.sequence)
             let (sum, overflow) = total.addingReportingOverflow(known.amount)
@@ -346,11 +354,22 @@ public struct Vault: Sendable {
     /// The value, script, descriptor, and sighash checks for one resolved
     /// input: the amounts and scripts the sighash will commit to must be the
     /// ones the vault knows, and every signature must commit to all outputs.
-    private func checkedInputFields(_ input: PSBT.Input, inputIndex: Int, utxo known: WalletUTXO)
+    private func checkedInputFields(_ input: PSBT.Input, inputIndex: Int,
+                                    utxo known: WalletUTXO, chainTip: UInt32)
         throws -> (sighashType: UInt32, sequence: UInt32) {
         guard known.amount > 0, known.amount <= Self.maxMoney,
               let claimed = input.witnessUTXO, claimed == known.spentOutput else {
             throw VaultError.invalidSpend("input \(inputIndex + 1) has the wrong amount or locking script")
+        }
+        // Same arithmetic as the wallet's own spendability rule
+        // (Wallet.swift): the funding block is confirmation one, mature at
+        // `coinbaseMaturity` confirmations.
+        if known.isCoinbase {
+            let matureAt = known.height + Wallet.coinbaseMaturity - 1
+            guard chainTip >= matureAt else {
+                throw VaultError.invalidSpend(
+                    "input \(inputIndex + 1) spends a coinbase that matures in \(matureAt - chainTip) blocks")
+            }
         }
         guard try scriptPubKey(index: known.index, choice: known.chain.rawValue) == known.scriptPubKey else {
             throw VaultError.invalidSpend("input \(inputIndex + 1) does not belong to this descriptor")
@@ -585,9 +604,11 @@ public struct Vault: Sendable {
     /// cosigner; when k partials are present, combine + finalize.
     public func partialSign(_ psbt: inout PSBT, master: HDKey,
                             knownUTXOs: [WalletUTXO],
-                            ownedOutputCoordinates: [OutputCoordinate]) throws {
+                            ownedOutputCoordinates: [OutputCoordinate],
+                            chainTip: UInt32) throws {
         _ = try reviewSpend(psbt, knownUTXOs: knownUTXOs,
-                            ownedOutputCoordinates: ownedOutputCoordinates)
+                            ownedOutputCoordinates: ownedOutputCoordinates,
+                            chainTip: chainTip)
         try partialSignUnchecked(&psbt, master: master)
     }
 
@@ -711,9 +732,11 @@ public struct Vault: Sendable {
     public func muSig2AttachNonce(_ psbt: inout PSBT, input: Int, context: MuSig2Context,
                                   master: HDKey, knownUTXOs: [WalletUTXO],
                                   ownedOutputCoordinates: [OutputCoordinate],
+                                  chainTip: UInt32,
                                   extraInput: Data? = nil) throws -> [Data: Data] {
         _ = try reviewSpend(psbt, knownUTXOs: knownUTXOs,
-                            ownedOutputCoordinates: ownedOutputCoordinates)
+                            ownedOutputCoordinates: ownedOutputCoordinates,
+                            chainTip: chainTip)
         return try muSig2AttachNonceUnchecked(&psbt, input: input, context: context,
                                               master: master, extraInput: extraInput)
     }
@@ -750,9 +773,11 @@ public struct Vault: Sendable {
     public func muSig2Sign(_ psbt: inout PSBT, input: Int, context: MuSig2Context,
                            master: HDKey, secretNonces: inout [Data: Data],
                            knownUTXOs: [WalletUTXO],
-                           ownedOutputCoordinates: [OutputCoordinate]) throws {
+                           ownedOutputCoordinates: [OutputCoordinate],
+                           chainTip: UInt32) throws {
         _ = try reviewSpend(psbt, knownUTXOs: knownUTXOs,
-                            ownedOutputCoordinates: ownedOutputCoordinates)
+                            ownedOutputCoordinates: ownedOutputCoordinates,
+                            chainTip: chainTip)
         try muSig2SignUnchecked(&psbt, input: input, context: context, master: master,
                                 secretNonces: &secretNonces)
     }
@@ -788,9 +813,11 @@ public struct Vault: Sendable {
     /// single-item key-path witness.
     public func muSig2Aggregate(_ psbt: inout PSBT, input: Int, context: MuSig2Context,
                                 knownUTXOs: [WalletUTXO],
-                                ownedOutputCoordinates: [OutputCoordinate]) throws {
+                                ownedOutputCoordinates: [OutputCoordinate],
+                                chainTip: UInt32) throws {
         _ = try reviewSpend(psbt, knownUTXOs: knownUTXOs,
-                            ownedOutputCoordinates: ownedOutputCoordinates)
+                            ownedOutputCoordinates: ownedOutputCoordinates,
+                            chainTip: chainTip)
         let session = try psbt.muSig2Session(input: input, aggregateKey: context.aggregate,
                                              tweaks: context.tweaks, isXOnlyTweaks: context.isXOnlyTweaks,
                                              message: keyPathSighash(psbt, input: input))
@@ -799,9 +826,11 @@ public struct Vault: Sendable {
 
     /// Finalizes the fully-signed PSBT and extracts the raw transaction.
     public func finalizeSpend(_ psbt: inout PSBT, knownUTXOs: [WalletUTXO],
-                              ownedOutputCoordinates: [OutputCoordinate]) throws -> Transaction {
+                              ownedOutputCoordinates: [OutputCoordinate],
+                              chainTip: UInt32) throws -> Transaction {
         _ = try reviewSpend(psbt, knownUTXOs: knownUTXOs,
-                            ownedOutputCoordinates: ownedOutputCoordinates)
+                            ownedOutputCoordinates: ownedOutputCoordinates,
+                            chainTip: chainTip)
         try psbt.finalize()
         return try psbt.extractedTransaction()
     }

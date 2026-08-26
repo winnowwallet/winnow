@@ -343,7 +343,8 @@ struct VaultSignView: View {
         let vault = inputs.vault
         let record = inputs.record
         return try vault.reviewSpend(psbt, knownUTXOs: record.utxos,
-                                     ownedOutputCoordinates: inputs.coordinates)
+                                     ownedOutputCoordinates: inputs.coordinates,
+                                     chainTip: model.status.tipHeight)
     }
 
     private func refreshSpendReview() {
@@ -410,7 +411,8 @@ struct VaultSignView: View {
                     var candidate = initial
                     try inputs.vault.partialSign(
                         &candidate, master: master, knownUTXOs: inputs.record.utxos,
-                        ownedOutputCoordinates: inputs.coordinates)
+                        ownedOutputCoordinates: inputs.coordinates,
+                        chainTip: model.status.tipHeight)
                     return candidate
                 }
                 try Task.checkCancellation()
@@ -441,7 +443,8 @@ struct VaultSignView: View {
                 let inputs = try authorizationInputs()
                 let transaction = try vault.finalizeSpend(
                     &psbt, knownUTXOs: inputs.record.utxos,
-                    ownedOutputCoordinates: inputs.coordinates)
+                    ownedOutputCoordinates: inputs.coordinates,
+                        chainTip: model.status.tipHeight)
                 let txid = try await commitAndBroadcast(transaction, vault: vault, record: record)
                 guard accepts(token) else { return }
                 broadcastTxid = txid
@@ -481,7 +484,8 @@ struct VaultSignView: View {
                         nonces[index] = try inputs.vault.muSig2AttachNonce(
                             &psbt, input: index, context: signingContext, master: master,
                             knownUTXOs: inputs.record.utxos,
-                            ownedOutputCoordinates: inputs.coordinates)
+                            ownedOutputCoordinates: inputs.coordinates,
+                        chainTip: model.status.tipHeight)
                     }
                     return (psbt, nonces)
                 }
@@ -528,7 +532,8 @@ struct VaultSignView: View {
                         try inputs.vault.muSig2Sign(
                             &psbt, input: index, context: signingContext, master: master,
                             secretNonces: &nonces, knownUTXOs: inputs.record.utxos,
-                            ownedOutputCoordinates: inputs.coordinates)
+                            ownedOutputCoordinates: inputs.coordinates,
+                        chainTip: model.status.tipHeight)
                         stagedNonces[index] = nonces
                     }
                     return psbt
@@ -567,12 +572,14 @@ struct VaultSignView: View {
                     try vault.muSig2Aggregate(
                         &psbt, input: index, context: context,
                         knownUTXOs: inputs.record.utxos,
-                        ownedOutputCoordinates: inputs.coordinates)
+                        ownedOutputCoordinates: inputs.coordinates,
+                        chainTip: model.status.tipHeight)
                 }
                 model.journalPSBT(stage: "musig2-aggregated", psbt: psbt)
                 let transaction = try vault.finalizeSpend(
                     &psbt, knownUTXOs: inputs.record.utxos,
-                    ownedOutputCoordinates: inputs.coordinates)
+                    ownedOutputCoordinates: inputs.coordinates,
+                        chainTip: model.status.tipHeight)
                 let txid = try await commitAndBroadcast(transaction, vault: vault, record: record)
                 guard accepts(token) else { return }
                 broadcastTxid = txid

@@ -70,15 +70,15 @@ struct VaultThresholdTests {
 
         var first = try PSBT(base64: created.base64)
         try vault.partialSign(&first, master: masters[pair.0], knownUTXOs: [utxo],
-                              ownedOutputCoordinates: owned)
+                              ownedOutputCoordinates: owned, chainTip: testChainTip)
         var second = try PSBT(base64: created.base64)
         try vault.partialSign(&second, master: masters[pair.1], knownUTXOs: [utxo],
-                              ownedOutputCoordinates: owned)
+                              ownedOutputCoordinates: owned, chainTip: testChainTip)
 
         var combined = try first.combined(with: [second])
         #expect(combined.inputs[0].tapScriptSignatures.count == 2)
         let signed = try vault.finalizeSpend(&combined, knownUTXOs: [utxo],
-                                             ownedOutputCoordinates: owned)
+                                             ownedOutputCoordinates: owned, chainTip: testChainTip)
         let result = try Flow().verifyMultisigSpend(tx: signed, inputIndex: 0,
                                                     spentOutputs: [utxo.spentOutput])
         #expect(result.validSignatures == 2, "pair \(pair) must produce two valid signatures")
@@ -99,13 +99,13 @@ struct VaultThresholdTests {
 
         var alone = try PSBT(base64: created.base64)
         try vault.partialSign(&alone, master: masters[index], knownUTXOs: [utxo],
-                              ownedOutputCoordinates: owned)
+                              ownedOutputCoordinates: owned, chainTip: testChainTip)
         #expect(alone.inputs[0].tapScriptSignatures.count == 1)
 
         var toFinalize = alone
         #expect(throws: (any Error).self) {
             _ = try vault.finalizeSpend(&toFinalize, knownUTXOs: [utxo],
-                                        ownedOutputCoordinates: owned)
+                                        ownedOutputCoordinates: owned, chainTip: testChainTip)
         }
     }
 
@@ -124,7 +124,7 @@ struct VaultThresholdTests {
         for master in masters {
             var copy = try PSBT(base64: created.base64)
             try vault.partialSign(&copy, master: master, knownUTXOs: [utxo],
-                                  ownedOutputCoordinates: owned)
+                                  ownedOutputCoordinates: owned, chainTip: testChainTip)
             signed.append(copy)
         }
 
@@ -132,13 +132,13 @@ struct VaultThresholdTests {
         var short = try signed[0].combined(with: [signed[1]])
         #expect(short.inputs[0].tapScriptSignatures.count == 2)
         #expect(throws: (any Error).self) {
-            _ = try vault.finalizeSpend(&short, knownUTXOs: [utxo], ownedOutputCoordinates: owned)
+            _ = try vault.finalizeSpend(&short, knownUTXOs: [utxo], ownedOutputCoordinates: owned, chainTip: testChainTip)
         }
 
         // All three: spendable.
         var full = try signed[0].combined(with: [signed[1], signed[2]])
         #expect(full.inputs[0].tapScriptSignatures.count == 3)
-        let tx = try vault.finalizeSpend(&full, knownUTXOs: [utxo], ownedOutputCoordinates: owned)
+        let tx = try vault.finalizeSpend(&full, knownUTXOs: [utxo], ownedOutputCoordinates: owned, chainTip: testChainTip)
         let result = try Flow().verifyMultisigSpend(tx: tx, inputIndex: 0,
                                                     spentOutputs: [utxo.spentOutput])
         #expect(result.validSignatures == 3)
