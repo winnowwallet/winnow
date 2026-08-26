@@ -100,12 +100,7 @@ public enum TransactionBuilder {
     public static func build(inputs: [Transaction.Outpoint], payments: [Payment],
                              change: Payment? = nil, changePosition: Int? = nil,
                              sequence: UInt32 = defaultSequence, locktime: UInt32 = 0) throws -> Transaction {
-        guard !inputs.isEmpty else { throw TxBuildError.noInputs }
-        var seenInputs: Set<Transaction.Outpoint> = []
-        for input in inputs {
-            guard input.txid.count == 32 else { throw TxBuildError.invalidOutpoint }
-            guard seenInputs.insert(input).inserted else { throw TxBuildError.duplicateInput }
-        }
+        try checkInputs(inputs)
         var outputs = payments.map { Transaction.Output(value: $0.amount, scriptPubKey: $0.scriptPubKey) }
         if let change {
             let position = changePosition ?? Int.random(in: 0 ... outputs.count)
@@ -115,6 +110,26 @@ public enum TransactionBuilder {
             outputs.insert(Transaction.Output(value: change.amount, scriptPubKey: change.scriptPubKey),
                            at: position)
         }
+        try checkOutputs(outputs)
+        let txInputs = inputs.map {
+            Transaction.Input(previousOutput: $0, scriptSig: Data(), sequence: sequence)
+        }
+        return Transaction(version: 2, inputs: txInputs, outputs: outputs, locktime: locktime)
+    }
+
+    /// Every outpoint well-formed and none repeated.
+    private static func checkInputs(_ inputs: [Transaction.Outpoint]) throws {
+        guard !inputs.isEmpty else { throw TxBuildError.noInputs }
+        var seenInputs: Set<Transaction.Outpoint> = []
+        for input in inputs {
+            guard input.txid.count == 32 else { throw TxBuildError.invalidOutpoint }
+            guard seenInputs.insert(input).inserted else { throw TxBuildError.duplicateInput }
+        }
+    }
+
+    /// Every output a positive in-supply amount to a real script, and the
+    /// total inside the supply too.
+    private static func checkOutputs(_ outputs: [Transaction.Output]) throws {
         guard !outputs.isEmpty else { throw TxBuildError.noOutputs }
         var outputTotal: Int64 = 0
         for output in outputs {
@@ -126,10 +141,6 @@ public enum TransactionBuilder {
             guard !overflow, sum <= BitcoinAmount.maximum else { throw TxBuildError.amountOverflow }
             outputTotal = sum
         }
-        let txInputs = inputs.map {
-            Transaction.Input(previousOutput: $0, scriptSig: Data(), sequence: sequence)
-        }
-        return Transaction(version: 2, inputs: txInputs, outputs: outputs, locktime: locktime)
     }
 
     /// Exact vsize of the *signed* transaction assuming every input is a P2TR

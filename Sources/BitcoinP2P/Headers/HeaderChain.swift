@@ -500,39 +500,9 @@ public actor HeaderChain {
 
     private static func load(from url: URL, params: NetworkParams) throws
         -> (headers: [BlockHeader], chainwork: [UInt256], heightByHash: [Data: UInt32], baseHeight: UInt32) {
-        if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-           let size = attributes[.size] as? NSNumber,
-           size.int64Value > Int64(maximumHeaderFileBytes) {
-            throw HeaderChainError.storageCorrupt(
-                "header file is \(size.int64Value) bytes, above the \(maximumHeaderFileBytes)-byte limit")
-        }
-        let data = try Data(contentsOf: url)
-        // Re-checked after reading: the file can change between the two.
-        guard data.count <= maximumHeaderFileBytes else {
-            throw HeaderChainError.storageCorrupt(
-                "header file is \(data.count) bytes, above the \(maximumHeaderFileBytes)-byte limit")
-        }
+        let data = try readBoundedHeaderFile(at: url)
         var reader = ByteReader(data)
-        guard let first = try? reader.readUInt32() else {
-            throw HeaderChainError.storageCorrupt("bad length")
-        }
-        var baseHeight: UInt32 = 0
-        var baseWork = UInt256()
-        var prefix = 4
-        var count = first
-        if first == formatMarker {
-            guard let version = try? reader.readUInt32(), version == formatVersion else {
-                throw HeaderChainError.storageCorrupt("unsupported header-file version")
-            }
-            guard let base = try? reader.readUInt32(),
-                  let workBytes = try? reader.readBytes(32),
-                  let stored = try? reader.readUInt32()
-            else { throw HeaderChainError.storageCorrupt("truncated header-file prefix") }
-            baseHeight = base
-            baseWork = UInt256(bigEndian: workBytes)
-            count = stored
-            prefix = 4 + 4 + 4 + 32 + 4
-        }
+        let (baseHeight, baseWork, count, prefix) = try parsedHeaderFilePrefix(&reader)
         // A file SHORTER than its count claims is truncation — bytes the count
         // says are there and are not — and stays a refusal.
         //
@@ -595,5 +565,42 @@ public actor HeaderChain {
         let index = Dictionary(uniqueKeysWithValues:
             loadedHeaders.enumerated().map { ($1.hash, baseHeight + UInt32($0)) })
         return (loadedHeaders, loadedWork, index, baseHeight)
+    }
+
+    /// The header file, read under the byte cap — checked against the
+    /// reported size before reading and against the bytes after, because the
+    /// file can change between the two.
+    private static func readBoundedHeaderFile(at url: URL) throws -> Data {
+        if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let size = attributes[.size] as? NSNumber,
+           size.int64Value > Int64(maximumHeaderFileBytes) {
+            throw HeaderChainError.storageCorrupt(
+                "header file is \(size.int64Value) bytes, above the \(maximumHeaderFileBytes)-byte limit")
+        }
+        let data = try Data(contentsOf: url)
+        guard data.count <= maximumHeaderFileBytes else {
+            throw HeaderChainError.storageCorrupt(
+                "header file is \(data.count) bytes, above the \(maximumHeaderFileBytes)-byte limit")
+        }
+        return data
+    }
+
+    /// The file's prefix: either a bare legacy count, or the versioned
+    /// marker followed by checkpoint base height, accumulated base work, and
+    /// the stored count.
+    private static func parsedHeaderFilePrefix(_ reader: inout ByteReader) throws
+        -> (baseHeight: UInt32, baseWork: UInt256, count: UInt32, prefix: Int) {
+        guard let first = try? reader.readUInt32() else {
+            throw HeaderChainError.storageCorrupt("bad length")
+        }
+        guard first == formatMarker else { return (0, UInt256(), first, 4) }
+        guard let version = try? reader.readUInt32(), version == formatVersion else {
+            throw HeaderChainError.storageCorrupt("unsupported header-file version")
+        }
+        guard let base = try? reader.readUInt32(),
+              let workBytes = try? reader.readBytes(32),
+              let stored = try? reader.readUInt32()
+        else { throw HeaderChainError.storageCorrupt("truncated header-file prefix") }
+        return (base, UInt256(bigEndian: workBytes), stored, 4 + 4 + 4 + 32 + 4)
     }
 }

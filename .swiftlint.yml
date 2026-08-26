@@ -10,5 +10,5 @@ included:
 
 cyclomatic_complexity:
   warning: 10
-  error: 15
+  error: 12
   ignores_case_statements: true

@@ -125,17 +125,33 @@ public struct Transaction: Equatable, Sendable {
         guard inputCount <= UInt64(reader.remaining / 41) else {
             throw WireError.malformed("tx input count \(inputCount)")
         }
+        var inputs = try decodeInputs(from: &reader, count: inputCount)
+        let outputs = try decodeOutputs(from: &reader)
+        if segwit {
+            try decodeWitnesses(from: &reader, into: &inputs)
+        }
+        let locktime = try reader.readUInt32()
+        return Transaction(version: version, inputs: inputs, outputs: outputs, locktime: locktime)
+    }
+
+    private static func decodeInputs(from reader: inout ByteReader,
+                                     count: UInt64) throws -> [Input] {
         var inputs: [Input] = []
-        inputs.reserveCapacity(Int(inputCount))
-        for _ in 0 ..< inputCount {
+        inputs.reserveCapacity(Int(count))
+        for _ in 0 ..< count {
             let outpoint = Outpoint(txid: try reader.readBytes(32), vout: try reader.readUInt32())
             let scriptSig = try reader.readVarData(maxLength: Self.maxSerializedScript)
             let sequence = try reader.readUInt32()
             inputs.append(Input(previousOutput: outpoint, scriptSig: scriptSig, sequence: sequence))
         }
+        return inputs
+    }
+
+    private static func decodeOutputs(from reader: inout ByteReader) throws -> [Output] {
         let outputCount = try reader.readVarInt()
         guard outputCount > 0 else { throw WireError.malformed("tx has no outputs") }
-        // An output is ≥ 9 bytes (8 value + 1 script length); same bound.
+        // An output is ≥ 9 bytes (8 value + 1 script length); the same bound
+        // as inputs against a malicious oversized compactSize.
         guard outputCount <= UInt64(reader.remaining / 9) else {
             throw WireError.malformed("tx output count \(outputCount)")
         }
@@ -146,17 +162,19 @@ public struct Transaction: Equatable, Sendable {
             let scriptPubKey = try reader.readVarData(maxLength: Self.maxSerializedScript)
             outputs.append(Output(value: value, scriptPubKey: scriptPubKey))
         }
-        if segwit {
-            for index in inputs.indices {
-                let itemCount = try reader.readVarInt()
-                guard itemCount <= 1_000 else { throw WireError.malformed("witness items \(itemCount)") }
-                for _ in 0 ..< itemCount {
-                    inputs[index].witness.append(try reader.readVarData(maxLength: 4_000_000))
-                }
+        return outputs
+    }
+
+    /// BIP144 witness stacks, one per input, in input order.
+    private static func decodeWitnesses(from reader: inout ByteReader,
+                                        into inputs: inout [Input]) throws {
+        for index in inputs.indices {
+            let itemCount = try reader.readVarInt()
+            guard itemCount <= 1_000 else { throw WireError.malformed("witness items \(itemCount)") }
+            for _ in 0 ..< itemCount {
+                inputs[index].witness.append(try reader.readVarData(maxLength: 4_000_000))
             }
         }
-        let locktime = try reader.readUInt32()
-        return Transaction(version: version, inputs: inputs, outputs: outputs, locktime: locktime)
     }
 
     public static func decode(_ data: Data) throws -> Transaction {

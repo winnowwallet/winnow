@@ -584,26 +584,29 @@ struct Parser {
         let token = takeWhile(\.isHexLetterOrDigit)
         guard !token.isEmpty else { throw DescriptorError.invalidKey }
         if let data = hexData(token), [32, 33, 65].contains(data.count) {
-            switch data.count {
-            case 33: guard data.first == 0x02 || data.first == 0x03 else { throw DescriptorError.invalidKey }
-            case 65: guard data.first == 0x04 else { throw DescriptorError.invalidKey }
-            default: break
-            }
-            return .publicKey(data)
-        }
-        let network: HDKey.Network
-        if token.hasPrefix("xpub") || token.hasPrefix("xprv") {
-            network = .mainnet
-        } else if token.hasPrefix("tpub") || token.hasPrefix("tprv") {
-            network = .testnet
-        } else {
-            network = .mainnet // WIF prefix decides below
+            return try Self.rawPublicKey(data)
         }
         if token.hasPrefix("xpub") || token.hasPrefix("xprv") || token.hasPrefix("tpub") || token.hasPrefix("tprv") {
             guard let key = try? HDKey.deserialize(token) else { throw DescriptorError.invalidKey }
+            let network: HDKey.Network = token.hasPrefix("t") ? .testnet : .mainnet
             return .extended(key, network: network)
         }
-        // WIF: version byte + 32-byte secret + optional 0x01 compression marker.
+        return try Self.wifPrivateKey(token)
+    }
+
+    /// A bare hex key of a known length, with its leading byte checked: x-only
+    /// (32), compressed (33, 0x02/0x03), or uncompressed (65, 0x04).
+    private static func rawPublicKey(_ data: Data) throws -> Descriptor.KeyBase {
+        switch data.count {
+        case 33: guard data.first == 0x02 || data.first == 0x03 else { throw DescriptorError.invalidKey }
+        case 65: guard data.first == 0x04 else { throw DescriptorError.invalidKey }
+        default: break
+        }
+        return .publicKey(data)
+    }
+
+    /// WIF: version byte + 32-byte secret + optional 0x01 compression marker.
+    private static func wifPrivateKey(_ token: String) throws -> Descriptor.KeyBase {
         guard let payload = try? Base58Check.decode(token), payload.count == 33 || payload.count == 34,
               payload.first == 0x80 || payload.first == 0xEF
         else { throw DescriptorError.invalidKey }

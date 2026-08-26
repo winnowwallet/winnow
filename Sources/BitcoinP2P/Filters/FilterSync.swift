@@ -430,8 +430,30 @@ public actor FilterSync {
         for peer in peers {
             sourced.append((peer, await pool.source(of: peer.endpoint)))
         }
-        let queryPeers = Self.crossSourcePair(sourced)
+        let message = try await crossCheckedCFHeaders(
+            batchStart: batchStart, batchStop: batchStop, stopHash: stopHash,
+            queryPeers: Self.crossSourcePair(sourced))
 
+        var headers = storedHeaders
+        try anchorPreviousHeader(of: message, batchStart: batchStart, in: &headers)
+
+        // Walk the BIP158 header chain: header[h] = SHA256d(filterHash[h] || header[h-1]).
+        var previous = message.previousFilterHeader
+        for (index, filterHash) in message.filterHashes.enumerated() {
+            let header = SHA256d.hash(filterHash + previous)
+            headers[String(batchStart + UInt32(index))] = header.hex
+            previous = header
+        }
+        return headers
+    }
+
+    /// One cfheaders answer for the batch, byte-identical across every peer
+    /// asked: a disagreement evicts the later peer and aborts, because a
+    /// filter-header lie is unattributable between two claimants.
+    private func crossCheckedCFHeaders(batchStart: UInt32, batchStop: UInt32,
+                                       stopHash: Data,
+                                       queryPeers: [PeerConnection]) async throws
+        -> CFHeadersMessage {
         var decoded: CFHeadersMessage?
         for peer in queryPeers {
             let response = try await peer.request(
@@ -453,8 +475,16 @@ public actor FilterSync {
         guard message.filterHashes.count == Int(batchStop - batchStart + 1) else {
             throw FilterSyncError.badPeerResponse("cfheaders count \(message.filterHashes.count) != \(batchStop - batchStart + 1)")
         }
+        return message
+    }
 
-        var headers = storedHeaders
+    /// The batch's previous filter header, anchored: zero at genesis, our
+    /// pinned header when one exists — or, on fresh progress with a start
+    /// height > 0, the peer-supplied value becomes the anchor, cross-checked
+    /// between peers where possible and against cfcheckpt at checkpoint
+    /// heights.
+    private func anchorPreviousHeader(of message: CFHeadersMessage, batchStart: UInt32,
+                                      in headers: inout [String: String]) throws {
         if batchStart == 0 {
             // BIP157: the genesis block's previous filter header is zero.
             guard message.previousFilterHeader == Data(repeating: 0, count: 32) else {
@@ -466,21 +496,8 @@ public actor FilterSync {
                 throw FilterSyncError.filterHeaderMismatch(height: batchStart)
             }
         } else {
-            // Fresh progress with a start height > 0: no pinned previous
-            // exists, so the peer-supplied previous header is the anchor —
-            // cross-checked byte-for-byte between two peers above when
-            // possible, and verified against cfcheckpt at checkpoint heights.
             headers[String(batchStart - 1)] = message.previousFilterHeader.hex
         }
-
-        // Walk the BIP158 header chain: header[h] = SHA256d(filterHash[h] || header[h-1]).
-        var previous = message.previousFilterHeader
-        for (index, filterHash) in message.filterHashes.enumerated() {
-            let header = SHA256d.hash(filterHash + previous)
-            headers[String(batchStart + UInt32(index))] = header.hex
-            previous = header
-        }
-        return headers
     }
 
     /// Fetches, verifies and matches all filters in [batchStart, batchStop].
@@ -503,29 +520,8 @@ public actor FilterSync {
 
         var seen: Set<UInt32> = []
         for response in responses {
-            guard case let .cfilter(message) = response else {
-                throw FilterSyncError.badPeerResponse("expected cfilter")
-            }
-            guard message.filterType == Self.basicFilterType else {
-                throw FilterSyncError.badPeerResponse("unexpected filter type \(message.filterType)")
-            }
-            guard let height = heightByHash[message.blockHash], !seen.contains(height) else {
-                throw FilterSyncError.unexpectedBlockHash
-            }
-            seen.insert(height)
-
-            // The filter must reproduce the pinned header chain (BIP158):
-            // header[h] == SHA256d(SHA256d(filter) || header[h-1]).
-            let filterHash = GCSFilter.filterHash(message.filter)
-            let previous = height == 0
-                ? Data(repeating: 0, count: 32)
-                : Self.filterHeader(at: height - 1, in: filterHeaders)
-            guard let pinned = Self.filterHeader(at: height, in: filterHeaders),
-                  SHA256d.hash(filterHash + (previous ?? Data(repeating: 0, count: 32))) == pinned
-            else {
-                throw FilterSyncError.filterHeaderMismatch(height: height)
-            }
-
+            let (height, message) = try verifiedFilter(from: response, heightByHash: heightByHash,
+                                                       seen: &seen, filterHeaders: filterHeaders)
             let scripts = watchScripts + (extraScripts[height] ?? [])
             guard !scripts.isEmpty else { continue }
             let parsed = try message.parsedFilter()
@@ -533,34 +529,70 @@ public actor FilterSync {
                                        key: Data(message.blockHash.prefix(16)),
                                        n: parsed.n, encoded: parsed.encoded)
             guard filter.containsAny(scripts) else { continue }
-
-            // Possible hit (or BIP158 false positive): fetch the full block.
-            let blockResponse = try await peer.request(
-                .getdata(InventoryPayload([InventoryVector(type: .witnessBlock, hash: message.blockHash)])),
-                expecting: ["block", "notfound"], timeout: .seconds(120))
-            switch blockResponse {
-            case let .block(block):
-                guard block.hash == message.blockHash else {
-                    await pool.misbehaving(peer, reason: "block hash mismatch at \(height)")
-                    throw FilterSyncError.badPeerResponse("block hash mismatch at \(height)")
-                }
-                // The header hash only authenticates the 80-byte header. Verify
-                // the transaction set hashes to the header's committed merkle
-                // root before crediting anything from it — otherwise a peer can
-                // serve the real header with a fabricated (or pruned) tx list.
-                guard block.hasValidMerkleRoot else {
-                    await pool.misbehaving(peer, reason: "merkle root mismatch at \(height)")
-                    throw FilterSyncError.badPeerResponse("merkle root mismatch at \(height)")
-                }
-                try await onMatch(BlockMatch(height: height, blockHash: message.blockHash, block: block))
-            case .notfound:
-                throw FilterSyncError.badPeerResponse("peer lost block at \(height)")
-            default:
-                throw FilterSyncError.badPeerResponse("expected block")
-            }
+            try await deliverMatchedBlock(from: peer, height: height,
+                                          blockHash: message.blockHash, onMatch: onMatch)
         }
         guard seen.count == count else {
             throw FilterSyncError.badPeerResponse("missing cfilters: \(seen.count)/\(count)")
+        }
+    }
+
+    /// One cfilter response, verified: the right type, a block we asked
+    /// about and have not seen, and a filter that reproduces the pinned
+    /// header chain (BIP158): header[h] == SHA256d(SHA256d(filter) || header[h-1]).
+    private func verifiedFilter(from response: PeerMessage, heightByHash: [Data: UInt32],
+                                seen: inout Set<UInt32>,
+                                filterHeaders: [String: String]) throws
+        -> (height: UInt32, message: CFilterMessage) {
+        guard case let .cfilter(message) = response else {
+            throw FilterSyncError.badPeerResponse("expected cfilter")
+        }
+        guard message.filterType == Self.basicFilterType else {
+            throw FilterSyncError.badPeerResponse("unexpected filter type \(message.filterType)")
+        }
+        guard let height = heightByHash[message.blockHash], !seen.contains(height) else {
+            throw FilterSyncError.unexpectedBlockHash
+        }
+        seen.insert(height)
+        let filterHash = GCSFilter.filterHash(message.filter)
+        let previous = height == 0
+            ? Data(repeating: 0, count: 32)
+            : Self.filterHeader(at: height - 1, in: filterHeaders)
+        guard let pinned = Self.filterHeader(at: height, in: filterHeaders),
+              SHA256d.hash(filterHash + (previous ?? Data(repeating: 0, count: 32))) == pinned
+        else {
+            throw FilterSyncError.filterHeaderMismatch(height: height)
+        }
+        return (height, message)
+    }
+
+    /// A possible hit (or BIP158 false positive): fetch the full block and
+    /// hand it to the caller. The header hash only authenticates the 80-byte
+    /// header, so the transaction set must hash to the committed merkle root
+    /// before anything is credited from it — otherwise a peer can serve the
+    /// real header with a fabricated (or pruned) tx list.
+    private func deliverMatchedBlock(from peer: PeerConnection, height: UInt32,
+                                     blockHash: Data,
+                                     onMatch: @Sendable (BlockMatch) async throws -> Void)
+        async throws {
+        let blockResponse = try await peer.request(
+            .getdata(InventoryPayload([InventoryVector(type: .witnessBlock, hash: blockHash)])),
+            expecting: ["block", "notfound"], timeout: .seconds(120))
+        switch blockResponse {
+        case let .block(block):
+            guard block.hash == blockHash else {
+                await pool.misbehaving(peer, reason: "block hash mismatch at \(height)")
+                throw FilterSyncError.badPeerResponse("block hash mismatch at \(height)")
+            }
+            guard block.hasValidMerkleRoot else {
+                await pool.misbehaving(peer, reason: "merkle root mismatch at \(height)")
+                throw FilterSyncError.badPeerResponse("merkle root mismatch at \(height)")
+            }
+            try await onMatch(BlockMatch(height: height, blockHash: blockHash, block: block))
+        case .notfound:
+            throw FilterSyncError.badPeerResponse("peer lost block at \(height)")
+        default:
+            throw FilterSyncError.badPeerResponse("expected block")
         }
     }
 

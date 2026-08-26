@@ -516,6 +516,21 @@ extension PSBT {
         else { return nil }
 
         guard let (threshold, leafKeys) = Multisig.parse(Script(leaf.script)) else { return nil }
+        let valid = validScriptPathSignatures(input: index, leaf: leaf, tx: tx,
+                                              spentOutputs: spentOutputs, leafKeys: leafKeys)
+        guard valid.count >= threshold else { return nil }
+        return try Signer.multisigWitness(signatures: valid, leafScript: Script(leaf.script),
+                                          controlBlock: leaf.controlBlock)
+    }
+
+    /// The cryptographically valid script-path signatures for one leaf,
+    /// keyed by signer: each must name a leaf key, commit to all outputs,
+    /// and verify against the recomputed sighash — anything else is skipped,
+    /// never fatal, because a combiner may carry a stranger's noise.
+    private func validScriptPathSignatures(input index: Int, leaf: TapLeafScript,
+                                           tx: Transaction,
+                                           spentOutputs: [SighashBIP341.SpentOutput],
+                                           leafKeys: [Data]) -> [Data: Data] {
         var valid: [Data: Data] = [:]
         for (id, signature) in inputs[index].tapScriptSignatures where id.leafHash == leaf.leafHash {
             guard leafKeys.contains(id.publicKey) else { continue }
@@ -538,9 +553,7 @@ extension PSBT {
             else { continue }
             valid[id.publicKey] = signature
         }
-        guard valid.count >= threshold else { return nil }
-        return try Signer.multisigWitness(signatures: valid, leafScript: Script(leaf.script),
-                                          controlBlock: leaf.controlBlock)
+        return valid
     }
 
     /// Extractor role: the fully-signed raw transaction.

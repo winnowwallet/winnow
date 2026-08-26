@@ -100,22 +100,7 @@ public struct GCSFilter: Sendable, Equatable {
         var reader = BitReader(encoded)
         var value: UInt64 = 0
         for _ in 0 ..< n {
-            var quotient: UInt64 = 0
-            while true {
-                guard let bit = reader.readOptional() else { throw GCSError.truncatedEncoding }
-                if !bit { break }
-                let (next, overflow) = quotient.addingReportingOverflow(1)
-                guard !overflow else { throw GCSError.decodedValueOverflow }
-                quotient = next
-            }
-
-            var remainder: UInt64 = 0
-            for _ in 0 ..< p {
-                guard let bit = reader.readOptional() else { throw GCSError.truncatedEncoding }
-                remainder = (remainder << 1) | UInt64(bit ? 1 : 0)
-            }
-            guard quotient <= UInt64.max >> p else { throw GCSError.decodedValueOverflow }
-            let delta = (quotient << p) | remainder
+            let delta = try readGolombRiceDelta(from: &reader, p: p)
             let (next, overflow) = value.addingReportingOverflow(delta)
             guard !overflow else { throw GCSError.decodedValueOverflow }
             value = next
@@ -127,6 +112,29 @@ public struct GCSFilter: Sendable, Equatable {
         while let bit = reader.readOptional() {
             guard !bit else { throw GCSError.nonCanonicalEncoding }
         }
+    }
+
+    /// One Golomb-Rice codeword: unary quotient, P remainder bits, composed
+    /// under overflow checks. Throws on truncation exactly where the stream
+    /// ran out.
+    private static func readGolombRiceDelta(from reader: inout BitReader,
+                                            p: UInt8) throws -> UInt64 {
+        var quotient: UInt64 = 0
+        while true {
+            guard let bit = reader.readOptional() else { throw GCSError.truncatedEncoding }
+            if !bit { break }
+            let (next, overflow) = quotient.addingReportingOverflow(1)
+            guard !overflow else { throw GCSError.decodedValueOverflow }
+            quotient = next
+        }
+
+        var remainder: UInt64 = 0
+        for _ in 0 ..< p {
+            guard let bit = reader.readOptional() else { throw GCSError.truncatedEncoding }
+            remainder = (remainder << 1) | UInt64(bit ? 1 : 0)
+        }
+        guard quotient <= UInt64.max >> p else { throw GCSError.decodedValueOverflow }
+        return (quotient << p) | remainder
     }
 
     /// Serialized form: compactSize(N) || encoded bitstream (BIP158 `NBytes`).
