@@ -175,8 +175,13 @@ every address, and it spends nothing.
      reads that beat the lock landing: the transition itself, captured.
      The reading is
      [`evidence-device-lock-2026-08-27.png`](evidence-device-lock-2026-08-27.png).
-     Still outstanding from the phone: the app-switcher snapshot showing
-     the cover, and a soak reading long enough to speak about days.
+     The app-switcher half followed the same day: the switcher shows
+     Winnow's card with the system's hidden treatment — an eye-slash and
+     "Winnow is hidden", no balance, no addresses, the snapshot withheld
+     rather than staled —
+     [`evidence-app-switcher-2026-08-27.png`](evidence-app-switcher-2026-08-27.png),
+     cropped to the wallet's own card. Still outstanding from the phone:
+     a soak reading long enough to speak about days.
    - *Sustained signet:* two runs, the second 90 minutes with 88 at chain tip,
      timeseries committed. It found `SEC-024` within the first hour. A third
      run starting at tip holds resident size between 13 MB and 36 MB. That
