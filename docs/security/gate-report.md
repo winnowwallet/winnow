@@ -165,11 +165,18 @@ every address, and it spends nothing.
      other's. Named, pinned by test, and not inferred from the
      script-path result.
    - *Device Keychain and screenshot checks:* the simulator half is done and
-     the claims are observations now rather than readings. **The hardware half
-     is not, and cannot be:** that iOS enforces the protection class when the
-     device locks, and that its app-switcher snapshot contains the cover, are
-     platform behaviours a simulator has no data protection, no Secure Enclave
-     and no snapshot to show. Those need the phone.
+     the claims are observations now rather than readings. **The Keychain
+     half of the hardware evidence now exists.** On 2026-08-27, on the
+     owner's passcoded phone running the v0.5.3 instrument, the in-app
+     check recorded the wallet key readable while unlocked (the control),
+     then refused while locked — samples
+     `5s 0 · 5s 0 · 10s 0 · 15s −25308 (locked) · 20s −25308 (locked)`,
+     where −25308 is `errSecInteractionNotAllowed` and the early zeros are
+     reads that beat the lock landing: the transition itself, captured.
+     The reading is
+     [`evidence-device-lock-2026-08-27.png`](evidence-device-lock-2026-08-27.png).
+     Still outstanding from the phone: the app-switcher snapshot showing
+     the cover, and a soak reading long enough to speak about days.
    - *Sustained signet:* two runs, the second 90 minutes with 88 at chain tip,
      timeseries committed. It found `SEC-024` within the first hour. A third
      run starting at tip holds resident size between 13 MB and 36 MB. That
