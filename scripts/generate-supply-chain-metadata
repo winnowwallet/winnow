@@ -77,11 +77,19 @@ def main() -> None:
     root = pathlib.Path(git(pathlib.Path.cwd(), "rev-parse", "--show-toplevel"))
     commit = git(root, "rev-parse", "HEAD")
     tree = git(root, "rev-parse", "HEAD^{tree}")
-    resolved_path = root / "Package.resolved"
     package_path = root / "Package.swift"
     project_path = root / "project.yml"
-    resolved = json.loads(resolved_path.read_text())
-    pins = sorted(resolved.get("pins", []), key=lambda pin: pin["identity"])
+    # The split moved the SPM manifest out: the dependency pins now live in
+    # the generated project's workspace state. Prefer the root file when it
+    # exists (pre-split layouts, the library repo), else the workspace's.
+    resolved_path = root / "Package.resolved"
+    if not resolved_path.exists():
+        resolved_path = (root / "WinnowApp.xcodeproj/project.xcworkspace"
+                         / "xcshareddata/swiftpm/Package.resolved")
+    pins: list[dict[str, Any]] = []
+    if resolved_path.exists():
+        resolved = json.loads(resolved_path.read_text())
+        pins = sorted(resolved.get("pins", []), key=lambda pin: pin["identity"])
 
     root_id = "SPDXRef-Package-winnow"
     packages: list[dict[str, Any]] = [
@@ -163,9 +171,11 @@ def main() -> None:
 
     materials = [
         {"uri": "git+https://github.com/winnowwallet/winnow.git", "digest": {"sha1": commit}},
-        {"uri": "file:Package.swift", "digest": {"sha256": sha256_file(package_path)}},
-        {"uri": "file:Package.resolved", "digest": {"sha256": sha256_file(resolved_path)}},
-        {"uri": "file:project.yml", "digest": {"sha256": sha256_file(project_path)}},
+        # Presence-driven: the split removed this repo's Package.swift and
+        # Package.resolved (the library pin lives in project.yml) — an
+        # honest SBOM lists what exists, and never crashes on what moved.
+        *[{"uri": f"file:{path.name}", "digest": {"sha256": sha256_file(path)}}
+          for path in (package_path, resolved_path, project_path) if path.exists()],
         *dependencies,
     ]
     materials.sort(key=lambda material: material["uri"])
