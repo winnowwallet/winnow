@@ -146,9 +146,13 @@ every address, and it spends nothing.
    written acceptance of the risk.~~ **Done** — fixed on `main`.
 3. ~~SEC-005 and SEC-017 closed, or dispositioned with an owner and a date.~~
    **Done** — both fixed.
-4. **Substantially reduced, still outstanding.** Most of what this condition
-   named now exists, and producing it found five defects that no amount of
-   reading would have surfaced — `SEC-024` through `SEC-028`.
+4. **Done — closed 2026-08-28.** Producing this condition's evidence found
+   five defects that no amount of reading would have surfaced (`SEC-024`
+   through `SEC-028`), and its last three legs closed on the phone itself:
+   locked-Keychain enforcement and the hidden app-switcher card on
+   2026-08-27, and the soak reading the owner accepted as sufficient on
+   2026-08-28 — a day resident at 68.4 MB, an order of magnitude under the
+   mid-sync launch peak. The per-leg detail below stands as the record.
 
    - *Node-backed differential runs:* the fixture had been **unrunnable**, its
      BIP325 challenge key lost with a workstation. It is rebuildable from the
@@ -206,9 +210,10 @@ every address, and it spends nothing.
      The two ~580 MB readings that raised the memory question were both
      taken a minute after launch, mid-sync; a day of residence settles an
      order of magnitude lower, so the launch figure was the sync burst,
-     not the resting footprint. One day supports a claim about a day; the
-     reading continues on the owner's device, which keeps the v0.5.3
-     instrument even as the tip retires it.
+     not the resting footprint. On 2026-08-28 the owner accepted this
+     reading as the soak evidence — the two macOS runs bound the hours,
+     the phone bound a day at rest, and the depth of the question does not
+     grow with more calendar.
 
    What is left is genuinely the hardware: on-device Keychain enforcement,
    screenshot and lifecycle behaviour, and runs long enough to speak about days.
@@ -221,9 +226,12 @@ every address, and it spends nothing.
    single-peer eclipse and the clipboard reach were both dispositioned by the
    owner on 2026-08-23, and both are written up above with their reasoning.
 
-**Four is now the only thing standing between this report and a different
-verdict.** It needs a person and hardware, and it cannot be closed by writing
-more code.
+**Every numbered condition is now closed.** The last of them needed a
+person and hardware, and that is what closed it. What stands between this
+report and a different verdict is no longer evidence production: it is the
+independent audit the owner has chosen to pursue before mainnet — named
+throughout this register as the strongest remaining confidence artifact —
+and the owner's decision itself.
 
 ## Human decision required
 
