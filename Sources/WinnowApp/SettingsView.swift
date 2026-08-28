@@ -94,14 +94,26 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    TextField("Explorer website URL (empty = mempool.space)", text: Binding(
-                        get: { model.esploraURLString },
-                        set: { model.setEsploraURL($0) }
-                    ))
-                    .font(.system(.footnote, design: .monospaced))
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .accessibilityIdentifier("esploraURLField")
+                    Picker("Block explorer", selection: Binding(
+                        get: { model.explorerProvider },
+                        set: { model.setExplorerProvider($0) }
+                    )) {
+                        Text("blockstream.info").tag(AppModel.ExplorerProvider.blockstream)
+                        Text("mempool.space").tag(AppModel.ExplorerProvider.mempool)
+                        Text("Custom").tag(AppModel.ExplorerProvider.custom)
+                    }
+                    .pickerStyle(.menu)
+                    .accessibilityIdentifier("explorerProviderPicker")
+                    if model.explorerProvider == .custom {
+                        TextField("Esplora-compatible website URL", text: Binding(
+                            get: { model.esploraURLString },
+                            set: { model.setEsploraURL($0) }
+                        ))
+                        .font(.system(.footnote, design: .monospaced))
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .accessibilityIdentifier("esploraURLField")
+                    }
                     Text("Selected: \(model.esploraBaseURL.absoluteString)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -109,7 +121,7 @@ struct SettingsView: View {
                 } header: {
                     Text("External block explorer")
                 } footer: {
-                    Text("This is a link destination only. Winnow never contacts it for balances, history, fees, synchronization, or broadcasting. Tapping an address or transaction shows a privacy warning before opening the selected website. You may enter a custom Esplora-compatible website.")
+                    Text("This is a link destination only. Winnow never contacts it for balances, history, fees, synchronization, or broadcasting. Tapping an address or transaction shows a privacy warning before opening the selected website. blockstream.info has no signet explorer, so that preset opens mempool.space while on signet.")
                 }
 
                 Section {

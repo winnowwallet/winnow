@@ -229,6 +229,15 @@ final class AppModel {
     private(set) var network: BitcoinNetwork
     private(set) var manualPeers: [String] // "host:port"
     private(set) var esploraURLString: String
+    private(set) var explorerProvider: ExplorerProvider
+
+    /// The warned external block explorer. Presets cover the common sites;
+    /// `custom` uses whatever Esplora-compatible URL the owner typed.
+    enum ExplorerProvider: String, CaseIterable {
+        case blockstream
+        case mempool
+        case custom
+    }
     /// Off by default: a fresh chain starts from the shipped checkpoint (#89).
     /// On means re-derive every block's work from block 0, which is what the
     /// app did before the checkpoint existed.
@@ -253,6 +262,7 @@ final class AppModel {
         /// See #81.
         static func manualPeers(_ network: BitcoinNetwork) -> String { "manualPeers.\(network.rawValue)" }
         static func esploraURL(_ network: BitcoinNetwork) -> String { "esploraURL.\(network.rawValue)" }
+        static func explorerProvider(_ network: BitcoinNetwork) -> String { "explorerProvider.\(network.rawValue)" }
         /// The pre-#81 flat keys, migrated once into the active network.
         static let legacyManualPeers = "manualPeers"
         static let legacyEsploraURL = "esploraURL"
@@ -282,6 +292,15 @@ final class AppModel {
         let scoped = Self.networkScopedSettings(defaults: defaults, network: selectedNetwork)
         manualPeers = scoped.manualPeers
         esploraURLString = scoped.esploraURL
+        // Provider default is blockstream.info; an installation that had
+        // already typed a custom explorer URL keeps it by migrating to
+        // `.custom` rather than silently switching sites.
+        if let stored = defaults.string(forKey: DefaultsKey.explorerProvider(selectedNetwork)),
+           let provider = ExplorerProvider(rawValue: stored) {
+            explorerProvider = provider
+        } else {
+            explorerProvider = scoped.esploraURL.isEmpty ? .blockstream : .custom
+        }
         verifyFromGenesis = defaults.bool(forKey: DefaultsKey.verifyFromGenesis)
         // Test mode preconfigures the local node as the (only) manual peer;
         // custom signets have no DNS seeds.
@@ -1697,19 +1716,43 @@ final class AppModel {
         defaults.set(esploraURLString, forKey: DefaultsKey.esploraURL(network))
     }
 
+    func setExplorerProvider(_ provider: ExplorerProvider) {
+        explorerProvider = provider
+        defaults.set(provider.rawValue, forKey: DefaultsKey.explorerProvider(network))
+    }
+
     /// The selected external block-explorer website. Winnow never contacts it
     /// in the background; URLs derived here are opened only after a user taps
     /// a link and accepts the privacy warning.
     var esploraBaseURL: URL {
-        if let url = URL(string: esploraURLString),
-           ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
-           url.host != nil {
-            return url
+        Self.explorerBaseURL(provider: explorerProvider,
+                             customURLString: esploraURLString, network: network)
+    }
+
+    /// Pure resolution, so the per-network preset table is testable without
+    /// an app model. blockstream.info serves no signet explorer, so the
+    /// blockstream preset resolves to mempool.space's signet site there —
+    /// visible in Settings' "Selected:" line rather than a 404 on tap. A
+    /// custom entry that fails to parse falls back to the default preset.
+    static func explorerBaseURL(provider: ExplorerProvider,
+                                customURLString: String,
+                                network: BitcoinNetwork) -> URL {
+        if provider == .custom {
+            if let url = URL(string: customURLString),
+               ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+               url.host != nil {
+                return url
+            }
+            return explorerBaseURL(provider: .blockstream, customURLString: "", network: network)
         }
-        let defaultURL = network == .mainnet
-            ? "https://mempool.space"
-            : "https://mempool.space/signet"
-        return URL(string: defaultURL)!
+        switch (provider, network) {
+        case (.blockstream, .mainnet):
+            return URL(string: "https://blockstream.info")!
+        case (.mempool, .mainnet):
+            return URL(string: "https://mempool.space")!
+        default:
+            return URL(string: "https://mempool.space/signet")!
+        }
     }
 
     func esploraTransactionURL(_ txid: Data) -> URL {

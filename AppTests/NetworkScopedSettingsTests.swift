@@ -49,6 +49,35 @@ final class NetworkScopedSettingsTests: XCTestCase {
         XCTAssertEqual(mainnet.esploraURL, "", "a signet explorer must not answer mainnet queries")
     }
 
+    /// The preset table, resolved purely: blockstream is the default face
+    /// of mainnet, but it has no signet explorer, so its signet resolution
+    /// is mempool.space — a working link beats a loyal 404.
+    func testExplorerPresetsResolvePerNetwork() {
+        typealias P = AppModel.ExplorerProvider
+        XCTAssertEqual(AppModel.explorerBaseURL(provider: .blockstream, customURLString: "",
+                                                network: .mainnet).absoluteString,
+                       "https://blockstream.info")
+        XCTAssertEqual(AppModel.explorerBaseURL(provider: .blockstream, customURLString: "",
+                                                network: .signet).absoluteString,
+                       "https://mempool.space/signet")
+        XCTAssertEqual(AppModel.explorerBaseURL(provider: .mempool, customURLString: "",
+                                                network: .mainnet).absoluteString,
+                       "https://mempool.space")
+        XCTAssertEqual(AppModel.explorerBaseURL(provider: .custom,
+                                                customURLString: "https://esplora.example",
+                                                network: .signet).absoluteString,
+                       "https://esplora.example")
+        // A custom entry that does not parse falls back to the default
+        // preset rather than producing a broken link.
+        XCTAssertEqual(AppModel.explorerBaseURL(provider: .custom, customURLString: "not a url",
+                                                network: .mainnet).absoluteString,
+                       "https://blockstream.info")
+    }
+
+    func testExplorerProviderKeyIsPerNetwork() {
+        XCTAssertNotEqual(Key.explorerProvider(.signet), Key.explorerProvider(.mainnet))
+    }
+
     /// Each network keeps its own value rather than the last one written
     /// winning.
     func testEachNetworkKeepsItsOwnValues() {

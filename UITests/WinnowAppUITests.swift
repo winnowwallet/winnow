@@ -403,8 +403,15 @@ final class WinnowAppUITests: XCTestCase {
         Screenshots.capture(app, "12-settings-peers", testCase: self)
 
         // Esplora is a selectable external link only, never a wallet backend.
-        let explorerField = app.textFields["esploraURLField"]
-        XCTAssertTrue(scrollUntilExists(app, explorerField, up: true), "no explorer URL field")
+        // Presets cover the common sites; the URL field appears for Custom.
+        let providerPicker = app.buttons["explorerProviderPicker"].firstMatch
+        XCTAssertTrue(scrollUntilExists(app, providerPicker, up: true), "no explorer picker")
+        providerPicker.tap()
+        app.buttons["Custom"].firstMatch.tap()
+        XCTAssertTrue(app.textFields["esploraURLField"].waitForExistence(timeout: 10),
+                      "custom explorer URL field did not appear")
+        providerPicker.tap()
+        app.buttons["blockstream.info"].firstMatch.tap()
 
         // Opening a transaction is the privacy boundary: capture the warning
         // and cancel before iOS contacts the selected endpoint.
