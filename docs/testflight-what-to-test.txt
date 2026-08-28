@@ -1,13 +1,7 @@
-Device security check, round two (Settings, near the bottom)
+The device security check is gone
 
-The check now leads with a "Passcode set" row. If it says NO, that is the finding: without a passcode iOS never locks the wallet key, the locked check cannot mean anything, and the footer says so — set a passcode and come back.
-
-With a passcode set: tap "Start locked-device check", lock the phone with the side button in the same motion, unlock after about twenty seconds. The probe now also samples at the moment the lock lands (not just on a fixed schedule), so even a quick suspension cannot lose the reading. "Locked read" should say "refused while locked — enforced"; the footnote lists each sample. Screenshot that screen, plus the app switcher showing Winnow's cover, plus the App uptime / Memory rows once the app has been resident a few days.
-
-Vault coins now respect coinbase maturity
-
-If a vault coin was mined directly to a vault address, its row in the vault detail says "matures in N blocks" and the Sign / combine review refuses to approve spending it early, with an error that counts the blocks remaining. Ordinary (non-coinbase) vault coins are unaffected.
+It was evidence tooling: v0.5.3 captured the locked-Keychain refusal, the hidden app-switcher card, and the resident-memory readings the release gate needed, and those are banked in the public security register. With the evidence in, the instrument leaves the app — Settings should now go straight from the peers list to About. If you still see the check, you are on v0.5.3.
 
 Everything else
 
-Normal use: receive, send, vault flows, backup. Under the hood every function in the wallet now passes a decision-path budget; nothing should feel different — if it does, that is worth a report.
+Normal use: receive, send, vault flows, backup. Vault coins mined directly to a vault address still show "matures in N blocks" and refuse early spending. Nothing else should feel different — if it does, that is worth a report.

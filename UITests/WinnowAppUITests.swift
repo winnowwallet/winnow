@@ -402,14 +402,6 @@ final class WinnowAppUITests: XCTestCase {
         if !localPeer.isHittable { app.collectionViews.firstMatch.swipeUp() }
         Screenshots.capture(app, "12-settings-peers", testCase: self)
 
-        // The on-device security check ships its own instrument. The
-        // simulator has no data protection, so only presence and the armed
-        // control are asserted here; the locked verdict belongs to hardware.
-        let lockedCheck = app.buttons["lockedCheckButton"]
-        XCTAssertTrue(scrollUntilExists(app, lockedCheck), "no device security check control")
-        XCTAssertTrue(app.staticTexts["Device security check"].exists,
-                      "device security section header missing")
-
         // Esplora is a selectable external link only, never a wallet backend.
         let explorerField = app.textFields["esploraURLField"]
         XCTAssertTrue(scrollUntilExists(app, explorerField, up: true), "no explorer URL field")

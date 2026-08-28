@@ -199,7 +199,16 @@ every address, and it spends nothing.
      against a coin no chain contained, an assertion on a label the UI
      no longer renders, and backgrounding invariants that raced the
      scene phase instead of exercising it. The days-long observation now
-     has a machine to run on; it has not run yet.
+     has a machine to run on; it has not run yet. The phone, meanwhile,
+     has started answering the same question at first hand: on 2026-08-28
+     the v0.5.3 instrument read **1d 1h resident, 68.4 MB** —
+     [`evidence-soak-day1-2026-08-28.png`](evidence-soak-day1-2026-08-28.png).
+     The two ~580 MB readings that raised the memory question were both
+     taken a minute after launch, mid-sync; a day of residence settles an
+     order of magnitude lower, so the launch figure was the sync burst,
+     not the resting footprint. One day supports a claim about a day; the
+     reading continues on the owner's device, which keeps the v0.5.3
+     instrument even as the tip retires it.
 
    What is left is genuinely the hardware: on-device Keychain enforcement,
    screenshot and lifecycle behaviour, and runs long enough to speak about days.
