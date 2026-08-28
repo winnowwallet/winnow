@@ -314,6 +314,18 @@ struct SendView: View {
             }
         }
         for await event in await broadcaster.events() {
+            if apply(event, sentTxid: sentTxid, window: window, echoTask: echoTask) {
+                break
+            }
+        }
+        echoTask?.cancel()
+        await window?.stop()
+    }
+
+    /// Applies one broadcaster event to the send screen's relay narrative.
+    /// Returns true when propagation tracking is finished (confirmation).
+    private func apply(_ event: TxBroadcaster.Event, sentTxid: Data,
+                       window: MempoolWindow?, echoTask: Task<Void, Never>?) -> Bool {
             switch event {
             case let .announced(txid, peerCount) where txid == sentTxid:
                 relayLog.append("Announced to \(peerCount) peer(s)")
@@ -334,11 +346,10 @@ struct SendView: View {
                 // Propagation tracking ends at confirmation.
                 echoTask?.cancel()
                 if let window { Task { await window.stop() } }
+                return true
             default:
                 break
             }
-        }
-        echoTask?.cancel()
-        await window?.stop()
+        return false
     }
 }

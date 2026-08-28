@@ -383,51 +383,67 @@ actor VaultStore {
         var recordIDs = Set<String>()
         var outpoints = Set<Transaction.Outpoint>()
         var aggregate: Int64 = 0
-
         for record in records {
             guard recordIDs.insert(record.id).inserted else {
                 throw VaultStorageError.invalidState("duplicate vault identifier")
             }
-            let descriptor = try Descriptor(record.descriptor)
-            let canonical = descriptor.serialized()
-            guard canonical == record.descriptor,
-                  canonical.split(separator: "#").last.map(String.init) == record.id
-            else {
-                throw VaultStorageError.invalidState("vault descriptor identifier does not match")
-            }
-            let vault = try Vault(descriptor: descriptor, network: network)
-            _ = try vault.scriptPubKey(index: 0, choice: AddressChain.receive.rawValue)
-            _ = try vault.scriptPubKey(index: 0, choice: AddressChain.change.rawValue)
-            guard record.nextReceiveIndex <= maximumNextIndex,
-                  record.nextChangeIndex <= maximumNextIndex
-            else {
-                throw VaultStorageError.invalidState("vault address index is out of range")
-            }
+            let vault = try validatedRecordShape(record, network: network)
+            try validateRecordCoins(record, vault: vault,
+                                    outpoints: &outpoints, aggregate: &aggregate)
+        }
+    }
 
-            for utxo in record.utxos {
-                guard utxo.txid.count == 32,
-                      utxo.amount > 0, utxo.amount <= BitcoinAmount.maximum,
-                      utxo.index < maximumWatchCount
-                else {
-                    throw VaultStorageError.invalidState("vault output metadata is invalid")
-                }
-                let nextIndex = utxo.chain == .receive
-                    ? record.nextReceiveIndex : record.nextChangeIndex
-                guard utxo.index < nextIndex,
-                      try vault.scriptPubKey(index: utxo.index, choice: utxo.chain.rawValue)
-                        == utxo.scriptPubKey
-                else {
-                    throw VaultStorageError.invalidState("vault output does not belong to its descriptor")
-                }
-                guard outpoints.insert(utxo.outpoint).inserted else {
-                    throw VaultStorageError.invalidState("duplicate vault output")
-                }
-                let sum = aggregate.addingReportingOverflow(utxo.amount)
-                guard !sum.overflow, sum.partialValue <= BitcoinAmount.maximum else {
-                    throw VaultStorageError.invalidState("vault balance is outside Bitcoin's monetary range")
-                }
-                aggregate = sum.partialValue
+    /// The record's own shape: a canonical descriptor whose checksum is the
+    /// record's identity, derivable at both chains, with indices in range.
+    private static func validatedRecordShape(_ record: VaultRecord,
+                                             network: BitcoinNetwork) throws -> Vault {
+        let descriptor = try Descriptor(record.descriptor)
+        let canonical = descriptor.serialized()
+        guard canonical == record.descriptor,
+              canonical.split(separator: "#").last.map(String.init) == record.id
+        else {
+            throw VaultStorageError.invalidState("vault descriptor identifier does not match")
+        }
+        let vault = try Vault(descriptor: descriptor, network: network)
+        _ = try vault.scriptPubKey(index: 0, choice: AddressChain.receive.rawValue)
+        _ = try vault.scriptPubKey(index: 0, choice: AddressChain.change.rawValue)
+        guard record.nextReceiveIndex <= maximumNextIndex,
+              record.nextChangeIndex <= maximumNextIndex
+        else {
+            throw VaultStorageError.invalidState("vault address index is out of range")
+        }
+        return vault
+    }
+
+    /// Every persisted coin re-derived and bounded: it must belong to this
+    /// descriptor below the record's own cursor, repeat no outpoint across
+    /// the whole store, and keep the aggregate inside Bitcoin's range.
+    private static func validateRecordCoins(_ record: VaultRecord, vault: Vault,
+                                            outpoints: inout Set<Transaction.Outpoint>,
+                                            aggregate: inout Int64) throws {
+        for utxo in record.utxos {
+            guard utxo.txid.count == 32,
+                  utxo.amount > 0, utxo.amount <= BitcoinAmount.maximum,
+                  utxo.index < maximumWatchCount
+            else {
+                throw VaultStorageError.invalidState("vault output metadata is invalid")
             }
+            let nextIndex = utxo.chain == .receive
+                ? record.nextReceiveIndex : record.nextChangeIndex
+            guard utxo.index < nextIndex,
+                  try vault.scriptPubKey(index: utxo.index, choice: utxo.chain.rawValue)
+                    == utxo.scriptPubKey
+            else {
+                throw VaultStorageError.invalidState("vault output does not belong to its descriptor")
+            }
+            guard outpoints.insert(utxo.outpoint).inserted else {
+                throw VaultStorageError.invalidState("duplicate vault output")
+            }
+            let sum = aggregate.addingReportingOverflow(utxo.amount)
+            guard !sum.overflow, sum.partialValue <= BitcoinAmount.maximum else {
+                throw VaultStorageError.invalidState("vault balance is outside Bitcoin's monetary range")
+            }
+            aggregate = sum.partialValue
         }
     }
 

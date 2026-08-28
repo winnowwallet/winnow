@@ -422,6 +422,18 @@ final class AppModel {
         }
     }
 
+    /// The highest start-height any connected peer advertised, floored at
+    /// our own tip — the denominator the header-sync progress is shown
+    /// against.
+    private func bestAdvertisedTip(in stack: SyncStack, atLeast tip: UInt32) async -> UInt32 {
+        var estimate = tip
+        for peer in await stack.pool.connectedPeers() {
+            let advertised = await peer.peerStartHeight
+            if advertised > 0, UInt32(advertised) > estimate { estimate = UInt32(advertised) }
+        }
+        return estimate
+    }
+
     private func updateSyncPhase() async {
         guard let stack else {
             if syncPhase != .idle { syncPhase = .idle }
@@ -442,11 +454,7 @@ final class AppModel {
         }
         // At least one peer: one is enough to sync — show the real progress.
         let tip = await stack.chain.height
-        var estimate = tip
-        for peer in await stack.pool.connectedPeers() {
-            let advertised = await peer.peerStartHeight
-            if advertised > 0, UInt32(advertised) > estimate { estimate = UInt32(advertised) }
-        }
+        let estimate = await bestAdvertisedTip(in: stack, atLeast: tip)
         if estimate > tip + 1 {
             syncPhase = .headers(synced: tip, tipEstimate: estimate)
         } else if let filters = stack.filters {
@@ -483,6 +491,22 @@ final class AppModel {
         e2e.journal("peers.status", fields: fields)
     }
 
+    /// Opens the stored header chain, rebuilding from scratch only on a
+    /// start mismatch: the stored chain starts somewhere this setting does
+    /// not ask for — the user just changed the setting. The file is not
+    /// damaged, it simply answers the other question, so rebuild rather
+    /// than try to reconcile the two. Every other error stays fatal.
+    nonisolated private static func openOrRebuildChain(params: NetworkParams, storageURL: URL,
+                                           start: HeaderChain.Start) throws -> HeaderChain {
+        do {
+            return try HeaderChain(params: params, storageURL: storageURL, start: start)
+        } catch let error as HeaderChainError {
+            guard case .startMismatch = error else { throw error }
+            try? FileManager.default.removeItem(at: storageURL)
+            return try HeaderChain(params: params, storageURL: storageURL, start: start)
+        }
+    }
+
     private func buildStackIfNeeded() async {
         guard stack == nil else { return }
         if buildingStack {
@@ -510,17 +534,7 @@ final class AppModel {
             // backup never freezes the onboarding sheet.
             let start = await chainStart()
             let chain = try await Task.detached(priority: .userInitiated) {
-                do {
-                    return try HeaderChain(params: params, storageURL: headersURL, start: start)
-                } catch let error as HeaderChainError {
-                    // The stored chain starts somewhere this setting does not
-                    // ask for — the user just changed the setting. The file is
-                    // not damaged, it simply answers the other question, so
-                    // rebuild rather than try to reconcile the two.
-                    guard case .startMismatch = error else { throw error }
-                    try? FileManager.default.removeItem(at: headersURL)
-                    return try HeaderChain(params: params, storageURL: headersURL, start: start)
-                }
+                try Self.openOrRebuildChain(params: params, storageURL: headersURL, start: start)
             }.value
             let broadcaster = try makeBroadcaster(
                 pool: pool, storageURL: dir.appending(path: "broadcast.json"))

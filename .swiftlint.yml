@@ -9,6 +9,6 @@ included:
   - Sources
 
 cyclomatic_complexity:
-  warning: 10
-  error: 12
+  warning: 7
+  error: 8
   ignores_case_statements: true

@@ -43,9 +43,9 @@ concurrency:
 
 jobs:
   # The complexity budget from .swiftlint.yml, enforced: SwiftLint exits
-  # nonzero on error-level violations (over 12 decision paths) and green on
-  # warnings — the 11-12 band is the ratchet's remaining headroom. As of the
-  # second pay-down every function in Sources/ is at 10 or under.
+  # nonzero on error-level violations (over 8 decision paths) and green on
+  # warnings — the single 8 slot is the ratchet's remaining headroom. As of
+  # the third pay-down every function in Sources/ is at 7 or under.
   complexity:
     runs-on: macos-latest
     timeout-minutes: 10
