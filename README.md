@@ -13,16 +13,23 @@ A private, opinionated, modern Bitcoin wallet for iOS — 100% Swift, one depend
 
 ## Layout
 
-Architecture invariant: **all logic lives in the SPM package, where it is tested; the app target is a thin shell.** No wallet, protocol, or crypto logic may move into `WinnowApp` — if the UI needs something, expose it from a library.
+The Bitcoin implementation lives in its own repository,
+[btc-swift](https://github.com/winnowwallet/btc-swift) — keys to broadcast
+in ~10,600 lines with one dependency, plus the differential battery against
+Bitcoin Core, the soak driver, and a scriptable CLI. This repository is the
+wallet that wears it: the app pins an exact btc-swift revision and bumps it
+deliberately.
 
-- `Sources/BitcoinCore` — crypto, keys (BIP39/32/86), Taproot (BIP341), descriptors (BIP380/387/389/390), MuSig2 (BIP327)
-- `Sources/BitcoinP2P` — wire protocol, peers, header chain, BIP157 filter sync, tx broadcast
-- `Sources/BlockchainBackend` — isolated HTTP protocol clients; production wallet reads remain P2P
-- `Sources/WalletCore` — wallet/vault actors, sighash + signing, PSBTv2, coin selection, fee policy, import bundles
+Architecture invariant: **all logic lives in the library, where it is
+tested; the app target is a thin shell.** No wallet, protocol, or crypto
+logic may move into `WinnowApp` — if the UI needs something, expose it from
+btc-swift.
+
 - `Sources/WinnowApp` — the iOS app (SwiftUI, iOS 17+)
-- `docs/` — public design papers (phone, read, write, vaults, import) + webpage; see the [design-paper index](.github/internal/design-papers.md)
-- [`.github/internal/story-run.md`](.github/internal/story-run.md) — reproducible, resumable whole-app public-signet story and release checklist (no local `bitcoind`)
-- `scripts/` — story runner, icon generation, App Store Connect API tooling, and TestFlight pipeline
+- `AppTests/` — app-hosted suites (Keychain, privacy, journal redaction, …)
+- `UITests/` — the simulator e2e against the signet fixture node
+- `docs/` — public design papers, the security register, and the site
+- `scripts/` — App Store Connect tooling and the TestFlight pipeline
 
 ## Build & test
 

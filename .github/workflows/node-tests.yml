@@ -108,21 +108,9 @@ jobs:
           }
           echo "devdir=/Applications/Xcode.app/Contents/Developer" >> "$GITHUB_OUTPUT"
 
-      - name: Swift package tests
-        env:
-          DEVELOPER_DIR: ${{ steps.devtools.outputs.devdir }}
-        run: swift test
-
-      - name: Differential suite (WINNOW_DIFF=1, node-backed)
-        env:
-          DEVELOPER_DIR: ${{ steps.devtools.outputs.devdir }}
-          WINNOW_DIFF: "1"
-        # --no-parallel is required, not tidiness. Two suites mine onto the
-        # same tip (FullLoopDiffTests and VaultInteropDiffTests); run
-        # concurrently they race for every block, each re-mines on the winner,
-        # and the run stalls indefinitely rather than failing.
-        run: swift test --filter DifferentialTests --no-parallel
-
+      # The package and differential suites moved with the library to
+      # winnowwallet/btc-swift and run there against the same fixture. This
+      # workflow keeps what needs the app: the simulator UI e2e.
       - name: Generate Xcode project
         run: xcodegen
 

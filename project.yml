@@ -7,8 +7,11 @@ options:
 # The local SPM package at the repository root (Package.swift). The app links
 # its four library products; the only runtime dependency remains P256K.
 packages:
+  # The Bitcoin implementation lives in its own repository; the app pins an
+  # exact revision and bumps it deliberately.
   btc-swift:
-    path: .
+    url: https://github.com/winnowwallet/btc-swift
+    revision: 43da78bf295d8ce0ea2199877fdcefdffde47e9d
   # Linked directly by the UI-test target (its copy of the signet miner signs
   # block challenges with P256K).
   swift-secp256k1:

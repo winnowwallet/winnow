@@ -32,28 +32,39 @@ jobs:
           printf 'TESTFLIGHT_MARKETING_VERSION=%s\n' "$VERSION" >> "$GITHUB_ENV"
           printf 'TESTFLIGHT_BUILD_NUMBER=%s\n' "$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
 
-      - name: Regenerate bundled fallback peers
-        # 161: freshness tracks releases rather than someone remembering. The
-        # generator fails the release outright on a thin list, so a silent
-        # degradation cannot ship; the log is the audit trail for a list that
-        # is deliberately not reproducible.
-        run: scripts/generate-fallback-peers 2>&1 | tee fallback-peers-generation.log
-
-      - name: Keep the fallback-peer generation log
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: fallback-peers-generation-log
-          path: fallback-peers-generation.log
-          retention-days: 400
-
-      - name: Full test suite (gate)
-        run: swift test
+      - name: Fallback peers freshness gate
+        # 161: freshness tracks releases rather than someone remembering.
+        # The peer list lives in btc-swift now, so the app release cannot
+        # regenerate it — instead it refuses to ship a stale one: if the
+        # pinned revision's FallbackPeersGenerated.swift was last touched
+        # more than 30 days ago, regenerate there, bump the pin, re-tag.
+        run: |
+          PIN=$(grep -A2 'btc-swift:' project.yml | grep 'revision:' | awk '{print $2}')
+          echo "pinned btc-swift: $PIN"
+          LAST=$(curl -sf "https://api.github.com/repos/winnowwallet/btc-swift/commits?path=Sources/BitcoinP2P/Protocol/FallbackPeersGenerated.swift&sha=$PIN&per_page=1"             | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["commit"]["committer"]["date"])')
+          echo "peer list last regenerated: $LAST"
+          python3 - "$LAST" <<'PYCHECK'
+          import datetime, sys
+          last = datetime.datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))
+          age = (datetime.datetime.now(datetime.timezone.utc) - last).days
+          print(f"peer list age: {age} days")
+          if age > 30:
+              raise SystemExit("fallback peers are stale: regenerate in btc-swift and bump the pin")
+          PYCHECK
 
       - name: Install pinned XcodeGen
         run: scripts/install-xcodegen
 
       - name: Generate Xcode project
         run: xcodegen
+
+      - name: App test suite (gate)
+        run: |
+          DEVICE=$(xcrun simctl list devices available | grep -m1 -o 'iPhone [^(]*' | sed 's/ $//')
+          xcodebuild test -project WinnowApp.xcodeproj -scheme WinnowApp \
+            -destination "platform=iOS Simulator,name=$DEVICE" \
+            -skipPackagePluginValidation -skipMacroValidation \
+            -only-testing:WinnowAppTests
 
       - name: App unit tests (gate)
         run: |
