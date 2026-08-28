@@ -1,7 +1,7 @@
-The device security check is gone
+Block explorer picker (Settings)
 
-It was evidence tooling: v0.5.3 captured the locked-Keychain refusal, the hidden app-switcher card, and the resident-memory readings the release gate needed, and those are banked in the public security register. With the evidence in, the instrument leaves the app — Settings should now go straight from the peers list to About. If you still see the check, you are on v0.5.3.
+The warned external explorer is now a picker: blockstream.info (the new default), mempool.space, or Custom with an Esplora-compatible URL field. Your selection persists per network, and if you had typed a custom URL before, it stays selected as Custom. One deliberate wrinkle: blockstream.info has no signet explorer, so while on signet that preset opens mempool.space — the "Selected:" line shows exactly where a tap will go. Try each preset, tap a transaction from history, and confirm the warning names the right site.
 
-Everything else
+Under the hood
 
-Normal use: receive, send, vault flows, backup. Vault coins mined directly to a vault address still show "matures in N blocks" and refuse early spending. Nothing else should feel different — if it does, that is worth a report.
+The Bitcoin implementation now lives in its own repository (btc-swift) and the app pins an exact revision of it; every function in both is at seven decision paths or under, enforced by CI. None of that should feel like anything — receive, send, vault flows, and backup should behave exactly as before, and anything that doesn't is worth a report.

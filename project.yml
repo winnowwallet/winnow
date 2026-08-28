@@ -11,7 +11,7 @@ packages:
   # exact revision and bumps it deliberately.
   btc-swift:
     url: https://github.com/winnowwallet/btc-swift
-    revision: 43da78bf295d8ce0ea2199877fdcefdffde47e9d
+    revision: f7b205131fef48629fb3f52925971c5bd53ce1ae
   # Linked directly by the UI-test target (its copy of the signet miner signs
   # block challenges with P256K).
   swift-secp256k1:
