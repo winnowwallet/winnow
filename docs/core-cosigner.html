@@ -120,6 +120,24 @@ $ bitcoin-cli -signet -rpcwallet=vault-signer-b walletprocesspsbt "$A" true "DEF
   <p>Paste B's output into Winnow and finalize. The phone's key never signs; Winnow is creator, combiner, finalizer, and broadcaster only. That is exactly the promise a wallet app should be able to make about shared custody — <em>your money moves even if this app's signer never runs</em> — and the test that pins it asserts our key's absence from the final witness, then lets the network confirm the spend.</p>
 
   <hr />
+  <h2 id="a-signer-can-be-a-group">5&frac12;. One signer can be a group</h2>
+  <p>A cosigner slot does not have to hold a person's key. A MuSig2 2-of-2 <em>group</em> — spouse and lawyer, two officers of a company — can occupy one slot of the 2-of-3 through its BIP328 synthetic xpub, and from the vault's point of view it is just another pasted key that derives fresh addresses like everyone else. No single member can produce the group's signature.</p>
+  <pre><code>$ btc-swift musig-xpub &lt;member-key-hex&gt; &lt;member-key-hex&gt;
+    &hellip; "cosignerExpression": "[8307b7d6]tpubD6NzVbkr&hellip;/&lt;0;1&gt;/*" &hellip;</code></pre>
+  <p>Paste that expression into the vault like any cosigner. When the group's turn comes to sign, the demo-grade <code>musig-sign-psbt</code> runs both members' rounds in one invocation (a real deployment distributes the two rounds; the primitives are the same):</p>
+  <pre><code>$ btc-swift musig-sign-psbt "&lt;base64&gt;" --secrets &lt;hex&gt;,&lt;hex&gt;</code></pre>
+  <p>The whole ceremony runs through the app — create the vault with the group pasted in, create the spend, accept the group's signature from the clipboard, sign the device leg, finalize, broadcast:</p>
+  <figure>
+  <img src="screenshots/23-group-vault.png" alt="Creating a vault whose second cosigner is a MuSig2 group's synthetic xpub, pasted like any other key." />
+  <figcaption aria-hidden="true">The group enters the vault as a pasted expression — the app neither knows nor cares that a committee stands behind it.</figcaption>
+  </figure>
+  <figure>
+  <img src="screenshots/25-group-broadcast.png" alt="The finalized spend broadcast from the phone: one signature from the device, one from the group." />
+  <figcaption aria-hidden="true">Broadcast from the phone: one signature from this device, one from the group — the threshold met across two kinds of signer.</figcaption>
+  </figure>
+  <p>The e2e suite drives exactly this flow through the app's UI and then checks the chain: the funding outpoint must be gone. The library-level twin goes further still — the group beside <em>Core</em>, our key silent — in the same interop suite linked below.</p>
+
+  <hr />
   <h2 id="what-this-costs-and-proves">6. What this costs, and what it proves</h2>
   <ul>
   <li><strong>On-chain visibility.</strong> A script-path spend shows its control block, leaf script, and both signatures. That is the honest price of k-of-n; the MuSig2 vaults pay interactivity instead.</li>

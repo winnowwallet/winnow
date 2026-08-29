@@ -1,5 +1,6 @@
 import BitcoinCore
 import Foundation
+import P256K
 import WalletCore
 import XCTest
 
@@ -803,4 +804,201 @@ final class WinnowAppUITests: XCTestCase {
         XCTAssertTrue(scrollUntilExists(app, exportButton, up: true),
                       "seed export sheet did not dismiss to Settings")
     }
+    // MARK: - 10 Group cosigner
+
+    /// Two-level custody through the app: a MuSig2 2-of-2 *group* — entered
+    /// as its BIP328 synthetic xpub, like any pasted cosigner — is one
+    /// signer of a 2-of-3, and the app carries the whole ceremony: create
+    /// the vault, create the spend, accept the group's signature from the
+    /// clipboard, sign the device leg, finalize, broadcast. The test plays
+    /// the group (both member secrets in-process, the same simulation the
+    /// CLI's musig-sign-psbt performs); the node judges the result — the
+    /// funding outpoint must actually be spent on chain.
+    func test10GroupCosignerVault() async throws {
+        // A fresh group each run: the vault's identity is its descriptor's
+        // checksum, so a repeated group would collide with a previous run's
+        // vault in the persistent simulator state and the save would be
+        // (rightly) refused as a duplicate.
+        let salt = UInt8.random(in: 1 ... 250)
+        let memberSecrets = [Data([0x74, salt] + Data(repeating: 0x33, count: 30)),
+                             Data([0x75, salt] + Data(repeating: 0x44, count: 30))]
+        let memberKeys = try memberSecrets.map {
+            try P256K.Signing.PrivateKey(dataRepresentation: $0).publicKey.dataRepresentation
+        }
+        let aggregate = try MuSig.aggregate(memberKeys)
+        let synthetic = try MuSig.syntheticExtendedKey(aggregatePublicKey: aggregate)
+        let groupExpression = "[\(String(format: "%08x", synthetic.fingerprint))]"
+            + "\(synthetic.serialized(network: .testnet))/<0;1>/*"
+
+        // 1. Create the vault through the UI: device key + the group + a
+        //    silent third.
+        let vaultName = "Group Vault \(UInt16.random(in: 100 ..< 999))"
+        var app = launchApp()
+        app.tabBars.buttons["Vaults"].tap()
+        app.buttons["newVaultButton"].tap()
+        app.typeInto("vaultNameField", vaultName)
+        app.buttons["addDeviceKeyButton"].tap()
+        for expression in [groupExpression, try Self.fixtureCosigner(0xB2)] {
+            app.typeInto("cosignerField", expression)
+            app.buttons["addPastedKeyButton"].tap()
+        }
+        app.buttons["buildDescriptorButton"].tap()
+        let descriptorPreview = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH 'tr('")).firstMatch
+        XCTAssertTrue(scrollUntilExists(app, descriptorPreview), "descriptor preview missing")
+        app.dismissKeyboard()
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["saveVaultButton"]))
+        app.buttons["saveVaultButton"].tap()
+        XCTAssertTrue(app.staticTexts[vaultName].waitForExistence(timeout: 30),
+                      "group vault was not saved")
+        Screenshots.capture(app, "23-group-vault", testCase: self)
+
+        // 2. Fund it (matured coinbase) — same derivation the app made.
+        let descriptor = try Vault.multiADescriptor(
+            threshold: 2,
+            cosigners: [try Self.deviceKeyExpression(), groupExpression,
+                        try Self.fixtureCosigner(0xB2)])
+        let vault = try Vault(descriptor: descriptor, network: .signet)
+        let fundingScript = try vault.scriptPubKey(index: 0, choice: 0)
+        let fundingBlock = try await SignetMiner.mineOntoTip(payingTo: fundingScript)
+        let fundingTxid = try BitcoinCLI.coinbaseTxid(blockHash: fundingBlock)
+        try await SignetMiner.ensureChainHeight(
+            atLeast: (try BitcoinCLI.blockHeight(of: fundingBlock)) + Int(Wallet.coinbaseMaturity) - 1)
+
+        // 3. Relaunch so the scan credits the coin, then create the spend in
+        //    the UI and read the PSBT off the screen.
+        app = launchApp()
+        app.tabBars.buttons["Vaults"].tap()
+        app.staticTexts[vaultName].firstMatch.tap()
+        let fundedRow = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "\(fundingTxid.prefix(16))")).firstMatch
+        poll(timeout: 300, interval: 5, "group vault funding scanned in") {
+            self.nudgeSync(app)
+            return fundedRow.exists
+        }
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["Create spend PSBT…"]))
+        app.buttons["Create spend PSBT…"].tap()
+        app.typeInto("Destination address", try Self.fixtureAddress(0xE5))
+        app.typeInto("Amount (sats)", "1000000")
+        let createButton = app.buttons["Create spend PSBT"]
+        XCTAssertTrue(scrollUntilExists(app, createButton), "create button not reachable")
+        createButton.tap()
+        let psbtText = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH 'cHNidP'")).firstMatch
+        XCTAssertTrue(psbtText.waitForExistence(timeout: 20), "no PSBT produced")
+        let unsigned = psbtText.label
+        Screenshots.capture(app, "24-group-spend-created", testCase: self)
+
+        // 4. The group signs (the test is both members).
+        let signed = try Self.groupSign(base64: unsigned, memberSecrets: memberSecrets,
+                                        synthetic: synthetic)
+
+        // 5. Relaunch with the group's PSBT on the clipboard; the app pastes,
+        //    reviews, signs the device leg, finalizes, and broadcasts.
+        app = launchApp(clipboard: signed)
+        app.tabBars.buttons["Vaults"].tap()
+        app.staticTexts[vaultName].firstMatch.tap()
+        let signButton = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH 'Sign / combine'")).firstMatch
+        XCTAssertTrue(scrollUntilExists(app, signButton))
+        signButton.tap()
+        XCTAssertTrue(app.buttons["psbtPasteButton"].waitForExistence(timeout: 20))
+        app.buttons["psbtPasteButton"].tap()
+        // The maturity check compares against the app's synced tip, and a
+        // fresh launch may still be catching up its headers — the persisted
+        // coin row proves nothing about the tip. Re-adding re-reviews at the
+        // current height, which is exactly what a person would do.
+        let review = app.staticTexts["Review — what you are signing"]
+        poll(timeout: 240, interval: 5, "review accepted once the tip caught up") {
+            app.buttons["addPSBTButton"].tap()
+            _ = review.waitForExistence(timeout: 3)
+            return review.exists
+        }
+        if !review.exists {
+            Screenshots.capture(app, "debug-10-review-missing", testCase: self)
+            let unsafe = app.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS 'unsafe' OR label CONTAINS 'invalid'")).firstMatch
+            XCTFail("review did not appear; sheet says: \(unsafe.exists ? unsafe.label : "no error text")")
+            return
+        }
+        _ = scrollUntilExists(app, review)
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["Sign with this device"]))
+        app.buttons["Sign with this device"].tap()
+        let finalize = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH 'Finalize'")).firstMatch
+        XCTAssertTrue(scrollUntilExists(app, finalize), "finalize button missing")
+        finalize.tap()
+        XCTAssertTrue(app.staticTexts["Broadcast"].waitForExistence(timeout: 60),
+                      "broadcast confirmation missing")
+        Screenshots.capture(app, "25-group-broadcast", testCase: self)
+
+        // 6. The node is the judge — patiently: the app broadcasts over P2P
+        //    (inv → getdata → tx), so the mempool arrival is asynchronous.
+        //    Wait for it, then mine until the funding outpoint is gone.
+        let burnMaster = try HDKey(seed: BIP39.seed(mnemonic: Self.mnemonic))
+        let burn = try BIP86.scriptPubKey(
+            internalKey: BIP86.xonlyPublicKey(of: burnMaster.derived(path: "m/86'/1'/9'/0/9")))
+        poll(timeout: 120, interval: 3, "spend reached the node's mempool") {
+            let mempool = (try? BitcoinCLI.runJSON(["getrawmempool"])) as? [Any]
+            return (mempool?.isEmpty == false)
+                || (try? BitcoinCLI.runObject(["gettxout", fundingTxid, "0"])) == nil
+        }
+        for _ in 0 ..< 3 where (try? BitcoinCLI.runObject(["gettxout", fundingTxid, "0"])) != nil {
+            _ = try await SignetMiner.mineOntoTip(payingTo: burn)
+        }
+        let spent = try? BitcoinCLI.runObject(["gettxout", fundingTxid, "0"])
+        XCTAssertNil(spent, "the vault coin was not spent on chain")
+    }
+
+    /// The group's half of the ceremony: BIP327 two rounds over the
+    /// script-path sighash with the BIP328 derivation tweaks — the same
+    /// simulation the CLI's musig-sign-psbt performs.
+    private static func groupSign(base64: String, memberSecrets: [Data],
+                                  synthetic: HDKey) throws -> String {
+        var psbt = try PSBT(base64: base64)
+        let memberKeys = try memberSecrets.map {
+            try P256K.Signing.PrivateKey(dataRepresentation: $0).publicKey.dataRepresentation
+        }
+        let aggregate = try MuSig.aggregate(memberKeys)
+        guard let leaf = psbt.inputs[0].tapLeafScripts.first else {
+            throw NSError(domain: "group", code: 1)
+        }
+        guard let derivation = psbt.inputs[0].tapBIP32Derivation.first(where: {
+            $0.value.masterFingerprint == synthetic.fingerprint
+        }) else { throw NSError(domain: "group", code: 2) }
+        var tweaks: [Data] = []
+        var step = synthetic
+        for component in derivation.value.path {
+            tweaks.append(MuSig.bip328Tweak(chainCode: step.chainCode,
+                                            aggregatePublicKey: step.publicKey,
+                                            index: component))
+            step = try step.derived(path: "\(component)")
+        }
+        let sighash = try SighashBIP341.sighash(
+            tx: try psbt.unsignedTransaction(), inputIndex: 0,
+            spentOutputs: try psbt.spentOutputs(), hashType: .default,
+            scriptPath: .init(leafScript: Script(leaf.script), leafVersion: leaf.leafVersion))
+        var nonces: [(secret: Data, public_: Data)] = []
+        for (secret, publicKey) in zip(memberSecrets, memberKeys) {
+            let nonce = try MuSig.nonceGenerate(secretKey: secret, publicKey: publicKey,
+                                                aggregateKey: Data(aggregate.dropFirst()),
+                                                message: sighash)
+            nonces.append((nonce.secretNonce, nonce.publicNonce))
+        }
+        let session = MuSig.Session(
+            aggregateNonce: try MuSig.nonceAggregate(publicNonces: nonces.map(\.public_)),
+            publicKeys: memberKeys, tweaks: tweaks,
+            isXOnlyTweaks: tweaks.map { _ in false }, message: sighash)
+        var partials: [Data] = []
+        for (index, secret) in memberSecrets.enumerated() {
+            var secretNonce = nonces[index].secret
+            partials.append(try MuSig.partialSign(secretNonce: &secretNonce, secretKey: secret,
+                                                  session: session))
+        }
+        let signature = try MuSig.partialSigAggregate(partialSignatures: partials, session: session)
+        psbt.inputs[0].pairs.append(PSBT.KeyValue(
+            type: 0x14, keyData: Data(derivation.key) + leaf.leafHash, value: signature))
+        return psbt.base64
+    }
+
 }
