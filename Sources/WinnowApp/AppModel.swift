@@ -473,7 +473,10 @@ final class AppModel {
         var descriptions: [String] = []
         for peer in await stack.pool.connectedPeers() {
             let endpoint = await peer.endpoint.description
-            let userAgent = await peer.peerUserAgent ?? "unknown"
+            // Empty until the peer's version message lands, and the journal
+            // reads better with a word than with a blank column.
+            let advertised = await peer.peerUserAgent
+            let userAgent = advertised.isEmpty ? "unknown" : advertised
             descriptions.append("\(endpoint) \(userAgent)")
         }
         descriptions.sort()
@@ -868,7 +871,7 @@ final class AppModel {
         try await authenticateSensitiveAction(reason: "Create and reveal a new wallet recovery phrase")
         try Task.checkCancellation()
         await buildStackIfNeeded()
-        guard let stack else { throw AppError.noStack }
+        guard stack != nil else { throw AppError.noStack }
         let knownHeight = await creationHeightForNewWallet()
         guard let walletURL = walletURL() else { throw AppError.noWallet }
         let wallet = try Wallet.create(network: network, keyStore: keyStore,

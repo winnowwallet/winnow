@@ -95,11 +95,16 @@ jobs:
             -skipPackagePluginValidation -skipMacroValidation
       - name: Build and inspect release app
         run: |
+          set -o pipefail
           xcodebuild -project WinnowApp.xcodeproj -scheme WinnowApp \
             -configuration Release \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath "$RUNNER_TEMP/winnow-release" \
             -skipPackagePluginValidation -skipMacroValidation \
-            CODE_SIGNING_ALLOWED=NO build
+            CODE_SIGNING_ALLOWED=NO build \
+            2>&1 | tee "$RUNNER_TEMP/winnow-release-build.log"
+          # The library runs the same gate over its own sources; this covers
+          # what lives here. Reads the build above rather than repeating it.
+          scripts/ci-app-warnings "$RUNNER_TEMP/winnow-release-build.log"
           scripts/verify-release-e2e-exclusion \
             "$RUNNER_TEMP/winnow-release/Build/Products/Release-iphonesimulator/WinnowApp.app"
