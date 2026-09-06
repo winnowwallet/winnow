@@ -1108,6 +1108,24 @@ final class AppModel {
         if startSync, isActive { startSyncLoop() }
     }
 
+    /// Installs a wallet and stack the way `adopt` does, without the storage
+    /// reset, the onboarding stage and the networking `adopt` also brings.
+    ///
+    /// For tests of the paths that only run on a booted model. On a fresh one
+    /// `wallet` and `stack` are nil, so every optional-chained rewind in
+    /// `resumeInterruptedRollback` is a no-op and a test of it proves only
+    /// the marker. `observeBroadcasterFailures` is deliberately not started:
+    /// it surfaces persistence failures to the status line, nothing on the
+    /// rollback path reads it, and its `for await` would hold the broadcaster
+    /// until a `shutdown` no test issues.
+    func installForTesting(wallet: Wallet, stack: SyncStack) async {
+        precondition(self.stack == nil && self.wallet == nil, "installForTesting is for a fresh model")
+        self.wallet = wallet
+        walletID = await wallet.id
+        walletDescriptor = await wallet.descriptor
+        self.stack = stack
+    }
+
     /// Leaves onboarding once the backup flow (or import report) is done.
     func finishOnboarding() {
         if let walletID {
