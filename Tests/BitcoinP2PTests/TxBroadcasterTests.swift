@@ -548,7 +548,11 @@ struct TxBroadcasterTests {
 
         // Nothing is announced to a peer that has said it will drop the
         // bytes (BIP133): retries keep running, but node A hears none of them
-        // while its floor refuses the transaction.
+        // while its floor refuses the transaction. A rebroadcast that fired
+        // before node A's floor reached the broadcaster was legitimate and can
+        // still sit in A's inbox on a slow runner; drain it, so the window
+        // below only sees announcements made after the floor took effect.
+        while await nodeA.nextMessage(command: "inv", timeout: .milliseconds(50)) != nil {}
         #expect(await nodeA.nextMessage(command: "inv", timeout: .milliseconds(600)) == nil)
 
         // Floor dropping back below the feerate rearms the event, and the
