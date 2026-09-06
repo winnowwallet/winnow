@@ -5,6 +5,9 @@ public enum HeaderChainError: LocalizedError, Equatable {
     case invalidTarget(height: UInt32)
     case targetAbovePowLimit(height: UInt32)
     case insufficientProofOfWork(height: UInt32)
+    /// The header's `bits` differ from its parent's inside a retarget period,
+    /// where neither mainnet nor signet allows a change.
+    case unexpectedDifficulty(height: UInt32)
     case reorgWithoutMoreWork
     case storageCorrupt(String)
     case storageUnavailable(String)
@@ -27,6 +30,8 @@ public enum HeaderChainError: LocalizedError, Equatable {
             "A peer sent an impossibly easy proof-of-work target at block \(height)."
         case let .insufficientProofOfWork(height):
             "A peer sent a header without enough proof of work at block \(height)."
+        case let .unexpectedDifficulty(height):
+            "A peer changed the proof-of-work difficulty at block \(height), where Bitcoin does not allow a change."
         case .reorgWithoutMoreWork:
             "A peer offered an older or weaker Bitcoin chain."
         case let .storageCorrupt(reason):
@@ -44,17 +49,29 @@ public enum HeaderChainError: LocalizedError, Equatable {
 /// What is validated per header (deliberately minimal, light-client scope):
 /// - previous-hash linkage to the known chain,
 /// - compact bits decodes to a valid target ≤ consensus powLimit,
-/// - SHA256d(header) ≤ target (proof of work).
+/// - SHA256d(header) ≤ target (proof of work),
+/// - `bits` repeat the parent's except at a retarget boundary (every
+///   `difficultyAdjustmentInterval` blocks). Mainnet and signet both retarget
+///   on that schedule with no minimum-difficulty exception, so a change
+///   inside a period is a lie about difficulty — the way a peer would extend
+///   our tip with cheap headers until an honest branch replaced them. A
+///   checkpoint-rooted chain applies this from its first new header: the
+///   mainnet checkpoint at 900,000 is mid-period, so 900,001 is checked
+///   against the checkpoint itself.
 ///
 /// What is NOT validated (documented deviation from full validation):
-/// - the difficulty *retarget schedule* (claimed bits are accepted as long as
-///   each header individually satisfies its claimed target),
+/// - the *value* `bits` take at a retarget boundary (the timespan-based
+///   recomputation; deferred and tracked separately), so a boundary header
+///   is held only to its own claimed target,
 /// - timestamps (no median-time-past / future-drift rules),
 /// - anything below the header (merkle root, signet block signatures).
 /// Fork choice is cumulative-work; competing branches replace ours only with
 /// strictly more work.
 public actor HeaderChain {
     public static let maxHeadersPerRequest = 2_000
+    /// Blocks per difficulty period — Core's `DifficultyAdjustmentInterval()`,
+    /// the same on mainnet and signet. `bits` may change only at a multiple.
+    static let difficultyAdjustmentInterval: UInt32 = 2016
 
     public let params: NetworkParams
     private let storageURL: URL?
@@ -226,6 +243,18 @@ public actor HeaderChain {
         return work
     }
 
+    /// Refuses a `bits` change anywhere but the first block of a retarget
+    /// period. What a boundary header may claim is not recomputed here; inside
+    /// a period the rule needs no arithmetic, only the parent. `previous` is
+    /// nil when the parent lies below `baseHeight`, unknown to a
+    /// checkpoint-rooted chain — nothing to compare against, so it passes.
+    static func requireStableBits(_ header: BlockHeader, previous: BlockHeader?, height: UInt32) throws {
+        guard let previous, height % difficultyAdjustmentInterval != 0,
+              header.bits != previous.bits
+        else { return }
+        throw HeaderChainError.unexpectedDifficulty(height: height)
+    }
+
     /// Target decoding and block-work division depend only on `bits`. Header
     /// files commonly repeat the same difficulty for long stretches, so load
     /// can cache this expensive result while still hashing and PoW-checking
@@ -286,7 +315,7 @@ public actor HeaderChain {
     /// persistence write incremental too. A reorg cannot reach here, so the
     /// outcome carries no fork height by definition.
     private func appendToTip(_ newHeaders: [BlockHeader]) throws -> ConnectOutcome {
-        var previousHash = headers[headers.count - 1].hash
+        var previous = headers[headers.count - 1]
         var work = chainwork[chainwork.count - 1]
         var appended: [BlockHeader] = []
         var appendedWork: [UInt256] = []
@@ -294,13 +323,14 @@ public actor HeaderChain {
         appendedWork.reserveCapacity(newHeaders.count)
         for header in newHeaders {
             let height = baseHeight + UInt32(headers.count + appended.count)
-            guard header.previousHash == previousHash else {
+            guard header.previousHash == previous.hash else {
                 throw HeaderChainError.doesNotConnect
             }
             work = work + (try Self.checkedWork(for: header, params: params, height: height))
+            try Self.requireStableBits(header, previous: previous, height: height)
             appended.append(header)
             appendedWork.append(work)
-            previousHash = header.hash
+            previous = header
         }
         let firstNewHeight = baseHeight + UInt32(headers.count)
         headers.append(contentsOf: appended)
@@ -321,10 +351,12 @@ public actor HeaderChain {
         var stagedWork = Array(chainwork[...forkIndex])
         for header in newHeaders {
             let height = baseHeight + UInt32(stagedHeaders.count)
-            guard header.previousHash == stagedHeaders[stagedHeaders.count - 1].hash else {
+            let previous = stagedHeaders[stagedHeaders.count - 1]
+            guard header.previousHash == previous.hash else {
                 throw HeaderChainError.doesNotConnect
             }
             let work = try Self.checkedWork(for: header, params: params, height: height)
+            try Self.requireStableBits(header, previous: previous, height: height)
             stagedHeaders.append(header)
             stagedWork.append(stagedWork[stagedWork.count - 1] + work)
         }

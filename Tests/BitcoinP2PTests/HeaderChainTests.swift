@@ -56,6 +56,77 @@ struct HeaderChainTests {
         }
     }
 
+    @Test("refuses a difficulty change inside a retarget period")
+    func rejectsBitsChangeMidPeriod() async throws {
+        let chain = makeSyntheticChain(length: 2, watchHeight: 6)
+        let headerChain = try HeaderChain(params: chain.params)
+        try await headerChain.connect(chain.blocks.dropFirst().map(\.header))
+        let tip = chain.blocks[2].header
+
+        // One notch harder than the chain's 0x207fffff: still under powLimit
+        // and mined for real, so only the schedule rule can refuse it.
+        let changed = Self.mined(onto: tip, bits: 0x207F_FFFE, tag: 0xD1,
+                                 params: chain.params, height: 3)
+        await #expect(throws: HeaderChainError.unexpectedDifficulty(height: 3)) {
+            try await headerChain.connect([changed])
+        }
+        #expect(await headerChain.height == 2)
+        #expect(await headerChain.tipHash == tip.hash)
+
+        // Positive control: the same header with the chain's bits connects.
+        let unchanged = Self.mined(onto: tip, bits: tip.bits, tag: 0xD1,
+                                   params: chain.params, height: 3)
+        #expect(try await headerChain.connect([unchanged]).appended == 1)
+        #expect(await headerChain.height == 3)
+        #expect(await headerChain.tipHash == unchanged.hash)
+    }
+
+    @Test("a replacement branch is held to the same rule")
+    func rejectsBitsChangeInBranch() async throws {
+        let chain = makeSyntheticChain(length: 2, watchHeight: 6)
+        let headerChain = try HeaderChain(params: chain.params)
+        try await headerChain.connect(chain.blocks.dropFirst().map(\.header))
+        let tipBefore = await headerChain.tipHash
+
+        // Forks at genesis and would carry more work than the chain, but its
+        // second header changes bits at height 2.
+        let genesis = chain.blocks[0].header
+        let first = Self.mined(onto: genesis, bits: genesis.bits, tag: 0xD2,
+                               params: chain.params, height: 1)
+        let second = Self.mined(onto: first, bits: 0x207F_FFFE, tag: 0xD2,
+                                params: chain.params, height: 2)
+        let third = Self.mined(onto: second, bits: 0x207F_FFFE, tag: 0xD2,
+                               params: chain.params, height: 3)
+        await #expect(throws: HeaderChainError.unexpectedDifficulty(height: 2)) {
+            try await headerChain.connect([first, second, third])
+        }
+        #expect(await headerChain.height == 2)
+        #expect(await headerChain.tipHash == tipBefore)
+    }
+
+    @Test("bits may change at a period boundary; an unknown parent is not judged")
+    func stableBitsRuleEdges() throws {
+        let chain = makeSyntheticChain(length: 1, watchHeight: 6)
+        let genesis = chain.blocks[0].header
+        let harder = BlockHeader(version: 1, previousHash: genesis.hash,
+                                 merkleRoot: Data(repeating: 0xD3, count: 32),
+                                 time: genesis.time + 600, bits: 0x207F_FFFE, nonce: 0)
+        let interval = HeaderChain.difficultyAdjustmentInterval
+        #expect(throws: HeaderChainError.unexpectedDifficulty(height: 1)) {
+            try HeaderChain.requireStableBits(harder, previous: genesis, height: 1)
+        }
+        #expect(throws: HeaderChainError.unexpectedDifficulty(height: interval + 1)) {
+            try HeaderChain.requireStableBits(harder, previous: genesis, height: interval + 1)
+        }
+        // The first block of a period is where the schedule allows a change.
+        try HeaderChain.requireStableBits(harder, previous: genesis, height: interval)
+        try HeaderChain.requireStableBits(harder, previous: genesis, height: interval * 3)
+        // Unchanged bits pass anywhere inside the period.
+        try HeaderChain.requireStableBits(genesis, previous: genesis, height: 1)
+        // A parent below the chain's base is unknown: nothing to compare against.
+        try HeaderChain.requireStableBits(harder, previous: nil, height: 1)
+    }
+
     @Test("a longer branch replaces; a shorter one is refused")
     func forkChoice() async throws {
         let chain = makeSyntheticChain(length: 1, watchHeight: 6)
@@ -219,6 +290,23 @@ struct HeaderChainTests {
             _ = try HeaderChain(params: chain.params, storageURL: file)
         }
         try? FileManager.default.removeItem(at: file.deletingLastPathComponent())
+    }
+
+    /// Mines a header onto `parent` at the given `bits`, accepted by the same
+    /// check the chain applies, so a refusal in the tests above can only come
+    /// from the schedule rule and never from proof of work.
+    private static func mined(onto parent: BlockHeader, bits: UInt32, tag: UInt8,
+                              params: NetworkParams, height: UInt32) -> BlockHeader {
+        var nonce: UInt32 = 0
+        while true {
+            let header = BlockHeader(version: 1, previousHash: parent.hash,
+                                     merkleRoot: Data(repeating: tag, count: 32),
+                                     time: parent.time + 600, bits: bits, nonce: nonce)
+            if (try? HeaderChain.checkedWork(for: header, params: params, height: height)) != nil {
+                return header
+            }
+            nonce &+= 1
+        }
     }
 }
 
