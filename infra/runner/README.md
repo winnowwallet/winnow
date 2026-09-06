@@ -21,13 +21,13 @@ fixture, cloned from a golden OSX-KVM image with the host's
 ## Bringing one up
 
 ```sh
-# on the host: clone the golden image and boot it (see OSX-KVM/README-local.md)
-cd ~/OSX-KVM && ./clone-runner.sh macvm-1-btc 1
-nohup runners/start-macvm-1-btc.sh > runners/macvm-1-btc.log 2>&1 &
+# on the host: clone the golden image and boot it; the procedure and the
+# current seat inventory live in the macos-ci-runners repository README
+~/src/macos-ci-runners/scripts/clone-runner.sh runner-1 2201
 
 # on the host, once the guest answers on its forwarded SSH port:
 gh api -X POST repos/winnowwallet/winnow/actions/runners/registration-token --jq .token > /tmp/reg-token
-~/src/winnow/infra/runner/provision.sh macvm-1-btc 2201 /tmp/reg-token
+~/src/winnow/infra/runner/provision.sh runner-1 2201 /tmp/reg-token
 rm /tmp/reg-token
 ```
 
