@@ -13,8 +13,12 @@ final class HostProcessProbeTests: XCTestCase {
         let echo = try HostProcess.run("/bin/echo", ["host-spawn-ok"])
         XCTAssertEqual(echo.status, 0)
         XCTAssertEqual(echo.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "host-spawn-ok")
+        // The UI job starts its own fixture at genesis, so height 0 is a
+        // reachable node; only a non-numeric answer means it is not there.
         let node = try BitcoinCLI.run(["getblockcount"])
-        XCTAssertGreaterThan(Int(node) ?? 0, 0, "local signet node unreachable")
+        let height = Int(node.trimmingCharacters(in: .whitespacesAndNewlines))
+        XCTAssertNotNil(height, "local signet node unreachable: \(node)")
+        XCTAssertGreaterThanOrEqual(height ?? -1, 0)
     }
 }
 
