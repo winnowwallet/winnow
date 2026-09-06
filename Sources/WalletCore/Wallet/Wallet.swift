@@ -1010,9 +1010,21 @@ public actor Wallet {
             if let existing = state.allUtxos.firstIndex(where: {
                 $0.txid == txid && $0.vout == UInt32(vout)
             }) {
-                // Already known: either a re-applied block, or our own
-                // pending change output being confirmed — update its height.
+                // Already known: a re-applied block, our own pending change
+                // output being confirmed, or a coin that a rollback kept, at
+                // height 0, because an in-flight send reserves it — update its
+                // height. Only the last is a receive to count: the rollback
+                // dropped its history entry with the block that carried it,
+                // and this is the block bringing it back. Pending change is
+                // not, since its send entry already carries the change as
+                // received.
+                let refound = state.allUtxos[existing].height == 0
+                    && !state.history.contains(where: { $0.txid == txid })
                 state.allUtxos[existing].height = height
+                if refound {
+                    receivedAmount += output.value
+                    effect.received.append(state.allUtxos[existing])
+                }
                 continue
             }
             let utxo = WalletUTXO(txid: txid, vout: UInt32(vout), amount: output.value,
@@ -1572,7 +1584,10 @@ public actor Wallet {
     /// What it rewinds, and what it must not:
     ///
     /// - coins confirmed above the fork are dropped, because the rescan will
-    ///   re-find them if they still exist;
+    ///   re-find them if they still exist -- unless an in-flight spend reserves
+    ///   one. That row stays, at height 0, so the reservation survives and the
+    ///   rescan re-heights it instead of admitting a second, selectable copy of
+    ///   a coin our own transaction is already spending;
     /// - spends *confirmed* above the fork are undone, restoring the coin;
     /// - spends with no height are left alone. Those are our own transactions,
     ///   still in flight and still being re-relayed, so restoring their inputs
@@ -1589,9 +1604,13 @@ public actor Wallet {
     ///
     /// Height 0 means "not in a block yet", not "in block zero", so pending
     /// coins and pending history survive any fork height.
+    ///
+    /// The residual risk: a reserved row whose funding never reappears on the
+    /// new branch stays at height 0 for good, unselectable and uncounted. That
+    /// is a permanent zombie, the same class as an orphaned pending send, and
+    /// the price of never admitting a coin the wallet is already spending.
     public func rollBack(to forkHeight: UInt32) throws {
         var candidate = state
-        candidate.allUtxos.removeAll { $0.height > forkHeight }
         // A disconnected transaction that spent our coins is re-pended, not
         // erased (#157). The reorg removed it from the chain, but nodes put it
         // straight back in their mempools, so it is *in flight* — exactly the
@@ -1627,6 +1646,7 @@ public actor Wallet {
                 ? WalletUTXO.SpentMarker(spentBy: marker.spentBy, height: nil)
                 : nil
         }
+        Self.rewindCoins(above: forkHeight, in: &candidate.allUtxos)
         candidate.history.removeAll { $0.height > forkHeight }
         // Never forward: a fork at or above the frontier leaves nothing that
         // was scanned in doubt, and advancing here would skip unread blocks.
@@ -1635,6 +1655,25 @@ public actor Wallet {
         guard candidate != state else { return }
         try persist(candidate)
         state = candidate
+    }
+
+    /// The coin rows a fork takes away: everything confirmed above it, since
+    /// the rescan re-finds whichever still exist -- except a row reserved by a
+    /// heightless marker. Its spender is in flight, so dropping it would let
+    /// the rescan admit the coin again, unspent and selectable while the
+    /// broadcaster is still relaying the transaction that spends it: the
+    /// wallet double-spending itself. Kept, and re-heighted to 0, "not in a
+    /// block yet": `applyOutputs` re-heights a known row rather than appending
+    /// a second one, and a repeat of this pass finds nothing above the fork,
+    /// which is what keeps the rollback idempotent.
+    private static func rewindCoins(above forkHeight: UInt32, in coins: inout [WalletUTXO]) {
+        coins.removeAll { coin in
+            let reserved = coin.spent != nil && coin.spent?.height == nil
+            return coin.height > forkHeight && !reserved
+        }
+        for index in coins.indices where coins[index].height > forkHeight {
+            coins[index].height = 0
+        }
     }
 
     func persist() throws {
