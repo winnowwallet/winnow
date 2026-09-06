@@ -19,10 +19,13 @@ struct DescriptorBoundsTests {
     static let key = "xpub6FC1fXFP1GXQpyRFfSE1vzzySqs3Vg63bzimYLeqtNUYbzA87kMNTcuy9ubr7MmavGRjW2FRYHP4WGKjwutbf1ghgkUW9H7e3ceaPLRcVwa"
     static let nums = Taproot.unspendableInternalKey.hex
 
-    /// `{pk, {pk, {pk, …}}}` nested `depth` levels.
+    /// `{{{pk,pk},pk},pk}` nested `depth` levels: `depth` opening braces,
+    /// the innermost `pk`, then `depth` closing `,pk}`. Built in one pass so
+    /// the 50,000-level fixture below is linear in `depth`, not quadratic.
     static func nested(depth: Int) -> String {
-        var inner = "pk(\(key))"
-        for _ in 0 ..< depth { inner = "{\(inner),pk(\(key))}" }
+        let leaf = "pk(\(key))"
+        let inner = String(repeating: "{", count: depth) + leaf
+            + String(repeating: ",\(leaf)}", count: depth)
         return "tr(\(nums),\(inner))"
     }
 
@@ -78,5 +81,13 @@ struct DescriptorBoundsTests {
     func shallowDescriptorUnaffected() throws {
         let descriptor = try Descriptor(Self.nested(depth: 2))
         #expect(descriptor.serialized().hasPrefix("tr("))
+    }
+
+    /// Pins the one-pass builder to the tree written out level by level —
+    /// the text every depth above hands the parser.
+    @Test("the nested fixture is the level-by-level tree")
+    func nestedFixtureShape() {
+        let pk = "pk(\(Self.key))"
+        #expect(Self.nested(depth: 3) == "tr(\(Self.nums),{{{\(pk),\(pk)},\(pk)},\(pk)})")
     }
 }
