@@ -559,6 +559,7 @@ struct Parser {
 
     mutating func parseDerivation() throws -> Descriptor.Derivation {
         var elements: [Descriptor.Derivation.Element] = []
+        var sawMultipath = false
         while consume("/") {
             if consume("*") {
                 let hardened = consume("'") || consume("h")
@@ -566,6 +567,11 @@ struct Parser {
                 guard !consume("/") else { throw DescriptorError.invalidPath } // wildcard is final
             } else if consume("<") {
                 // BIP389 multipath: <NUM;NUM;...> with optional hardened markers.
+                // One per key expression: `multipathCount` and `derived()` take
+                // the choice count from the first element, so a second, narrower
+                // one would be indexed past its end on derivation.
+                guard !sawMultipath else { throw DescriptorError.invalidPath }
+                sawMultipath = true
                 var values = [try parsePathStep()]
                 while consume(";") { values.append(try parsePathStep()) }
                 try expect(">")
