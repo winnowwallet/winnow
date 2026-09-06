@@ -89,6 +89,11 @@ public actor PeerPool {
     /// The height of the header chain this pool last synced — proof-of-work
     /// validated, so no peer can inflate it. nil until the first header sync.
     private var validatedTip: UInt32?
+    /// Seats `evictStaleTips` has already judged. The height a peer reports
+    /// is fixed at its handshake and never refreshed, while `validatedTip`
+    /// advances with every header sync, so judging the same seat again later
+    /// would read an honest peer's age as staleness and burn it.
+    private var staleTipJudged: Set<PeerEndpoint> = []
 
     /// UI-facing snapshot of the pool's connection progress.
     public struct ConnectionStatus: Sendable, Equatable {
@@ -241,8 +246,13 @@ public actor PeerPool {
     func evictStaleTips() async -> [PeerEndpoint] {
         guard let validatedTip else { return [] }
         let reference = Int64(validatedTip)
+        // Judged once per seat, against the first tip the pool trusted after
+        // the seat was taken; a peer that is unseated and dials back in is a
+        // new seat with a new handshake, and is judged afresh.
+        staleTipJudged.formIntersection(peers.map(\.endpoint))
         var heights: [(peer: PeerConnection, height: Int64)] = []
-        for peer in peers {
+        for peer in peers where !staleTipJudged.contains(peer.endpoint) {
+            staleTipJudged.insert(peer.endpoint)
             // Widened before any arithmetic: the wire accepts the full signed
             // field, and `Int32.min` from a hostile peer must not trap here.
             heights.append((peer, Int64(await peer.peerStartHeight)))
@@ -525,6 +535,7 @@ public actor PeerPool {
             return false
         }
         peers.append(peer)
+        staleTipJudged.remove(endpoint)
         seatedSources[endpoint] = source
         if knownGood.insert(endpoint).inserted {
             knownSource[endpoint] = source

@@ -280,4 +280,26 @@ struct PSBTTests {
         let parsed = try PSBT(serialized: psbt.serialized)
         #expect(parsed.inputs[0].pairs.count == PSBT.maxMapPairs)
     }
+
+    @Test("setting an optional field to nil removes its pair instead of writing an empty value")
+    func nilSettersRemovePairs() throws {
+        let fixture = try Fixture()
+        var psbt = try PSBT(unsignedTx: fixture.tx, inputs: fixture.inputs, outputs: fixture.outputs)
+        #expect(psbt.inputs[0].tapInternalKey != nil)
+
+        psbt.inputs[0].tapInternalKey = nil
+        #expect(psbt.inputs[0].pair(type: PSBT.InType.tapInternalKey) == nil)
+        #expect(psbt.inputs[0].tapInternalKey == nil)
+        // Clearing a field that was never set must not create an empty pair.
+        psbt.inputs[0].tapKeySignature = nil
+        #expect(psbt.inputs[0].pair(type: PSBT.InType.tapKeySignature) == nil)
+        psbt.inputs[0].finalScriptWitness = nil
+        #expect(psbt.inputs[0].pair(type: PSBT.InType.finalScriptWitness) == nil)
+        psbt.outputs[0].tapInternalKey = nil
+        #expect(psbt.outputs[0].pair(type: PSBT.OutType.tapInternalKey) == nil)
+
+        // No empty fixed-width pair was left behind for the parser to reject.
+        #expect(try PSBT(serialized: psbt.serialized) == psbt)
+    }
+
 }

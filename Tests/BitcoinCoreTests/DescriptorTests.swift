@@ -52,6 +52,12 @@ struct DescriptorTests {
         // Mismatched multipath widths are invalid (BIP389).
         let mismatched = "tr(xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/<0;1>/*,{pk(xpub68NZiKmJWnxxS6aaHmn81bvJeTESw724CRDs6HbuccFQN9Ku14VQrADWgqbhhTHBaohPX4CjNLf9fq9MYo6oDaPPLPxSb7gwQN3ih19Zm4Y/<0;1;2>/*)})"
         #expect((try? Descriptor(mismatched)) == nil)
+
+        // One multipath element per key expression (BIP389). A second one
+        // used to parse and then trap on derivation, because the choice count
+        // comes from the first element and indexed the narrower second.
+        let doubled = "tr(xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/<0;1;2>/<0;1>/*)"
+        #expect(throws: DescriptorError.invalidPath) { _ = try Descriptor(doubled) }
     }
 
     @Test("BIP388 sortedmulti_a policy descriptor parses, derives, round-trips")

@@ -726,6 +726,11 @@ final class AppModel {
         else { return }
         try await wallet?.rollBack(to: forkHeight)
         try await vaultStore.rollBack(to: forkHeight)
+        // The same stores `rollBackStores` rewinds, plus the filter frontier.
+        // Without this, a crash between the marker and the broadcaster's
+        // rewind leaves an own send whose block fell parked forever, so the
+        // network never hears it again.
+        try await stack?.broadcaster.rollBack(to: forkHeight)
         try await stack?.filters?.rollBack(to: forkHeight)
         finishRollback()
     }
