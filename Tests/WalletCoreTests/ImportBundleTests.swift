@@ -287,6 +287,7 @@ struct ImportBundleTests {
     @Test("app-style apply + recordScanHeight exports the live frontier")
     func exportAfterAppStyleFilterProgress() async throws {
         let storage = tempFileURL("wallet.json")
+        defer { try? FileManager.default.removeItem(at: storage.deletingLastPathComponent()) }
         let keyStore = InMemoryKeyStore()
         // App path: apply(match:) + independent FilterSync progress, never
         // Wallet.scan. Persist must land on disk so a reopen sees it.

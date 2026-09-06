@@ -282,6 +282,7 @@ struct WalletTests {
     @Test("fee bump keeps inputs/payments, satisfies BIP125 fees, signs, and persists")
     func feeBump() async throws {
         let url = tempFileURL("wallet.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let keyStore = InMemoryKeyStore()
         let wallet = try await makeWallet(storageURL: url, keyStore: keyStore)
         let fundingScript = try await wallet.scriptPubKey(chain: .receive, index: 0)
@@ -600,6 +601,7 @@ struct WalletTests {
     @Test("persistence: state round-trips through Wallet.open")
     func persistence() async throws {
         let url = tempFileURL("wallet.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let keyStore = InMemoryKeyStore()
         let wallet = try await makeWallet(storageURL: url, keyStore: keyStore)
         _ = try await wallet.freshReceiveAddress()
@@ -623,6 +625,7 @@ struct WalletTests {
     @Test("corrupt persisted coin totals fail closed instead of trapping balance")
     func corruptPersistedAmounts() async throws {
         let url = tempFileURL("corrupt-amount-wallet.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let keyStore = InMemoryKeyStore()
         let wallet = try await makeWallet(storageURL: url, keyStore: keyStore)
         let script = try await wallet.scriptPubKey(chain: .receive, index: 0)
@@ -692,6 +695,7 @@ struct WalletTests {
     @Test("wallet state from before fee-bump metadata remains readable")
     func legacyPersistence() async throws {
         let url = tempFileURL("legacy-wallet.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let keyStore = InMemoryKeyStore()
         let wallet = try await makeWallet(storageURL: url, keyStore: keyStore)
         _ = try await wallet.freshReceiveAddress()
