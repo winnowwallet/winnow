@@ -12,6 +12,7 @@ let package = Package(
         .executable(name: "btc-swift", targets: ["BtcSwiftCLI"]),
         .executable(name: "WinnowSoak", targets: ["WinnowSoak"]),
         .executable(name: "winnow-story", targets: ["WinnowStoryCLI"]),
+        .executable(name: "winnow-generate", targets: ["WinnowGenerate"]),
         .executable(name: "WinnowFuzz", targets: ["WinnowFuzz"]),
     ],
     dependencies: [
@@ -48,6 +49,11 @@ let package = Package(
             path: "Tools/Story/Sources/WinnowStoryCLI"
         ),
         .executableTarget(
+            name: "WinnowGenerate",
+            dependencies: ["BitcoinCore", "BitcoinP2P"],
+            path: "Tools/Generate/Sources/WinnowGenerate"
+        ),
+        .executableTarget(
             name: "WinnowFuzz",
             dependencies: ["BitcoinCore", "BitcoinP2P", "WalletCore"],
             path: "Tools/Fuzz/Sources/WinnowFuzz"
@@ -56,6 +62,11 @@ let package = Package(
             name: "WinnowStoryCLITests",
             dependencies: ["WinnowStoryCLI"],
             path: "Tools/Story/Tests/WinnowStoryCLITests"
+        ),
+        .testTarget(
+            name: "WinnowGenerateTests",
+            dependencies: ["WinnowGenerate"],
+            path: "Tools/Generate/Tests/WinnowGenerateTests"
         ),
         .testTarget(
             name: "BitcoinCoreTests",

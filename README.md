@@ -46,7 +46,7 @@ and `WinnowSoak`. The explorer backend is never instantiated by the wallet.
 | `Tests/NodeSupport` | Miner and RPC helpers shared by differential and UI tests |
 | `AppTests/` | App state, privacy, journal redaction and iOS Keychain attributes |
 | `UITests/` | Simulator journeys and storefront capture |
-| `Tools/Fuzz/`, `Tools/Story/` | Local development tools, outside the shipping app |
+| `Tools/Fuzz/`, `Tools/Generate/`, `Tools/Story/` | Local development tools, outside the shipping app |
 | `docs/` | Website, design papers and security evidence |
 | `scripts/`, `infra/` | Build, release, reporting and dedicated test fixtures |
 

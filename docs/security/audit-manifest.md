@@ -29,9 +29,12 @@ test proves only the named property. It is not a general wallet-safety claim.
 The baseline run did **not** execute suites gated by `WINNOW_DIFF` or the
 checkpoint-generation environment. (At the frozen commit two further suites
 were gated by `WINNOW_SIGNET`, which no workflow set; their assertions now run
-on the node lane under `WINNOW_DIFF=1` as `FilterSyncDiffTests`.) App/UI tests
-and an iOS release configuration were also outside this run. Those are open
-evidence items, not implied passes.
+on the node lane under `WINNOW_DIFF=1` as `FilterSyncDiffTests`. Since this
+baseline, checkpoint generation and the genesis-versus-checkpoint agreement
+check left the test tree for the `winnow-generate` tool, and the 2,000 headers
+past the checkpoint became a vector that `CheckpointStartTests` connects on
+every CI run.) App/UI tests and an iOS release configuration were also outside
+this run. Those are open evidence items, not implied passes.
 
 ## Size and dependency boundary
 

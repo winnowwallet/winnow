@@ -178,19 +178,21 @@ public struct NetworkParams: Sendable, Equatable {
         // Taken from a chain of 963,233 headers whose tip was height 963,232,
         // 000000000000000000016813353d83651497417cc705d1e2caf46a541e81deef.
         //
-        // To reproduce, point the generator at a genesis-validated header file
-        // and it recomputes all three through the same loading path the app
-        // uses (`swift test --filter CheckpointGenerator`, with
-        // WINNOW_HEADERS_BIN set — see the test for what it does).
-        //
-        // Block 900,000 hash, display order:
-        //   000000000000000000010538edbfd2d5b809a33dd83f284aeea41c6d0d96968a
+        // To reproduce, point `scripts/refresh-checkpoint` at a genesis-validated
+        // header file: `winnow-generate checkpoint` recomputes all three through
+        // the same loading path the app uses, prints the lines below ready to
+        // paste, and proves a chain started from them agrees with the
+        // genesis-rooted chain 2,000 blocks on (Tools/Generate/README.md).
+        // Those 2,000 headers are the vector `CheckpointStartTests` replays.
         //
         // Note the two hex spellings below are not interchangeable:
         // `Data(hex:)` keeps byte order, `Data(displayHex:)` reverses it. The
         // header is wire bytes and the chainwork is big-endian, so both take
         // `hex:`; using `displayHex:` for the work would store it backwards and
         // every fork-choice comparison against it would be meaningless.
+        //
+        // Block 900,000 hash, display order:
+        //   000000000000000000010538edbfd2d5b809a33dd83f284aeea41c6d0d96968a
         checkpoint: Checkpoint(
             height: 900_000,
             header: Data(hex:
