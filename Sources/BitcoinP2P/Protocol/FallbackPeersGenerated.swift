@@ -1,10 +1,11 @@
 // GENERATED FILE — edit by regenerating, not by hand.
 //
 // scripts/generate-fallback-peers rewrites this file on the release path
-// (#161): it resolves the mainnet DNS seeds, dials candidates with the same
-// PeerConnection the app uses — whose handshake already refuses any peer not
-// advertising NODE_COMPACT_FILTERS — and keeps a /16-spread selection, checked
-// by the same `PeerEndpoint.netblock` the pool's diversity policy uses.
+// (#161) with `winnow-generate fallback-peers` (Tools/Generate): it resolves
+// the mainnet DNS seeds, dials candidates with the same PeerConnection the
+// app uses — whose handshake already refuses any peer not advertising
+// NODE_COMPACT_FILTERS — and keeps a /16-spread selection, checked by the
+// same `PeerEndpoint.netblock` the pool's diversity policy uses.
 //
 // The committed copy is the last verified generation and the build's fallback;
 // a release regenerates so freshness tracks releases rather than memory.

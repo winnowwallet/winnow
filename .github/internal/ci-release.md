@@ -41,9 +41,13 @@ Run Release manually first to validate the checkout without signing, uploading,
 assigning TestFlight groups or publishing. Release checks the generation date
 recorded inside `FallbackPeersGenerated.swift`, so copying or squashing history
 cannot make an old peer list appear fresh. If older than 30 days, run
-`scripts/generate-fallback-peers`, retain its log and commit the result before
-tagging. The signed app archive is checked for E2E controls and its provenance
-is attached to the GitHub release.
+`scripts/generate-fallback-peers` (which runs `winnow-generate fallback-peers`
+from [Tools/Generate](../../Tools/Generate/README.md)), retain its log and
+commit the result before tagging. Refreshing the header checkpoint is the same
+tool's other subcommand, via `scripts/refresh-checkpoint`, and needs a
+genesis-validated header file; it is a manual release-time step, not a check.
+The signed app archive is checked for E2E controls and its provenance is
+attached to the GitHub release.
 
 The CI workflow is reused directly, so release definitions cannot drift into a
 second copy of package/app/fuzz checks. Debug app tests already build the app;

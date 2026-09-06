@@ -5,7 +5,7 @@
 # non-reproducible) list auditable — keep it.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
-WINNOW_GENERATE_FALLBACK_PEERS=1 swift test --filter FallbackPeerGeneratorTests
+swift run --configuration release winnow-generate fallback-peers
 # The generator fails its own run on a thin list; this catches the other
 # silent failure, where nothing was written at all.
 git diff --stat -- Sources/BitcoinP2P/Protocol/FallbackPeersGenerated.swift
