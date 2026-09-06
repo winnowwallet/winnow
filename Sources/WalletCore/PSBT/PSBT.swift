@@ -204,6 +204,13 @@ public struct PSBT: Equatable, Sendable {
             }
         }
 
+        /// Drops the pair. A field set to nil is absent on the wire, not
+        /// present with an empty or zero value that the parser rejects or,
+        /// for an index or amount, silently reads as 0.
+        mutating func remove(type: UInt8, keyData: Data = Data()) {
+            pairs.removeAll { $0.type == type && $0.keyData == keyData }
+        }
+
         /// PSBT_IN_PREVIOUS_TXID — 32 bytes, internal byte order.
         public var previousTxid: Data? {
             get {
@@ -211,7 +218,10 @@ public struct PSBT: Equatable, Sendable {
                       value.count == 32 else { return nil }
                 return value
             }
-            set { set(KeyValue(type: InType.previousTxid, value: newValue ?? Data())) }
+            set {
+                guard let newValue else { remove(type: InType.previousTxid); return }
+                set(KeyValue(type: InType.previousTxid, value: newValue))
+            }
         }
 
         /// PSBT_IN_OUTPUT_INDEX — uint32 LE.
@@ -222,8 +232,9 @@ public struct PSBT: Equatable, Sendable {
                 return value.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self).littleEndian }
             }
             set {
+                guard let newValue else { remove(type: InType.outputIndex); return }
                 var value = Data()
-                value.appendUInt32(newValue ?? 0)
+                value.appendUInt32(newValue)
                 set(KeyValue(type: InType.outputIndex, value: value))
             }
         }
@@ -236,8 +247,9 @@ public struct PSBT: Equatable, Sendable {
                 return value.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self).littleEndian }
             }
             set {
+                guard let newValue else { remove(type: InType.sequence); return }
                 var value = Data()
-                value.appendUInt32(newValue ?? 0)
+                value.appendUInt32(newValue)
                 set(KeyValue(type: InType.sequence, value: value))
             }
         }
@@ -250,8 +262,9 @@ public struct PSBT: Equatable, Sendable {
                 return value.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self).littleEndian }
             }
             set {
+                guard let newValue else { remove(type: InType.sighashType); return }
                 var value = Data()
-                value.appendUInt32(newValue ?? 0)
+                value.appendUInt32(newValue)
                 set(KeyValue(type: InType.sighashType, value: value))
             }
         }
@@ -266,9 +279,10 @@ public struct PSBT: Equatable, Sendable {
                 return SighashBIP341.SpentOutput(amount: amount, scriptPubKey: script)
             }
             set {
+                guard let newValue else { remove(type: InType.witnessUTXO); return }
                 var value = Data()
-                value.appendInt64(newValue?.amount ?? 0)
-                value.appendVarData(newValue?.scriptPubKey ?? Data())
+                value.appendInt64(newValue.amount)
+                value.appendVarData(newValue.scriptPubKey)
                 set(KeyValue(type: InType.witnessUTXO, value: value))
             }
         }
@@ -276,13 +290,19 @@ public struct PSBT: Equatable, Sendable {
         /// PSBT_IN_TAP_INTERNAL_KEY — 32-byte x-only key (BIP371).
         public var tapInternalKey: Data? {
             get { pair(type: InType.tapInternalKey)?.value }
-            set { set(KeyValue(type: InType.tapInternalKey, value: newValue ?? Data())) }
+            set {
+                guard let newValue else { remove(type: InType.tapInternalKey); return }
+                set(KeyValue(type: InType.tapInternalKey, value: newValue))
+            }
         }
 
         /// PSBT_IN_TAP_KEY_SIG — 64-byte sig, or 65 with the sighash byte (BIP371).
         public var tapKeySignature: Data? {
             get { pair(type: InType.tapKeySignature)?.value }
-            set { set(KeyValue(type: InType.tapKeySignature, value: newValue ?? Data())) }
+            set {
+                guard let newValue else { remove(type: InType.tapKeySignature); return }
+                set(KeyValue(type: InType.tapKeySignature, value: newValue))
+            }
         }
 
         /// PSBT_IN_TAP_BIP32_DERIVATION — keyed by the x-only pubkey (BIP371).
@@ -337,9 +357,10 @@ public struct PSBT: Equatable, Sendable {
                 return items
             }
             set {
+                guard let newValue else { remove(type: InType.finalScriptWitness); return }
                 var value = Data()
-                value.appendCompactSize(UInt64(newValue?.count ?? 0))
-                for item in newValue ?? [] { value.appendVarData(item) }
+                value.appendCompactSize(UInt64(newValue.count))
+                for item in newValue { value.appendVarData(item) }
                 set(KeyValue(type: InType.finalScriptWitness, value: value))
             }
         }
@@ -467,6 +488,13 @@ public struct PSBT: Equatable, Sendable {
             }
         }
 
+        /// Drops the pair. A field set to nil is absent on the wire, not
+        /// present with an empty or zero value that the parser rejects or,
+        /// for an index or amount, silently reads as 0.
+        mutating func remove(type: UInt8, keyData: Data = Data()) {
+            pairs.removeAll { $0.type == type && $0.keyData == keyData }
+        }
+
         /// PSBT_OUT_AMOUNT — int64 LE sats (BIP370).
         public var amount: Int64? {
             get {
@@ -475,8 +503,9 @@ public struct PSBT: Equatable, Sendable {
                 return value.withUnsafeBytes { $0.loadUnaligned(as: Int64.self).littleEndian }
             }
             set {
+                guard let newValue else { remove(type: OutType.amount); return }
                 var value = Data()
-                value.appendInt64(newValue ?? 0)
+                value.appendInt64(newValue)
                 set(KeyValue(type: OutType.amount, value: value))
             }
         }
@@ -484,13 +513,19 @@ public struct PSBT: Equatable, Sendable {
         /// PSBT_OUT_SCRIPT — raw script bytes (BIP370).
         public var script: Data? {
             get { pair(type: OutType.script)?.value }
-            set { set(KeyValue(type: OutType.script, value: newValue ?? Data())) }
+            set {
+                guard let newValue else { remove(type: OutType.script); return }
+                set(KeyValue(type: OutType.script, value: newValue))
+            }
         }
 
         /// PSBT_OUT_TAP_INTERNAL_KEY — 32-byte x-only key (BIP371).
         public var tapInternalKey: Data? {
             get { pair(type: OutType.tapInternalKey)?.value }
-            set { set(KeyValue(type: OutType.tapInternalKey, value: newValue ?? Data())) }
+            set {
+                guard let newValue else { remove(type: OutType.tapInternalKey); return }
+                set(KeyValue(type: OutType.tapInternalKey, value: newValue))
+            }
         }
 
         /// PSBT_OUT_TAP_BIP32_DERIVATION — keyed by the x-only pubkey (BIP371).
