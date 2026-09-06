@@ -12,15 +12,17 @@ swift-secp256k1 is remote. Xcode resolution must match that root lockfile.
 | CI | PR, main push, manual, release caller | Complexity, package tests, story tests, app/Keychain tests, release warning and E2E exclusion gates, CLI smoke, provenance, fixed fuzz corpus |
 | LOC | Every PR, main push and manual run | cloc 2.10, committed paths, matching JSON/CSV/Markdown and merge-base deltas; 90-day artifacts subject to org limits |
 | Fuzz sanitizers | Weekly or manual seed replay | Sustained address/thread sanitizer coverage; does not repeat normal suites |
-| Node integration | Confirmed manual run or release caller | Core differential tests, then app UI tests on a fresh fixture owned by that run |
+| Node integration | Differential: same-repo PRs touching code, main pushes, nightly, release, confirmed manual run. UI: nightly, release, confirmed manual run (optional storefront capture) | Core differential tests and app UI tests, each on a fresh fixture owned by that job |
 | Release | New stable version tag or manual validation | Calls CI and Node integration, then signs/uploads and publishes only for tag pushes |
 | TestFlight recovery | Manual, exact version and build number | Finish notes/group assignment for an existing upload |
 | App Store submission | Manual | Attach a processed build and optionally submit for review |
 | Website | docs changes or manual | Validate links/LFS, then deploy the same static docs tree |
 
-PR checks use hosted runners. Persistent Intel and node runners accept trusted
-events only. Node suites share the source in `Tests/NodeSupport` and run
-serially; they must never share a mining fixture with another concurrent run.
+Hosted runners carry every PR check; the persistent Intel and node runners
+additionally take pull requests from branches in this repository, never from
+forks. Node suites share the source in `Tests/NodeSupport` and run serially on
+the single listener; they must never share a mining fixture with another
+concurrent run.
 Each job owns fixture setup and teardown under its temporary directory; prior
 wallet state and difficulty retargets cannot affect the next run.
 The three Keychain attribute checks use the app's existing iOS test host.

@@ -28,7 +28,8 @@ jobs:
           swiftlint lint --quiet
 
   package-tests-intel:
-    if: github.event_name != 'pull_request'
+    # The persistent Intel seat takes branches of this repository; forks stay hosted.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, macos, x86_64]
     timeout-minutes: 45
     steps:

@@ -10,7 +10,9 @@ Produced by `scripts/storefront-capture` (UITests/StorefrontCaptureTests,
 #39): a story with believable amounts in the beginner shell, its own wallet
 (entropy pinned per run from the chain height), and a keyed node wallet as
 the payer so received payments look like payments, not coinbases. The script
-fails unless all ten files exist at the right size.
+fails unless all ten files exist at the right size. The regular UI job skips
+this class explicitly; dispatch `node-tests.yml` with `capture_storefront`
+to run it on the seat and collect the set from the run's artifact.
 
 Use these six, in this order:
 
