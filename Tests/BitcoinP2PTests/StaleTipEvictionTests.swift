@@ -150,6 +150,43 @@ struct StaleTipEvictionTests {
         await pool.stop()
     }
 
+    @Test("a seat is judged once; the reported height ageing behind a moving tip is not staleness")
+    func seatedPeerIsNotRejudgedAsTipAdvances() async throws {
+        let long = makeSyntheticChain(length: 250, watchHeight: 3)
+        let short = Array(long.blocks.prefix(121)) // heights 0...120, so both report 120
+        let manual = LoopbackNode(params: long.params, chain: short)
+        let remembered = LoopbackNode(params: long.params, chain: short)
+        try await manual.start()
+        try await remembered.start()
+        defer { Task { await manual.stop() }; Task { await remembered.stop() } }
+        let rememberedEndpoint = await remembered.endpoint
+        // The remembered peer is the one under judgment; a manual peer is
+        // exempt, and one manual seat lets the diversity ceiling seat both.
+        let store = tempFileURL("peers.json")
+        try Self.persistedPeersFile([rememberedEndpoint]).write(to: store)
+        let pool = PeerPool(params: long.params, peerCount: 2,
+                            manualPeers: [await manual.endpoint], peersFileURL: store)
+        await pool.start()
+        _ = await Self.settle(pool) { $0.count == 2 }
+
+        let chain = try HeaderChain(params: long.params)
+        _ = try await pool.syncHeaders(chain)
+        #expect(await chain.height == 120)
+        #expect(await Self.settle(pool) { $0.count == 2 }.count == 2, "judged at 120 against 120: both stay")
+
+        // The chain moves 130 blocks past what the peers reported at their
+        // handshake, learned from headers the pool did not get from them.
+        _ = try await chain.connect(long.blocks[121...].map(\.header))
+        #expect(await chain.height == 250)
+        _ = try await pool.syncHeaders(chain)
+        let seated = await Self.settle(pool) { $0.count == 2 }
+        #expect(seated.contains(rememberedEndpoint),
+                "a height that only aged with the tip is not a stale tip; the seat was judged when taken")
+        #expect(await pool.rejectionReason(rememberedEndpoint) == nil)
+        #expect(await pool.coolingEndpoints.isEmpty)
+        await pool.stop()
+    }
+
     @Test("the tolerance is the wallet's reorg horizon")
     func toleranceMatchesHorizon() {
         #expect(PeerPool.staleTipTolerance == 100)
