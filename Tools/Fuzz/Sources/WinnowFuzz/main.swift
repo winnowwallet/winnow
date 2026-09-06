@@ -1,43 +1,18 @@
 import BitcoinCore
 import BitcoinP2P
 import Foundation
-import WalletCore
-
-private enum Target: String, CaseIterable {
-    case psbt
-    case descriptor
-    case transaction
-    case block
-    case messages
-    case framing
-    case filter
-    case address
-    case importBundle = "import"
-}
-
-private struct SplitMix64 {
-    var state: UInt64
-
-    mutating func next() -> UInt64 {
-        state &+= 0x9E37_79B9_7F4A_7C15
-        var value = state
-        value = (value ^ (value >> 30)) &* 0xBF58_476D_1CE4_E5B9
-        value = (value ^ (value >> 27)) &* 0x94D0_49BB_1331_11EB
-        return value ^ (value >> 31)
-    }
-
-    mutating func index(_ upperBound: Int) -> Int {
-        guard upperBound > 0 else { return 0 }
-        return Int(next() % UInt64(upperBound))
-    }
-}
+import WinnowFuzzCore
 
 private struct Options {
     var iterations = 2_000
     var seed: UInt64 = 0x5749_4E4E_4F57_4655 // "WINNOWFU"
-    var target: Target?
+    var target: FuzzTarget?
     var maxInput = 4_096
     var artifactDirectory: URL?
+
+    /// The `--target` selection as given, so a recorded case can be replayed
+    /// with the same interleaving.
+    var targetName: String { target?.rawValue ?? "all" }
 
     init(arguments: [String]) throws {
         var index = 0
@@ -64,7 +39,7 @@ private struct Options {
             case "--target":
                 let name = try value()
                 guard name != "all" else { target = nil; break }
-                guard let parsed = Target(rawValue: name) else { throw RunnerError.usage("unknown target \(name)") }
+                guard let parsed = FuzzTarget(rawValue: name) else { throw RunnerError.usage("unknown target \(name)") }
                 target = parsed
             case "--max-input":
                 guard let parsed = Int(try value()), parsed > 0, parsed <= 1_000_000 else {
@@ -88,7 +63,7 @@ private enum RunnerError: Error, CustomStringConvertible {
 
     var description: String {
         switch self {
-        case let .usage(message): "\(message)\nusage: WinnowFuzz [--iterations N] [--seed N|0xHEX] [--target all|\(Target.allCases.map(\.rawValue).joined(separator: "|"))] [--max-input N] [--artifact-dir PATH]"
+        case let .usage(message): "\(message)\nusage: WinnowFuzz [--iterations N] [--seed N|0xHEX] [--target all|\(FuzzTarget.allCases.map(\.rawValue).joined(separator: "|"))] [--max-input N] [--artifact-dir PATH]"
         case let .invariant(message): message
         }
     }
@@ -96,7 +71,7 @@ private enum RunnerError: Error, CustomStringConvertible {
 
 private let generatorXOnly = Data(hex: "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")!
 
-private func binaryCorpus(for target: Target) -> [Data] {
+private func binaryCorpus(for target: FuzzTarget) -> [Data] {
     let minimalTransaction = Data(hex:
         "0200000001" + String(repeating: "00", count: 32) +
             "ffffffff00ffffffff0100000000000000000000000000")!
@@ -164,101 +139,45 @@ private func mutate(_ source: Data, rng: inout SplitMix64, maximum: Int) -> Data
     return Data(bytes)
 }
 
-private func require(_ condition: Bool, _ message: String) throws {
-    if !condition { throw RunnerError.invariant(message) }
+/// Standard output through the descriptor, not stdio: a trap never flushes a
+/// pipe's buffer, and these lines exist to survive one.
+private func emit(_ line: String) {
+    FileHandle.standardOutput.write(Data("\(line)\n".utf8))
 }
 
-private func exercise(_ target: Target, data: Data, rng: inout SplitMix64) throws {
-    switch target {
-    case .psbt:
-        if let parsed = try? PSBT(serialized: data) {
-            try require(try PSBT(serialized: parsed.serialized) == parsed, "PSBT canonical round trip changed semantics")
-            try require(try PSBT(base64: parsed.base64) == parsed, "PSBT Base64 round trip changed semantics")
+/// Names the case in flight, so a trap (which never reaches `saveFailure`)
+/// still leaves the target, seed, and iteration on disk. One plain write per
+/// case is the simplest correct option: the kernel keeps the bytes when the
+/// process dies, there is no handle to manage, and lines of varying length
+/// need no truncation.
+private struct InFlightMarker {
+    let url: URL?
+
+    init(directory: URL?) {
+        url = directory?.appendingPathComponent("in-flight.txt")
+        if let directory {
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         }
-    case .descriptor:
-        if let parsed = try? Descriptor(String(decoding: data, as: UTF8.self)) {
-            try require(try Descriptor(parsed.serialized()) == parsed, "descriptor canonical round trip changed semantics")
-            // Derivation is where a parseable-but-malformed descriptor used to
-            // trap (a second multipath element narrower than the first). A
-            // throw is an acceptable answer here; a crash is not.
-            _ = try? parsed.derived(index: 0)
-        }
-    case .transaction:
-        if let parsed = try? Transaction.decode(data) {
-            try require(try Transaction.decode(parsed.serialized(includeWitness: true)) == parsed,
-                        "transaction canonical round trip changed semantics")
-        }
-    case .block:
-        if let parsed = try? Block.decode(data) {
-            try require(try Block.decode(parsed.serialized) == parsed, "block canonical round trip changed semantics")
-        }
-    case .messages:
-        let commands = ["version", "verack", "ping", "pong", "sendheaders", "feefilter", "inv", "getdata",
-                        "notfound", "tx", "block", "getheaders", "headers", "getcfilters", "cfilter",
-                        "getcfheaders", "cfheaders", "getcfcheckpt", "cfcheckpt"]
-        for command in commands {
-            if let parsed = try? PeerMessage.decode(command: command, payload: data) {
-                try require(try PeerMessage.decode(command: parsed.command, payload: parsed.payload) == parsed,
-                            "\(command) message canonical round trip changed semantics")
-            }
-        }
-    case .framing:
-        var framer = MessageFramer(magic: Data([0x0A, 0x03, 0xCF, 0x40]))
-        var offset = 0
-        while offset < data.count {
-            let length = min(data.count - offset, 1 + rng.index(31))
-            framer.append(data.subdata(in: offset ..< offset + length))
-            offset += length
-        }
-        var decoded = 0
-        while true {
-            let next: (command: String, payload: Data)?
-            do {
-                next = try framer.nextMessage()
-            } catch {
-                break
-            }
-            guard let message = next else { break }
-            let reframed = MessageFramer.frame(command: message.command, payload: message.payload, magic: framer.magic)
-            var check = MessageFramer(magic: framer.magic)
-            check.append(reframed)
-            let roundTrip = try check.nextMessage()
-            try require(roundTrip?.command == message.command && roundTrip?.payload == message.payload,
-                        "framed message did not round trip")
-            decoded += 1
-            if decoded == 32 { break }
-        }
-    case .filter:
-        var reader = ByteReader(data)
-        if let count = try? reader.readVarInt(), count <= UInt64(UInt32.max) {
-            let encoded = data.subdata(in: data.startIndex + reader.offset ..< data.endIndex)
-            if let filter = try? GCSFilter(key: Data(repeating: 0, count: 16), n: UInt32(count), encoded: encoded) {
-                _ = filter.matchAny([data.prefix(32), Data([0]), Data()])
-                try require(filter.serialized == data, "GCS filter canonical round trip changed bytes")
-            }
-        }
-    case .address:
-        let string = String(decoding: data, as: UTF8.self)
-        for network in [BitcoinNetwork.mainnet, .signet] {
-            if let script = try? AddressDecoder.scriptPubKey(for: string, network: network) {
-                try require(script.count <= 42, "address produced an oversized standard script")
-            }
-        }
-    case .importBundle:
-        guard data.count <= 4_000_000, let bundle = try? JSONDecoder().decode(ImportBundle.self, from: data) else { return }
-        let serialized = try bundle.serialized()
-        try require(try JSONDecoder().decode(ImportBundle.self, from: Data(serialized.utf8)) == bundle,
-                    "import bundle canonical round trip changed semantics")
-        _ = try? bundle.claimedUTXOs()
+    }
+
+    func record(_ line: String) {
+        guard let url else { return }
+        try? Data("\(line)\n".utf8).write(to: url)
+    }
+
+    func clear() {
+        guard let url else { return }
+        try? FileManager.default.removeItem(at: url)
     }
 }
 
-private func saveFailure(_ data: Data, target: Target, seed: UInt64, iteration: Int, directory: URL?) {
+private func saveFailure(_ data: Data, target: FuzzTarget, seed: UInt64, iteration: Int, directory: URL?) {
     guard let directory else { return }
     try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let url = directory.appendingPathComponent("\(target.rawValue)-\(String(seed, radix: 16))-\(iteration).bin")
     FileManager.default.createFile(atPath: url.path, contents: data,
                                    attributes: [.posixPermissions: 0o600])
+    emit("saved \(url.path); add this file under Tests/FuzzRegressions/Cases/\(target.rawValue)/ to keep it as a regression")
 }
 
 @main
@@ -266,11 +185,18 @@ private enum WinnowFuzzMain {
     static func main() {
         do {
             let options = try Options(arguments: Array(CommandLine.arguments.dropFirst()))
-            let targets = options.target.map { [$0] } ?? Target.allCases
+            let targets = options.target.map { [$0] } ?? FuzzTarget.allCases
+            let seed = "0x\(String(options.seed, radix: 16))"
+            let marker = InFlightMarker(directory: options.artifactDirectory)
+            for target in targets {
+                emit("fuzzing target=\(target.rawValue) seed=\(seed) iterations=\(options.iterations) max-input=\(options.maxInput)")
+            }
             var rng = SplitMix64(state: options.seed)
             var runs = 0
             for iteration in 0 ..< options.iterations {
                 for target in targets {
+                    marker.record("target=\(target.rawValue) seed=\(seed) iteration=\(iteration) " +
+                        "targets=\(options.targetName) max-input=\(options.maxInput)")
                     let corpus = binaryCorpus(for: target)
                     let input = mutate(corpus[rng.index(corpus.count)], rng: &rng, maximum: options.maxInput)
                     do {
@@ -283,6 +209,7 @@ private enum WinnowFuzzMain {
                     runs += 1
                 }
             }
+            marker.clear()
             print("WinnowFuzz passed \(runs) deterministic cases (seed 0x\(String(options.seed, radix: 16)))")
         } catch {
             FileHandle.standardError.write(Data("\(error)\n".utf8))
