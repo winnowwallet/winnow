@@ -79,12 +79,11 @@ public struct BlockMatch: Sendable, Equatable {
 /// 2. `getcfcheckpt` at the tip from up to 3 peers; peers that disagree with
 ///    the majority answer are disconnected (BIP157 filters are not
 ///    consensus-committed — cross-peer comparison is the mitigation).
-/// 3. `getcfheaders` per ≤1000-block batch; the announced previous filter
-///    header must equal our pinned header at batchStart-1 (zero at genesis),
-///    then the filter-hash chain is walked forward and pinned per height. On
-///    the first batch of a fresh progress file there is no pinned previous
-///    header, so the batch's cfheaders response is required to be byte-identical
-///    from two peers when two are available.
+/// 3. `getcfheaders` per ≤1000-block batch from up to 3 peers spanning source
+///    classes, judged by the same strict-majority rule as step 2 — never by
+///    which peer was seated first; the announced previous filter header must
+///    equal our pinned header at batchStart-1 (zero at genesis), then the
+///    filter-hash chain is walked forward and pinned per height.
 /// 4. `getcfilters` (type 0x00) for the batch; each filter must reproduce the
 ///    pinned header chain given the block hash from our PoW-checked header
 ///    chain — this is what anchors filters to the block chain.
@@ -236,6 +235,14 @@ public actor FilterSync {
                 batchStart: batchStart, batchStop: batchStop,
                 stopHash: stopHash, peers: peers,
                 startingFrom: progress.filterHeaders)
+            // The cross-check may have just disconnected `peers[0]` as the
+            // minority, so the list is re-derived before anything is sent to
+            // it. Same intersection as above, for the same reason: a long
+            // sync must not drift onto replacements dialled mid-scan whose
+            // checkpoints were never compared against anyone's. If every
+            // approved peer has gone, stop rather than continue unvetted —
+            // the next `sync` redoes the comparison from scratch.
+            peers = try await approved(peers: approvedEndpoints)
             try await scanFilters(batchStart: batchStart, batchStop: batchStop,
                                   peer: peers[0], watchScripts: watchScripts,
                                   filterHeaders: proposedHeaders,
@@ -245,12 +252,6 @@ public actor FilterSync {
             candidate.nextScanHeight = batchStop + 1
             try persist(candidate)
             progress = candidate
-            // Same intersection as above, for the same reason: a long sync
-            // must not drift onto replacements dialled mid-scan whose
-            // checkpoints were never compared against anyone's. If every
-            // approved peer has gone, stop rather than continue unvetted —
-            // the next `sync` redoes the comparison from scratch.
-            peers = try await approved(peers: approvedEndpoints)
         }
 
         // Final guard: the highest checkpoint header we computed must equal
@@ -337,25 +338,40 @@ public actor FilterSync {
         of checkpoints: [(peer: PeerConnection, message: CFCheckptMessage)])
         async throws -> CFCheckptMessage {
         guard checkpoints.count > 1 else { return checkpoints[0].message }
-        var tally: [(message: CFCheckptMessage, count: Int)] = []
-        for entry in checkpoints {
-            if let index = tally.firstIndex(where: { $0.message == entry.message }) {
-                tally[index].count += 1
-            } else {
-                tally.append((entry.message, 1))
-            }
-        }
-        let best = tally.max { $0.count < $1.count }!
-        guard best.count * 2 > checkpoints.count else {
+        let answers: [(peer: PeerConnection, value: CFCheckptMessage)] =
+            checkpoints.map { (peer: $0.peer, value: $0.message) }
+        guard let majority = Self.strictMajority(of: answers) else {
             for (peer, _) in checkpoints {
                 await pool.misbehaving(peer, reason: "cfcheckpt no majority")
             }
             throw FilterSyncError.checkpointMismatch("no cfcheckpt majority across \(checkpoints.count) peers")
         }
-        for (peer, message) in checkpoints where message != best.message {
+        for peer in majority.minority {
             await pool.misbehaving(peer, reason: "cfcheckpt mismatch")
         }
-        return best.message
+        return majority.value
+    }
+
+    /// The answer more than half of `answers` gave, and the peers that gave
+    /// something else — nil when nothing reaches a strict majority (a 1–1
+    /// split, or three different answers). One definition shared by the
+    /// cfcheckpt and cfheaders layers, so "majority" cannot mean two things.
+    /// What to do with the minority, or with no majority at all, is each
+    /// caller's judgement: the tally only says who agreed with whom.
+    private static func strictMajority<T: Equatable>(
+        of answers: [(peer: PeerConnection, value: T)])
+        -> (value: T, minority: [PeerConnection])? {
+        var tally: [(value: T, count: Int)] = []
+        for entry in answers {
+            if let index = tally.firstIndex(where: { $0.value == entry.value }) {
+                tally[index].count += 1
+            } else {
+                tally.append((entry.value, 1))
+            }
+        }
+        guard let best = tally.max(by: { $0.count < $1.count }),
+              best.count * 2 > answers.count else { return nil }
+        return (best.value, answers.filter { $0.value != best.value }.map(\.peer))
     }
 
     /// Core serves checkpoint headers at heights 1000, 2000, …, ascending
@@ -398,44 +414,56 @@ public actor FilterSync {
         return result
     }
 
-    /// Fetches cfheaders for [batchStart, batchStop] and pins the filter
-    /// header chain to our block-header chain.
-    /// Picks the cross-check pair: two peers from *different* source classes
-    /// when the pool holds them, any two otherwise, one when that is all
-    /// there is. Pure so the policy is testable without a network.
-    static func crossSourcePair(_ peers: [(peer: PeerConnection, source: PeerSource?)])
-        -> [PeerConnection]
+    /// Picks the cross-check set: up to `limit` peers, spanning as many source
+    /// classes as the pool holds. The anchor is the first peer; next comes the
+    /// first peer of a *different* class, then any class not yet represented,
+    /// and only then are the remaining seats filled in seating order. Fewer
+    /// peers than `limit`, or a single class, is the degraded mode — used, not
+    /// refused, exactly as a single-peer pool is. Pure so the policy is
+    /// testable without a network.
+    static func crossSourceSet(_ peers: [(peer: PeerConnection, source: PeerSource?)],
+                               limit: Int = 3) -> [PeerConnection]
     {
-        guard let first = peers.first else { return [] }
-        guard peers.count > 1 else { return [first.peer] }
-        if let other = peers.dropFirst().first(where: { $0.source != first.source }) {
-            return [first.peer, other.peer]
+        guard let anchor = peers.first, limit > 0 else { return [] }
+        var chosen = [anchor.peer]
+        var classes = [anchor.source]
+        let rest = peers.dropFirst()
+        for entry in rest where chosen.count < limit && !classes.contains(entry.source) {
+            chosen.append(entry.peer)
+            classes.append(entry.source)
         }
-        return [first.peer, peers[1].peer]
+        for entry in rest where chosen.count < limit && !chosen.contains(where: { $0 === entry.peer }) {
+            chosen.append(entry.peer)
+        }
+        return chosen
     }
 
+    /// Fetches cfheaders for [batchStart, batchStop] and pins the filter
+    /// header chain to our block-header chain.
     private func pinFilterHeaders(batchStart: UInt32, batchStop: UInt32, stopHash: Data,
                                   peers: [PeerConnection],
                                   startingFrom storedHeaders: [String: String]) async throws
         -> [String: String]
     {
-        // Always cross-check cfheaders between two peers when the pool has
-        // them (paper §2.7: "fetch cfheaders from ≥2 independent peers and
+        // Always cross-check cfheaders across peers when the pool has them
+        // (paper §2.7: "fetch cfheaders from ≥2 independent peers and
         // disconnect peers that disagree"). A single-peer pool degrades to one.
         //
-        // The pair spans source classes when it can (#3). `prefix(2)` took
+        // The set spans source classes when it can (#3). `prefix(2)` took
         // whichever two connected first, and the diversity ceiling permits two
         // seats from one class — so the cross-check could be a DNS seed's
         // answer compared against the same DNS seed's other answer: one
-        // acquisition channel agreeing with itself. Same-class pairs remain
-        // the degraded mode, exactly as a single-peer pool is.
+        // acquisition channel agreeing with itself. Same-class sets remain
+        // the degraded mode, exactly as a single-peer pool is. Three rather
+        // than two because two can only ever tie, and a tie names no liar:
+        // the third answer is what turns a disagreement into a verdict (#26).
         var sourced: [(peer: PeerConnection, source: PeerSource?)] = []
         for peer in peers {
             sourced.append((peer, await pool.source(of: peer.endpoint)))
         }
         let message = try await crossCheckedCFHeaders(
             batchStart: batchStart, batchStop: batchStop, stopHash: stopHash,
-            queryPeers: Self.crossSourcePair(sourced))
+            queryPeers: Self.crossSourceSet(sourced))
 
         var headers = storedHeaders
         try anchorPreviousHeader(of: message, batchStart: batchStart, in: &headers)
@@ -450,35 +478,84 @@ public actor FilterSync {
         return headers
     }
 
-    /// One cfheaders answer for the batch, byte-identical across every peer
-    /// asked: a disagreement evicts the later peer and aborts, because a
-    /// filter-header lie is unattributable between two claimants.
+    /// One cfheaders answer for the batch, judged by strict majority across
+    /// the peers asked — never by seating order. The first version kept the
+    /// first reply as the reference and evicted whoever contradicted it
+    /// *later*, so the dial race decided blame: a liar that connected first
+    /// became the reference and the honest second peer was banned — struck
+    /// from the persisted good-peers file — for telling the truth (#26).
+    ///
+    /// Now every reply is tallied. The majority answer is adopted and only
+    /// the peers outside it are evicted: their answer contradicts a majority
+    /// that, with the set spanning source classes, includes cross-source
+    /// agreement, so the lie is attributable. With no strict majority — a
+    /// 1–1 split, or three different answers — nobody can be named, so every
+    /// tallied peer is cooled off rather than banned and the batch fails
+    /// closed. A ban here would condemn the honest peer alongside the liar;
+    /// a cooldown keeps both in the good-peers file while the pool seats
+    /// other candidates in the meantime, which is what breaks the tie on the
+    /// next pass. A lone answer is accepted, as `majorityReference` accepts
+    /// a lone survivor and for the same reason.
     private func crossCheckedCFHeaders(batchStart: UInt32, batchStop: UInt32,
                                        stopHash: Data,
                                        queryPeers: [PeerConnection]) async throws
         -> CFHeadersMessage {
-        var decoded: CFHeadersMessage?
-        for peer in queryPeers {
-            let response = try await peer.request(
-                .getcfheaders(GetCFiltersRequest(startHeight: batchStart, stopHash: stopHash)),
-                expecting: ["cfheaders"])
-            guard case let .cfheaders(message) = response else {
-                throw FilterSyncError.badPeerResponse("expected cfheaders")
-            }
-            guard message.stopHash == stopHash else {
-                throw FilterSyncError.badPeerResponse("cfheaders stop hash mismatch")
-            }
-            if let existing = decoded, existing != message {
-                await pool.misbehaving(peer, reason: "cfheaders mismatch at \(batchStart)")
-                throw FilterSyncError.checkpointMismatch("cfheaders disagree at \(batchStart)")
-            }
-            decoded = message
+        let answers = try await collectedCFHeaders(batchStart: batchStart, stopHash: stopHash,
+                                                   from: queryPeers)
+        guard !answers.isEmpty else {
+            // Reachable now that a transport error skips a peer instead of
+            // aborting the batch: every peer asked may be resting. Same
+            // distinction as the top of `sync` (#82).
+            let cooling = await pool.coolingEndpoints.count
+            throw cooling > 0 ? FilterSyncError.peersCoolingDown(cooling) : FilterSyncError.noPeers
         }
-        guard let message = decoded else { throw FilterSyncError.noPeers }
+        guard let majority = Self.strictMajority(of: answers) else {
+            for (peer, _) in answers {
+                await pool.transportFailure(peer, reason: "cfheaders disagree at \(batchStart)")
+            }
+            throw FilterSyncError.checkpointMismatch("cfheaders disagree at \(batchStart)")
+        }
+        for peer in majority.minority {
+            await pool.misbehaving(peer, reason: "cfheaders mismatch at \(batchStart)")
+        }
+        let message = majority.value
         guard message.filterHashes.count == Int(batchStop - batchStart + 1) else {
             throw FilterSyncError.badPeerResponse("cfheaders count \(message.filterHashes.count) != \(batchStop - batchStart + 1)")
         }
         return message
+    }
+
+    /// The batch's cfheaders replies, one per peer that answered about the
+    /// block we asked about. Mirrors `collectedCheckpoints`: a transport
+    /// error cools that peer off and the others are still asked, and a reply
+    /// about a different stop hash evicts the peer that sent it — an honest
+    /// peer echoes the hash it was sent, so that fault is attributable on its
+    /// own, before any tally.
+    private func collectedCFHeaders(batchStart: UInt32, stopHash: Data,
+                                    from queryPeers: [PeerConnection]) async throws
+        -> [(peer: PeerConnection, value: CFHeadersMessage)] {
+        var answers: [(peer: PeerConnection, value: CFHeadersMessage)] = []
+        answers.reserveCapacity(queryPeers.count)
+        for peer in queryPeers {
+            let response: PeerMessage
+            do {
+                response = try await peer.request(
+                    .getcfheaders(GetCFiltersRequest(startHeight: batchStart, stopHash: stopHash)),
+                    expecting: ["cfheaders"])
+            } catch let error as PeerError where error.isTransport {
+                await pool.transportFailure(peer, reason: error.localizedDescription)
+                continue
+            }
+            guard case let .cfheaders(message) = response else {
+                throw FilterSyncError.badPeerResponse("expected cfheaders")
+            }
+            guard message.stopHash == stopHash else {
+                await pool.misbehaving(peer, reason: "cfheaders stop hash mismatch at \(batchStart)")
+                continue
+            }
+            answers.append((peer, message))
+        }
+        return answers
     }
 
     /// The batch's previous filter header, anchored: zero at genesis, our

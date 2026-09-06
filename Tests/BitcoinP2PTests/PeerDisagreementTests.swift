@@ -10,7 +10,8 @@ import Testing
 /// headers contradicts it. The only defence is comparing peers. `FilterSync`
 /// adopts the majority cfcheckpt answer rather than the first reply — a first
 /// reply adopted by fiat would let a lying peer evict the honest ones and
-/// become the sole reference.
+/// become the sole reference. The per-batch cfheaders cross-check is judged
+/// by the same rule (#26).
 ///
 /// The lying node here keeps its block headers honest and rebuilds a complete,
 /// internally consistent filter-commitment chain, so it cannot be caught by
@@ -19,7 +20,7 @@ import Testing
 struct PeerDisagreementTests {
     /// Two peers that disagree give no majority. The lie is unattributable —
     /// either one could be the liar — so the sync must fail closed rather than
-    /// pick a side.
+    /// pick a side, and must blame nobody.
     @Test("two peers disagreeing about filter commitments fails closed")
     func twoWayDisagreementFailsClosed() async throws {
         let synthetic = makeSyntheticChain(length: 6, watchHeight: 3)
@@ -30,9 +31,10 @@ struct PeerDisagreementTests {
         try await liar.start()
         defer { Task { await honest.stop(); await liar.stop() } }
 
+        let endpoints = [await honest.endpoint, await liar.endpoint]
+        let peersFile = tempFileURL("peers.json")
         let pool = PeerPool(params: synthetic.params, peerCount: 2,
-                            manualPeers: [await honest.endpoint, await liar.endpoint],
-                            peersFileURL: tempFileURL("peers.json"))
+                            manualPeers: endpoints, peersFileURL: peersFile)
         await pool.start()
         #expect(await pool.connectedPeers().count == 2)
 
@@ -68,7 +70,90 @@ struct PeerDisagreementTests {
         // Nothing was pinned from a disputed answer.
         #expect(await sync.nextScanHeight == 1,
                 "a disputed filter view must not advance the scan frontier")
+        // And nobody was banned for it. A 1–1 split cannot say which peer
+        // lied, so both are cooled off — the rest a slow peer gets — rather
+        // than one of them condemned for having connected second (#26).
+        for endpoint in endpoints {
+            #expect(await pool.coolingEndpoints.contains(endpoint),
+                    "an unattributable disagreement cools \(endpoint) off, not bans it")
+            #expect(await pool.rejectionReason(endpoint)?.contains("cfheaders disagree") == true)
+        }
         await pool.stop()
+        // Cooled, not condemned: both survive in the persisted good-peers
+        // file, which `misbehaving` would have struck them from.
+        #expect(try PeerCooldownTests.storedPeers(peersFile) == Set(endpoints),
+                "a tie must not strike either peer from the peers file")
+    }
+
+    /// The fix for #26: a liar seated *first*. The cfheaders cross-check kept
+    /// the first reply as its reference and evicted whoever contradicted it
+    /// later, so seating order decided blame — the liar became the reference
+    /// and an honest peer was banned, struck from the persisted good-peers
+    /// file, for telling the truth. Judged by majority, the liar is the one
+    /// that goes and the sync completes on the honest answer.
+    ///
+    /// Six blocks, so cfcheckpt is empty for everyone and only the cfheaders
+    /// layer can catch the lie (see above). Peer order is dial-completion
+    /// order, so the liar is pinned to the front by delaying the honest
+    /// nodes' handshakes, as `CheckpointMajorityTests` does.
+    @Test("a liar seated first is the one evicted, not the honest peer that contradicts it")
+    func liarFirstIsTheOneEvicted() async throws {
+        let synthetic = makeSyntheticChain(length: 6, watchHeight: 3)
+        let liar = LoopbackNode(params: synthetic.params, chain: synthetic.blocks,
+                                lieAboutFilterCommitments: true)
+        let honestA = LoopbackNode(params: synthetic.params, chain: synthetic.blocks,
+                                   versionDelay: .milliseconds(150))
+        let honestB = LoopbackNode(params: synthetic.params, chain: synthetic.blocks,
+                                   versionDelay: .milliseconds(250))
+        let nodes = [liar, honestA, honestB]
+        for node in nodes { try await node.start() }
+        defer { for node in nodes { Task { await node.stop() } } }
+
+        let liarEndpoint = await liar.endpoint
+        let honestEndpoints = [await honestA.endpoint, await honestB.endpoint]
+        let peersFile = tempFileURL("peers.json")
+        let pool = PeerPool(params: synthetic.params, peerCount: 3,
+                            manualPeers: [liarEndpoint] + honestEndpoints,
+                            peersFileURL: peersFile)
+        await pool.start()
+        #expect(await pool.connectedPeers().count == 3)
+        // Precondition for what this test is actually about.
+        let first = await pool.connectedPeers().first
+        #expect(await first?.endpoint.description == liarEndpoint.description,
+                "fixture precondition: the liar must be first in the peer list")
+
+        let chain = try HeaderChain(params: synthetic.params)
+        let sync = try FilterSync(pool: pool, chain: chain, startHeight: 1,
+                                  storageURL: tempFileURL("progress.json"),
+                                  requiredCheckpointPeers: 3)
+        let collector = MatchCollector()
+        try await sync.sync(watchScripts: [synthetic.watchScript]) { collector.add($0) }
+
+        // The honest answer was adopted and the scan ran to the tip.
+        #expect(collector.matches.count == 1)
+        #expect(await sync.nextScanHeight == 7)
+
+        // The liar is the one gone — banned, not rested, because two peers
+        // outvoting it makes the lie attributable — and both honest peers
+        // keep their seats.
+        let connected = await Self.connectedEndpoints(pool)
+        #expect(connected.contains(liarEndpoint.description) == false)
+        for endpoint in honestEndpoints {
+            #expect(connected.contains(endpoint.description),
+                    "an honest peer was evicted for contradicting the liar")
+        }
+        #expect(await pool.rejectionReason(liarEndpoint)?.contains("cfheaders mismatch") == true)
+        #expect(await pool.coolingEndpoints.contains(liarEndpoint) == false,
+                "a ban is not a cooldown — it must not expire")
+        await pool.stop()
+        #expect(try PeerCooldownTests.storedPeers(peersFile) == Set(honestEndpoints),
+                "the liar is struck from the peers file; the honest peers stay")
+    }
+
+    static func connectedEndpoints(_ pool: PeerPool) async -> Set<String> {
+        var result: Set<String> = []
+        for peer in await pool.connectedPeers() { result.insert(await peer.endpoint.description) }
+        return result
     }
 
     /// Positive control: the same two-peer setup with both peers honest syncs

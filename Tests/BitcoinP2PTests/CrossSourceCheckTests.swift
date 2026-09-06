@@ -19,19 +19,30 @@ struct CrossSourceCheckTests {
 
     // MARK: - The pure selection policy
 
-    @Test("two classes present: the pair spans them")
-    func pairSpansClasses() {
+    @Test("two classes present: the set spans them before it repeats one")
+    func setSpansClasses() {
         let a = connection(1), b = connection(2), c = connection(3)
-        let picked = FilterSync.crossSourcePair([(a, .dnsSeed), (b, .dnsSeed), (c, .persisted)])
-        #expect(picked.count == 2)
+        let picked = FilterSync.crossSourceSet([(a, .dnsSeed), (b, .dnsSeed), (c, .persisted)])
+        #expect(picked.count == 3)
         #expect(picked[0] === a)
         #expect(picked[1] === c, "the second same-class peer must be passed over for the other channel")
+        #expect(picked[2] === b, "and then taken: a third answer is what lets a tally name a liar")
     }
 
-    @Test("one class present: any two, the degraded mode")
+    @Test("three classes present: one seat each, the same-class repeat left out")
+    func threeClassesEachGetASeat() {
+        let a = connection(1), b = connection(2), c = connection(3), d = connection(4)
+        let picked = FilterSync.crossSourceSet(
+            [(a, .dnsSeed), (b, .dnsSeed), (c, .persisted), (d, .fallback)])
+        #expect(picked.count == 3)
+        #expect(picked[0] === a && picked[1] === c && picked[2] === d,
+                "a third class outranks a second seat for the anchor's class")
+    }
+
+    @Test("one class present: what there is, the degraded mode")
     func singleClassDegrades() {
         let a = connection(1), b = connection(2)
-        let picked = FilterSync.crossSourcePair([(a, .dnsSeed), (b, .dnsSeed)])
+        let picked = FilterSync.crossSourceSet([(a, .dnsSeed), (b, .dnsSeed)])
         #expect(picked.count == 2, "same-class is degraded, not refused — like a single-peer pool")
         #expect(picked[0] === a && picked[1] === b)
     }
@@ -39,15 +50,27 @@ struct CrossSourceCheckTests {
     @Test("an unknown source counts as its own channel")
     func unknownIsItsOwnClass() {
         let a = connection(1), b = connection(2), c = connection(3)
-        let picked = FilterSync.crossSourcePair([(a, nil), (b, nil), (c, .fallback)])
+        let picked = FilterSync.crossSourceSet([(a, nil), (b, nil), (c, .fallback)])
         #expect(picked[1] === c, "known-vs-unknown is more diverse than unknown-vs-unknown")
     }
 
     @Test("one peer or none: what there is")
     func degenerateCounts() {
         let a = connection(1)
-        #expect(FilterSync.crossSourcePair([]).isEmpty)
-        #expect(FilterSync.crossSourcePair([(a, .manual)]).count == 1)
+        #expect(FilterSync.crossSourceSet([]).isEmpty)
+        #expect(FilterSync.crossSourceSet([(a, .manual)]).count == 1)
+    }
+
+    @Test("the limit is a ceiling, and no peer is seated twice")
+    func limitIsACeiling() {
+        let a = connection(1), b = connection(2), c = connection(3)
+        let sourced: [(peer: PeerConnection, source: PeerSource?)] =
+            [(a, .manual), (b, .manual), (c, .dnsSeed)]
+        let two = FilterSync.crossSourceSet(sourced, limit: 2)
+        #expect(two.count == 2)
+        #expect(two[0] === a && two[1] === c, "the other channel still comes before the repeat")
+        #expect(FilterSync.crossSourceSet(sourced, limit: 5).count == 3,
+                "a ceiling, not a quota: three peers make a set of three")
     }
 
     // MARK: - The wiring, on the wire
