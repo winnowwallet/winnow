@@ -26,6 +26,8 @@ jobs:
         run: |
           which swiftlint || brew install swiftlint
           swiftlint lint --quiet
+      - name: No silently skipped tests
+        run: scripts/check-test-gates
 
   package-tests-intel:
     # The persistent Intel seat takes branches of this repository; forks stay hosted.
