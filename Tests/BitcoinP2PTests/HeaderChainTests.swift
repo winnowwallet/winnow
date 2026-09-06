@@ -375,10 +375,15 @@ struct MainnetCheckpointTests {
 
 /// Starting the chain somewhere other than block 0, end to end (#89 phase 3).
 ///
-/// These run everywhere: the only fixture is block 900,001's header, 80 bytes,
-/// which is enough to make a checkpoint-rooted chain do real work and write a
-/// real file. The full genesis-vs-checkpoint comparison needs a mainnet header
-/// file and lives in CheckpointAgreementTests.
+/// These run everywhere. The fixtures are block 900,001's header and the
+/// 2,000 real mainnet headers after the checkpoint, 160 KB of hex, which is
+/// enough to make a checkpoint-rooted chain do real proof-of-work checks at
+/// mainnet difficulty — across the retarget at 901,152 — and write and reread
+/// a real file. What they cannot prove is the checkpoint's chainwork: that
+/// number summarises the 900,000 headers below it, and only
+/// `winnow-generate checkpoint`, run against a genesis-validated header file
+/// at release time, recomputes it and proves the genesis-rooted and
+/// checkpoint-rooted chains agree (Tools/Generate/README.md).
 @Suite("Checkpoint start")
 struct CheckpointStartTests {
     /// The block right after the shipped mainnet checkpoint.
@@ -387,6 +392,20 @@ struct CheckpointStartTests {
         "00e000208a96960d6d1ca4ee4a283fd83da309b8d5d2bfed380501000000000000000000"
         + "371c9ffd63d75fb36c57d58eb842d23c0e7ec049daf16d94cc38805c346e9d52"
         + "e880426874370217973dc83b")!
+
+    /// Heights 900,001 through 902,000, one 80-byte header per line as hex —
+    /// what `winnow-generate checkpoint --vector-out` writes from a
+    /// genesis-validated header file, and what the shipped constant was
+    /// checked against.
+    static func headersPastCheckpoint() throws -> [BlockHeader] {
+        let text = try String(decoding: vectorData("mainnet-headers-900001-902000.txt"), as: UTF8.self)
+        return try text.split(separator: "\n").map { line in
+            guard let bytes = Data(hex: String(line)), bytes.count == BlockHeader.serializedSize else {
+                throw VectorError.malformed(String(line))
+            }
+            return try BlockHeader.decode(bytes)
+        }
+    }
 
     private func tempURL(_ name: String) -> URL {
         let url = FileManager.default.temporaryDirectory.appending(path: "winnow-\(name).bin")
@@ -443,6 +462,28 @@ struct CheckpointStartTests {
         #expect(await reopened.tipHash == next.hash)
         #expect(await reopened.tipWork == workAfter)
         #expect(await reopened.blockHash(at: cp.height) == (await chain.blockHash(at: cp.height)))
+
+        // Then the 2,000 real headers past the checkpoint, the same blocks the
+        // release-time agreement check connects: every one proof-of-work
+        // checked at mainnet difficulty, then written and read back.
+        let vector = try Self.headersPastCheckpoint()
+        #expect(vector.count == 2_000)
+        #expect(vector.first == next)
+        #expect(try BlockHeader.decode(cp.header).hash == vector.first?.previousHash)
+        #expect(try await reopened.connect(Array(vector.dropFirst())).appended == vector.count - 1)
+        #expect(await reopened.height == cp.height + UInt32(vector.count))
+        let tipAfterVector = await reopened.tipHash
+        let workAfterVector = await reopened.tipWork
+        #expect(tipAfterVector == vector.last?.hash)
+        #expect(workAfterVector != workAfter)
+
+        let reloaded = try HeaderChain(params: params, storageURL: url, start: .checkpoint)
+        #expect(await reloaded.startHeight == cp.height)
+        #expect(await reloaded.height == cp.height + UInt32(vector.count))
+        #expect(await reloaded.tipHash == tipAfterVector)
+        #expect(await reloaded.tipWork == workAfterVector)
+        #expect(await reloaded.blockHash(at: cp.height + 1) == next.hash)
+        #expect(await reloaded.header(at: cp.height - 1) == nil)
     }
 
     @Test("turning verification on refuses the checkpoint-rooted file instead of misreading it")
