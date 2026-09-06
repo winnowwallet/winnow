@@ -365,13 +365,7 @@ public struct Vault: Sendable {
         let outputs = try reviewedOutputs(of: psbt, inputTotal: inputs.total,
                                           ownedOutputCoordinates: ownedOutputCoordinates)
         let fee = inputs.total - outputs.total
-        // A vault proposal is untrusted input. Refuse to sign away more than
-        // ten percent of the known coins as miner fee; the owner can construct
-        // a replacement proposal instead of approving an accidental drain.
-        guard fee <= inputs.total / 10 else {
-            throw VaultError.invalidSpend(
-                "the \(fee)-sat fee exceeds the 10% safety limit for these inputs")
-        }
+        try Self.checkFeeCeiling(fee: fee, inputTotal: inputs.total)
         return SpendReview(outputs: outputs.reviewed, inputTotal: inputs.total,
                            outputTotal: outputs.total, fee: fee,
                            sighashTypes: inputs.sighashTypes,
@@ -382,6 +376,20 @@ public struct Vault: Sendable {
 
     /// The Bitcoin supply cap, the ceiling on every amount and sum here.
     private static let maxMoney: Int64 = 2_100_000_000_000_000
+
+    /// The fee ceiling, one rule for the creator and every reviewer so the
+    /// two cannot drift: a spend may pay at most ten percent of its inputs as
+    /// miner fee. A vault proposal is untrusted input, so review refuses to
+    /// sign away more than that — the owner can construct a replacement
+    /// proposal instead of approving an accidental drain — and the creator
+    /// applies the same rule to its own selection so it never builds a
+    /// proposal its cosigners' review would refuse.
+    private static func checkFeeCeiling(fee: Int64, inputTotal: Int64) throws {
+        guard fee <= inputTotal / 10 else {
+            throw VaultError.invalidSpend(
+                "the \(fee)-sat fee exceeds the 10% safety limit for these inputs")
+        }
+    }
 
     /// The document-level shape: something to spend, something paid, a
     /// bounded output count, and a transaction version this vault signs.
@@ -564,6 +572,10 @@ public struct Vault: Sendable {
                                                  changeScriptPubKey: changeScript,
                                                  feeRateSatPerVByte: feeRateSatPerVByte,
                                                  witnessBytesPerInput: witnessBytesPerInput(index: utxos.first?.index ?? 0))
+        // The ceiling every cosigner's review applies, so the creator never
+        // builds a proposal nobody can sign.
+        try Self.checkFeeCeiling(fee: selection.fee,
+                                 inputTotal: selection.selected.reduce(0) { $0 + $1.amount })
         let change = selection.changeAmount.map { Payment(amount: $0, scriptPubKey: changeScript) }
         let tx = try TransactionBuilder.build(
             inputs: selection.selected.map(\.outpoint), payments: payments, change: change,

@@ -385,6 +385,66 @@ struct VaultFlowTests {
         }
     }
 
+    /// The creator and every reviewer apply one fee ceiling. Before this,
+    /// `createSpend` built a proposal at any fee rate, and once the fee took
+    /// more than ten percent of the inputs every cosigner's `partialSign`
+    /// refused it: a PSBT nobody could sign.
+    @Test("createSpend refuses the fee its cosigners' review would refuse")
+    func createSpendFeeCeiling() throws {
+        let masters = try Self.masters()
+        let descriptor = try Vault.multiADescriptor(
+            threshold: 2, cosigners: masters.map { try Self.keyExpression(master: $0) })
+        let vault = try Vault(descriptor: descriptor, network: .signet)
+        let utxo = try Self.funding(vault: vault, amount: 100_000)
+        // A one-input, two-output multi_a spend is about 220 vbytes, so 100
+        // sat/vB is roughly a 22,000-sat fee: past the 10,000-sat ceiling for
+        // this coin, yet still affordable, so the ceiling is the only refusal.
+        do {
+            _ = try vault.createSpend(
+                utxos: [utxo], payments: [Payment(amount: 50_000, scriptPubKey: destination)],
+                changeIndex: 0, feeRateSatPerVByte: 100, chainTip: testChainTip, randomness: { 0.5 })
+            Issue.record("expected the fee ceiling to refuse the spend")
+        } catch let VaultError.invalidSpend(message) {
+            #expect(message.hasSuffix("exceeds the 10% safety limit for these inputs"))
+        }
+    }
+
+    /// The ceiling is inclusive: a fee of exactly one tenth of the inputs
+    /// passes review and one satoshi more does not. Driven at the review
+    /// layer, where the outputs — and so the fee — can be set to the satoshi.
+    @Test("the fee ceiling admits one tenth of the inputs and refuses one satoshi more")
+    func feeCeilingBoundary() throws {
+        let masters = try Self.masters()
+        let descriptor = try Vault.multiADescriptor(
+            threshold: 2, cosigners: masters.map { try Self.keyExpression(master: $0) })
+        let vault = try Vault(descriptor: descriptor, network: .signet)
+        let utxo = try Self.funding(vault: vault, amount: 100_000)
+        let owned = [Vault.OutputCoordinate(choice: AddressChain.change.rawValue, index: 0)]
+        let created = try vault.createSpend(
+            utxos: [utxo], payments: [Payment(amount: 50_000, scriptPubKey: destination)],
+            changeIndex: 0, feeRateSatPerVByte: 2, chainTip: testChainTip, randomness: { 0.5 })
+        let paymentIndex = try #require(created.outputs.firstIndex { $0.script == destination })
+        let vaultOutputIndex = try #require(created.outputs.firstIndex { $0.script != destination })
+        let ceiling = utxo.amount / 10
+
+        // Outputs totalling the inputs minus the ceiling: the fee is exactly it.
+        var atCeiling = created
+        atCeiling.outputs[paymentIndex].amount = utxo.amount - ceiling - 1
+        atCeiling.outputs[vaultOutputIndex].amount = 1
+        let review = try vault.reviewSpend(
+            atCeiling, knownUTXOs: [utxo], ownedOutputCoordinates: owned, chainTip: testChainTip)
+        #expect(review.fee == ceiling)
+
+        // One satoshi less paid out is one satoshi over the ceiling.
+        var overCeiling = atCeiling
+        overCeiling.outputs[paymentIndex].amount = utxo.amount - ceiling - 2
+        #expect(throws: VaultError.invalidSpend(
+            "the \(ceiling + 1)-sat fee exceeds the 10% safety limit for these inputs")) {
+            _ = try vault.reviewSpend(
+                overCeiling, knownUTXOs: [utxo], ownedOutputCoordinates: owned, chainTip: testChainTip)
+        }
+    }
+
     // MARK: - 2-of-2 MuSig2 key-path vault
 
     @Test("2-of-2 musig vault: nonce round, partial sigs, aggregate, BIP340-verifiable")
