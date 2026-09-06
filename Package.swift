@@ -48,6 +48,11 @@ let package = Package(
             dependencies: ["BitcoinCore", "BitcoinP2P", "BlockchainBackend", "WalletCore"],
             path: "Tools/Story/Sources/WinnowStoryCLI"
         ),
+        .target(
+            name: "WinnowFuzzCore",
+            dependencies: ["BitcoinCore", "BitcoinP2P", "WalletCore"],
+            path: "Tools/Fuzz/Sources/WinnowFuzzCore"
+        ),
         .executableTarget(
             name: "WinnowGenerate",
             dependencies: ["BitcoinCore", "BitcoinP2P"],
@@ -55,7 +60,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "WinnowFuzz",
-            dependencies: ["BitcoinCore", "BitcoinP2P", "WalletCore"],
+            dependencies: ["BitcoinCore", "BitcoinP2P", "WinnowFuzzCore"],
             path: "Tools/Fuzz/Sources/WinnowFuzz"
         ),
         .testTarget(
@@ -87,8 +92,14 @@ let package = Package(
             name: "DifferentialTests",
             dependencies: ["BitcoinCore", "BitcoinP2P", "WalletCore"],
             path: "Tests",
-            exclude: ["BitcoinCoreTests", "BitcoinP2PTests", "WalletCoreTests"],
+            exclude: ["BitcoinCoreTests", "BitcoinP2PTests", "FuzzRegressions", "WalletCoreTests"],
             sources: ["DifferentialTests", "NodeSupport"]
+        ),
+        .testTarget(
+            name: "FuzzRegressionTests",
+            dependencies: ["WinnowFuzzCore"],
+            path: "Tests/FuzzRegressions",
+            resources: [.copy("Cases")]
         ),
     ]
 )
