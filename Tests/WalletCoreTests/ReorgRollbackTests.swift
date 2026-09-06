@@ -42,6 +42,28 @@ struct ReorgRollbackTests {
         return funding.txid
     }
 
+    /// A coin confirmed above the fork and reserved by our own in-flight send:
+    /// funded at 220 and matured, spent by a committed send, then rolled back
+    /// to 200. Returns the funding transaction too, so a test can re-find it.
+    private func reservedCoinAboveFork() async throws
+        -> (wallet: Wallet, funding: Transaction, prepared: Wallet.PreparedSend) {
+        let wallet = try await wallet()
+        let script = try await wallet.scriptPubKey(chain: .receive, index: 0)
+        let funding = Transaction(version: 2, inputs: [coinbaseInput()], outputs: [
+            Transaction.Output(value: 500_000, scriptPubKey: script),
+        ], locktime: 0)
+        try await wallet.apply(match: fakeMatch(height: 220, transactions: [funding]))
+        try await matureCoinbase(wallet, height: 220)
+
+        let prepared = try await wallet.buildSend(
+            payments: [Payment(amount: 100_000, scriptPubKey: destination)],
+            feeRateSatPerVByte: 2, chainTip: 319, randomness: { 0.5 })
+        try await wallet.commit(prepared)
+
+        try await wallet.rollBack(to: 200)
+        return (wallet, funding, prepared)
+    }
+
     // MARK: - What a reorg takes away
 
     /// A payment that only existed on the orphaned branch.
@@ -171,6 +193,50 @@ struct ReorgRollbackTests {
         }
     }
 
+    /// The same exemption when the reserved coin was itself confirmed above
+    /// the fork. Dropping its row with the block that carried it, like any
+    /// other orphaned receive, forgets the reservation: the rescan re-finds
+    /// the funding and admits a fresh, unspent, selectable coin while the
+    /// broadcaster is still relaying the send that spends it -- the wallet
+    /// double-spending itself. The row stays instead, reserved at height 0,
+    /// until the rescan re-heights it and the send confirms on top.
+    @Test("an in-flight spend of a coin above the fork stays reserved")
+    func inFlightSpendOfACoinAboveTheForkStaysReserved() async throws {
+        let (wallet, funding, prepared) = try await reservedCoinAboveFork()
+        let sendTxid = prepared.built.transaction.txid
+        let change = try #require(prepared.built.changeAmount)
+
+        let reserved = try #require(await wallet.allUtxos.first { $0.txid == funding.txid },
+                                    "the row must survive the rollback")
+        #expect(reserved.height == 0, "not in a block yet, until the rescan finds it again")
+        #expect(reserved.spent?.height == nil, "still in flight")
+        #expect(reserved.spent?.spentBy == sendTxid)
+        #expect(await wallet.utxos.contains { $0.txid == funding.txid } == false,
+                "a reserved coin is not selectable")
+
+        // The rescan re-finds the funding on the new branch: the row is
+        // re-heighted, not duplicated, and the receive returns to history.
+        try await wallet.apply(match: fakeMatch(height: 205, transactions: [funding]))
+        let refound = try #require(await wallet.allUtxos.first { $0.txid == funding.txid })
+        #expect(refound.height == 205)
+        #expect(await wallet.utxos.contains { $0.txid == funding.txid } == false,
+                "re-found, and still reserved")
+        let receive = try #require(await wallet.history.first { $0.txid == funding.txid },
+                                   "the receive the rollback dropped is back")
+        #expect(receive.height == 205)
+        #expect(receive.received == 500_000)
+
+        // Then the send confirms, through the same tombstone upgrade a fresh
+        // pending send uses.
+        try await wallet.apply(match: fakeMatch(height: 206,
+                                                transactions: [prepared.built.transaction]))
+        let spentRow = try #require(await wallet.allUtxos.first { $0.txid == funding.txid })
+        #expect(spentRow.spent?.height == 206, "the marker heights at the confirmation")
+        let entry = try #require(await wallet.history.first { $0.txid == sendTxid })
+        #expect(entry.height == 206)
+        #expect(await wallet.balance == change, "only the change is ours to spend")
+    }
+
     // MARK: - What a reorg must never take away
 
     /// The highest-consequence invariant here. Rewinding the address indices
@@ -238,6 +304,19 @@ struct ReorgRollbackTests {
         try await wallet.rollBack(to: 200)
         #expect(await wallet.allUtxos == once)
         #expect(await wallet.nextScanHeight == frontier)
+    }
+
+    /// A reserved row the rollback kept is re-heighted to 0, and height 0 is
+    /// not above any fork: a second run finds nothing left to do.
+    @Test("rolling back twice is the same as once with a reserved, re-heighted row")
+    func rollbackIsIdempotentWithAReservedRelinkedRow() async throws {
+        let (wallet, funding, _) = try await reservedCoinAboveFork()
+        let once = await wallet.allUtxos
+        #expect(once.contains { $0.txid == funding.txid && $0.height == 0 },
+                "the fixture holds a reserved, re-heighted row")
+
+        try await wallet.rollBack(to: 200)
+        #expect(await wallet.allUtxos == once)
     }
 
     /// A fork at or above the frontier leaves nothing that was scanned in
