@@ -439,7 +439,7 @@ public struct WalletState: Codable, Equatable, Sendable {
         observedFeeRates = try container.decodeIfPresent([Double].self, forKey: .observedFeeRates) ?? []
         pendingSends = try container.decodeIfPresent([PendingSend].self, forKey: .pendingSends) ?? []
 
-        func validateCoins(_ coins: [WalletUTXO], key: CodingKeys) throws {
+        func validateCoins(_ coins: [WalletUTXO], key: CodingKeys, countingTotal: Bool = true) throws {
             var seen = Set<Transaction.Outpoint>()
             var total: Int64 = 0
             for coin in coins {
@@ -447,12 +447,14 @@ public struct WalletState: Codable, Equatable, Sendable {
                       !coin.scriptPubKey.isEmpty,
                       coin.amount > 0,
                       coin.amount <= BitcoinAmount.maximum,
+                      coin.spent.map({ $0.spentBy.count == 32 }) ?? true,
                       seen.insert(coin.outpoint).inserted
                 else {
                     throw DecodingError.dataCorruptedError(
                         forKey: key, in: container,
                         debugDescription: "invalid or duplicate wallet coin")
                 }
+                guard countingTotal else { continue }
                 let (next, overflow) = total.addingReportingOverflow(coin.amount)
                 guard !overflow, next <= BitcoinAmount.maximum else {
                     throw DecodingError.dataCorruptedError(
@@ -462,6 +464,10 @@ public struct WalletState: Codable, Equatable, Sendable {
                 total = next
             }
         }
+        // Every row, tombstones included: `rollBack` turns a spent row back
+        // into a live coin, so a tampered marker must not load at all. The
+        // monetary total is a property of the live coins only.
+        try validateCoins(allUtxos, key: .utxos, countingTotal: false)
         try validateCoins(utxos, key: .utxos)
         for pending in pendingSends {
             try validateCoins(pending.selected, key: .pendingSends)
@@ -1171,15 +1177,20 @@ public actor Wallet {
     /// never before: committing first means a broadcast that never leaves the
     /// device (no stack, disk error) strands the inputs in a locally-spent but
     /// on-chain-unspent limbo that forward-only scanning cannot repair.
+    ///
+    /// Persists a candidate before adopting it, like `commitFeeBump` and
+    /// `rollBack`: a failed write leaves memory and disk in agreement, so a
+    /// relaunch cannot re-select an input the broadcaster is already relaying.
     public func commit(_ prepared: PreparedSend) throws {
         let signed = prepared.built.transaction
+        var updated = state
         // Tombstoned with no height: the spend exists only in our own pending
         // transaction. A rollback must leave these reserved even while it
         // restores confirmed spends, or the wallet re-selects coins its own
         // in-flight transaction is already spending and double-spends itself.
-        for index in state.allUtxos.indices
-        where prepared.selected.contains(where: { $0.outpoint == state.allUtxos[index].outpoint }) {
-            state.allUtxos[index].spent = WalletUTXO.SpentMarker(spentBy: signed.txid, height: nil)
+        for index in updated.allUtxos.indices
+        where prepared.selected.contains(where: { $0.outpoint == updated.allUtxos[index].outpoint }) {
+            updated.allUtxos[index].spent = WalletUTXO.SpentMarker(spentBy: signed.txid, height: nil)
         }
         if let change = prepared.change {
             guard let vout = prepared.changeOutputIndex,
@@ -1187,20 +1198,21 @@ public actor Wallet {
                   signed.outputs[Int(vout)].scriptPubKey == change.scriptPubKey,
                   signed.outputs[Int(vout)].value == change.amount
             else { throw WalletError.changeOutputMissing }
-            state.allUtxos.append(WalletUTXO(txid: signed.txid, vout: vout, amount: change.amount,
+            updated.allUtxos.append(WalletUTXO(txid: signed.txid, vout: vout, amount: change.amount,
                                           scriptPubKey: change.scriptPubKey, chain: .change,
                                           index: prepared.changeIndex, height: 0))
-            state.nextChangeIndex += 1
+            updated.nextChangeIndex += 1
         }
-        state.history.append(HistoryEntry(txid: signed.txid, height: 0,
+        updated.history.append(HistoryEntry(txid: signed.txid, height: 0,
                                           received: prepared.change?.amount ?? 0,
                                           spent: prepared.selected.reduce(0) { $0 + $1.amount },
                                           fee: prepared.fee))
-        state.pendingSends.append(PendingSend(
+        updated.pendingSends.append(PendingSend(
             rawTransaction: signed.serialized(includeWitness: true), selected: prepared.selected,
             changeIndex: prepared.change == nil ? nil : prepared.changeIndex,
             changeOutputIndex: prepared.changeOutputIndex, fee: prepared.fee))
-        try persist()
+        try persist(updated)
+        state = updated
     }
 
     /// Convenience: build, sign and immediately commit, with no external

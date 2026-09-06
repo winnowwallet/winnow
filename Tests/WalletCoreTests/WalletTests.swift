@@ -707,4 +707,70 @@ struct WalletTests {
         #expect(await reopened.feeBumpableTxids.isEmpty)
         #expect(await reopened.observedFeeRates.isEmpty)
     }
+
+    @Test("a failed persist on the first send leaves memory and disk in agreement")
+    func commitPersistFailureLeavesStateUntouched() async throws {
+        let url = tempFileURL("commit-rollback-wallet.json")
+        let keyStore = InMemoryKeyStore()
+        let wallet = try await makeWallet(storageURL: url, keyStore: keyStore)
+        let script = try await wallet.scriptPubKey(chain: .receive, index: 0)
+        let funding = Transaction(version: 2, inputs: [coinbaseInput()], outputs: [
+            Transaction.Output(value: 150_000, scriptPubKey: script),
+        ], locktime: 0)
+        try await wallet.apply(match: fakeMatch(height: 100, transactions: [funding]))
+        try await matureCoinbase(wallet, height: 100)
+        let destination = Data([0x51, 0x20] + repeatElement(0x99, count: 32))
+        let prepared = try await wallet.buildSend(
+            payments: [Payment(amount: 100_000, scriptPubKey: destination)], feeRateSatPerVByte: 2,
+            chainTip: testChainTip, randomness: { 0.5 })
+        let changeIndexBefore = await wallet.nextChangeIndex
+
+        // The state file becomes unwritable: a directory now sits at its path.
+        try FileManager.default.removeItem(at: url)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        await #expect(throws: (any Error).self) { try await wallet.commit(prepared) }
+        // Nothing moved in memory either: the coin is still spendable, no
+        // change row or history entry exists, and no input is reserved.
+        #expect(await wallet.balance == 150_000)
+        #expect(await wallet.utxos.count == 1)
+        #expect(await wallet.allUtxos.allSatisfy { !$0.isSpent })
+        #expect(await wallet.nextChangeIndex == changeIndexBefore)
+        #expect(await wallet.history.contains { $0.txid == prepared.built.transaction.txid } == false)
+    }
+
+    @Test("a tampered tombstone fails closed on load instead of waiting to be resurrected")
+    func corruptPersistedTombstone() async throws {
+        let url = tempFileURL("corrupt-tombstone-wallet.json")
+        let keyStore = InMemoryKeyStore()
+        let wallet = try await makeWallet(storageURL: url, keyStore: keyStore)
+        let script = try await wallet.scriptPubKey(chain: .receive, index: 0)
+        let funding = Transaction(version: 2, inputs: [coinbaseInput()], outputs: [
+            Transaction.Output(value: 150_000, scriptPubKey: script),
+        ], locktime: 0)
+        try await wallet.apply(match: fakeMatch(height: 100, transactions: [funding]))
+        try await matureCoinbase(wallet, height: 100)
+        let destination = Data([0x51, 0x20] + repeatElement(0x99, count: 32))
+        let prepared = try await wallet.buildSend(
+            payments: [Payment(amount: 100_000, scriptPubKey: destination)], feeRateSatPerVByte: 2,
+            chainTip: testChainTip, randomness: { 0.5 })
+        try await wallet.commit(prepared)
+        #expect(try Wallet.open(storageURL: url, keyStore: keyStore) != nil, "the untouched file loads")
+
+        // The spent row's amount is corrupted. A rollback past the spend
+        // would have turned it into a live coin with that amount.
+        let data = try Data(contentsOf: url)
+        var json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var coins = try #require(json["utxos"] as? [[String: Any]])
+        let spentIndex = try #require(coins.firstIndex { $0["spent"] != nil })
+        coins[spentIndex]["amount"] = 0
+        json["utxos"] = coins
+        try JSONSerialization.data(withJSONObject: json).write(to: url, options: .atomic)
+
+        #expect(throws: (any Error).self) {
+            _ = try Wallet.open(storageURL: url, keyStore: keyStore)
+        }
+    }
+
 }
