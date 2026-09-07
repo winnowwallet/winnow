@@ -454,7 +454,7 @@ struct FilterSyncAdversaryTests {
         await fixture.pool.stop()
         // Cooled, not condemned: both survive in the persisted good-peers
         // file, which `misbehaving` would have struck them from.
-        #expect(try PeerCooldownTests.storedPeers(peersFile) == Set(endpoints),
+        #expect(try PeerPoolTests.storedPeers(peersFile) == Set(endpoints),
                 "a tie must not strike either peer from the peers file")
     }
 
@@ -505,7 +505,7 @@ struct FilterSyncAdversaryTests {
         #expect(await fixture.pool.coolingEndpoints.contains(liarEndpoint) == false,
                 "a ban is not a cooldown — it must not expire")
         await fixture.pool.stop()
-        #expect(try PeerCooldownTests.storedPeers(peersFile) == Set(honestEndpoints),
+        #expect(try PeerPoolTests.storedPeers(peersFile) == Set(honestEndpoints),
                 "the liar is struck from the peers file; the honest peers stay")
     }
 
