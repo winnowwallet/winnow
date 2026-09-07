@@ -12,7 +12,7 @@ import sys
 
 root = pathlib.Path(sys.argv[1]).resolve()
 sources = root / "Sources"
-soak = root / "Tools/Story/Sources/WinnowStoryCLI/SoakCommand.swift"
+soak = root / "Tools/Debug/Sources/WinnowDebug/SoakCommand.swift"
 warnings = []
 pattern = re.compile(r"^(.*?):(\d+):(\d+): warning: (.*)$")
 

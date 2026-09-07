@@ -1,7 +1,7 @@
 // GENERATED FILE — edit by regenerating, not by hand.
 //
 // scripts/generate-fallback-peers rewrites this file on the release path
-// (#161) with `winnow-story generate fallback-peers` (Tools/Story): it resolves
+// (#161) with `winnow-debug generate fallback-peers` (Tools/Debug): it resolves
 // the mainnet DNS seeds, dials candidates with the same PeerConnection the
 // app uses — whose handshake already refuses any peer not advertising
 // NODE_COMPACT_FILTERS — and keeps a /16-spread selection, checked by the

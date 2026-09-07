@@ -1,7 +1,7 @@
 import BitcoinP2P
 import Foundation
 import Testing
-@testable import WinnowStoryCLI
+@testable import WinnowDebug
 
 /// The generators' decisions, offline: everything `winnow-generate` does
 /// between the network or the header file and the bytes it writes.

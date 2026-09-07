@@ -11,7 +11,7 @@ let package = Package(
         // Test fixtures shared by every test target, SwiftPM and Xcode alike.
         .library(name: "TestSupport", targets: ["TestSupport"]),
         .executable(name: "btc-swift", targets: ["BtcSwiftCLI"]),
-        .executable(name: "winnow-story", targets: ["WinnowStoryCLI"]),
+        .executable(name: "winnow-debug", targets: ["WinnowDebug"]),
         .executable(name: "WinnowFuzz", targets: ["WinnowFuzz"]),
     ],
     dependencies: [
@@ -35,9 +35,9 @@ let package = Package(
             dependencies: ["BitcoinCore", "BitcoinP2P", "WalletCore"]
         ),
         .executableTarget(
-            name: "WinnowStoryCLI",
-            dependencies: ["BitcoinCore", "BitcoinP2P", "WalletCore"],
-            path: "Tools/Story/Sources/WinnowStoryCLI"
+            name: "WinnowDebug",
+            dependencies: ["BitcoinCore", "BitcoinP2P"],
+            path: "Tools/Debug/Sources/WinnowDebug"
         ),
         .target(
             name: "WinnowFuzzCore",
@@ -80,13 +80,13 @@ let package = Package(
             dependencies: ["BitcoinCore", "BitcoinP2P", "WalletCore", "TestSupport"],
             path: "Tests/DifferentialTests"
         ),
-        // The development tools, tested together: the story runner, the
+        // The development tools, tested together: the debugging commands, the
         // release-path generators, and the fuzz crash corpus replayed out of
         // `Cases`. One target, so a tool suite costs no more manifest than a
         // library one and `swift test` links the tools once.
         .testTarget(
             name: "ToolsTests",
-            dependencies: ["WinnowStoryCLI", "WinnowFuzzCore"],
+            dependencies: ["WinnowDebug", "WinnowFuzzCore"],
             resources: [.copy("Cases")]
         ),
     ]

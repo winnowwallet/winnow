@@ -71,7 +71,7 @@ struct SoakOptions {
     }
 
     static let usageText = """
-    winnow-story soak — sustained read-path soak against a live network
+    winnow-debug soak — sustained read-path soak against a live network
 
       --network signet|mainnet   default signet
       --minutes N                0 or omitted runs until interrupted

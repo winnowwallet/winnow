@@ -1,27 +1,27 @@
 import BitcoinP2P
 import Foundation
 import Testing
-@testable import WinnowStoryCLI
+@testable import WinnowDebug
 
 @Suite("Operator command dispatch", .timeLimit(.minutes(1)))
 struct OperatorCLITests {
     @Test("operator help needs no story run, simulator, network, or header file")
     func help() async throws {
         for command in [["generate"], ["generate", "--help"], ["soak", "--help"], ["soak", "help"]] {
-            try await WinnowStoryCLI.execute(command)
+            try await WinnowDebug.execute(command)
         }
     }
 
     @Test("operator errors come from their own parser without requiring a story run")
     func dispatch() async {
         await #expect(throws: GenerateError.self) {
-            try await WinnowStoryCLI.execute(["generate", "nope"])
+            try await WinnowDebug.execute(["generate", "nope"])
         }
         await #expect(throws: GenerateError.self) {
-            try await WinnowStoryCLI.execute(["generate", "checkpoint"])
+            try await WinnowDebug.execute(["generate", "checkpoint"])
         }
         await #expect(throws: SoakError.self) {
-            try await WinnowStoryCLI.execute(["soak", "--peers", "0"])
+            try await WinnowDebug.execute(["soak", "--peers", "0"])
         }
     }
 

@@ -28,12 +28,13 @@ additional related tests. The Xcode AppTests class names are unchanged.
 The store-persistence cases formerly in `TxBroadcasterTests` are now in
 `TxBroadcasterStoreTests`; relay cases remain in `TxBroadcasterTests`.
 `MuSig2SessionSafetyTests` retains its type, now in `MuSig2Tests.swift`.
-`WinnowGenerateTests` and the story/fuzz suites retain their names in the
-shared `ToolsTests` target. The unused `BlockchainBackend` module and its two
+`WinnowGenerateTests` and the fuzz suite retain their names in `ToolsTests`.
+The demo/story tests were retired with that feature; the subprocess
+output-drain regression is retained in `DebugSystemTests`. The unused `BlockchainBackend` module and its two
 Esplora/disclosure suites were subsequently removed: their four tests covered
 only the deleted client, not GUI explorer links or wallet networking.
 
 Historical `WinnowSoak` runs used the standalone executable. The same driver
-now runs as `swift run winnow-story soak`; `winnow-generate` commands now use
-`swift run winnow-story generate`. Neither command migration rewrites the
+now runs as `swift run winnow-debug soak`; `winnow-generate` commands now use
+`swift run winnow-debug generate`. Neither command migration rewrites the
 recorded dates, measurements, or scope of historical evidence.

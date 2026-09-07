@@ -1,18 +1,18 @@
 # Release-path generators
 
-`winnow-story generate` produces two constants the app ships and that `swift test`
+`winnow-debug generate` produces two constants the app ships and that `swift test`
 cannot: the mainnet fallback-peer list (#161), which needs the live network,
 and the mainnet header checkpoint (#89), which needs a 77 MB genesis-validated
 header file. Both used to be test suites gated behind environment variables no
 workflow set, so they never ran. `btc-swift` promises no network, so they do
-not belong there either. These commands share the `winnow-story` operator
+not belong there either. These commands share the `winnow-debug` debugging
 executable, outside the shipping app. Their sources live in
-`Tools/Story/Sources/WinnowStoryCLI`; this directory retains the generator runbook.
+`Tools/Debug/Sources/WinnowDebug`; this directory retains the generator runbook.
 
 Run from the repository root:
 
 ```sh
-swift run winnow-story generate --help
+swift run winnow-debug generate --help
 scripts/generate-fallback-peers
 scripts/refresh-checkpoint ~/…/mainnet/headers.bin [height]
 ```
