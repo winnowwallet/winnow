@@ -45,16 +45,6 @@ final class MatchCollector: @unchecked Sendable {
     }
 }
 
-/// Temporary file URL under a per-run directory.
-func tempFileURL(_ name: String) -> URL {
-    let url = FileManager.default.temporaryDirectory
-        .appendingPathComponent("winnow-diff-tests-\(UUID().uuidString)")
-        .appendingPathComponent(name)
-    try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                             withIntermediateDirectories: true)
-    return url
-}
-
 // MARK: - PSBT envelope conversion for Core
 
 /// Core 31.1 reads BIP174 v0 only and rejects PSBTv2 outright; we emit v2 and

@@ -1,6 +1,7 @@
 @testable import WinnowApp
 import BitcoinCore
 import BitcoinP2P
+import TestSupport
 import WalletCore
 import XCTest
 
@@ -10,7 +11,7 @@ import XCTest
 /// refuses every mutation instead of taking the app down.
 final class PeopleStoreSecurityTests: XCTestCase {
     func testMissingFileIsAnEmptyStore() async {
-        let url = temporaryURL()
+        let url = tempFileURL("people-store.json")
         let store = PeopleStore()
         let result = await store.configure(storageURL: url, network: .signet)
         let records = await store.all
@@ -19,7 +20,7 @@ final class PeopleStoreSecurityTests: XCTestCase {
     }
 
     func testMalformedFileFailsClosedRefusesMutationsAndIsNotRewritten() async throws {
-        let url = temporaryURL()
+        let url = tempFileURL("people-store.json")
         let original = Data("not people json".utf8)
         try original.write(to: url, options: .atomic)
         defer { try? FileManager.default.removeItem(at: url) }
@@ -95,7 +96,7 @@ final class PeopleStoreSecurityTests: XCTestCase {
     func testAddRefusesASecondEntryForTheSameKeyEvenRelabelled() async throws {
         let alice = try fixture(0xA1)
         let store = PeopleStore()
-        let url = temporaryURL()
+        let url = tempFileURL("people-store.json")
         defer { try? FileManager.default.removeItem(at: url) }
         await store.configure(storageURL: url, network: .signet)
         try await store.add(name: "Alice", payTo: alice.payTo, signerKey: alice.signer)
@@ -131,7 +132,7 @@ final class PeopleStoreSecurityTests: XCTestCase {
     func testPaymentIndexAdvancesMonotonicallyAndIdempotently() async throws {
         let alice = try fixture(0xA1)
         let store = PeopleStore()
-        let url = temporaryURL()
+        let url = tempFileURL("people-store.json")
         defer { try? FileManager.default.removeItem(at: url) }
         await store.configure(storageURL: url, network: .signet)
         let record = try await store.add(name: "Alice", payTo: alice.payTo, signerKey: nil)
@@ -183,7 +184,7 @@ final class PeopleStoreSecurityTests: XCTestCase {
         let alice = try fixture(0xA1)
         let bob = try fixture(0xB2)
         let store = PeopleStore()
-        let url = temporaryURL()
+        let url = tempFileURL("people-store.json")
         defer { try? FileManager.default.removeItem(at: url) }
         await store.configure(storageURL: url, network: .signet)
         let a = try await store.add(name: "Alice", payTo: alice.payTo, signerKey: alice.signer)
@@ -225,13 +226,8 @@ final class PeopleStoreSecurityTests: XCTestCase {
     }
 
     private func write(_ records: [PersonRecord]) throws -> URL {
-        let url = temporaryURL()
+        let url = tempFileURL("people-store.json")
         try JSONEncoder().encode(records).write(to: url, options: .atomic)
         return url
-    }
-
-    private func temporaryURL() -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("people-store-\(UUID().uuidString).json")
     }
 }

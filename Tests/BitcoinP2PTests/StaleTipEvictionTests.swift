@@ -1,6 +1,7 @@
 import BitcoinCore
 import Foundation
 import Testing
+import TestSupport
 @testable import BitcoinP2P
 
 /// A peer far behind the tip cannot serve filters or blocks near it, and

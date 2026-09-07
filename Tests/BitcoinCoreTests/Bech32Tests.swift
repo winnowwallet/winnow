@@ -1,5 +1,7 @@
+import BitcoinP2P
 import Foundation
 import Testing
+import TestSupport
 @testable import BitcoinCore
 
 /// BIP350 (and BIP173 segwit address) test vectors parsed from bip-0350.mediawiki.
@@ -28,7 +30,7 @@ struct Bech32Tests {
     }
 
     static func validBech32m() throws -> [String] {
-        let text = try section("The following strings are valid Bech32m:", in: vectorString("bip-0350.mediawiki"))
+        let text = try section("The following strings are valid Bech32m:", in: Vectors.string("bip-0350.mediawiki", in: .module))
         guard let end = text.range(of: "No string can be simultaneously") else {
             throw VectorError.malformed("valid bech32m list end")
         }
@@ -36,7 +38,7 @@ struct Bech32Tests {
     }
 
     static func invalidBech32m() throws -> [String] {
-        let text = try section("The following string are not valid Bech32m", in: vectorString("bip-0350.mediawiki"))
+        let text = try section("The following string are not valid Bech32m", in: Vectors.string("bip-0350.mediawiki", in: .module))
         guard let end = text.range(of: "===Test vectors for v0-v16") else {
             throw VectorError.malformed("invalid bech32m list end")
         }
@@ -44,7 +46,7 @@ struct Bech32Tests {
     }
 
     static func validSegwitAddresses() throws -> [(String, String)] {
-        let text = try section("The following list gives valid segwit addresses", in: vectorString("bip-0350.mediawiki"))
+        let text = try section("The following list gives valid segwit addresses", in: Vectors.string("bip-0350.mediawiki", in: .module))
         guard let end = text.range(of: "The following list gives invalid segwit addresses") else {
             throw VectorError.malformed("valid segwit list end")
         }
@@ -55,7 +57,7 @@ struct Bech32Tests {
     }
 
     static func invalidSegwitAddresses() throws -> [String] {
-        let text = try section("The following list gives invalid segwit addresses", in: vectorString("bip-0350.mediawiki"))
+        let text = try section("The following list gives invalid segwit addresses", in: Vectors.string("bip-0350.mediawiki", in: .module))
         guard let end = text.range(of: "==Appendix") else { throw VectorError.malformed("invalid segwit list end") }
         return text[..<end.lowerBound].components(separatedBy: .newlines).compactMap(extract)
     }

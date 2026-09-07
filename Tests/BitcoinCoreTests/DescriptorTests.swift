@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TestSupport
 @testable import BitcoinCore
 
 /// Descriptor engine round-trips (parse/serialize with recomputed checksum),
@@ -62,7 +63,7 @@ struct DescriptorTests {
 
     @Test("BIP388 sortedmulti_a policy descriptor parses, derives, round-trips")
     func bip388PolicyDescriptor() throws {
-        let text = try vectorString("bip-0388.mediawiki")
+        let text = try Vectors.string("bip-0388.mediawiki", in: .module)
         // The "Taproot wallet policy with sortedmulti_a and a miniscript leaf" example's
         // expanded Descriptor line (a tr() with sortedmulti_a and multipath keys).
         var descriptorText: String?

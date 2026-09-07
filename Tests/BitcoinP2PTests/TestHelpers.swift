@@ -1,5 +1,6 @@
 import BitcoinCore
 import Foundation
+import TestSupport
 @testable import BitcoinP2P
 
 /// Test doubles shared across BitcoinP2PTests.
@@ -87,16 +88,6 @@ func makeFakeSegwitTx() -> Transaction {
     return Transaction(version: 2, inputs: [input], outputs: [output], locktime: 0)
 }
 
-/// Temporary file URL that is removed on test teardown best-effort.
-func tempFileURL(_ name: String) -> URL {
-    let url = FileManager.default.temporaryDirectory
-        .appendingPathComponent("winnow-tests-\(UUID().uuidString)")
-        .appendingPathComponent(name)
-    try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                             withIntermediateDirectories: true)
-    return url
-}
-
 /// Resumes a continuation at most once: the first resume wins, later ones
 /// are dropped. Wraps every checked continuation handed to a Network.framework
 /// state handler — NWConnection/NWListener can still deliver a state update
@@ -133,16 +124,4 @@ final class ResumeOnce: @unchecked Sendable {
 final class MatchCollector: @unchecked Sendable {
     private(set) var matches: [BlockMatch] = []
     func add(_ match: BlockMatch) { matches.append(match) }
-}
-
-func vectorData(_ name: String) throws -> Data {
-    guard let url = Bundle.module.url(forResource: name, withExtension: nil, subdirectory: "Vectors") else {
-        throw VectorError.missingFile(name)
-    }
-    return try Data(contentsOf: url)
-}
-
-enum VectorError: Error {
-    case missingFile(String)
-    case malformed(String)
 }

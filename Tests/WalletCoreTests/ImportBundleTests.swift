@@ -3,6 +3,7 @@ import BitcoinP2P
 import Foundation
 import P256K
 import Testing
+import TestSupport
 @testable import WalletCore
 
 /// Import bundle (docs/read-side.md §2.7.5): parsing, seeding, and the verify

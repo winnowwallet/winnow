@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import TestSupport
 @testable import BitcoinP2P
 
 /// TxBroadcaster against loopback nodes: inv announcement, getdata answer,

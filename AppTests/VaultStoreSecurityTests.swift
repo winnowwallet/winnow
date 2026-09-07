@@ -1,12 +1,13 @@
 @testable import WinnowApp
 import BitcoinCore
 import BitcoinP2P
+import TestSupport
 import WalletCore
 import XCTest
 
 final class VaultStoreSecurityTests: XCTestCase {
     func testMissingVaultFileIsAnEmptyStore() async {
-        let url = temporaryURL()
+        let url = tempFileURL("vault-store.json")
         let store = VaultStore()
 
         let result = await store.configure(storageURL: url, network: .signet)
@@ -16,7 +17,7 @@ final class VaultStoreSecurityTests: XCTestCase {
     }
 
     func testMalformedVaultFileFailsClosedAndIsNotRewritten() async throws {
-        let url = temporaryURL()
+        let url = tempFileURL("vault-store.json")
         let original = Data("not vault json".utf8)
         try original.write(to: url, options: .atomic)
         defer { try? FileManager.default.removeItem(at: url) }
@@ -201,13 +202,8 @@ final class VaultStoreSecurityTests: XCTestCase {
     }
 
     private func write(_ records: [VaultRecord]) throws -> URL {
-        let url = temporaryURL()
+        let url = tempFileURL("vault-store.json")
         try JSONEncoder().encode(records).write(to: url, options: .atomic)
         return url
-    }
-
-    private func temporaryURL() -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("vault-store-\(UUID().uuidString).json")
     }
 }
