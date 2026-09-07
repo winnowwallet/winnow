@@ -2,6 +2,7 @@ import BitcoinCore
 import BitcoinP2P
 import Foundation
 import Testing
+import TestSupport
 @testable import WalletCore
 
 /// `decoderawtransaction` (Core 31) vs our serialization/parsing — field-level

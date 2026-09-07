@@ -1,6 +1,7 @@
 import BitcoinCore
 import BitcoinP2P
 import Foundation
+import TestSupport
 @testable import WalletCore
 
 /// Master switch: the differential suite talks to the dev custom-signet node

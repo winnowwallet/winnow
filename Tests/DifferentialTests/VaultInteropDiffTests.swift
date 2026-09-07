@@ -3,6 +3,7 @@ import BitcoinP2P
 import Foundation
 import P256K
 import Testing
+import TestSupport
 import WalletCore
 
 /// Mixed-implementation vault interoperability (invariant S8, issue #58).
