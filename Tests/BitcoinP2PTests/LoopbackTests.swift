@@ -130,23 +130,32 @@ struct LoopbackTests {
         await peer.disconnect()
     }
 
-    @Test("full BIP157 flow: checkpoints, pinned headers, filter match, block fetch")
-    func filterSync() async throws {
+    /// Runs alone and with a second honest peer. The two-peer form is the
+    /// positive control for `PeerDisagreementTests`: without it, a refusal
+    /// there could be the two-peer path being broken rather than the
+    /// disagreement being caught.
+    @Test("full BIP157 flow: checkpoints, pinned headers, filter match, block fetch",
+          arguments: [1, 2])
+    func filterSync(peerCount: Int) async throws {
         let synthetic = makeSyntheticChain(length: 6, watchHeight: 3)
-        let node = LoopbackNode(params: synthetic.params, chain: synthetic.blocks)
-        try await node.start()
-        defer { Task { await node.stop() } }
+        let nodes = (0 ..< peerCount).map { _ in
+            LoopbackNode(params: synthetic.params, chain: synthetic.blocks)
+        }
+        for node in nodes { try await node.start() }
+        defer { for node in nodes { Task { await node.stop() } } }
 
-        let pool = PeerPool(params: synthetic.params, peerCount: 1,
-                            manualPeers: [await node.endpoint],
+        var endpoints: [PeerEndpoint] = []
+        for node in nodes { endpoints.append(await node.endpoint) }
+        let pool = PeerPool(params: synthetic.params, peerCount: peerCount,
+                            manualPeers: endpoints,
                             peersFileURL: tempFileURL("peers.json"))
         await pool.start()
-        #expect(await pool.connectedPeers().count == 1)
+        #expect(await pool.connectedPeers().count == peerCount)
 
         let chain = try HeaderChain(params: synthetic.params)
         let progressFile = tempFileURL("filter-progress.json")
         let sync = try FilterSync(pool: pool, chain: chain, startHeight: 1,
-                                  storageURL: progressFile, requiredCheckpointPeers: 1)
+                                  storageURL: progressFile, requiredCheckpointPeers: peerCount)
 
         let collector = MatchCollector()
         try await sync.sync(watchScripts: [synthetic.watchScript]) { match in
@@ -166,7 +175,7 @@ struct LoopbackTests {
 
         // Progress persists across instances.
         let reloaded = try FilterSync(pool: pool, chain: chain, startHeight: 1,
-                                      storageURL: progressFile, requiredCheckpointPeers: 1)
+                                      storageURL: progressFile, requiredCheckpointPeers: peerCount)
         #expect(await reloaded.nextScanHeight == 7)
         #expect(await reloaded.lastScannedHeight == 6)
 
