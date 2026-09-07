@@ -1,10 +1,9 @@
 import BitcoinCore
-import BitcoinP2P
+import WalletCore
 import Foundation
 import LocalAuthentication
 import SwiftUI
 import UIKit
-import WalletCore
 
 @MainActor
 protocol DeviceAuthenticating {
