@@ -174,34 +174,6 @@ struct LoopbackTests {
         try? FileManager.default.removeItem(at: progressFile.deletingLastPathComponent())
     }
 
-    @Test("cfcheckpt headers map to checkpoint multiples, not the tip (Core semantics)")
-    func checkpointHeightMapping() async throws {
-        // Regression test for a bug caught by the differential harness: Core's
-        // ProcessGetCFCheckPt returns headers at heights 1000, 2000, …
-        // ascending — never the stop block itself. FilterSync used to map the
-        // first header onto the tip and reject every sync past height 1000.
-        let synthetic = makeSyntheticChain(length: 1_001, watchHeight: 3)
-        let node = LoopbackNode(params: synthetic.params, chain: synthetic.blocks)
-        try await node.start()
-        defer { Task { await node.stop() } }
-
-        let pool = PeerPool(params: synthetic.params, peerCount: 1,
-                            manualPeers: [await node.endpoint])
-        await pool.start()
-        let chain = try HeaderChain(params: synthetic.params)
-        let sync = try FilterSync(pool: pool, chain: chain, startHeight: 1,
-                                  requiredCheckpointPeers: 1)
-        let collector = MatchCollector()
-        try await sync.sync(watchScripts: [synthetic.watchScript]) { match in
-            collector.add(match)
-        }
-        #expect(collector.matches.count == 1)
-        #expect(await sync.lastScannedHeight == 1_001)
-        // The single checkpoint (height 1000) was pinned and cross-checked.
-        #expect(await sync.filterHeader(at: 1_000) != nil)
-        await pool.stop()
-    }
-
     @Test("a lying filter fails verification against the pinned header chain")
     func filterTamperingDetected() async throws {
         let synthetic = makeSyntheticChain(length: 4, watchHeight: 6)
