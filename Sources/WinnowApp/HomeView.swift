@@ -178,7 +178,7 @@ private struct HistoryRow: View {
                     Text("replaced by \(replacement.displayHex.prefix(8))…")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .accessibilityIdentifier("transactionReplaced")
+                        .accessibilityIdentifier("transactionReplaced-\(entry.txid.displayHex)")
                 } else if entry.height > 0 {
                     Text("block \(entry.height)")
                         .accessibilityIdentifier("transactionConfirmation-\(entry.txid.displayHex)")

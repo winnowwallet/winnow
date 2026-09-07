@@ -1415,9 +1415,13 @@ final class WinnowAppUITests: XCTestCase {
         let replacement = try XCTUnwrap(Set(try BitcoinCLI.mempoolTxids()).subtracting(before).first)
         XCTAssertNotEqual(original, replacement)
         app.buttons["Done"].tap()
-        XCTAssertTrue(app.staticTexts["transactionReplaced"].firstMatch.waitForExistence(timeout: 30))
+        let replaced = app.staticTexts["transactionReplaced-\(original)"]
+        XCTAssertTrue(scrollUntilExists(app, replaced, maxSwipes: 5),
+                      "the original payment was not marked replaced in history")
+        XCTAssertTrue(replaced.label.contains(String(replacement.prefix(8))))
         let payout = try AddressDecoder.scriptPubKey(for: Self.fixtureAddress(0xD4), network: .signet)
         try await SignetMiner.mineOntoTip(payingTo: payout)
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["syncNowButton"], maxSwipes: 5, up: true))
         XCTAssertTrue(poll(timeout: 180, interval: 5, "replacement confirmed in the app") {
             self.nudgeSync(app)
             return app.staticTexts["transactionConfirmation-\(replacement)"].exists
