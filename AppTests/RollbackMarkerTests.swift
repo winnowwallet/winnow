@@ -18,14 +18,6 @@ import XCTest
 /// reads as if the guarantee holds.
 @MainActor
 final class RollbackMarkerTests: XCTestCase {
-    private final class SilentAuthenticator: DeviceAuthenticating {
-        func authenticate(reason: String) async throws {}
-    }
-
-    private func makeModel() -> AppModel {
-        AppModel(deviceAuthenticator: SilentAuthenticator())
-    }
-
     /// The stores a rollback moves, with a fork to find: a wallet scanned
     /// through block 500, a filter frontier that agrees, and one own send the
     /// broadcaster holds as confirmed at 300. Nothing is persisted and the

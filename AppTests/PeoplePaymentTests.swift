@@ -8,10 +8,6 @@ import XCTest
 /// How people reach the send review and how vaults become shared savings.
 @MainActor
 final class PeoplePaymentTests: XCTestCase {
-    private final class SilentAuthenticator: DeviceAuthenticating {
-        func authenticate(reason: String) async throws {}
-    }
-
     private var savedNetwork: String?
 
     override func setUp() {
