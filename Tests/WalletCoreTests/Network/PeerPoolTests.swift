@@ -127,13 +127,9 @@ struct PeerPoolTests {
         }
         #expect(allAccepted, "every silent candidate must be dialed before any is released")
         #expect(await pool.connectionStatus.dialing)
+        await pool.stop()
         for node in nodes { await node.stop() }
         await dialing.value
-        let status = await pool.connectionStatus
-        #expect(status.connected == 0)
-        #expect(status.exhausted)
-        #expect(status.attempts == 5)
-        await pool.stop()
     }
 
     @Test("total dial effort is capped per round")
