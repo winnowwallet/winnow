@@ -253,7 +253,8 @@ struct VaultDraftIdentityTests {
         #expect(draft.role == .scriptPath)
         // Removing the last cosigner releases the lock again.
         draft.remove(at: IndexSet(integer: 0))
-        #expect(draft.setRole(.muSig2))
+        let released = draft.setRole(.muSig2) // mutating: cannot sit inside #expect
+        #expect(released)
         #expect(draft.role == .muSig2)
         #expect(draft.threshold == 1)
     }
