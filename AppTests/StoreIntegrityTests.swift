@@ -206,14 +206,14 @@ private func writeBytes(_ bytes: Data, to url: URL) throws -> Data {
 
 /// Encodes a snapshot at `url` and hands back the bytes it wrote. Both record
 /// stores persist a plain array, so one helper serves them.
-private func writeSnapshot(_ records: [some Encodable], to url: URL) throws -> Data {
+private func writeSnapshot<Record: Encodable>(_ records: [Record], to url: URL) throws -> Data {
     let data = try JSONEncoder().encode(records)
     return try writeBytes(data, to: url)
 }
 
 /// The same, into a fresh temporary file, for the cases that only need the
 /// store to refuse what is there.
-private func snapshotFile(_ records: [some Encodable], named name: String) throws -> URL {
+private func snapshotFile<Record: Encodable>(_ records: [Record], named name: String) throws -> URL {
     let url = tempFileURL(name)
     _ = try writeSnapshot(records, to: url)
     return url
