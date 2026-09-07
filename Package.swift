@@ -86,9 +86,15 @@ let package = Package(
             dependencies: ["BitcoinP2P", "BitcoinCore", "TestSupport"],
             resources: [.copy("Vectors")]
         ),
+        // The esplora client and what it discloses belong to BlockchainBackend;
+        // they were only ever `@testable import`ed from the WalletCore suite.
+        .testTarget(
+            name: "BlockchainBackendTests",
+            dependencies: ["BlockchainBackend"]
+        ),
         .testTarget(
             name: "WalletCoreTests",
-            dependencies: ["WalletCore", "BitcoinP2P", "BlockchainBackend", "TestSupport"],
+            dependencies: ["WalletCore", "BitcoinP2P", "TestSupport"],
             resources: [.copy("Vectors")]
         ),
         .testTarget(
