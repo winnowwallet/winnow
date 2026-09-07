@@ -34,14 +34,15 @@ live in this repository. The app and all development tools use one root
 Swift package and dependency lockfile. There is one release version and one source revision.
 
 Wallet, protocol and cryptographic logic stays in the library modules; the
-SwiftUI app remains a thin shell. The root `Winnow` package groups `BitcoinCore`, `BitcoinP2P`, `WalletCore`
-and `BlockchainBackend` for local use, plus the `btc-swift` development CLI
-and the `winnow-story soak` subcommand. The explorer backend is never instantiated by the wallet.
+SwiftUI app remains a thin shell. The root `Winnow` package groups
+`BitcoinCore`, `BitcoinP2P`, and `WalletCore`, plus the offline `btc-swift` CLI,
+the `winnow-story` operator tool, and the fuzz harness. Explorer links open an
+external website after a warning; there is no HTTP wallet backend.
 
 | Path | Purpose |
 | --- | --- |
 | `Sources/WinnowApp` | iOS app (SwiftUI, iOS 17+) |
-| Other `Sources/` targets | Bitcoin libraries, offline CLI and soak driver |
+| Other `Sources/` targets | Bitcoin libraries and offline CLI |
 | `Tests/` | BIP vectors, unit, loopback and Core differential tests |
 | `Tests/Support` | `TestSupport`: fixtures, loopback harness, miner and RPC helpers shared by every test target |
 | `AppTests/` | App state, privacy, journal redaction and iOS Keychain attributes |

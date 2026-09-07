@@ -7,7 +7,6 @@ let package = Package(
     products: [
         .library(name: "BitcoinCore", targets: ["BitcoinCore"]),
         .library(name: "BitcoinP2P", targets: ["BitcoinP2P"]),
-        .library(name: "BlockchainBackend", targets: ["BlockchainBackend"]),
         .library(name: "WalletCore", targets: ["WalletCore"]),
         // Test fixtures shared by every test target, SwiftPM and Xcode alike.
         .library(name: "TestSupport", targets: ["TestSupport"]),
@@ -28,12 +27,8 @@ let package = Package(
             dependencies: ["BitcoinCore"]
         ),
         .target(
-            name: "BlockchainBackend",
-            dependencies: ["BitcoinCore"]
-        ),
-        .target(
             name: "WalletCore",
-            dependencies: ["BitcoinCore", "BitcoinP2P", "BlockchainBackend"]
+            dependencies: ["BitcoinCore", "BitcoinP2P"]
         ),
         .executableTarget(
             name: "BtcSwiftCLI",
@@ -41,7 +36,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "WinnowStoryCLI",
-            dependencies: ["BitcoinCore", "BitcoinP2P", "BlockchainBackend", "WalletCore"],
+            dependencies: ["BitcoinCore", "BitcoinP2P", "WalletCore"],
             path: "Tools/Story/Sources/WinnowStoryCLI"
         ),
         .target(
@@ -74,12 +69,6 @@ let package = Package(
             name: "BitcoinP2PTests",
             dependencies: ["BitcoinP2P", "BitcoinCore", "TestSupport"],
             resources: [.copy("Vectors")]
-        ),
-        // The esplora client and what it discloses belong to BlockchainBackend;
-        // they were only ever `@testable import`ed from the WalletCore suite.
-        .testTarget(
-            name: "BlockchainBackendTests",
-            dependencies: ["BlockchainBackend"]
         ),
         .testTarget(
             name: "WalletCoreTests",
