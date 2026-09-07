@@ -16,7 +16,7 @@ public enum TestVaults {
 
     /// Three cosigner HD masters (fixed entropy — deterministic fixtures).
     public static func masters() throws -> [HDKey] {
-        try cosignerEntropy.map { try master(entropyByte: $0) }
+        try cosignerEntropy.map { try Self.master(entropyByte: $0) }
     }
 
     /// `[fp/86'/1'/0']tpub…/<0;1>/*` cosigner key expression text.
@@ -34,16 +34,16 @@ public enum TestVaults {
 
     /// A k-of-3 `sortedmulti_a` script-path vault over `masters()`.
     public static func multiAVault(threshold k: Int = 2) throws -> (vault: Vault, masters: [HDKey]) {
-        let masters = try masters()
+        let masters = try Self.masters()
         let descriptor = try Vault.multiADescriptor(
-            threshold: k, cosigners: try masters.map { try keyExpression(master: $0) })
+            threshold: k, cosigners: try masters.map { try Self.keyExpression(master: $0) })
         return (try Vault(descriptor: descriptor, network: .signet), masters)
     }
 
     /// The 2-of-2 MuSig2 key-path vault over the first two of `masters()`.
     public static func muSig2Vault() throws -> (vault: Vault, masters: [HDKey]) {
-        let masters = try masters().prefix(2).map { $0 }
-        let keys = try masters.map { try bareKeyExpression(master: $0) }
+        let masters = try Self.masters().prefix(2).map { $0 }
+        let keys = try masters.map { try Self.bareKeyExpression(master: $0) }
         return (try Vault("tr(musig(\(keys[0]),\(keys[1]))/<0;1>/*)", network: .signet), masters)
     }
 

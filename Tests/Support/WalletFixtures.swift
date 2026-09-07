@@ -90,7 +90,7 @@ public func fundedWallet(network: BitcoinNetwork = .signet,
         fundings.append(try await fund(wallet, amount: coin.amount, height: coin.height,
                                        chain: coin.chain, index: coin.index))
     }
-    if mature, let top = coins.map(\.height).max() {
+    if mature, let top = coins.map({ $0.height }).max() {
         try await matureCoinbase(wallet, height: top)
     }
     return (wallet, fundings)
