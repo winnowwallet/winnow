@@ -239,11 +239,12 @@ final class VaultStoreSecurityTests: XCTestCase {
         let fixture = try makeFixture()
         var invalid = fixture.record
         invalid.id = "00000000"
+        let damaged = invalid // immutable copy: the closure below runs concurrently
         let url = tempFileURL("vault-store.json")
         defer { try? FileManager.default.removeItem(at: url) }
         try await assertOneInvalidRecordRejectsTheWholeSnapshot(
             vaultStoreFixture(VaultStore(), url: url,
-                              damage: { try writeSnapshot([fixture.record, invalid], to: url) }))
+                              damage: { try writeSnapshot([fixture.record, damaged], to: url) }))
     }
 
     func testDuplicateVaultAndOutpointSnapshotsFailClosed() async throws {
@@ -426,11 +427,12 @@ final class PeopleStoreSecurityTests: XCTestCase {
         nameless.name = "  "
         nameless.signerKey = nil
         nameless.payTo = try fixture(0xB2).payTo
+        let damaged = nameless // immutable copy: the closure below runs concurrently
         let url = tempFileURL("people-store.json")
         defer { try? FileManager.default.removeItem(at: url) }
         try await assertOneInvalidRecordRejectsTheWholeSnapshot(
             peopleStoreFixture(PeopleStore(), url: url,
-                               damage: { try writeSnapshot([good, nameless], to: url) }))
+                               damage: { try writeSnapshot([good, damaged], to: url) }))
     }
 
     func testPrivateKeysAndSharedKeysInTheFileFailClosed() async throws {
