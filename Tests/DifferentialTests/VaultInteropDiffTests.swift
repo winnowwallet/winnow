@@ -112,7 +112,7 @@ struct VaultInteropDiffTests {
         // Core writes hardened steps as `h`, we write them as `'`. Both are
         // BIP380-legal and the vault normalises to the apostrophe form, so the
         // substitution has to be made in our spelling or it silently matches
-        // nothing. (`VaultCosignerIdentityTests` already treats the two
+        // nothing. (`VaultAdmissionTests` already treats the two
         // markers as the same key; this is the same fact seen from outside.)
         let body = String(ourText.split(separator: "#")[0])
         let coreExpressionOurSpelling = coreExpression

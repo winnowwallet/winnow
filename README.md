@@ -36,7 +36,7 @@ Swift package and dependency lockfile. There is one release version and one sour
 Wallet, protocol and cryptographic logic stays in the library modules; the
 SwiftUI app remains a thin shell. The root `Winnow` package groups `BitcoinCore`, `BitcoinP2P`, `WalletCore`
 and `BlockchainBackend` for local use, plus the `btc-swift` development CLI
-and `WinnowSoak`. The explorer backend is never instantiated by the wallet.
+and the `winnow-story soak` subcommand. The explorer backend is never instantiated by the wallet.
 
 | Path | Purpose |
 | --- | --- |

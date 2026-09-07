@@ -8,14 +8,23 @@ public enum WinnowStoryCLI {
     public static func main() async {
         do {
             try await execute(Array(CommandLine.arguments.dropFirst()))
+        } catch let error as SoakError {
+            FileHandle.standardError.write(Data("\(error)\n".utf8))
+            exit(2)
         } catch {
             FileHandle.standardError.write(Data(("error: \(error.localizedDescription)\n").utf8))
             exit(1)
         }
     }
 
-    private static func execute(_ arguments: [String]) async throws {
+    static func execute(_ arguments: [String]) async throws {
         guard let command = arguments.first else { return usage() }
+        // Operator commands need neither a story run nor a simulator.
+        switch command {
+        case "generate": return try await WinnowGenerate.execute(Array(arguments.dropFirst()))
+        case "soak": return try await SoakCommand.execute(Array(arguments.dropFirst()))
+        default: break
+        }
         let repository = URL(fileURLWithPath:
             ProcessInfo.processInfo.environment["WINNOW_STORY_REPOSITORY"]
                 ?? FileManager.default.currentDirectoryPath)
@@ -475,7 +484,13 @@ public enum WinnowStoryCLI {
 
     private static func usage() {
         print("""
-        Winnow whole-app public-signet story
+        Winnow operator tool: public-signet story, generators and network soak
+
+          ./scripts/winnow-story generate --help
+          ./scripts/winnow-story generate fallback-peers [--out PATH] [--target 96] [--floor 24]
+          ./scripts/winnow-story generate checkpoint <headers.bin> [--height H] [--vector-out PATH]
+          ./scripts/winnow-story soak --help
+          ./scripts/winnow-story soak [--network signet|mainnet] [--minutes N] [--out PATH] [--state DIR]
 
           ./scripts/winnow-story doctor
           ./scripts/winnow-story start --run NAME

@@ -12,9 +12,7 @@ let package = Package(
         // Test fixtures shared by every test target, SwiftPM and Xcode alike.
         .library(name: "TestSupport", targets: ["TestSupport"]),
         .executable(name: "btc-swift", targets: ["BtcSwiftCLI"]),
-        .executable(name: "WinnowSoak", targets: ["WinnowSoak"]),
         .executable(name: "winnow-story", targets: ["WinnowStoryCLI"]),
-        .executable(name: "winnow-generate", targets: ["WinnowGenerate"]),
         .executable(name: "WinnowFuzz", targets: ["WinnowFuzz"]),
     ],
     dependencies: [
@@ -42,10 +40,6 @@ let package = Package(
             dependencies: ["BitcoinCore", "BitcoinP2P", "WalletCore"]
         ),
         .executableTarget(
-            name: "WinnowSoak",
-            dependencies: ["BitcoinCore", "BitcoinP2P"]
-        ),
-        .executableTarget(
             name: "WinnowStoryCLI",
             dependencies: ["BitcoinCore", "BitcoinP2P", "BlockchainBackend", "WalletCore"],
             path: "Tools/Story/Sources/WinnowStoryCLI"
@@ -54,11 +48,6 @@ let package = Package(
             name: "WinnowFuzzCore",
             dependencies: ["BitcoinCore", "BitcoinP2P", "WalletCore"],
             path: "Tools/Fuzz/Sources/WinnowFuzzCore"
-        ),
-        .executableTarget(
-            name: "WinnowGenerate",
-            dependencies: ["BitcoinCore", "BitcoinP2P"],
-            path: "Tools/Generate/Sources/WinnowGenerate"
         ),
         .executableTarget(
             name: "WinnowFuzz",
@@ -108,7 +97,7 @@ let package = Package(
         // library one and `swift test` links the tools once.
         .testTarget(
             name: "ToolsTests",
-            dependencies: ["WinnowStoryCLI", "WinnowGenerate", "WinnowFuzzCore"],
+            dependencies: ["WinnowStoryCLI", "WinnowFuzzCore"],
             resources: [.copy("Cases")]
         ),
     ]
