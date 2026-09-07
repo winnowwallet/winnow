@@ -18,7 +18,7 @@ struct InspectionTests {
         let outputs = try #require(inspected["outputs"] as? [[String: Any]])
         #expect(outputs.first?["value"] as? Int == 4_000)
         let psbt = try PSBT(unsignedTx: tx, inputs: [
-            .init(spentOutput: .init(value: 5_000, scriptPubKey: Data([0x51])))
+            .init(spentOutput: .init(amount: 5_000, scriptPubKey: Data([0x51])))
         ], outputs: [.init()])
         let parsed = try object(["psbt", psbt.base64])
         let transaction = try #require(parsed["transaction"] as? [String: Any])
