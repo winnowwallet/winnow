@@ -19,24 +19,6 @@ import TestSupport
 /// hang with no output.
 let diffEnabled = ProcessInfo.processInfo.environment["WINNOW_DIFF"] == "1"
 
-/// Thread-safe sink for FilterSync matches.
-final class MatchCollector: @unchecked Sendable {
-    private let lock = NSLock()
-    private var stored: [BlockMatch] = []
-
-    var matches: [BlockMatch] {
-        lock.lock()
-        defer { lock.unlock() }
-        return stored
-    }
-
-    func add(_ match: BlockMatch) {
-        lock.lock()
-        stored.append(match)
-        lock.unlock()
-    }
-}
-
 // MARK: - PSBT envelope conversion for Core
 
 /// Core 31.1 reads BIP174 v0 only and rejects PSBTv2 outright; we emit v2 and
