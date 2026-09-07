@@ -48,7 +48,7 @@ struct DescriptorTests {
         #expect(outputs[0].scriptPubKey != outputs[1].scriptPubKey)
 
         // Choice 0 (receive) equals the BIP86 first address for this account key.
-        #expect(outputs[0].address == "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr")
+        #expect(outputs[0].address == TestScripts.bip86FirstMainnetAddress)
 
         // Mismatched multipath widths are invalid (BIP389).
         let mismatched = "tr(xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/<0;1>/*,{pk(xpub68NZiKmJWnxxS6aaHmn81bvJeTESw724CRDs6HbuccFQN9Ku14VQrADWgqbhhTHBaohPX4CjNLf9fq9MYo6oDaPPLPxSb7gwQN3ih19Zm4Y/<0;1;2>/*)})"

@@ -216,10 +216,10 @@ final class PeopleStoreSecurityTests: XCTestCase {
     }
 
     private func fixture(_ byte: UInt8) throws -> Fixture {
-        let master = try HDKey(seed: BIP39.seed(mnemonic: BIP39.mnemonic(entropy: Data(repeating: byte, count: 16))))
+        let master = try TestVaults.master(entropyByte: byte)
         let account = try master.derived(path: "m/86'/1'/0'")
         let origin = "[\(String(format: "%08x", master.fingerprint))/86'/1'/0']"
-        let signer = "\(origin)\(account.neutered.serialized(network: .testnet))/<0;1>/*"
+        let signer = try TestVaults.keyExpression(master: master)
         return Fixture(payTo: try PersonPayTo.descriptor("tr(\(signer))", network: .signet),
                        signer: signer,
                        privateSigner: "\(origin)\(account.serialized(network: .testnet))/<0;1>/*")

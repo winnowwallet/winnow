@@ -119,7 +119,7 @@ struct Bech32Tests {
         // From BIP86: output key a60869f0... -> bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr
         let program = Data(hex: "a60869f0dbcf1dc659c9cecbaf8050135ea9e8cdc487053f1dc6880949dc684c")!
         let address = try SegwitAddress.encode(hrp: "bc", version: 1, program: program)
-        #expect(address == "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr")
+        #expect(address == TestScripts.bip86FirstMainnetAddress)
         let decoded = try SegwitAddress.decode(address, expectedHRP: "bc")
         #expect(decoded.version == 1 && decoded.program == program)
     }

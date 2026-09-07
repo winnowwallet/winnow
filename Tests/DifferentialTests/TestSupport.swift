@@ -19,14 +19,6 @@ import TestSupport
 /// hang with no output.
 let diffEnabled = ProcessInfo.processInfo.environment["WINNOW_DIFF"] == "1"
 
-/// The well-known BIP39 all-"abandon" mnemonic — the harness never holds
-/// real funds; this is a disposable signet.
-let testMnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
-
-func testMaster() throws -> HDKey {
-    try HDKey(seed: BIP39.seed(mnemonic: testMnemonic))
-}
-
 /// Thread-safe sink for FilterSync matches.
 final class MatchCollector: @unchecked Sendable {
     private let lock = NSLock()

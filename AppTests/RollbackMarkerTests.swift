@@ -1,6 +1,7 @@
 @testable import WinnowApp
 import BitcoinP2P
 import Foundation
+import TestSupport
 import WalletCore
 import XCTest
 
@@ -37,8 +38,7 @@ final class RollbackMarkerTests: XCTestCase {
     }
 
     private func makeFixture() async throws -> Fixture {
-        let wallet = try Wallet.create(network: .signet, keyStore: InMemoryKeyStore(), storageURL: nil,
-                                       entropy: Data(repeating: 0, count: 16), creationHeight: 100)
+        let wallet = try makeTestWallet()
         try await wallet.recordScanHeight(501)
         let pool = PeerPool(params: .signet, peerCount: 0, manualPeers: [])
         let chain = try HeaderChain(params: .signet)
