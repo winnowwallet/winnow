@@ -1168,7 +1168,7 @@ final class WinnowAppUITests: XCTestCase {
         let resumedProgress = app.staticTexts["approvalProgress"]
         XCTAssertTrue(poll(timeout: 240, interval: 5, "group approval reviewed once the tip caught up") {
             let review = app.buttons["reviewApprovalButton"]
-            guard self.scrollUntilExists(app, review, up: true) else { return false }
+            guard self.scrollUntilExists(app, review) else { return false }
             review.tap()
             return self.scrollUntilExists(app, resumedProgress)
         })

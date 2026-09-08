@@ -309,6 +309,7 @@ struct ApprovalView: View {
     private func requestSection(_ session: VaultSpendSession) -> some View {
         Section {
             TextField("Paste the request", text: $pasted, axis: .vertical)
+                .lineLimit(1...4)
                 .font(.system(.caption, design: .monospaced))
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
