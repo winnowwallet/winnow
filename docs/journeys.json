@@ -90,7 +90,7 @@
       "Leave a signing exchange, then start again with fresh signing data.",
       "Review and approve on the phone, exchange replies with Core, and confirm a payment with one on-chain signature.",
       "Restore the earlier backup with the recovery words and check that it finds the payment and the remaining balance.",
-      "In a separate flow, use a MuSig2 group as one signer in a shared wallet."
+      "In a separate flow, use a MuSig2 group as one signer in a shared wallet. Import its raw request through Approve a request and finish with the phone’s approval."
     ],
     "tests": [
       "test16MuSig2RequiresSecondDevice",
