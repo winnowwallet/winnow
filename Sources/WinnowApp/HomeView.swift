@@ -154,16 +154,13 @@ struct HomeView: View {
                             .foregroundStyle(.secondary)
                     }
                     ForEach(Array(model.status.history.enumerated()), id: \.offset) { _, entry in
-                        NavigationLink {
-                            PaymentDetailView(txid: entry.txid)
-                        } label: {
-                            HistoryRow(entry: entry)
-                        }
+                        NavigationLink(value: entry.txid) { HistoryRow(entry: entry) }
                         .accessibilityIdentifier("historyPayment-\(entry.txid.displayHex)")
                     }
                 }
             }
             .navigationTitle("Winnow")
+            .navigationDestination(for: Data.self) { PaymentDetailView(txid: $0) }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button("Receive") { showReceive = true }

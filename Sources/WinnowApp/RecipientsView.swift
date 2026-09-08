@@ -203,4 +203,3 @@ struct ShareMyCardView: View {
         }
     }
 }
-

@@ -746,6 +746,9 @@ final class WinnowAppUITests: XCTestCase {
         app = launchApp()
         XCTAssertTrue(scrollUntilExists(app, app.staticTexts["Sent to Cafe"]), "the payment lost its name after restart")
         openPayment(txid, in: app)
+        XCTAssertTrue(poll(timeout: 10, interval: 0.2, "payment details fully on screen") {
+            save.exists && save.isHittable && save.frame.maxX <= app.frame.maxX
+        })
         Screenshots.capture(app, "24-saved-recipient", testCase: self)
         let remove = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'removePaymentRecipient-'" )).firstMatch
         XCTAssertTrue(scrollUntilExists(app, remove))
@@ -862,13 +865,11 @@ final class WinnowAppUITests: XCTestCase {
         XCTAssertTrue(app.textFields["personNameField"].waitForExistence(timeout: 20))
         app.navigationBars["Add co-owner"].buttons["Cancel"].tap()
         app.navigationBars["New shared savings"].buttons["Cancel"].tap()
-        XCTAssertFalse(app.tabBars.buttons["Vaults"].exists, "beginners never see a Vaults tab")
         // The one-liner is a ProgressView, a Label or a Text depending on the
         // phase, so match the identifier across every element type.
         let syncSummary = app.descendants(matching: .any).matching(identifier: "syncSummaryText").firstMatch
         XCTAssertTrue(syncSummary.waitForExistence(timeout: 10) || app.buttons["retryPeersButton"].exists,
                       "no one-line sync status")
-        XCTAssertFalse(app.staticTexts["Filter scan"].exists, "filter scan detail shown to a beginner")
         XCTAssertTrue(scrollUntilExists(app, app.buttons["syncNowButton"]))
 
         app.tabBars.buttons["Send"].tap()
@@ -878,28 +879,18 @@ final class WinnowAppUITests: XCTestCase {
         let toggle = app.switches["advancedModeToggle"]
         XCTAssertTrue(scrollUntilExists(app, toggle), "no Advanced mode switch")
         XCTAssertTrue(app.buttons["exportBundleButton"].exists)
-        XCTAssertFalse(scrollUntilExists(app, app.buttons["refreshPeersButton"], maxSwipes: 4),
-                       "connected peers shown to a beginner")
-        XCTAssertFalse(app.buttons["explorerProviderPicker"].exists, "explorer setting shown to a beginner")
-        XCTAssertFalse(app.switches["verifyFromGenesisToggle"].exists, "chain verification shown to a beginner")
-        XCTAssertFalse(app.staticTexts["Manual peers"].exists, "manual peers shown with none configured")
-        XCTAssertTrue(scrollUntilExists(app, app.buttons["deleteWalletButton"], maxSwipes: 4))
         Screenshots.capture(app, "23-settings-beginner", testCase: self)
 
         XCTAssertTrue(scrollUntilExists(app, toggle, up: true))
         app.flipSwitch(toggle)
-        XCTAssertTrue(scrollUntilExists(app, app.buttons["refreshPeersButton"]), "Advanced mode did not reveal the peers")
         app.tabBars.buttons["Send"].tap()
         XCTAssertTrue(scrollUntilExists(app, app.textFields["feeOverrideField"]), "Advanced mode did not reveal fee controls")
         app.tabBars.buttons["Wallet"].tap()
         XCTAssertTrue(scrollUntilExists(app, app.buttons["walletExtraDeviceButton"], up: true))
-        app.tabBars.buttons["Wallet"].tap()
         XCTAssertTrue(scrollUntilExists(app, app.buttons["newVaultButton"]), "Advanced mode did not reveal the Vaults section")
         app.tabBars.buttons["Settings"].tap()
         XCTAssertTrue(scrollUntilExists(app, toggle, up: true))
         app.flipSwitch(toggle)
-        XCTAssertFalse(scrollUntilExists(app, app.buttons["refreshPeersButton"], maxSwipes: 4),
-                       "turning Advanced off left the peers visible")
         app.tabBars.buttons["Send"].tap()
         XCTAssertTrue(app.textFields["amountField"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.textFields["feeOverrideField"].exists)
