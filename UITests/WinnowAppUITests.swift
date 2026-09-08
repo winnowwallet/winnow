@@ -1181,6 +1181,9 @@ final class WinnowAppUITests: XCTestCase {
         XCTAssertTrue(poll(timeout: 60, "shared approval flow sends the group payment") {
             self.scrollUntilExists(app, app.staticTexts["approvalBroadcast"])
         })
+        XCTAssertFalse(app.staticTexts["Winnow cannot safely review this request"].exists,
+                       "a successful payment is still showing a stale-coin warning")
+        XCTAssertTrue(app.navigationBars["Payment"].exists)
         Screenshots.capture(app, "32-group-broadcast", testCase: self)
 
         // 6. The node is the judge — patiently: the app broadcasts over P2P

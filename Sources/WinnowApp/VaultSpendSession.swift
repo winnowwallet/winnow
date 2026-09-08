@@ -266,7 +266,7 @@ struct ApprovalView: View {
                     ProgressView()
                 }
             }
-            .navigationTitle("Approve a request")
+            .navigationTitle(session?.broadcastTxid == nil ? "Approve a request" : "Payment")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") {
@@ -295,14 +295,19 @@ struct ApprovalView: View {
 
     @ViewBuilder
     private func content(_ session: VaultSpendSession) -> some View {
-        if session.broadcastTxid == nil { requestSection(session) }
-        if session.working != nil { reviewSection(session) }
-        if session.working != nil, session.broadcastTxid == nil { decisionSection(session) }
-        if let error = session.error, session.review != nil || session.working == nil {
-            Section { Text(error).foregroundStyle(.red).font(.footnote).accessibilityIdentifier("approvalError") }
+        if let txid = session.broadcastTxid {
+            sentSection(txid)
+        } else {
+            requestSection(session)
+            if session.working != nil {
+                reviewSection(session)
+                decisionSection(session)
+            }
+            if let error = session.error, session.review != nil || session.working == nil {
+                Section { Text(error).foregroundStyle(.red).font(.footnote).accessibilityIdentifier("approvalError") }
+            }
+            if let output = session.output { shareSection(output, session: session) }
         }
-        if let output = session.output, session.broadcastTxid == nil { shareSection(output, session: session) }
-        if let txid = session.broadcastTxid { sentSection(txid) }
     }
 
     /// Where the request comes in.
