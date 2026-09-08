@@ -301,7 +301,7 @@ struct ApprovalView: View {
         if let error = session.error, session.review != nil || session.working == nil {
             Section { Text(error).foregroundStyle(.red).font(.footnote).accessibilityIdentifier("approvalError") }
         }
-        if let output = session.output, session.broadcastTxid == nil { shareSection(output, approved: session.approvedByYou) }
+        if let output = session.output, session.broadcastTxid == nil { shareSection(output, session: session) }
         if let txid = session.broadcastTxid { sentSection(txid) }
     }
 
@@ -389,12 +389,19 @@ struct ApprovalView: View {
         }
     }
 
-    private func shareSection(_ output: String, approved: Bool) -> some View {
+    private func shareSection(_ output: String, session: VaultSpendSession) -> some View {
         Section {
             CopyableTextBlock(text: output)
                 .accessibilityIdentifier("approvalOutputBlock")
+            if model.advancedMode, let raw = try? session.working?.base64V0() {
+                DisclosureGroup("Raw PSBT") {
+                    CopyableTextBlock(text: raw)
+                        .accessibilityIdentifier("approvalRawPSBT")
+                }
+                .accessibilityIdentifier("approvalRawPSBTDisclosure")
+            }
         } header: {
-            Text(approved ? "Share your approval" : "Share payment request")
+            Text(session.approvedByYou ? "Share your approval" : "Share payment request")
         } footer: {
             Text("Send this back to a co-owner, or to whoever will finish the payment.")
         }

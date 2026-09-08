@@ -12,7 +12,8 @@ shared savings, and extra-device accounts use the same form and review. The
 reviewed proposal goes directly to the account's approval screen; each signing
 method keeps its own approval rules. Every script-path account uses Approve a
 request, including raw PSBTs and group co-signers; there is no second Advanced
-signing screen for the same account. MuSig2 keeps its separate two-round exchange.
+signing screen for the same account. Advanced mode exposes Raw PSBT for exchanges
+with other wallets. MuSig2 keeps its separate two-round exchange.
 Removing a shortcut preserves
 past labels, signer identities, and fresh-address counters in the existing
 people.json store. Receive shares the wallet’s payment card.

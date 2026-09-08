@@ -9,7 +9,8 @@ The ordinary, shared, and extra-device journeys all start payments in Send.
 Form editing is checked once; each signing journey then checks its own approval
 rules and the result accepted by the Bitcoin node. Ordinary co-owner requests
 and raw PSBTs signed by a group both go through Approve a request. The group
-journey checks that Advanced mode adds no second signing entry.
+journey approves on the phone, exports the raw request to the group, imports its
+reply, and sends. It checks that Advanced mode adds no second signing entry.
 
 [WinnowAppUITests.swift](WinnowAppUITests.swift) contains the scenarios.
 [The journey inventory](../docs/journeys.json) maps them to the public website;

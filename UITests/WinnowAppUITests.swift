@@ -1130,16 +1130,30 @@ final class WinnowAppUITests: XCTestCase {
         reviewFromAccount(app, name: vaultName, address: try Self.fixtureAddress(0xE5), amount: "1000000", chooseInSend: true)
         Screenshots.capture(app, "31-group-spend-created", testCase: self)
         app.buttons["sendButton"].tap()
-        let request = app.staticTexts.matching(NSPredicate(format: "label CONTAINS '\"winnow\":\"approval\"'")).firstMatch
-        XCTAssertTrue(scrollUntilExists(app, request))
-        let unsigned = try ApprovalRequest.decode(request.label, network: .signet).decodedPSBT().base64V0()
+        let progress = app.staticTexts["approvalProgress"]
+        XCTAssertTrue(scrollUntilExists(app, progress))
+        XCTAssertTrue(progress.label.contains("No approvals yet"))
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["approveButton"]))
+        app.buttons["approveButton"].tap()
+        XCTAssertTrue(poll(timeout: 60, "phone approves before the group") {
+            self.scrollUntilExists(app, progress, up: true) && progress.label.contains("1 of 2")
+        })
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["finishApprovalButton"]))
+        XCTAssertFalse(app.buttons["finishApprovalButton"].isEnabled, "phone approval alone enabled sending")
+        let rawDisclosure = app.buttons["approvalRawPSBTDisclosure"]
+        XCTAssertTrue(scrollUntilExists(app, rawDisclosure))
+        rawDisclosure.tap()
+        let rawRequest = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'cHNidP'")).firstMatch
+        XCTAssertTrue(scrollUntilExists(app, rawRequest))
+        let phoneSigned = rawRequest.label
+        XCTAssertEqual(try PSBT(base64: phoneSigned).inputs.first?.tapScriptSignatures.count, 1)
 
-        // 4. The group signs (the test is both members).
-        let signed = try Self.groupSign(base64: unsigned, memberSecrets: memberSecrets,
+        // 4. The group signs the raw request exported by the phone.
+        let signed = try Self.groupSign(base64: phoneSigned, memberSecrets: memberSecrets,
                                         synthetic: synthetic)
 
         // 5. Relaunch with the group's PSBT on the clipboard; the app pastes,
-        //    reviews, signs the device leg, finalizes, and broadcasts.
+        //    reviews both approvals, finalizes, and broadcasts.
         app = launchApp(clipboard: signed, advanced: true)
         app.tabBars.buttons["Wallet"].tap()
         let signingVaultRow = app.staticTexts[vaultName].firstMatch
@@ -1151,19 +1165,16 @@ final class WinnowAppUITests: XCTestCase {
         approveRequest.tap()
         XCTAssertTrue(app.buttons["approvalPasteButton"].waitForExistence(timeout: 20))
         app.buttons["approvalPasteButton"].tap()
-        let progress = app.staticTexts["approvalProgress"]
+        let resumedProgress = app.staticTexts["approvalProgress"]
         XCTAssertTrue(poll(timeout: 240, interval: 5, "group approval reviewed once the tip caught up") {
             let review = app.buttons["reviewApprovalButton"]
             guard self.scrollUntilExists(app, review, up: true) else { return false }
             review.tap()
-            return self.scrollUntilExists(app, progress)
+            return self.scrollUntilExists(app, resumedProgress)
         })
-        XCTAssertTrue(progress.label.contains("1 of 2"), "group approval was not counted")
+        XCTAssertTrue(resumedProgress.label.contains("2 of 2"), "both approvals were not retained")
         XCTAssertTrue(scrollUntilExists(app, app.buttons["approveButton"]))
-        app.buttons["approveButton"].tap()
-        XCTAssertTrue(poll(timeout: 60, "phone approval joins the group approval") {
-            self.scrollUntilExists(app, progress, up: true) && progress.label.contains("2 of 2")
-        })
+        XCTAssertFalse(app.buttons["approveButton"].isEnabled, "the phone can approve a second time")
         let finish = app.buttons["finishApprovalButton"]
         XCTAssertTrue(scrollUntilExists(app, finish) && finish.isEnabled)
         finish.tap()
