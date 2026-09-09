@@ -965,6 +965,7 @@ final class WinnowAppUITests: XCTestCase {
             let threshold = app.descendants(matching: .any).matching(
                 NSPredicate(format: "label CONTAINS '2 of 3' OR value CONTAINS '2 of 3'")).firstMatch
             XCTAssertTrue(threshold.waitForExistence(timeout: 5), "the threshold did not settle at 2 of 3")
+            app.typeInto("savingsNameField", savingsName)
             XCTAssertTrue(scrollUntilExists(app, app.buttons["createSharedSavingsButton"]))
             app.buttons["createSharedSavingsButton"].tap()
             XCTAssertTrue(app.staticTexts["savingsShareNotice"].waitForExistence(timeout: 60),
