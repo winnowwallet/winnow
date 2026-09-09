@@ -10,6 +10,10 @@ public enum WalletError: Error, Equatable, LocalizedError {
     case noPayments
     /// The built transaction lost its change output (should not happen).
     case changeOutputMissing
+    /// The signed transaction is past Bitcoin Core's standard size limit, so
+    /// no peer would relay it. Coin selection refuses this earlier, on its
+    /// estimate; this measures the bytes that were actually signed.
+    case transactionTooLarge(vsize: Int, limit: Int)
     /// A seed-bearing export was requested, but the secret is an xprv (or
     /// missing) rather than a BIP39 mnemonic. Refusing is safer than emitting
     /// a bundle that looks spendable and is not.
@@ -45,6 +49,8 @@ public enum WalletError: Error, Equatable, LocalizedError {
             "Nothing to send."
         case .changeOutputMissing:
             "The built transaction lost its change output."
+        case let .transactionTooLarge(vsize, limit):
+            "The signed transaction is \(vsize) vbytes, above the \(limit)-vbyte relay maximum."
         case .mnemonicUnavailable:
             "This wallet has no recovery phrase to export — it was imported from an extended key, not a BIP39 mnemonic."
         case .exportWhilePending:
@@ -1177,12 +1183,31 @@ public actor Wallet {
         let (psbt, signed) = try sign(transaction: tx, selected: selection.selected,
                                       changeIndex: changeOutputIndex.map { _ in changeIndex },
                                       changeOutputIndex: changeOutputIndex)
+        try Self.checkStandardSize(signed)
 
         let built = BuiltTransaction(psbt: psbt, transaction: signed, fee: selection.fee,
                                      changeAmount: selection.changeAmount)
         return PreparedSend(built: built, selected: selection.selected, change: change,
                             changeIndex: changeIndex,
                             changeOutputIndex: changeOutputIndex.map(UInt32.init), fee: selection.fee)
+    }
+
+    /// Refuses a transaction past Bitcoin Core's standard size limit, measured
+    /// on the signed bytes rather than on the estimate coin selection used.
+    ///
+    /// `CoinSelection.select` applies the same ceiling to its estimate, which
+    /// is where a person meets this rule and where it costs no signature. This
+    /// is the invariant on the way out: the broadcaster announces and returns
+    /// whether or not a peer took the transaction, and `commit` then marks
+    /// every selected coin spent, so a transaction nothing will relay strands
+    /// those coins in a locally-spent, on-chain-unspent limbo that
+    /// forward-only scanning cannot repair.
+    static func checkStandardSize(_ transaction: Transaction) throws {
+        let vsize = TransactionBuilder.vsize(of: transaction)
+        guard vsize <= TransactionBuilder.maximumStandardVSize else {
+            throw WalletError.transactionTooLarge(
+                vsize: vsize, limit: TransactionBuilder.maximumStandardVSize)
+        }
     }
 
     /// Commits a prepared send to wallet state: the spent UTXOs leave the
@@ -1470,13 +1495,19 @@ public actor Wallet {
                                                        originPath: origin.path))
         }
         var psbt = try PSBT(unsignedTx: transaction, inputs: inputInfo, outputs: outputInfo)
+        // One KeyStore read and one seed derivation for the whole operation,
+        // handed down to each input the way the vault entries take `master`
+        // (`Vault.partialSign`), rather than a PBKDF2 run per input. The key
+        // still lives no longer than this call.
+        let master = try masterKey()
         for (index, utxo) in selected.enumerated() {
             // BIP86 key-path spend: the output key is the account key tweaked
             // by the coin's own chain/index coordinates. Both sends and
             // replacements come through here.
             try psbt.signKeyPath(
                 input: index,
-                tweakedPrivateKey: tweakedPrivateKey(chain: utxo.chain, index: utxo.index))
+                tweakedPrivateKey: tweakedPrivateKey(chain: utxo.chain, index: utxo.index,
+                                                     master: master))
         }
         try psbt.finalize()
         return (psbt, try psbt.extractedTransaction())
@@ -1501,8 +1532,8 @@ public actor Wallet {
         return origin
     }
 
-    /// The master key from the KeyStore — loaded just for the duration of a
-    /// derivation or signing call, never held in wallet state.
+    /// The master key from the KeyStore — loaded just for the duration of one
+    /// signing operation, never held in wallet state.
     private func masterKey() throws -> HDKey {
         switch try keyStore.load(walletID: id) {
         case let .mnemonic(words):
@@ -1512,11 +1543,11 @@ public actor Wallet {
         }
     }
 
-    /// BIP86 tweaked private key for one of our addresses (key-path spend).
-    /// The secret is loaded from the KeyStore just for this call.
-    private func tweakedPrivateKey(chain: AddressChain, index: UInt32) throws -> Data {
+    /// BIP86 tweaked private key for one of our addresses (key-path spend),
+    /// derived from the `master` its caller loaded for this signing operation.
+    private func tweakedPrivateKey(chain: AddressChain, index: UInt32, master: HDKey) throws -> Data {
         let originPath = Self.originUnchecked(of: descriptor).path
-        var key = try masterKey()
+        var key = master
         for step in originPath { key = try key.child(at: step) }
         key = try key.child(at: UInt32(chain.rawValue)).child(at: index)
         guard let secret = key.privateKey else {

@@ -205,6 +205,74 @@ struct WalletTests {
         #expect(await wallet.history.contains { $0.txid == prepared.built.transaction.txid })
     }
 
+    @Test("signing derives the master key once per send, and every input still verifies")
+    func signDerivesMasterOncePerSend() async throws {
+        let keyStore = CountingKeyStore()
+        let (wallet, _) = try await fundedWallet(keyStore: keyStore, coins: [
+            (.receive, 0, 100_000, 100), (.receive, 1, 60_000, 101), (.receive, 2, 40_000, 102),
+        ])
+        let loadsBefore = keyStore.loads
+
+        let prepared = try await wallet.buildSend(
+            payments: [Payment(amount: 180_000, scriptPubKey: TestScripts.p2trDestination)],
+            feeRateSatPerVByte: 2, chainTip: testChainTip, randomness: { 0.5 })
+
+        // Three inputs, one KeyStore read: the master key is derived for the
+        // signing operation, not once for each input it signs.
+        #expect(prepared.built.transaction.inputs.count == 3)
+        #expect(keyStore.loads - loadsBefore == 1)
+
+        // The shared master still yields each input's own key: every witness
+        // verifies against the output key its scriptPubKey commits to.
+        let signed = prepared.built.transaction
+        let spentOutputs = try prepared.built.psbt.spentOutputs()
+        for index in signed.inputs.indices {
+            let sighash = try SighashBIP341.sighash(tx: signed, inputIndex: index,
+                                                    spentOutputs: spentOutputs, hashType: .default)
+            let outputKey = P256K.Schnorr.XonlyKey(
+                dataRepresentation: spentOutputs[index].scriptPubKey.suffix(32))
+            let signature = try P256K.Schnorr.SchnorrSignature(
+                dataRepresentation: signed.inputs[index].witness[0])
+            var message = [UInt8](sighash)
+            #expect(outputKey.isValid(signature, for: &message), "input \(index) must verify")
+        }
+    }
+
+    @Test("a signed transaction past the standard size limit is refused after signing")
+    func standardSizeCeiling() throws {
+        let output = Transaction.Output(value: 100_000, scriptPubKey: TestScripts.p2trDestination)
+        func signed(inputs: Int) -> Transaction {
+            // A P2TR key-path witness: one 64-byte SIGHASH_DEFAULT signature.
+            Transaction(version: 2, inputs: (0 ..< inputs).map {
+                Transaction.Input(
+                    previousOutput: Transaction.Outpoint(txid: Data(repeating: 0x11, count: 32),
+                                                         vout: UInt32($0)),
+                    scriptSig: Data(), sequence: TransactionBuilder.defaultSequence,
+                    witness: [Data(repeating: 0x22, count: 64)])
+            }, outputs: [output], locktime: 0)
+        }
+        var pastCeiling = 1
+        while TransactionBuilder.signedVSize(inputCount: pastCeiling, outputs: [output])
+            <= TransactionBuilder.maximumStandardVSize { pastCeiling += 1 }
+
+        // The guard measures the signed bytes where coin selection estimates
+        // them. For the key-path spends this wallet makes the two agree
+        // exactly, which is why the boundary is built here rather than sent
+        // through buildSend — selection refuses it one step earlier.
+        let fits = signed(inputs: pastCeiling - 1)
+        #expect(TransactionBuilder.vsize(of: fits)
+            == TransactionBuilder.signedVSize(inputCount: pastCeiling - 1, outputs: [output]))
+        #expect(throws: Never.self) { try Wallet.checkStandardSize(fits) }
+
+        let over = signed(inputs: pastCeiling)
+        let vsize = TransactionBuilder.vsize(of: over)
+        #expect(vsize > TransactionBuilder.maximumStandardVSize)
+        #expect(throws: WalletError.transactionTooLarge(
+            vsize: vsize, limit: TransactionBuilder.maximumStandardVSize)) {
+            try Wallet.checkStandardSize(over)
+        }
+    }
+
     @Test("fee bump keeps inputs/payments, satisfies BIP125 fees, signs, and persists")
     func feeBump() async throws {
         let url = tempFileURL("wallet.json")
