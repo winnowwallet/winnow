@@ -5,6 +5,10 @@
 HeaderChain and its work arithmetic verify header links, proof of work, and
 difficulty rules, persist progress, and report chain reorganizations.
 Balances and confirmations need a validated chain to refer to.
+Headers and cumulative work remain in memory. Normal sync appends at the tip;
+an older parent is found by searching the headers backwards once per batch.
+This avoids a second full-chain hash index, at the cost of slower lookups for
+old or unknown parents. Memory still grows with the retained history.
 Difficulty adjustments are calculated during sync, reorgs, and reloads. A start
 at the mainnet checkpoint (900,000) lacks the beginning of the preceding period,
 so the first adjustment at 901,152 cannot be calculated; 903,168 onward can.

@@ -33,15 +33,19 @@ struct HeaderChainTests {
         #expect(!work4.isEmpty)
     }
 
-    @Test("rejects a header that does not link to the chain")
-    func rejectsUnlinked() async throws {
+    @Test("rejects a header that does not link to the chain", arguments: [UInt8(0x99), 0])
+    func rejectsUnlinked(parentByte: UInt8) async throws {
         let chain = makeSyntheticChain(length: 3, watchHeight: 6)
         let headerChain = try HeaderChain(params: chain.params)
-        let orphan = minedHeader(previousHash: Data(repeating: 0x99, count: 32),
+        try await headerChain.connect(chain.blocks.dropFirst().map(\.header))
+        // Zero is genesis's previous hash, not a block this chain contains.
+        let orphan = minedHeader(previousHash: Data(repeating: parentByte, count: 32),
                                  merkleRoot: Data(repeating: 0, count: 32), time: 1_600_100_000)
         await #expect(throws: HeaderChainError.doesNotConnect) {
             try await headerChain.connect([orphan])
         }
+        #expect(await headerChain.height == 3)
+        #expect(await headerChain.tipHash == chain.blocks[3].hash)
     }
 
     @Test("rejects headers failing proof of work")
@@ -430,6 +434,10 @@ struct HeaderChainTests {
         let next = try BlockHeader.decode(Self.block900_001)
         #expect(try await chain.connect([next]).appended == 1)
         #expect(await chain.height == cp.height + 1)
+        // The checkpoint's predecessor is outside this retained chain.
+        await #expect(throws: HeaderChainError.doesNotConnect) {
+            try await chain.connect([BlockHeader.decode(cp.header)])
+        }
         let workAfter = await chain.tipWork
 
         // Reopening must land on exactly the same chain — this is the format

@@ -72,8 +72,6 @@ public actor HeaderChain {
     /// the whole chain up to and including `headers[0]`, so fork choice keeps
     /// comparing totals even when the chain does not start at genesis.
     private var chainwork: [UInt256]
-    /// Absolute heights, not indices.
-    private var heightByHash: [Data: UInt32]
     /// How many headers the file on disk currently claims. Tracked so an
     /// append knows where the record area ends without re-reading the file,
     /// and so any divergence falls back to a full rewrite rather than writing
@@ -127,8 +125,7 @@ public actor HeaderChain {
         let checkpoint = start == .checkpoint ? params.checkpoint : nil
 
         if let storageURL, FileManager.default.fileExists(atPath: storageURL.path) {
-            let loaded: (headers: [BlockHeader], chainwork: [UInt256],
-                         heightByHash: [Data: UInt32], baseHeight: UInt32)
+            let loaded: (headers: [BlockHeader], chainwork: [UInt256], baseHeight: UInt32)
             do {
                 loaded = try Self.load(from: storageURL, params: params)
             } catch let error as HeaderChainError {
@@ -140,7 +137,6 @@ public actor HeaderChain {
             try Self.checkStoredStart(loaded.baseHeight, headers: loaded.headers, wanted: checkpoint)
             headers = loaded.headers
             chainwork = loaded.chainwork
-            heightByHash = loaded.heightByHash
             baseHeight = loaded.baseHeight
             persistedCount = loaded.headers.count
         } else if let checkpoint {
@@ -150,14 +146,12 @@ public actor HeaderChain {
             _ = try Self.checkedWork(for: header, params: params, height: checkpoint.height)
             headers = [header]
             chainwork = [UInt256(bigEndian: checkpoint.chainwork)]
-            heightByHash = [header.hash: checkpoint.height]
             baseHeight = checkpoint.height
         } else {
             let genesis = HeaderChain.genesisHeader(for: params)
             headers = [genesis]
             // Seed cumulative work for genesis.
             chainwork = [try Self.checkedWork(for: genesis, params: params, height: 0)]
-            heightByHash = [genesis.hash: 0]
             baseHeight = 0
         }
     }
@@ -286,36 +280,34 @@ public actor HeaderChain {
     /// an existing branch -- the one fact a consumer needs in order to rewind.
     @discardableResult
     public func connect(_ newHeaders: [BlockHeader]) throws -> ConnectOutcome {
-        // Headers the chain already holds, at the height they claim, are not
-        // news and not a competing branch. A peer replays them legitimately:
-        // a `headers` announcement of a block we then also fetch, a reply to
-        // a getheaders whose locator sat below the tip, or a reply left
-        // waiting behind a request that was answered from the announcement.
-        // Read as a branch they carry no more work than the chain, and the
-        // pool then condemned an honest peer for "an older or weaker chain"
-        // — and with a single manual peer, that left the app peerless until
-        // relaunch. Skip them; judge only what is new.
-        var remaining = newHeaders[...]
-        while let first = remaining.first,
-              let known = heightByHash[first.hash],
-              let previous = heightByHash[first.previousHash],
-              known == previous + 1 {
-            remaining = remaining.dropFirst()
-        }
-        let newHeaders = Array(remaining)
-        guard !newHeaders.isEmpty else { return ConnectOutcome(appended: 0) }
-        guard let forkHeight = heightByHash[newHeaders[0].previousHash] else {
+        guard let first = newHeaders.first else { return ConnectOutcome(appended: 0) }
+        guard let parent = index(of: first.previousHash) else {
             throw HeaderChainError.doesNotConnect
         }
-        // Fast path: extending the tip, which is every batch of an ordinary
-        // sync. The staged path copies both arrays and rebuilds the whole
-        // hash index, so its cost grows with the chain — 460 batches against
-        // mainnet meant hundreds of millions of redundant operations (#86).
-        // An append touches only the new headers.
-        if forkHeight == height {
+        // A reply can repeat known headers before extending the chain. Find
+        // its parent once, then compare the known prefix in chain order.
+        var nextIndex = parent + 1
+        var remaining = newHeaders[...]
+        while let first = remaining.first, nextIndex < headers.count, first == headers[nextIndex] {
+            remaining = remaining.dropFirst()
+            nextIndex += 1
+        }
+        guard !remaining.isEmpty else { return ConnectOutcome(appended: 0) }
+        let newHeaders = Array(remaining)
+        if nextIndex == headers.count {
             return try appendToTip(newHeaders)
         }
-        return try replaceBranch(with: newHeaders, forkHeight: forkHeight)
+        return try replaceBranch(with: newHeaders, forkHeight: baseHeight + UInt32(nextIndex - 1))
+    }
+
+    /// Ordinary sync extends the tip. For an older parent, the next stored
+    /// header already contains its hash; search backwards without retaining
+    /// a second hash index for the entire chain. Element zero's predecessor
+    /// is outside the chain, including when it starts at a checkpoint.
+    private func index(of hash: Data) -> Int? {
+        if hash == tipHash { return headers.count - 1 }
+        guard let child = headers.lastIndex(where: { $0.previousHash == hash }), child > 0 else { return nil }
+        return child - 1
     }
 
     /// The ordinary-sync path: proof-of-work-check and append, with the
@@ -341,18 +333,14 @@ public actor HeaderChain {
             appendedWork.append(work)
             previous = header
         }
-        let firstNewHeight = baseHeight + UInt32(headers.count)
         headers.append(contentsOf: appended)
         chainwork.append(contentsOf: appendedWork)
-        for (offset, header) in appended.enumerated() {
-            heightByHash[header.hash] = firstNewHeight + UInt32(offset)
-        }
         try persistAppended(from: headers.count - appended.count)
         return ConnectOutcome(appended: newHeaders.count)
     }
 
     /// The reorg path: stage the replacement branch from the fork, admit it
-    /// only with strictly more work, then swap and rebuild the index.
+    /// only with strictly more work, then swap the stored chain.
     private func replaceBranch(with newHeaders: [BlockHeader],
                                forkHeight: UInt32) throws -> ConnectOutcome {
         let forkIndex = Int(forkHeight - baseHeight)
@@ -381,10 +369,6 @@ public actor HeaderChain {
         let disconnected = headers.count - 1 - forkIndex
         headers = stagedHeaders
         chainwork = stagedWork
-        heightByHash = heightByHash.filter { $0.value <= forkHeight }
-        for (index, header) in headers.enumerated() where heightByHash[header.hash] == nil {
-            heightByHash[header.hash] = baseHeight + UInt32(index)
-        }
         try persist()
         return ConnectOutcome(appended: newHeaders.count,
                               forkHeight: disconnected > 0 ? forkHeight : nil,
@@ -416,7 +400,7 @@ public actor HeaderChain {
                 // consumed in place of the real one.
                 answeredNothing = connected.appended == 0
             } catch HeaderChainError.reorgWithoutMoreWork
-                where batch.count == 1 && heightByHash[batch[0].previousHash] == height - 1 {
+                where batch.count == 1 && batch[0].previousHash == tip.previousHash {
                 // A sibling of our tip with no more work: the losing block
                 // of a race the peer saw first. Being on the losing side is
                 // a state, not a lie, so it counts as a batch that answered
@@ -601,7 +585,7 @@ public actor HeaderChain {
     static let maximumHeaderFileBytes = 256 * 1_024 * 1_024
 
     private static func load(from url: URL, params: NetworkParams) throws
-        -> (headers: [BlockHeader], chainwork: [UInt256], heightByHash: [Data: UInt32], baseHeight: UInt32) {
+        -> (headers: [BlockHeader], chainwork: [UInt256], baseHeight: UInt32) {
         let data = try readBoundedHeaderFile(at: url)
         var reader = ByteReader(data)
         let (baseHeight, baseWork, count, prefix) = try parsedHeaderFilePrefix(&reader)
@@ -663,9 +647,7 @@ public actor HeaderChain {
             loadedHeaders.append(header)
             loadedWork.append(work)
         }
-        let index = Dictionary(uniqueKeysWithValues:
-            loadedHeaders.enumerated().map { ($1.hash, baseHeight + UInt32($0)) })
-        return (loadedHeaders, loadedWork, index, baseHeight)
+        return (loadedHeaders, loadedWork, baseHeight)
     }
 
     /// A loaded header must be the genesis where the file starts at genesis,
