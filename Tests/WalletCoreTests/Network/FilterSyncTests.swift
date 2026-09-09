@@ -5,14 +5,19 @@ import TestSupport
 @testable import WalletCore
 
 /// FilterSync end to end, by subject: the happy path over a real loopback
-/// transport, what the on-disk progress file may and may not say, how the
-/// frontier rewinds under a reorg, and the BIP158 arithmetic underneath it all.
+/// transport, how a bounded run stops and resumes, what the on-disk progress
+/// file may and may not say, which pinned headers survive a batch, how the
+/// frontier rewinds under a reorg, and the BIP158 arithmetic underneath it
+/// all.
 ///
 /// Merged from `LoopbackTests`, `FilterSyncPersistenceTests`,
 /// `FilterProgressRollbackTests` and `FilterMatchingTests`; each `// MARK:`
-/// below is one of those suites, in that order. The loopback sections open
-/// real 127.0.0.1 listeners — no external network — and the last two sections
-/// touch no socket at all.
+/// below is one of those suites, in that order, apart from two later
+/// sections: the bounded-run and chunked-fetch tests, which sit with the
+/// loopback tests they extend, and the pruning section between the second and
+/// third, which belongs to neither. The loopback sections open real 127.0.0.1
+/// listeners — no external network — and the last two sections touch no
+/// socket at all.
 @Suite("FilterSync")
 struct FilterSyncTests {
 
@@ -249,6 +254,145 @@ struct FilterSyncTests {
         await pool.stop()
     }
 
+    // MARK: - Bounded runs and chunked fetching
+
+    /// `maxBlocks` is what makes a scan that cannot run to the tip possible:
+    /// the run stops at its ceiling, saves what it scanned, and the next call
+    /// starts from the saved frontier rather than the wallet's start height.
+    ///
+    /// The ceiling also shortens the batch rather than working around it, so
+    /// the cfheaders cross-check still covers exactly the blocks the run
+    /// scanned — asserted here on what the node was actually asked.
+    @Test("a run with maxBlocks stops at its ceiling and the next resumes from disk")
+    func boundedRunStopsAndResumes() async throws {
+        let synthetic = makeSyntheticChain(length: 6, watchHeight: 3)
+        let node = LoopbackNode(params: synthetic.params, chain: synthetic.blocks)
+        try await node.start()
+        defer { Task { await node.stop() } }
+        let pool = PeerPool(params: synthetic.params, peerCount: 1,
+                            manualPeers: [await node.endpoint],
+                            peersFileURL: tempFileURL("peers.json"))
+        await pool.start()
+        defer { Task { await pool.stop() } }
+        let chain = try HeaderChain(params: synthetic.params)
+        let progressFile = tempFileURL("bounded-progress.json")
+        defer { try? FileManager.default.removeItem(at: progressFile.deletingLastPathComponent()) }
+        let sync = try FilterSync(pool: pool, chain: chain, startHeight: 1,
+                                  storageURL: progressFile, requiredCheckpointPeers: 1)
+        let collector = MatchCollector()
+
+        try await sync.sync(watchScripts: [synthetic.watchScript], maxBlocks: 2) {
+            collector.add($0)
+        }
+        #expect(await sync.nextScanHeight == 3)
+        #expect(collector.matches.isEmpty, "the block that pays us is above this ceiling")
+
+        // The ceiling counts from the frontier, so this run covers 3 ... 4 and
+        // finds the payment the first run stopped short of.
+        try await sync.sync(watchScripts: [synthetic.watchScript], maxBlocks: 2) {
+            collector.add($0)
+        }
+        #expect(await sync.nextScanHeight == 5)
+        #expect(collector.matches.map(\.height) == [synthetic.watchHeight])
+
+        // Each run asked for cfheaders over exactly the blocks it scanned:
+        // a shorter batch, not a batch skipped.
+        let cfheaderRanges = await node.receivedMessages.compactMap { message -> UInt32? in
+            guard case let .getcfheaders(request) = message else { return nil }
+            return request.startHeight
+        }
+        #expect(cfheaderRanges == [1, 3])
+
+        // A fresh instance reads the bounded frontier, and an unbounded run
+        // from there finishes the chain.
+        let reloaded = try FilterSync(pool: pool, chain: chain, startHeight: 1,
+                                      storageURL: progressFile, requiredCheckpointPeers: 1)
+        #expect(await reloaded.nextScanHeight == 5)
+        try await reloaded.sync(watchScripts: [synthetic.watchScript]) { collector.add($0) }
+        #expect(await reloaded.nextScanHeight == 7)
+        #expect(collector.matches.map(\.height) == [synthetic.watchHeight])
+    }
+
+    /// Chunking changes how the filters are fetched and nothing else, so the
+    /// two paths have to agree on everything outside FilterSync: the same
+    /// matches, and the same saved progress. What differs is what the scan
+    /// holds while it works.
+    @Test("a chunked scan and a whole-batch scan agree, and the chunked one holds less")
+    func chunkedScanMatchesWholeBatch() async throws {
+        let synthetic = makeSyntheticChain(length: 6, watchHeight: 3)
+        let whole = try await scanWholeChain(synthetic, filtersPerChunk: 1_000)
+        let chunked = try await scanWholeChain(synthetic, filtersPerChunk: 2)
+
+        #expect(whole.matches.map(\.height) == chunked.matches.map(\.height))
+        #expect(whole.matches.map(\.blockHash) == chunked.matches.map(\.blockHash))
+        #expect(whole.matches.count == 1)
+        #expect(whole.progress == chunked.progress)
+
+        // One request for the whole batch, against one per chunk: 1 ... 2,
+        // 3 ... 4, 5 ... 6. The stop hashes say the ranges are real.
+        #expect(whole.filterRequests.map(\.startHeight) == [1])
+        #expect(chunked.filterRequests.map(\.startHeight) == [1, 3, 5])
+        #expect(chunked.filterRequests.map(\.stopHash)
+            == [2, 4, 6].map { synthetic.blocks[$0].hash })
+
+        // The point of the chunks: peak buffered filter bytes follow the chunk
+        // size, not the batch length. Two filters of six, on a fixture whose
+        // blocks are all about the same size, is comfortably under half.
+        #expect(chunked.peakChunkBytes > 0)
+        #expect(chunked.peakChunkBytes * 2 <= whole.peakChunkBytes)
+    }
+
+    @Test("the scan ceiling counts from the frontier, stops at the tip, and never traps")
+    func scanCeilingArithmetic() {
+        #expect(FilterSync.scanCeiling(frontier: 100, maxBlocks: 10, tip: 1_000) == 109)
+        #expect(FilterSync.scanCeiling(frontier: 100, maxBlocks: 1, tip: 1_000) == 100)
+        #expect(FilterSync.scanCeiling(frontier: 100, maxBlocks: 10_000, tip: 1_000) == 1_000)
+        #expect(FilterSync.scanCeiling(frontier: 100, maxBlocks: nil, tip: 1_000) == 1_000)
+        // No room means no blocks, which is not the same as no ceiling.
+        #expect(FilterSync.scanCeiling(frontier: 100, maxBlocks: 0, tip: 1_000) == nil)
+        // "As far as you can get" must not overflow the addition.
+        #expect(FilterSync.scanCeiling(frontier: .max - 1, maxBlocks: .max, tip: .max) == .max)
+    }
+
+    /// What one scan of the whole synthetic chain did, over its own loopback
+    /// node so two chunk sizes can be compared without either seeing the
+    /// other's connection.
+    private struct ScanOutcome {
+        let matches: [BlockMatch]
+        let progress: FilterSync.Progress
+        let peakChunkBytes: Int
+        let filterRequests: [GetCFiltersRequest]
+    }
+
+    private func scanWholeChain(_ synthetic: SyntheticChain,
+                                filtersPerChunk: UInt32) async throws -> ScanOutcome {
+        let node = LoopbackNode(params: synthetic.params, chain: synthetic.blocks)
+        try await node.start()
+        defer { Task { await node.stop() } }
+        let pool = PeerPool(params: synthetic.params, peerCount: 1,
+                            manualPeers: [await node.endpoint],
+                            peersFileURL: tempFileURL("peers.json"))
+        await pool.start()
+        defer { Task { await pool.stop() } }
+        let chain = try HeaderChain(params: synthetic.params)
+        let progressFile = tempFileURL("chunked-progress.json")
+        defer { try? FileManager.default.removeItem(at: progressFile.deletingLastPathComponent()) }
+        let sync = try FilterSync(pool: pool, chain: chain, startHeight: 1,
+                                  storageURL: progressFile, requiredCheckpointPeers: 1,
+                                  filtersPerChunk: filtersPerChunk)
+        let collector = MatchCollector()
+        try await sync.sync(watchScripts: [synthetic.watchScript]) { collector.add($0) }
+        let saved = try JSONDecoder().decode(FilterSync.Progress.self,
+                                             from: Data(contentsOf: progressFile))
+        let requests = await node.receivedMessages.compactMap { message -> GetCFiltersRequest? in
+            guard case let .getcfilters(request) = message else { return nil }
+            return request
+        }
+        return ScanOutcome(matches: collector.matches, progress: saved,
+                           peakChunkBytes: await sync.peakChunkFilterBytesForTest,
+                           filterRequests: requests)
+    }
+
     // MARK: - FilterSync persistence
 
     @Test("disabled, missing, and valid loaded progress are distinguished")
@@ -390,6 +534,259 @@ struct FilterSyncTests {
         try JSONEncoder().encode(progress).write(to: url, options: .atomic)
     }
 
+    // MARK: - Pinned header pruning
+
+    /// The store used to keep one pinned header per block scanned, rewritten
+    /// whole after every batch, so a wallet with an old birthday carried tens
+    /// of megabytes of them and re-encoded that on each of a thousand batches.
+    /// A batch now persists only what a later check can still ask for.
+    ///
+    /// These cases are about what survives — and, more importantly, about the
+    /// checks that must still be able to run afterwards, because a header that
+    /// is not pinned is not compared, and a prune that dropped one would retire
+    /// a comparison without ever failing a test.
+    ///
+    /// The fixture below is one pinned header per height: the shape the store
+    /// had before pruning.
+    private func pinsForEveryHeight(in range: ClosedRange<UInt32>) -> [String: String] {
+        var headers: [String: String] = [:]
+        for height in range {
+            headers[String(height)] = Data(repeating: UInt8(height % 251), count: 32).hex
+        }
+        return headers
+    }
+
+    @Test("a prune keeps every checkpoint boundary, the anchor, and the recent run")
+    func pruneKeepsBoundariesAnchorAndRecentRun() {
+        let dense = pinsForEveryHeight(in: 1 ... 5_432)
+        let pruned = FilterSync.prunedFilterHeaders(dense, frontier: 5_433)
+
+        // The anchor: what the next batch checks a peer's announced chain
+        // against.
+        #expect(pruned["5432"] == dense["5432"])
+        // Every boundary a cfcheckpt reply names, down to the oldest — these
+        // are compared on every sync and cost one header per 1,000 blocks.
+        for boundary in stride(from: 1_000, through: 5_000, by: 1_000) {
+            #expect(pruned[String(boundary)] == dense[String(boundary)], "boundary \(boundary)")
+        }
+        // The recent run reaches back to the boundary below the last one, so a
+        // reorg rewinding into it still lands on a pinned anchor.
+        #expect(pruned["4000"] != nil)
+        #expect(pruned["3999"] == nil)
+        #expect(pruned["1500"] == nil)
+        // 4,000 through 5,432 is 1,433 headers; the boundaries at 1,000, 2,000
+        // and 3,000 are the only older ones kept.
+        #expect(pruned.count == 1_436)
+    }
+
+    @Test("a prune refuses when the frontier anchor is not pinned")
+    func pruneRefusesWithoutAnchor() {
+        var dense = pinsForEveryHeight(in: 1 ... 5_432)
+        dense["5432"] = nil
+
+        // Fail closed: a store that has already lost its anchor is not one to
+        // prune further, because the pruning would be reasoning about a chain
+        // it cannot verify it has.
+        #expect(FilterSync.prunedFilterHeaders(dense, frontier: 5_433) == dense)
+        // And a frontier of zero has no anchor to speak of.
+        #expect(FilterSync.prunedFilterHeaders(dense, frontier: 0) == dense)
+    }
+
+    @Test("batch after batch, the kept headers stay contiguous and bounded")
+    func pruneAcrossBatchesStaysContiguous() {
+        // What the batch loop does: pin a batch on top of what was kept, then
+        // prune to the new frontier. Nine batches, so the frontier is well past
+        // the point where the first ones would have been dropped.
+        var kept: [String: String] = [:]
+        var frontier: UInt32 = 1
+        for _ in 0 ..< 9 {
+            let batchStop = frontier + FilterSync.maxRangePerRequest - 1
+            kept.merge(pinsForEveryHeight(in: frontier ... batchStop)) { _, new in new }
+            frontier = batchStop + 1
+            kept = FilterSync.prunedFilterHeaders(kept, frontier: frontier)
+        }
+
+        #expect(frontier == 9_001)
+        // Contiguous from the boundary below the last one up to the anchor:
+        // the range a rollback can rewind into has no holes in it.
+        for height in UInt32(8_000) ... 9_000 {
+            #expect(kept[String(height)] != nil, "height \(height)")
+        }
+        #expect(kept["7999"] == nil)
+        // Every older boundary is still there, and nothing else is: 8,000
+        // through 9,000 plus the boundaries at 1,000 to 7,000.
+        for boundary in stride(from: 1_000, through: 7_000, by: 1_000) {
+            #expect(kept[String(boundary)] != nil, "boundary \(boundary)")
+        }
+        #expect(kept.count == 1_001 + 7)
+    }
+
+    /// A wallet starting at 999, synced over `progressFile` against a node
+    /// holding the chain up to `nodeTip`. Returns the match count, so a case
+    /// can prove the scan really ran rather than exiting early.
+    ///
+    /// 999 rather than 1 because pruning only has something to drop once the
+    /// frontier is past its second checkpoint boundary — below that the kept
+    /// run covers everything — and starting just under the first boundary gets
+    /// there while scanning about a thousand blocks.
+    @discardableResult
+    private func syncFrom999(_ synthetic: SyntheticChain, nodeTip: Int,
+                             progressFile: URL) async throws -> Int {
+        let node = LoopbackNode(params: synthetic.params,
+                                chain: Array(synthetic.blocks.prefix(nodeTip + 1)))
+        try await node.start()
+        defer { Task { await node.stop() } }
+        let pool = PeerPool(params: synthetic.params, peerCount: 1,
+                            manualPeers: [await node.endpoint],
+                            peersFileURL: tempFileURL("peers.json"))
+        await pool.start()
+        defer { Task { await pool.stop() } }
+        let chain = try HeaderChain(params: synthetic.params)
+        let sync = try FilterSync(pool: pool, chain: chain, startHeight: 999,
+                                  storageURL: progressFile, requiredCheckpointPeers: 1)
+
+        let collector = MatchCollector()
+        try await sync.sync(watchScripts: [synthetic.watchScript]) { collector.add($0) }
+
+        #expect(await sync.nextScanHeight == UInt32(nodeTip) + 1)
+        return collector.matches.count
+    }
+
+    /// A peerless sync over an existing progress file, for reading what a
+    /// completed sync left on disk — and for proving the pruned file is one
+    /// `load` still accepts.
+    private func reload(_ progressFile: URL, params: NetworkParams) throws -> FilterSync {
+        let pool = PeerPool(params: params, peerCount: 0, manualPeers: [])
+        return try FilterSync(pool: pool, chain: try HeaderChain(params: params),
+                              startHeight: 999, storageURL: progressFile)
+    }
+
+    @Test("a sync past two boundaries persists the boundaries and the anchor, and drops the rest")
+    func syncPrunesPersistedProgress() async throws {
+        let synthetic = makeSyntheticChain(length: 2_100, watchHeight: 1_500)
+        let progressFile = tempFileURL("filter-prune.json")
+        defer { try? FileManager.default.removeItem(at: progressFile.deletingLastPathComponent()) }
+        let matches = try await syncFrom999(synthetic, nodeTip: 2_001, progressFile: progressFile)
+        #expect(matches == 1, "the scan really ran")
+
+        let reloaded = try reload(progressFile, params: synthetic.params)
+        #expect(reloaded.persistenceState == .loaded)
+        #expect(await reloaded.nextScanHeight == 2_002)
+        #expect(await reloaded.filterHeader(at: 2_001) != nil, "the anchor")
+        #expect(await reloaded.filterHeader(at: 2_000) != nil, "a boundary")
+        #expect(await reloaded.filterHeader(at: 1_000) != nil, "the oldest boundary")
+        #expect(await reloaded.filterHeader(at: 999) == nil)
+        #expect(await reloaded.filterHeader(at: 998) == nil, "the bootstrap anchor is spent")
+        // 1,000 through 2,001, and nothing else.
+        #expect(await reloaded.pinnedFilterHeadersForTest.count == 1_002)
+    }
+
+    /// The upgrade case: a file written by a build that kept one header per
+    /// block scanned is read in the shape it was written, and the next batch
+    /// prunes it rather than carrying it forward for the rest of the wallet's
+    /// life. Nothing migrates the file on load, and nothing has to: the batch
+    /// that persists is the batch that prunes.
+    @Test("a progress file written before pruning is pruned by the next batch")
+    func denseProgressFileIsPrunedByTheNextBatch() async throws {
+        let synthetic = makeSyntheticChain(length: 2_100, watchHeight: 1_500)
+        let progressFile = tempFileURL("filter-prune-dense.json")
+        defer { try? FileManager.default.removeItem(at: progressFile.deletingLastPathComponent()) }
+
+        // One batch, ending below the second boundary: what the store looked
+        // like before pruning existed — a header per height, none dropped.
+        try await syncFrom999(synthetic, nodeTip: 1_998, progressFile: progressFile)
+        let dense = try await reload(progressFile, params: synthetic.params)
+            .pinnedFilterHeadersForTest
+        #expect(dense.count == 1_001, "998 through 1,998")
+        #expect(dense["998"] != nil)
+        #expect(dense["999"] != nil)
+
+        // One more batch over that file, and it comes back pruned.
+        try await syncFrom999(synthetic, nodeTip: 2_001, progressFile: progressFile)
+        let pruned = try reload(progressFile, params: synthetic.params)
+        #expect(await pruned.pinnedFilterHeadersForTest.count == 1_002)
+        #expect(await pruned.filterHeader(at: 998) == nil)
+        #expect(await pruned.filterHeader(at: 1_000) != nil, "the boundary survives the upgrade")
+        #expect(await pruned.filterHeader(at: 2_001) != nil, "so does the anchor")
+    }
+
+    @Test("a sync resumed over a pruned store makes the same checkpoint comparison")
+    func resumedSyncComparesAgainstKeptBoundaries() async throws {
+        let synthetic = makeSyntheticChain(length: 2_015, watchHeight: 1_500)
+        let progressFile = tempFileURL("filter-prune-resume.json")
+        defer { try? FileManager.default.removeItem(at: progressFile.deletingLastPathComponent()) }
+        try await syncFrom999(synthetic, nodeTip: 2_001, progressFile: progressFile)
+
+        // A node with 14 more blocks, because a sync already at the tip
+        // returns before the checkpoint comparison runs at all. 2,016 and not
+        // more: the synthetic chain is mined at constant difficulty, and the
+        // header chain verifies the retarget at height 2,016.
+        let node = LoopbackNode(params: synthetic.params, chain: synthetic.blocks)
+        try await node.start()
+        defer { Task { await node.stop() } }
+        let pool = PeerPool(params: synthetic.params, peerCount: 1,
+                            manualPeers: [await node.endpoint],
+                            peersFileURL: tempFileURL("peers.json"))
+        await pool.start()
+        defer { Task { await pool.stop() } }
+        let resumed = try FilterSync(pool: pool, chain: try HeaderChain(params: synthetic.params),
+                                     startHeight: 999, storageURL: progressFile,
+                                     requiredCheckpointPeers: 1)
+
+        try await resumed.sync(watchScripts: []) { _ in }
+
+        // The kept anchor carried the batch, and the kept boundaries matched
+        // the node's cfcheckpt: 1,000 in `checkPinnedBoundaries` before the
+        // batches, and 2,000 in the final guard after them — the highest
+        // boundary at or below the tip, which is the entry Core's cfcheckpt
+        // list ends on.
+        #expect(await resumed.nextScanHeight == 2_016)
+        #expect(await resumed.filterHeader(at: 2_015) != nil)
+        #expect(await resumed.filterHeader(at: 1_000) != nil)
+        #expect(await resumed.filterHeader(at: 2_000) != nil)
+    }
+
+    @Test("a peer lying about the filter chain is still caught at the oldest kept boundary")
+    func prunedStoreStillCatchesALiar() async throws {
+        // 2,016 blocks, short of the retarget the header chain verifies.
+        let synthetic = makeSyntheticChain(length: 2_015, watchHeight: 1_500)
+        let progressFile = tempFileURL("filter-prune-liar.json")
+        defer { try? FileManager.default.removeItem(at: progressFile.deletingLastPathComponent()) }
+        try await syncFrom999(synthetic, nodeTip: 2_001, progressFile: progressFile)
+
+        // Same chain, a complete and self-consistent lie about its filter
+        // commitments — catchable only against something already pinned.
+        let node = LoopbackNode(params: synthetic.params, chain: synthetic.blocks,
+                                lieAboutFilterCommitments: true, lieSalt: 0xFF)
+        try await node.start()
+        defer { Task { await node.stop() } }
+        let pool = PeerPool(params: synthetic.params, peerCount: 1,
+                            manualPeers: [await node.endpoint],
+                            peersFileURL: tempFileURL("peers.json"))
+        await pool.start()
+        defer { Task { await pool.stop() } }
+        let resumed = try FilterSync(pool: pool, chain: try HeaderChain(params: synthetic.params),
+                                     startHeight: 999, storageURL: progressFile,
+                                     requiredCheckpointPeers: 1)
+
+        var thrown: (any Error)?
+        do {
+            try await resumed.sync(watchScripts: []) { _ in }
+        } catch {
+            thrown = error
+        }
+
+        guard case let .checkpointMismatch(reason)? = thrown as? FilterSyncError else {
+            Issue.record("expected checkpointMismatch, got \(String(describing: thrown))")
+            return
+        }
+        // Height 1,000 names the boundary furthest below the kept run — the
+        // one a keep-the-last-N prune would have dropped, taking this refusal
+        // with it.
+        #expect(reason.contains("pinned header at 1000"))
+        #expect(await resumed.nextScanHeight == 2_002, "nothing advanced")
+    }
+
     // MARK: - Filter progress rollback
 
     /// Filter progress rewinds with everything else (#127).
@@ -445,6 +842,49 @@ struct FilterSyncTests {
         let once = await filters.nextScanHeight
         try await filters.rollBack(to: 300)
         #expect(await filters.nextScanHeight == once)
+    }
+
+    /// A rollback into a pruned store, which is the case pruning has to answer
+    /// for: the frontier rewinds, the orphaned pins go, and the fork height is
+    /// still pinned, so the next batch checks the peer's announced chain
+    /// against ours instead of adopting it. Keeping the recent run is what
+    /// buys that.
+    @Test("a reorg into the kept run still rolls back to an anchored frontier")
+    func rollBackAfterPrune() async throws {
+        let filters = try offlineSync(startHeight: 1)
+        let kept = FilterSync.prunedFilterHeaders(pinsForEveryHeight(in: 1 ... 5_432),
+                                                  frontier: 5_433)
+        try await filters.recordProgressForTest(nextScanHeight: 5_433, filterHeaders: kept)
+
+        try await filters.rollBack(to: 5_400)
+
+        #expect(await filters.nextScanHeight == 5_401)
+        #expect(await filters.filterHeader(at: 5_400) != nil, "the new frontier's anchor")
+        #expect(await filters.filterHeader(at: 5_401) == nil, "that block is not on this chain any more")
+        // The comparisons below the fork are untouched by either step.
+        #expect(await filters.filterHeader(at: 5_000) != nil)
+        #expect(await filters.filterHeader(at: 1_000) != nil)
+    }
+
+    /// The honest residual, stated as a test rather than left to be found. A
+    /// reorg deeper than the kept run lands on a height whose header was
+    /// pruned, so the next sync re-anchors on the peer's announced header
+    /// exactly as a fresh install does. The boundaries are why that is bounded
+    /// rather than open: the fabricated chain is compared against a pinned
+    /// boundary within the next thousand blocks.
+    @Test("a reorg below the kept run re-anchors like a fresh install, boundaries intact")
+    func rollBackBelowKeptRun() async throws {
+        let filters = try offlineSync(startHeight: 1)
+        let kept = FilterSync.prunedFilterHeaders(pinsForEveryHeight(in: 1 ... 5_432),
+                                                  frontier: 5_433)
+        try await filters.recordProgressForTest(nextScanHeight: 5_433, filterHeaders: kept)
+
+        try await filters.rollBack(to: 3_500)
+
+        #expect(await filters.nextScanHeight == 3_501)
+        #expect(await filters.filterHeader(at: 3_500) == nil)
+        #expect(await filters.filterHeader(at: 3_000) != nil, "the boundary that still compares")
+        #expect(await filters.filterHeader(at: 1_000) != nil)
     }
 
     /// A fork above the frontier leaves nothing scanned in doubt, and moving
