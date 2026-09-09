@@ -11,7 +11,7 @@ import TestSupport
 /// the damaged store, the legacy and versioned formats, and the failed-write
 /// paths — and from `TxBroadcaster reorg tombstones`. Neither source suite
 /// carried a trait, so this one carries none either.
-@Suite("TxBroadcaster store")
+@Suite("TxBroadcaster store", .timeLimit(.minutes(2)))
 struct TxBroadcasterStoreTests {
 
     // MARK: - TxBroadcaster: pending store
@@ -145,7 +145,7 @@ struct TxBroadcasterStoreTests {
     @Test("invalid fee rates and failed initial writes never create pending relay state")
     func broadcastPersistenceIsTransactional() async throws {
         let pool = PeerPool(params: .signet, peerCount: 0, manualPeers: [])
-        let store = tempFileURL("missing-parent/pending.json")
+        let store = tempFileURL("pending.json")
         try FileManager.default.removeItem(at: store.deletingLastPathComponent())
         let broadcaster = try TxBroadcaster(pool: pool, storageURL: store)
         let raw = makeFakeSegwitTx().serialized(includeWitness: true)

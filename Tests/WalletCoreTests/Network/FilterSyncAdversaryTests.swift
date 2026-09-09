@@ -65,8 +65,13 @@ struct FilterSyncAdversaryTests {
         let chain: HeaderChain
         let sync: FilterSync
 
-        /// The fire-and-forget teardown each case used to write inline.
-        func stopNodes() { for node in nodes { Task { await node.stop() } } }
+        func stop() {
+            Task { [pool, nodes, peersFile] in
+                await pool.stop()
+                for node in nodes { await node.stop() }
+                try? FileManager.default.removeItem(at: peersFile.deletingLastPathComponent())
+            }
+        }
     }
 
     private static func makeNode(params: NetworkParams, blocks: [Block],
@@ -95,7 +100,7 @@ struct FilterSyncAdversaryTests {
     /// on one synthetic chain, started; a pool with `peerCount` and
     /// `requiredCheckpointPeers` both N, seated on them in node order, with a
     /// temp peers file; a fresh HeaderChain; and a FilterSync from height 1
-    /// with its progress in a temp file. `liars` carries one entry per node —
+    /// in memory. `liars` carries one entry per node —
     /// `nil` for honest — so the node count follows it: three for most cases,
     /// two or one where the case is about a pool that small.
     ///
@@ -127,7 +132,6 @@ struct FilterSyncAdversaryTests {
         await pool.start()
         let chain = try HeaderChain(params: synthetic.params)
         let sync = try FilterSync(pool: pool, chain: chain, startHeight: 1,
-                                  storageURL: tempFileURL("progress.json"),
                                   requiredCheckpointPeers: liars.count)
         return CheckpointFixture(
             synthetic: synthetic,
@@ -165,7 +169,7 @@ struct FilterSyncAdversaryTests {
     @Test("two honest peers outvote one liar, which is evicted while the sync completes")
     func majorityOfThreeAdoptsHonestCheckpoints() async throws {
         let fixture = try await Self.threePeerFixture(liars: [nil, nil, .filterCommitments(salt: 0xFF)])
-        defer { fixture.stopNodes() }
+        defer { fixture.stop() }
         let liarEndpoint = fixture.liarEndpoints[0]
         #expect(await fixture.pool.connectedPeers().count == 3)
 
@@ -195,7 +199,7 @@ struct FilterSyncAdversaryTests {
         // agree and form a majority *for the lie* — the opposite of this test.
         let fixture = try await Self.threePeerFixture(
             liars: [nil, .filterCommitments(salt: 0xFF), .filterCommitments(salt: 0x0F)])
-        defer { fixture.stopNodes() }
+        defer { fixture.stop() }
         #expect(await fixture.pool.connectedPeers().count == 3)
 
         var thrown: (any Error)?
@@ -228,7 +232,7 @@ struct FilterSyncAdversaryTests {
     @Test("two disagreeing peers are a no-majority refusal above the checkpoint interval")
     func twoPeersCannotFormAMajority() async throws {
         let fixture = try await Self.threePeerFixture(liars: [nil, .filterCommitments(salt: 0xFF)])
-        defer { fixture.stopNodes() }
+        defer { fixture.stop() }
         #expect(await fixture.pool.connectedPeers().count == 2)
 
         var thrown: (any Error)?
@@ -261,7 +265,7 @@ struct FilterSyncAdversaryTests {
         let fixture = try await Self.threePeerFixture(
             liars: [.filterCommitments(salt: 0xFF), nil, nil],
             delays: [.zero, .milliseconds(150), .milliseconds(250)])
-        defer { fixture.stopNodes() }
+        defer { fixture.stop() }
         let liarEndpoint = fixture.liarEndpoints[0]
         #expect(await fixture.pool.connectedPeers().count == 3)
         // Precondition for what this test is actually about.
@@ -289,7 +293,7 @@ struct FilterSyncAdversaryTests {
     @Test("a cfcheckpt answering about a different chain is refused, even from a lone peer")
     func stopHashMismatchRefused() async throws {
         let fixture = try await Self.threePeerFixture(liars: [.stopHash])
-        defer { fixture.stopNodes() }
+        defer { fixture.stop() }
 
         var thrown: (any Error)?
         do {
@@ -320,7 +324,7 @@ struct FilterSyncAdversaryTests {
     @Test("one peer lying about the stop hash does not stop two honest peers syncing")
     func mixedStopHashLieStillSyncs() async throws {
         let fixture = try await Self.threePeerFixture(liars: [nil, nil, .stopHash])
-        defer { fixture.stopNodes() }
+        defer { fixture.stop() }
         let liarEndpoint = fixture.liarEndpoints[0]
         #expect(await fixture.pool.connectedPeers().count == 3)
 
@@ -339,7 +343,7 @@ struct FilterSyncAdversaryTests {
     @Test("three peers unanimously answering about a different chain are still refused")
     func unanimousStopHashMismatchRefused() async throws {
         let fixture = try await Self.threePeerFixture(liars: [.stopHash, .stopHash, .stopHash])
-        defer { fixture.stopNodes() }
+        defer { fixture.stop() }
 
         var thrown: (any Error)?
         do {
@@ -381,7 +385,7 @@ struct FilterSyncAdversaryTests {
     @Test("three honest peers agree and the scan completes")
     func threeHonestPeersSync() async throws {
         let fixture = try await Self.threePeerFixture(liars: [nil, nil, nil])
-        defer { fixture.stopNodes() }
+        defer { fixture.stop() }
 
         let collector = MatchCollector()
         try await fixture.sync.sync(watchScripts: [fixture.synthetic.watchScript]) { collector.add($0) }
@@ -410,7 +414,7 @@ struct FilterSyncAdversaryTests {
     func twoWayDisagreementFailsClosed() async throws {
         let fixture = try await Self.threePeerFixture(liars: [nil, .filterCommitments(salt: 0xFF)],
                                                       chainLength: 6)
-        defer { fixture.stopNodes() }
+        defer { fixture.stop() }
         let endpoints = fixture.endpoints
         let peersFile = fixture.peersFile
         #expect(await fixture.pool.connectedPeers().count == 2)
@@ -474,7 +478,7 @@ struct FilterSyncAdversaryTests {
             liars: [.filterCommitments(salt: 0xFF), nil, nil],
             delays: [.zero, .milliseconds(150), .milliseconds(250)],
             chainLength: 6)
-        defer { fixture.stopNodes() }
+        defer { fixture.stop() }
         let liarEndpoint = fixture.liarEndpoints[0]
         let honestEndpoints = fixture.honestEndpoints
         let peersFile = fixture.peersFile
@@ -527,7 +531,7 @@ struct FilterSyncAdversaryTests {
     func singlePeerIsTrustedUncorroborated() async throws {
         let fixture = try await Self.threePeerFixture(liars: [.filterCommitments(salt: 0xFF)],
                                                       chainLength: 6)
-        defer { fixture.stopNodes() }
+        defer { fixture.stop() }
 
         // The lying commitment chain is self-consistent, so the only thing that
         // catches it is a second peer — and there is not one. The sync either
@@ -639,6 +643,7 @@ struct FilterSyncAdversaryTests {
         defer { Task { await manualA.stop(); await manualB.stop(); await persisted.stop() } }
 
         let peersFile = tempFileURL("cross-source-peers.json")
+        defer { try? FileManager.default.removeItem(at: peersFile.deletingLastPathComponent()) }
         let stored = PersistedPeers([PeerCandidate(endpoint: await persisted.endpoint,
                                                    source: .persisted)])
         try JSONEncoder().encode(stored).write(to: peersFile)
@@ -646,13 +651,13 @@ struct FilterSyncAdversaryTests {
         let pool = PeerPool(params: synthetic.params, peerCount: 3,
                             manualPeers: [await manualA.endpoint, await manualB.endpoint],
                             peersFileURL: peersFile)
+        defer { Task { await pool.stop() } }
         await pool.start()
         #expect(await pool.connectedPeers().count == 3)
         #expect(await pool.source(of: persisted.endpoint) == .persisted)
 
         let chain = try HeaderChain(params: synthetic.params)
         let sync = try FilterSync(pool: pool, chain: chain, startHeight: 1,
-                                  storageURL: tempFileURL("cross-source-progress.json"),
                                   requiredCheckpointPeers: 3)
         try await sync.sync(watchScripts: [synthetic.watchScript]) { _ in }
 
@@ -675,7 +680,7 @@ struct FilterSyncAdversaryTests {
         let fixture = try await Self.threePeerFixture(
             liars: [nil, nil, .behindAndHangsUp(blocks: 950)],
             delays: [.zero, .zero, .milliseconds(300)])
-        defer { fixture.stopNodes() }
+        defer { fixture.stop() }
         let shortEndpoint = fixture.endpoints[2]
         #expect(await fixture.pool.connectedPeers().count == 3,
                 "51 behind is inside the tolerance; the pool keeps the short peer")

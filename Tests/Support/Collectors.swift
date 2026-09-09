@@ -66,11 +66,10 @@ public func pollUntil(_ timeout: Duration = .seconds(60),
 public func settle(_ pool: PeerPool,
                    until predicate: @escaping ([PeerEndpoint]) -> Bool) async -> [PeerEndpoint] {
     var seen: [PeerEndpoint] = []
-    for _ in 0 ..< 100 {
+    _ = await pollUntil(.seconds(10)) {
         seen = []
         for peer in await pool.connectedPeers() { seen.append(await peer.endpoint) }
-        if predicate(seen) { return seen }
-        try? await Task.sleep(for: .milliseconds(100))
+        return predicate(seen)
     }
     return seen
 }

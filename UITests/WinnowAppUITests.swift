@@ -183,7 +183,7 @@ final class WinnowAppUITests: XCTestCase {
         // address is used, so resolve it rather than assuming 0.)
         var fundingIndex: UInt32?
         for i: UInt32 in 0 ..< 10
-        where try Self.walletReceiveAddress(index: i) == address { fundingIndex = i }
+        where try TestVaults.receiveAddress(master: HDKey(seed: BIP39.seed(mnemonic: Self.mnemonic)), index: i) == address { fundingIndex = i }
         guard let fundingIndex else {
             XCTFail("the displayed address is not index 0..<10 of the fixed-entropy wallet")
             return
@@ -229,7 +229,7 @@ final class WinnowAppUITests: XCTestCase {
         // (the node's "miner" wallet is a signing-only wallet with no
         // keypool — it can't hand out receive addresses). Typed, not pasted:
         // cross-process pasteboard consent prompts proved flaky.
-        let destination = try Self.fixtureAddress(0xC3)
+        let destination = try TestVaults.fixtureAddress(0xC3)
         let app = launchApp()
         XCTAssertTrue(poll(timeout: 120, "persisted funded balance") {
             self.balanceText(app) != "0 sats" && self.balanceText(app) != ""
@@ -312,7 +312,7 @@ final class WinnowAppUITests: XCTestCase {
             ((try? Set(BitcoinCLI.mempoolTxids()).isSubset(of: mempoolBefore)) ?? true) == false
         }
         Timings.record("send", step: "broadcast→echo/relay", from: relayStart)
-        let payout = try AddressDecoder.scriptPubKey(for: Self.fixtureAddress(0xD4), network: .signet)
+        let payout = try AddressDecoder.scriptPubKey(for: TestVaults.fixtureAddress(0xD4), network: .signet)
         let confirmStart = Date()
         try await SignetMiner.mineOntoTip(payingTo: payout)
 
@@ -339,41 +339,6 @@ final class WinnowAppUITests: XCTestCase {
 
     // MARK: - 04 Vaults
 
-    /// A deterministic cosigner key expression ([fp/86'/1'/0']tpub…/<0;1>/*)
-    /// from a one-byte repeated seed — a fixture, not a real cosigner.
-    static func fixtureCosigner(_ byte: UInt8) throws -> String {
-        let master = try HDKey(seed: Data(repeating: byte, count: 64))
-        let account = try BIP86.accountKey(from: master, coinType: 1, account: 0)
-        let fingerprint = String(format: "%08x", master.fingerprint)
-        return "[\(fingerprint)/86'/1'/0']\(account.neutered.serialized(network: .testnet))/<0;1>/*"
-    }
-
-    /// The fixed-entropy test wallet's own key expression — the same text
-    /// "Add this device's key" produced in test04 (AppModel.ownKeyExpression).
-    static func deviceKeyExpression() throws -> String {
-        let master = try HDKey(seed: BIP39.seed(mnemonic: mnemonic))
-        let account = try BIP86.accountKey(from: master, coinType: 1, account: 0)
-        let fingerprint = String(format: "%08x", master.fingerprint)
-        return "[\(fingerprint)/86'/1'/0']\(account.neutered.serialized(network: .testnet))/<0;1>/*"
-    }
-
-    /// A deterministic signet P2TR address from a one-byte repeated seed
-    /// (fixture send destination / block payout).
-    static func fixtureAddress(_ byte: UInt8) throws -> String {
-        let master = try HDKey(seed: Data(repeating: byte, count: 64))
-        let account = try BIP86.accountKey(from: master, coinType: 1, account: 0)
-        return try BIP86.address(internalKey: account.publicKey.dropFirst(), hrp: "tb")
-    }
-
-    /// The fixed-entropy test wallet's receive address at `index`
-    /// (m/86'/1'/0'/0/index, signet).
-    static func walletReceiveAddress(index: UInt32) throws -> String {
-        let master = try HDKey(seed: BIP39.seed(mnemonic: mnemonic))
-        let account = try BIP86.accountKey(from: master, coinType: 1, account: 0)
-        let key = try account.derived(path: "0/\(index)")
-        return try BIP86.address(internalKey: key.publicKey.dropFirst(), hrp: "tb")
-    }
-
     func test04VaultCreate() throws {
         // The raw vault tools live in Wallet,
         // in Advanced mode; beginners see the same records as shared savings.
@@ -388,7 +353,7 @@ final class WinnowAppUITests: XCTestCase {
         // Default policy: 2-of-n script path; three cosigners → 2-of-3.
         app.buttons["addDeviceKeyButton"].tap()
         for byte: UInt8 in [0xA1, 0xB2] {
-            app.typeInto("cosignerField", try Self.fixtureCosigner(byte))
+            app.typeInto("cosignerField", try TestVaults.fixtureCosigner(byte))
             app.buttons["addPastedKeyButton"].tap()
         }
         let threshold = app.steppers["vaultThresholdStepper"]
@@ -405,8 +370,7 @@ final class WinnowAppUITests: XCTestCase {
         // The descriptor preview is a CopyableTextBlock whose Text starts
         // with "tr(" — below the fold, and SwiftUI Forms materialize rows
         // lazily, so scroll it into existence.
-        let descriptor = app.staticTexts.matching(
-            NSPredicate(format: "label BEGINSWITH 'tr('")).firstMatch
+        let descriptor = app.descendants(matching: .any)["descriptorBlock"].firstMatch
         XCTAssertTrue(scrollUntilExists(app, descriptor), "descriptor preview did not appear")
         app.dismissKeyboard()
         Screenshots.capture(app, "10-vault-create", testCase: self)
@@ -520,8 +484,7 @@ final class WinnowAppUITests: XCTestCase {
 
         // Imported JSON may contain the seed. Leaving the active scene must
         // erase it before the app can be foregrounded again.
-        XCUIDevice.shared.press(.home)
-        app.activate()
+        backgroundAndReturn(app)
         XCTAssertTrue(app.buttons["importPasteButton"].waitForExistence(timeout: 20),
                       "import sheet did not return after activation")
         XCTAssertFalse(((app.textViews["importJSONEditor"].value as? String) ?? "")
@@ -564,8 +527,8 @@ final class WinnowAppUITests: XCTestCase {
     func test07ApproveRequest() async throws {
         let descriptor = try Vault.multiADescriptor(
             threshold: 2,
-            cosigners: try [Self.deviceKeyExpression(), Self.fixtureCosigner(0xA1),
-                            Self.fixtureCosigner(0xB2)])
+            cosigners: try [TestVaults.keyExpression(master: HDKey(seed: BIP39.seed(mnemonic: Self.mnemonic))), TestVaults.fixtureCosigner(0xA1),
+                            TestVaults.fixtureCosigner(0xB2)])
         let vault = try Vault(descriptor: descriptor, network: .signet)
         let recordID = String(descriptor.serialized().split(separator: "#").last!)
         let savingsAddress = try vault.address(index: 0)
@@ -615,7 +578,7 @@ final class WinnowAppUITests: XCTestCase {
             XCTAssertTrue(poll(timeout: 60, interval: 1, "funding relayed into the node's mempool") {
                 ((try? Set(BitcoinCLI.mempoolTxids()).isSubset(of: mempoolBefore)) ?? true) == false
             })
-            let payout = try AddressDecoder.scriptPubKey(for: Self.fixtureAddress(0xD4), network: .signet)
+            let payout = try AddressDecoder.scriptPubKey(for: TestVaults.fixtureAddress(0xD4), network: .signet)
             try await SignetMiner.mineOntoTip(payingTo: payout)
         }
         XCTAssertTrue(poll(timeout: 30, interval: 2, "the node sees the funding coin") {
@@ -642,7 +605,7 @@ final class WinnowAppUITests: XCTestCase {
                               chain: .receive, index: 0, height: coin.height)
         var psbt = try vault.createSpend(
             utxos: [utxo],
-            payments: [Payment(amount: 100_000, address: Self.fixtureAddress(0xE5), network: .signet)],
+            payments: [Payment(amount: 100_000, address: TestVaults.fixtureAddress(0xE5), network: .signet)],
             changeIndex: 0, feeRateSatPerVByte: 2, chainTip: UInt32(try BitcoinCLI.blockCount()),
             randomness: { 0.5 })
         let alice = try HDKey(seed: Data(repeating: 0xA1, count: 64))
@@ -698,22 +661,21 @@ final class WinnowAppUITests: XCTestCase {
         XCTAssertTrue(poll(timeout: 60, interval: 1, "spend in the node's mempool") {
             (try? BitcoinCLI.mempoolTxids().isEmpty == false) ?? false
         })
-        let payout = try AddressDecoder.scriptPubKey(for: Self.fixtureAddress(0xD4), network: .signet)
+        let payout = try AddressDecoder.scriptPubKey(for: TestVaults.fixtureAddress(0xD4), network: .signet)
         try await SignetMiner.mineOntoTip(payingTo: payout)
         XCTAssertTrue(poll(timeout: 120, interval: 5, "the spend leaves the savings' UTXO set") {
             (try? freshCoins().isEmpty) ?? false
         })
 
         // Sensitive state is dropped on a background transition.
-        XCUIDevice.shared.press(.home)
-        app.activate()
+        backgroundAndReturn(app)
         XCTAssertFalse(progress.waitForExistence(timeout: 3), "approval review survived backgrounding")
     }
 
     // MARK: - 10 Save a recipient from a payment, then pay a fresh card address
 
     func test10SaveRecipientFromPayment() async throws {
-        let address = try Self.fixtureAddress(0xE1)
+        let address = try TestVaults.fixtureAddress(0xE1)
         var app = launchApp()
         app.tabBars.buttons["Send"].tap()
         app.typeInto("destinationField", address)
@@ -726,7 +688,7 @@ final class WinnowAppUITests: XCTestCase {
             ((try? Set(BitcoinCLI.mempoolTxids()).subtracting(before).isEmpty) ?? true) == false
         })
         let txid = try XCTUnwrap(Set(try BitcoinCLI.mempoolTxids()).subtracting(before).first)
-        let payout = try AddressDecoder.scriptPubKey(for: Self.fixtureAddress(0xD4), network: .signet)
+        let payout = try AddressDecoder.scriptPubKey(for: TestVaults.fixtureAddress(0xD4), network: .signet)
         try await SignetMiner.mineOntoTip(payingTo: payout)
         app.tabBars.buttons["Wallet"].tap()
         openPayment(txid, in: app)
@@ -776,7 +738,7 @@ final class WinnowAppUITests: XCTestCase {
                       "a saved fixed address must explain reuse")
 
         // A card uses a fresh address for each committed payment.
-        let aliceKey = try Self.fixtureCosigner(0xA1)
+        let aliceKey = try TestVaults.fixtureCosigner(0xA1)
         let card = try PersonCard(network: .signet, name: "Alice", payTo: "tr(\(aliceKey))",
                                   signerKey: aliceKey).serialized()
         app.terminate()
@@ -791,7 +753,7 @@ final class WinnowAppUITests: XCTestCase {
         XCTAssertTrue(scrollUntilExists(app, recipient))
         let destination = app.staticTexts["reviewDestination"]
         let firstAddress = destination.label
-        XCTAssertEqual(firstAddress, try Self.fixtureReceiveAddress(0xA1, index: 0))
+        XCTAssertEqual(firstAddress, try TestVaults.fixtureReceiveAddress(0xA1, index: 0))
         XCTAssertFalse(app.staticTexts["addressReuseWarning"].exists)
         Screenshots.capture(app, "25-pay-person-review", testCase: self)
         XCTAssertTrue(scrollUntilExists(app, app.buttons["sendButton"]))
@@ -808,7 +770,7 @@ final class WinnowAppUITests: XCTestCase {
         app.typeInto("amountField", "1000")
         app.buttons["reviewButton"].tap()
         XCTAssertTrue(scrollUntilExists(app, recipient))
-        XCTAssertEqual(destination.label, try Self.fixtureReceiveAddress(0xA1, index: 1))
+        XCTAssertEqual(destination.label, try TestVaults.fixtureReceiveAddress(0xA1, index: 1))
     }
 
     private func reviewFromAccount(_ app: XCUIApplication, name: String, address: String, amount: String,
@@ -852,15 +814,6 @@ final class WinnowAppUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["personPayToSummary"].label, "Fresh address each payment")
         app.buttons["savePersonButton"].tap()
         XCTAssertTrue(row.waitForExistence(timeout: 30), "recipient was not saved")
-    }
-
-    /// Alice's receive address at `index`, as her wallet would derive it from
-    /// the fixture 0xA1 account key.
-    static func fixtureReceiveAddress(_ byte: UInt8, index: UInt32) throws -> String {
-        let master = try HDKey(seed: Data(repeating: byte, count: 64))
-        let account = try BIP86.accountKey(from: master, coinType: 1, account: 0)
-        let key = try account.derived(path: "0/\(index)")
-        return try BIP86.address(internalKey: key.publicKey.dropFirst(), hrp: "tb")
     }
 
     // MARK: - 11 Beginner shell (mine-free)
@@ -928,11 +881,11 @@ final class WinnowAppUITests: XCTestCase {
     /// for approval of a payment to her. The approve-and-finish half is
     /// test07; this is the creation half a beginner does.
     func test12SharedSavingsCreateAndAsk() async throws {
-        let aliceKey = try Self.fixtureCosigner(0xA1)
+        let aliceKey = try TestVaults.fixtureCosigner(0xA1)
         // 0xC3, not 0xB2: with the device key and Alice that would be the
         // very descriptor test04 saved as "E2E Vault", and a vault is
         // identified by its descriptor.
-        let bobKey = try Self.fixtureCosigner(0xC3)
+        let bobKey = try TestVaults.fixtureCosigner(0xC3)
         let bobCard = try PersonCard(network: .signet, name: "Bob", payTo: "tr(\(bobKey))",
                                      signerKey: bobKey).serialized()
         var app = launchApp(clipboard: bobCard)
@@ -1001,7 +954,7 @@ final class WinnowAppUITests: XCTestCase {
             XCTAssertTrue(poll(timeout: 60, interval: 1, "funding relayed into the node's mempool") {
                 ((try? Set(BitcoinCLI.mempoolTxids()).isSubset(of: mempoolBefore)) ?? true) == false
             })
-            let payout = try AddressDecoder.scriptPubKey(for: Self.fixtureAddress(0xD4), network: .signet)
+            let payout = try AddressDecoder.scriptPubKey(for: TestVaults.fixtureAddress(0xD4), network: .signet)
             try await SignetMiner.mineOntoTip(payingTo: payout)
             app.tabBars.buttons["Wallet"].tap()
         }
@@ -1084,13 +1037,12 @@ final class WinnowAppUITests: XCTestCase {
         newVault.tap()
         app.typeInto("vaultNameField", vaultName)
         app.buttons["addDeviceKeyButton"].tap()
-        for expression in [groupExpression, try Self.fixtureCosigner(0xB2)] {
+        for expression in [groupExpression, try TestVaults.fixtureCosigner(0xB2)] {
             app.typeInto("cosignerField", expression)
             app.buttons["addPastedKeyButton"].tap()
         }
         app.buttons["buildDescriptorButton"].tap()
-        let descriptorPreview = app.staticTexts.matching(
-            NSPredicate(format: "label BEGINSWITH 'tr('")).firstMatch
+        let descriptorPreview = app.descendants(matching: .any)["descriptorBlock"].firstMatch
         XCTAssertTrue(scrollUntilExists(app, descriptorPreview), "descriptor preview missing")
         app.dismissKeyboard()
         XCTAssertTrue(scrollUntilExists(app, app.buttons["saveVaultButton"]))
@@ -1102,8 +1054,8 @@ final class WinnowAppUITests: XCTestCase {
         // 2. Fund it (matured coinbase) — same derivation the app made.
         let descriptor = try Vault.multiADescriptor(
             threshold: 2,
-            cosigners: [try Self.deviceKeyExpression(), groupExpression,
-                        try Self.fixtureCosigner(0xB2)])
+            cosigners: [try TestVaults.keyExpression(master: HDKey(seed: BIP39.seed(mnemonic: Self.mnemonic))), groupExpression,
+                        try TestVaults.fixtureCosigner(0xB2)])
         let vault = try Vault(descriptor: descriptor, network: .signet)
         let fundingScript = try vault.scriptPubKey(index: 0, choice: 0)
         let fundingBlock = try await SignetMiner.mineOntoTip(payingTo: fundingScript)
@@ -1131,7 +1083,7 @@ final class WinnowAppUITests: XCTestCase {
             if vaultRow.exists { vaultRow.tap() }
             return false
         }
-        reviewFromAccount(app, name: vaultName, address: try Self.fixtureAddress(0xE5), amount: "1000000", chooseInSend: true)
+        reviewFromAccount(app, name: vaultName, address: try TestVaults.fixtureAddress(0xE5), amount: "1000000", chooseInSend: true)
         Screenshots.capture(app, "31-group-spend-created", testCase: self)
         app.buttons["sendButton"].tap()
         let progress = app.staticTexts["approvalProgress"]
@@ -1147,14 +1099,14 @@ final class WinnowAppUITests: XCTestCase {
         let rawDisclosure = app.buttons["approvalRawPSBTDisclosure"]
         XCTAssertTrue(scrollUntilExists(app, rawDisclosure))
         rawDisclosure.tap()
-        let rawRequest = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'cHNidP'")).firstMatch
+        let rawRequest = app.staticTexts["approvalRawPSBT"]
         XCTAssertTrue(scrollUntilExists(app, rawRequest))
         let phoneSigned = rawRequest.label
         XCTAssertEqual(try PSBT(base64: phoneSigned).inputs.first?.tapScriptSignatures.count, 1)
 
         // 4. The group signs the raw request exported by the phone.
-        let signed = try Self.groupSign(base64: phoneSigned, memberSecrets: memberSecrets,
-                                        synthetic: synthetic)
+        let signed = try GroupSigner.sign(PSBT(base64: phoneSigned), memberSecrets: memberSecrets,
+                                          synthetic: synthetic).base64
 
         // 5. Relaunch with the group's PSBT on the clipboard; the app pastes,
         //    reviews both approvals, finalizes, and broadcasts.
@@ -1208,57 +1160,6 @@ final class WinnowAppUITests: XCTestCase {
         XCTAssertNil(spent, "the vault coin was not spent on chain")
     }
 
-    /// The group's half of the ceremony: BIP327 two rounds over the
-    /// script-path sighash with the BIP328 derivation tweaks — the same
-    /// simulation the CLI's musig-sign-psbt performs.
-    private static func groupSign(base64: String, memberSecrets: [Data],
-                                  synthetic: HDKey) throws -> String {
-        var psbt = try PSBT(base64: base64)
-        let memberKeys = try memberSecrets.map {
-            try P256K.Signing.PrivateKey(dataRepresentation: $0).publicKey.dataRepresentation
-        }
-        let aggregate = try MuSig.aggregate(memberKeys)
-        guard let leaf = psbt.inputs[0].tapLeafScripts.first else {
-            throw NSError(domain: "group", code: 1)
-        }
-        guard let derivation = psbt.inputs[0].tapBIP32Derivation.first(where: {
-            $0.value.masterFingerprint == synthetic.fingerprint
-        }) else { throw NSError(domain: "group", code: 2) }
-        var tweaks: [Data] = []
-        var step = synthetic
-        for component in derivation.value.path {
-            tweaks.append(MuSig.bip328Tweak(chainCode: step.chainCode,
-                                            aggregatePublicKey: step.publicKey,
-                                            index: component))
-            step = try step.derived(path: "\(component)")
-        }
-        let sighash = try SighashBIP341.sighash(
-            tx: try psbt.unsignedTransaction(), inputIndex: 0,
-            spentOutputs: try psbt.spentOutputs(), hashType: .default,
-            scriptPath: .init(leafScript: Script(leaf.script), leafVersion: leaf.leafVersion))
-        var nonces: [(secret: Data, public_: Data)] = []
-        for (secret, publicKey) in zip(memberSecrets, memberKeys) {
-            let nonce = try MuSig.nonceGenerate(secretKey: secret, publicKey: publicKey,
-                                                aggregateKey: Data(aggregate.dropFirst()),
-                                                message: sighash)
-            nonces.append((nonce.secretNonce, nonce.publicNonce))
-        }
-        let session = MuSig.Session(
-            aggregateNonce: try MuSig.nonceAggregate(publicNonces: nonces.map(\.public_)),
-            publicKeys: memberKeys, tweaks: tweaks,
-            isXOnlyTweaks: tweaks.map { _ in false }, message: sighash)
-        var partials: [Data] = []
-        for (index, secret) in memberSecrets.enumerated() {
-            var secretNonce = nonces[index].secret
-            partials.append(try MuSig.partialSign(secretNonce: &secretNonce, secretKey: secret,
-                                                  session: session))
-        }
-        let signature = try MuSig.partialSigAggregate(partialSignatures: partials, session: session)
-        psbt.inputs[0].pairs.append(PSBT.KeyValue(
-            type: 0x14, keyData: Data(derivation.key) + leaf.leafHash, value: signature))
-        return psbt.base64
-    }
-
     // MARK: - 09 Backup resume + recovery-phrase reveal (#5)
 
     /// Mine-free. Kills the app on the mnemonic backup sheet and asserts the
@@ -1291,8 +1192,7 @@ final class WinnowAppUITests: XCTestCase {
 
         // A background transition erases the phrase and dismisses its sheet;
         // resuming requires another explicit action (and production auth).
-        XCUIDevice.shared.press(.home)
-        resumed.activate()
+        backgroundAndReturn(resumed)
         XCTAssertFalse(resumed.switches["writtenDownToggle"].waitForExistence(timeout: 3),
                        "onboarding recovery phrase survived backgrounding")
         let resumeBackup = resumed.buttons["resumeBackupButton"]
@@ -1331,8 +1231,7 @@ final class WinnowAppUITests: XCTestCase {
         XCTAssertTrue(settled.buttons["settingsCopyPhraseButton"].exists,
                       "Settings recovery screen does not offer phrase copy")
         Screenshots.capture(settled, "22-phrase-revealed", testCase: self)
-        XCUIDevice.shared.press(.home)
-        settled.activate()
+        backgroundAndReturn(settled)
         // As in test08: the clear rides on the scene's background
         // transition, which a slow simulator delivers a moment after the
         // app is back, so wait for the phrase to go rather than read it in
@@ -1357,8 +1256,7 @@ final class WinnowAppUITests: XCTestCase {
         seedAlert.buttons["Export with phrase"].tap()
         let shareLink = settled.buttons["exportShareLink"]
         XCTAssertTrue(shareLink.waitForExistence(timeout: 30), "seed export was not staged")
-        XCUIDevice.shared.press(.home)
-        settled.activate()
+        backgroundAndReturn(settled)
         XCTAssertFalse(shareLink.waitForExistence(timeout: 3),
                        "seed-bearing staged export survived backgrounding")
         XCTAssertTrue(scrollUntilExists(settled, exportButton, up: true),
@@ -1374,8 +1272,7 @@ final class WinnowAppUITests: XCTestCase {
         importApp.typeInto("importJSONEditor", privateMarker)
         XCTAssertTrue(((importApp.textViews["importJSONEditor"].value as? String) ?? "")
             .contains(privateMarker), "import test marker was not entered")
-        XCUIDevice.shared.press(.home)
-        importApp.activate()
+        backgroundAndReturn(importApp)
         XCTAssertTrue(importApp.buttons["importPasteButton"].waitForExistence(timeout: 20),
                       "empty import sheet did not remain available")
         XCTAssertFalse(((importApp.textViews["importJSONEditor"].value as? String) ?? "")
@@ -1473,8 +1370,7 @@ final class WinnowAppUITests: XCTestCase {
             .exists, "no shared-file note")
         Screenshots.capture(app, "19-export-seed-redacted", testCase: self)
 
-        XCUIDevice.shared.press(.home)
-        app.activate()
+        backgroundAndReturn(app)
         // The clear happens on the scene's background transition, which a
         // slow simulator delivers a moment after the app is back: wait for
         // the link to go, rather than reading it in the first three seconds.
@@ -1522,7 +1418,7 @@ final class WinnowAppUITests: XCTestCase {
         var app = launchApp(advanced: true)
         app.tabBars.buttons["Send"].tap()
         app.typeInto("amountField", "20000")
-        app.typeInto("destinationField", try Self.fixtureAddress(0xD5))
+        app.typeInto("destinationField", try TestVaults.fixtureAddress(0xD5))
         XCTAssertTrue(scrollUntilExists(app, app.buttons["reviewButton"]))
         app.buttons["reviewButton"].tap()
         XCTAssertTrue(scrollUntilExists(app, app.buttons["sendButton"], maxSwipes: 5))
@@ -1581,7 +1477,7 @@ final class WinnowAppUITests: XCTestCase {
                       "the original payment was not marked replaced in history")
         XCTAssertTrue(replaced.label.contains(String(replacement.prefix(8))))
         app.navigationBars.buttons["Winnow"].tap()
-        let payout = try AddressDecoder.scriptPubKey(for: Self.fixtureAddress(0xD4), network: .signet)
+        let payout = try AddressDecoder.scriptPubKey(for: TestVaults.fixtureAddress(0xD4), network: .signet)
         try await SignetMiner.mineOntoTip(payingTo: payout)
         XCTAssertTrue(scrollUntilExists(app, app.buttons["syncNowButton"], maxSwipes: 5, up: true))
         XCTAssertTrue(poll(timeout: 180, interval: 5, "replacement confirmed in the app") {
@@ -1596,7 +1492,7 @@ final class WinnowAppUITests: XCTestCase {
     func test16MuSig2RequiresSecondDevice() async throws {
         let external = try CoreSigner(wallet: "ui-musig-\(UUID().uuidString)")
         let externalKey = external.publicExpression
-        let ownKey = String(try Self.deviceKeyExpression().dropLast("/<0;1>/*".count))
+        let ownKey = String(try TestVaults.keyExpression(master: HDKey(seed: BIP39.seed(mnemonic: Self.mnemonic))).dropLast("/<0;1>/*".count))
         let vault = try Vault("tr(musig(\(ownKey),\(externalKey))/<0;1>/*)", network: .signet)
         try external.importVault(vault)
         let name = "Extra device \(UUID().uuidString.prefix(6))"
@@ -1643,7 +1539,7 @@ final class WinnowAppUITests: XCTestCase {
         XCTAssertEqual(backedUpAccount.descriptor, vault.descriptor.serialized())
         XCTAssertEqual(backedUpAccount.utxos.count, 1)
 
-        reviewFromAccount(app, name: name, address: try Self.fixtureAddress(0xE5), amount: "1000000")
+        reviewFromAccount(app, name: name, address: try TestVaults.fixtureAddress(0xE5), amount: "1000000")
         app.buttons["sendButton"].tap()
         let psbtOutput = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'cHNidP'")).firstMatch
         XCTAssertTrue(scrollUntilExists(app, psbtOutput), "payment was not handed straight to the second-signer flow")
@@ -1724,7 +1620,7 @@ final class WinnowAppUITests: XCTestCase {
         XCTAssertEqual(witness.count, 1, "key-path spend exposed a script")
         XCTAssertEqual(witness.first?.count, 128, "expected one 64-byte signature")
         _ = try await SignetMiner.mineOntoTip(payingTo: AddressDecoder.scriptPubKey(
-            for: Self.fixtureAddress(0xD4), network: .signet))
+            for: TestVaults.fixtureAddress(0xD4), network: .signet))
         let spent = try BitcoinCLI.runJSON(["gettxout", fundingTxid, String(coin.vout)])
         XCTAssertTrue(spent == nil || spent is NSNull, "the funded output was not spent")
         backup.mnemonic = Self.mnemonic // represents the separately saved words

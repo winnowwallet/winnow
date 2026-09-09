@@ -194,6 +194,7 @@ struct WalletReorgTests {
     @Test("a tampered tombstone fails closed on load instead of waiting to be resurrected")
     func corruptPersistedTombstone() async throws {
         let url = tempFileURL("corrupt-tombstone-wallet.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let keyStore = InMemoryKeyStore()
         let (wallet, _) = try await fundedWallet(storageURL: url, keyStore: keyStore,
                                                 coins: [(.receive, 0, 150_000, 100)])

@@ -71,7 +71,7 @@ struct DescriptorBoundsTests {
     /// end of the input.
     @Test("unbalanced nesting is refused")
     func unbalancedNestingRefused() {
-        #expect(throws: (any Error).self) {
+        #expect(throws: DescriptorError.unexpectedCharacter(")")) {
             _ = try Descriptor("tr(\(Self.nums),\(String(repeating: "{", count: 64))pk(\(Self.key)))")
         }
     }

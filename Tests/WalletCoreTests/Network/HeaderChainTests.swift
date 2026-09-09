@@ -11,7 +11,7 @@ import TestSupport
 /// file), `HeaderReplayTests` and `ReorgVisibilityTests`. None of those suites
 /// carried a trait, so they are sections of this one suite rather than nested
 /// suites; every test keeps its display name and its source order.
-@Suite("HeaderChain")
+@Suite("HeaderChain", .timeLimit(.minutes(2)))
 struct HeaderChainTests {
     // MARK: - HeaderChain
     //
@@ -212,12 +212,12 @@ struct HeaderChainTests {
     func persistence() async throws {
         let chain = makeSyntheticChain(length: 4, watchHeight: 6)
         let file = tempFileURL("headers.dat")
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
         let headerChain = try HeaderChain(params: chain.params, storageURL: file)
         try await headerChain.connect(chain.blocks.dropFirst().map(\.header))
         let reloaded = try HeaderChain(params: chain.params, storageURL: file)
         #expect(await reloaded.height == 4)
         #expect(await reloaded.tipHash == chain.blocks[4].hash)
-        try? FileManager.default.removeItem(at: file.deletingLastPathComponent())
     }
 
     /// A build that cannot interpret a checkpoint-rooted file must say so
@@ -227,6 +227,7 @@ struct HeaderChainTests {
     func checkpointFileRefused() async throws {
         let chain = makeSyntheticChain(length: 2, watchHeight: 6)
         let file = tempFileURL("headers.dat")
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
 
         var data = Data()
         data.appendUInt32(0xFFFF_FFFF)          // format marker
@@ -240,7 +241,6 @@ struct HeaderChainTests {
         #expect(throws: HeaderChainError.self) {
             _ = try HeaderChain(params: chain.params, storageURL: file)
         }
-        try? FileManager.default.removeItem(at: file.deletingLastPathComponent())
     }
 
     @Test("repeated difficulty caching still verifies every stored header hash")
@@ -259,6 +259,7 @@ struct HeaderChainTests {
         }
 
         let file = tempFileURL("headers.dat")
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
         var stored = Data()
         stored.appendUInt32(2)
         stored.append(genesis.serialized)
@@ -267,7 +268,6 @@ struct HeaderChainTests {
         #expect(throws: HeaderChainError.insufficientProofOfWork(height: 1)) {
             _ = try HeaderChain(params: chain.params, storageURL: file)
         }
-        try? FileManager.default.removeItem(at: file.deletingLastPathComponent())
     }
 
     /// Mines a header onto `parent` at the given `bits`, accepted by the same

@@ -66,10 +66,8 @@ struct FilterSyncDiffTests {
         // run forward over those blocks without error and land at the tip.
         let creationHeight = tip - 5
         let wallet = try await Wallet.create(network: .signet, keyStore: InMemoryKeyStore(),
-                                             storageURL: tempFileURL("wallet.json"),
                                              creationHeight: creationHeight)
         let sync = try FilterSync(pool: pool, chain: synced.chain, startHeight: creationHeight,
-                                  storageURL: tempFileURL("filters.json"),
                                   requiredCheckpointPeers: 1)
         try await sync.sync(watchScripts: wallet.watchScripts()) { match in
             _ = try await wallet.apply(match: match)
@@ -107,7 +105,7 @@ struct FilterSyncDiffTests {
     {
         let peers = await pool.connectedPeers()
         let peer = try #require(peers.first, "no connection to \(BitcoinCLI.nodeHost):\(BitcoinCLI.p2pPort)")
-        let chain = try HeaderChain(params: params, storageURL: tempFileURL("headers.bin"))
+        let chain = try HeaderChain(params: params)
         try await chain.sync(using: peer, timeout: .seconds(60))
         let tip = try UInt32(BitcoinCLI.blockCount())
         #expect(await chain.height == tip, "header sync tip")
@@ -137,9 +135,7 @@ struct FilterSyncDiffTests {
     /// It is normally long in by the time a scan has finished; the wait is
     /// for a slow node, not a missing message.
     private func feeFilterFloor(of pool: PeerPool) async throws -> Double? {
-        for _ in 0 ..< 100 where await pool.feeFilterFloorSatPerVByte() == nil {
-            try await Task.sleep(for: .milliseconds(50))
-        }
+        _ = await pollUntil { await pool.feeFilterFloorSatPerVByte() != nil }
         return await pool.feeFilterFloorSatPerVByte()
     }
 

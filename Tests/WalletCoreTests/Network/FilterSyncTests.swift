@@ -13,7 +13,7 @@ import TestSupport
 /// below is one of those suites, in that order. The loopback sections open
 /// real 127.0.0.1 listeners — no external network — and the last two sections
 /// touch no socket at all.
-@Suite("FilterSync")
+@Suite("FilterSync", .timeLimit(.minutes(2)))
 struct FilterSyncTests {
 
     // MARK: - Loopback peers
@@ -160,13 +160,13 @@ struct FilterSyncTests {
         var endpoints: [PeerEndpoint] = []
         for node in nodes { endpoints.append(await node.endpoint) }
         let pool = PeerPool(params: synthetic.params, peerCount: peerCount,
-                            manualPeers: endpoints,
-                            peersFileURL: tempFileURL("peers.json"))
+                            manualPeers: endpoints)
         await pool.start()
         #expect(await pool.connectedPeers().count == peerCount)
 
         let chain = try HeaderChain(params: synthetic.params)
         let progressFile = tempFileURL("filter-progress.json")
+        defer { try? FileManager.default.removeItem(at: progressFile.deletingLastPathComponent()) }
         let sync = try FilterSync(pool: pool, chain: chain, startHeight: 1,
                                   storageURL: progressFile, requiredCheckpointPeers: peerCount)
 
@@ -203,7 +203,6 @@ struct FilterSyncTests {
         #expect(await reloaded.lastScannedHeight == 6)
 
         await pool.stop()
-        try? FileManager.default.removeItem(at: progressFile.deletingLastPathComponent())
     }
 
     @Test("historical receipts reject an altered block and a transaction outside the block", arguments: [false, true])
@@ -215,8 +214,7 @@ struct FilterSyncTests {
         let node = LoopbackNode(params: synthetic.params, chain: blocks)
         try await node.start()
         defer { Task { await node.stop() } }
-        let pool = PeerPool(params: synthetic.params, peerCount: 1, manualPeers: [await node.endpoint],
-                            peersFileURL: tempFileURL("receipt-peers.json"))
+        let pool = PeerPool(params: synthetic.params, peerCount: 1, manualPeers: [await node.endpoint])
         await pool.start()
         let chain = try HeaderChain(params: synthetic.params)
         _ = try await pool.syncHeaders(chain)
@@ -373,7 +371,7 @@ struct FilterSyncTests {
         await pool.start()
         defer { Task { await pool.stop() } }
         let chain = try HeaderChain(params: synthetic.params)
-        let store = tempFileURL("filter-write-failure/progress.json")
+        let store = tempFileURL("progress.json")
         let sync = try FilterSync(pool: pool, chain: chain, startHeight: 1,
                                   storageURL: store, requiredCheckpointPeers: 1)
         try FileManager.default.removeItem(at: store.deletingLastPathComponent())

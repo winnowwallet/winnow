@@ -46,6 +46,28 @@ public enum TestVaults {
         return (try Vault("tr(musig(\(keys[0]),\(keys[1]))/<0;1>/*)", network: .signet), masters)
     }
 
+    /// Signet cosigner from a repeated 64-byte seed (distinct from BIP39 entropy).
+    public static func fixtureCosigner(_ byte: UInt8) throws -> String {
+        try keyExpression(master: HDKey(seed: Data(repeating: byte, count: 64)))
+    }
+
+    /// Account-level signet destination used for fixture payouts.
+    public static func fixtureAddress(_ byte: UInt8) throws -> String {
+        let master = try HDKey(seed: Data(repeating: byte, count: 64))
+        let account = try BIP86.accountKey(from: master, coinType: 1, account: 0)
+        return try BIP86.address(internalKey: account.publicKey.dropFirst(), hrp: "tb")
+    }
+
+    public static func fixtureReceiveAddress(_ byte: UInt8, index: UInt32) throws -> String {
+        try receiveAddress(master: HDKey(seed: Data(repeating: byte, count: 64)), index: index)
+    }
+
+    public static func receiveAddress(master: HDKey, index: UInt32) throws -> String {
+        let account = try BIP86.accountKey(from: master, coinType: 1, account: 0)
+        let key = try account.derived(path: "0/\(index)")
+        return try BIP86.address(internalKey: key.publicKey.dropFirst(), hrp: "tb")
+    }
+
     /// A fabricated funding UTXO paying the vault at (choice, index).
     public static func funding(vault: Vault, amount: Int64, choice: AddressChain = .receive,
                                index: UInt32 = 0, height: UInt32 = 100) throws -> WalletUTXO {

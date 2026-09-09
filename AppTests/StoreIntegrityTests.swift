@@ -60,6 +60,7 @@ private func assertMissingFileIsAnEmptyStore(
     _ fixture: StoreFixture,
     file: StaticString = #filePath, line: UInt = #line
 ) async {
+    defer { try? FileManager.default.removeItem(at: fixture.snapshotURL.deletingLastPathComponent()) }
     let outcome = await fixture.configure()
     let count = await fixture.recordCount()
     XCTAssertEqual(outcome, .missing,
@@ -227,7 +228,7 @@ final class VaultStoreSecurityTests: XCTestCase {
 
     func testMalformedVaultFileFailsClosedAndIsNotRewritten() async throws {
         let url = tempFileURL("vault-store.json")
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         try await assertDamagedSnapshotFailsClosedAndIsNotRewritten(
             vaultStoreFixture(VaultStore(), url: url,
                               damage: { try writeBytes(Data("not vault json".utf8), to: url) }))
@@ -239,7 +240,7 @@ final class VaultStoreSecurityTests: XCTestCase {
         invalid.id = "00000000"
         let damaged = invalid // immutable copy: the closure below runs concurrently
         let url = tempFileURL("vault-store.json")
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         try await assertOneInvalidRecordRejectsTheWholeSnapshot(
             vaultStoreFixture(VaultStore(), url: url,
                               damage: { try writeSnapshot([fixture.record, damaged], to: url) }))
@@ -255,7 +256,7 @@ final class VaultStoreSecurityTests: XCTestCase {
         duplicateOutpoint.allUtxos.append(funded.allUtxos[0])
         for records in [[fixture.record, fixture.record], [duplicateOutpoint]] {
             let url = try snapshotFile(records, named: "vault-store.json")
-            defer { try? FileManager.default.removeItem(at: url) }
+            defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
             let store = VaultStore()
             guard case .damaged = await store.configure(storageURL: url, network: .signet)
             else { return XCTFail("duplicate persisted identity was accepted") }
@@ -280,7 +281,7 @@ final class VaultStoreSecurityTests: XCTestCase {
             record.nextReceiveIndex = 1
             record.allUtxos = utxos
             let url = try snapshotFile([record], named: "vault-store.json")
-            defer { try? FileManager.default.removeItem(at: url) }
+            defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
             let store = VaultStore()
             guard case .damaged = await store.configure(storageURL: url, network: .signet)
             else { return XCTFail("invalid vault output metadata was accepted") }
@@ -292,14 +293,14 @@ final class VaultStoreSecurityTests: XCTestCase {
         var record = fixture.record
         record.nextReceiveIndex = VaultStore.maximumNextIndex + 1
         let damagedURL = try snapshotFile([record], named: "vault-store.json")
-        defer { try? FileManager.default.removeItem(at: damagedURL) }
+        defer { try? FileManager.default.removeItem(at: damagedURL.deletingLastPathComponent()) }
         let damagedStore = VaultStore()
         guard case .damaged = await damagedStore.configure(storageURL: damagedURL, network: .signet)
         else { return XCTFail("oversized persisted index was accepted") }
 
         record.nextReceiveIndex = VaultStore.maximumNextIndex
         let validURL = try snapshotFile([record], named: "vault-store.json")
-        defer { try? FileManager.default.removeItem(at: validURL) }
+        defer { try? FileManager.default.removeItem(at: validURL.deletingLastPathComponent()) }
         let store = VaultStore()
         let result = await store.configure(storageURL: validURL, network: .signet)
         XCTAssertEqual(result, .loaded)
@@ -315,7 +316,7 @@ final class VaultStoreSecurityTests: XCTestCase {
     func testFailedPersistenceRollsBackTheLiveSnapshotAndLeavesFileUntouched() async throws {
         let fixture = try makeFixture()
         let url = tempFileURL("vault-store.json")
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = VaultStore(writeData: { _, _ in throw StoreWriteFailure.expected })
         try await assertFailedWriteRollsBackAndLeavesTheFileUntouched(
             vaultStoreFixture(store, url: url, record: fixture.record))
@@ -330,7 +331,7 @@ final class VaultStoreSecurityTests: XCTestCase {
     func testCoinbaseOutputsAreFlaggedAndTheFlagSurvivesPersistence() async throws {
         let fixture = try makeFixture()
         let url = try snapshotFile([fixture.record], named: "vault-store.json")
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = VaultStore()
         _ = await store.configure(storageURL: url, network: .signet)
 
@@ -403,7 +404,7 @@ final class PeopleStoreSecurityTests: XCTestCase {
 
     func testMalformedFileFailsClosedRefusesMutationsAndIsNotRewritten() async throws {
         let url = tempFileURL("people-store.json")
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let original = Data("not people json".utf8)
         let store = PeopleStore()
         try await assertDamagedSnapshotFailsClosedAndIsNotRewritten(
@@ -427,7 +428,7 @@ final class PeopleStoreSecurityTests: XCTestCase {
         nameless.payTo = try fixture(0xB2).payTo
         let damaged = nameless // immutable copy: the closure below runs concurrently
         let url = tempFileURL("people-store.json")
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         try await assertOneInvalidRecordRejectsTheWholeSnapshot(
             peopleStoreFixture(PeopleStore(), url: url,
                                damage: { try writeSnapshot([good, damaged], to: url) }))
@@ -462,7 +463,7 @@ final class PeopleStoreSecurityTests: XCTestCase {
             ("wrong network address", [wrongNetwork]),
         ] {
             let url = try snapshotFile(records, named: "people-store.json")
-            defer { try? FileManager.default.removeItem(at: url) }
+            defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
             let store = PeopleStore()
             guard case .damaged = await store.configure(storageURL: url, network: .signet)
             else { return XCTFail("\(label) was accepted") }
@@ -473,7 +474,7 @@ final class PeopleStoreSecurityTests: XCTestCase {
         let alice = try fixture(0xA1)
         let store = PeopleStore()
         let url = tempFileURL("people-store.json")
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         await store.configure(storageURL: url, network: .signet)
         try await store.add(name: "Alice", payTo: alice.payTo, signerKey: alice.signer)
 
@@ -509,7 +510,7 @@ final class PeopleStoreSecurityTests: XCTestCase {
         let alice = try fixture(0xA1)
         let store = PeopleStore()
         let url = tempFileURL("people-store.json")
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         await store.configure(storageURL: url, network: .signet)
         let record = try await store.add(name: "Alice", payTo: alice.payTo, signerKey: nil)
         XCTAssertEqual(record.nextPaymentIndex, 0)
@@ -539,7 +540,7 @@ final class PeopleStoreSecurityTests: XCTestCase {
         let alice = try fixture(0xA1)
         let record = PersonRecord(id: "one", name: "Alice", payTo: alice.payTo, signerKey: alice.signer)
         let url = tempFileURL("people-store.json")
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let store = PeopleStore(writeData: { _, _ in throw StoreWriteFailure.expected })
         try await assertFailedWriteRollsBackAndLeavesTheFileUntouched(
             peopleStoreFixture(store, url: url, record: record,
@@ -553,7 +554,7 @@ final class PeopleStoreSecurityTests: XCTestCase {
         let bob = try fixture(0xB2)
         let store = PeopleStore()
         let url = tempFileURL("people-store.json")
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         await store.configure(storageURL: url, network: .signet)
         let a = try await store.add(name: "Alice", payTo: alice.payTo, signerKey: alice.signer)
         let b = try await store.add(name: "Bob", payTo: bob.payTo, signerKey: bob.signer)

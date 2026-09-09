@@ -4,7 +4,6 @@ import TestSupport
 @testable import WalletCore
 
 /// BIP387 multi_a/sortedmulti_a vectors parsed from bip-0387.mediawiki.
-/// (The task brief calls these "BIP388 vectors"; the descriptor fragments live in BIP387.)
 @Suite("BIP387 multi_a/sortedmulti_a")
 struct BIP387Tests {
     @Test("vector block parsed")
@@ -33,8 +32,14 @@ struct BIP387Tests {
 
     @Test("invalid descriptors are rejected at parse or derive time")
     func invalidDescriptors() throws {
-        for text in try Vectors.descriptorVectors("bip-0387.mediawiki", in: .module).invalid {
-            #expect((try? Descriptor(text).derived(index: 0)) == nil, "accepted: \(text)")
+        let invalid = try Vectors.descriptorVectors("bip-0387.mediawiki", in: .module).invalid
+        let errors: [DescriptorError] = [
+            .unknownExpression("multi_a"), .unknownExpression("sh"), .unknownExpression("wsh"),
+            .invalidThreshold, .invalidThreshold, .invalidKey, .invalidThreshold,
+        ]
+        try #require(invalid.count == errors.count)
+        for (text, error) in zip(invalid, errors) {
+            #expect(throws: error, "\(text)") { try Descriptor(text).derived(index: 0) }
         }
     }
 

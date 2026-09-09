@@ -34,12 +34,14 @@ struct TxBroadcasterTests {
         for node in [nodeA, nodeB, nodeC] { endpoints.append(await node.endpoint) }
 
         let store = tempFileURL("pending-txs.json")
+        defer { try? FileManager.default.removeItem(at: store.deletingLastPathComponent()) }
         let pool = PeerPool(params: params, peerCount: 3, manualPeers: endpoints)
         await pool.start()
         #expect(await pool.connectedPeers().count == 3)
 
         let broadcaster = try TxBroadcaster(pool: pool, storageURL: store,
                                         rebroadcastBaseInterval: .seconds(3_600))
+        defer { Task { await broadcaster.shutdown(); await pool.stop() } }
         let events = await broadcaster.events()
         let tx = makeFakeSegwitTx()
         let rawTx = tx.serialized(includeWitness: true)
@@ -69,36 +71,21 @@ struct TxBroadcasterTests {
         let consumer = Task {
             for await event in events { seen.add(event) }
         }
-        let deadline = ContinuousClock.now + .seconds(5)
-        while ContinuousClock.now < deadline {
-            let events = seen.events
-            if events.contains(where: {
-                if case .announced(_, peerCount: 3) = $0 { return true }
-                return false
-            }), events.filter({ if case .requested = $0 { return true }; return false }).count == 3 {
-                break
-            }
-            try await Task.sleep(for: .milliseconds(20))
-        }
-        consumer.cancel()
-        #expect(seen.events.contains {
-            if case .announced(_, peerCount: 3) = $0 { return true }
-            return false
+        defer { consumer.cancel() }
+        #expect(await pollUntil {
+            seen.events.contains(.announced(txid: txid, peerCount: 3))
+                && seen.events.filter { if case .requested = $0 { return true }; return false }.count == 3
         })
-        #expect(seen.events.filter {
-            if case .requested = $0 { return true }
-            return false
-        }.count == 3)
 
         // Pending tx survives a restart (JSON persistence).
         let reloaded = try TxBroadcaster(pool: pool, storageURL: store)
+        defer { Task { await reloaded.shutdown() } }
         #expect(await reloaded.pendingTxids == [txid])
 
         try await broadcaster.markConfirmed(txid, atHeight: 1)
         #expect(await broadcaster.pendingTxids.isEmpty)
 
         await pool.stop()
-        try? FileManager.default.removeItem(at: store.deletingLastPathComponent())
     }
 
     @Test("broadcasting malformed raw tx data throws")
@@ -458,13 +445,7 @@ struct TxBroadcasterTests {
 
         // Run past the ceiling, then let it keep firing: the point is that it
         // stops climbing, not merely that it arrives.
-        var saturated = false
-        let deadline = ContinuousClock.now + .seconds(60) // hang-guard, not a deadline
-        while ContinuousClock.now < deadline {
-            if await broadcaster.attemptCount(txid) ?? 0 >= 63 { saturated = true; break }
-            try? await Task.sleep(for: .milliseconds(5))
-        }
-        #expect(saturated)
+        try #require(await pollUntil { await broadcaster.attemptCount(txid) ?? 0 >= 63 })
         try? await Task.sleep(for: .milliseconds(50))
         #expect(await broadcaster.attemptCount(txid) == 63,
                 "the counter must hold at the ceiling rather than climb past it")
@@ -526,10 +507,7 @@ struct TxBroadcasterTests {
         // 100 sat/vB: nothing this test sends clears it.
         try await node.send(.feefilter(100_000))
         let peer = try #require(await pool.connectedPeers().first)
-        for _ in 0 ..< 100 where await peer.feeFilter != 100_000 {
-            try await Task.sleep(for: .milliseconds(50))
-        }
-        #expect(await peer.feeFilter == 100_000)
+        try #require(await pollUntil { await peer.feeFilter == 100_000 })
 
         let broadcaster = try TxBroadcaster(pool: pool,
                                             rebroadcastBaseInterval: .milliseconds(300),

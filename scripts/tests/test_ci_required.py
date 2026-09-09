@@ -19,7 +19,8 @@ class CIRequiredTests(unittest.TestCase):
         for workflow in ci.PATTERNS:
             self.assertFalse(ci.affects(workflow, ["README.md", "Sources/WinnowApp/README.md", "docs/index.html"]))
         self.assertTrue(ci.affects("ci", ["docs/vaults.html"]))
-        self.assertFalse(ci.affects("node-tests", ["docs/vaults.html"]))
+        self.assertTrue(ci.affects("ui", ["docs/vaults.html"]))
+        self.assertFalse(ci.affects("differential", ["docs/vaults.html"]))
 
     def test_code_and_selector_changes_require_checks(self):
         for workflow in ci.PATTERNS:
@@ -27,13 +28,43 @@ class CIRequiredTests(unittest.TestCase):
                          "scripts/ci-required", "scripts/tests/test_ci_required.py", "Package.resolved"]:
                 self.assertTrue(ci.affects(workflow, [path]), (workflow, path))
 
+    def test_test_edits_run_only_the_suites_they_affect(self):
+        cases = {
+            "Tests/BitcoinCoreTests/Bech32Tests.swift": (False, False),
+            "Tests/BitcoinCoreTests/Vectors/bip-0350.mediawiki": (False, False),
+            "Tests/WalletCoreTests/ImportBundleTests.swift": (False, False),
+            "Tests/ToolsTests/FuzzRegressionTests.swift": (False, False),
+            "AppTests/ClipboardTests.swift": (False, False),
+            "Tests/DifferentialTests/FullLoopDiffTests.swift": (True, False),
+            "UITests/WinnowAppUITests.swift": (False, True),
+            "Sources/WinnowApp/AppModel.swift": (True, True),
+            "Tests/Support/Node/CoreSigner.swift": (True, True),
+        }
+        for path, (differential, ui) in cases.items():
+            with self.subTest(path=path):
+                self.assertTrue(ci.affects("ci", [path]))
+                self.assertEqual(ci.affects("differential", [path]), differential)
+                self.assertEqual(ci.affects("ui", [path]), ui)
+        self.assertTrue(ci.affects("ui", ["AppTests/ClipboardTests.swift", "UITests/TestHelpers.swift"]))
+
+    def test_one_suite_does_not_stand_in_for_the_other(self):
+        run = {"id": 42, "head_repository": {"full_name": "owner/repo"},
+               "head_commit": {"tree_id": "same"}, "event": "pull_request",
+               "conclusion": "success", "html_url": "run"}
+        def request(path):
+            return {"workflow_runs": [run]} if "/workflows/" in path else {
+                "jobs": [{"name": "differential", "conclusion": "success"},
+                         {"name": "ui", "conclusion": "skipped"}]}
+        self.assertEqual(ci.successful_source("differential", "owner/repo", "same", request), "run")
+        self.assertIsNone(ci.successful_source("ui", "owner/repo", "same", request))
+
     def evidence(self, *, tree="same", repo="owner/repo", conclusion="success", event="pull_request", skipped=False):
         run = {"id": 42, "head_repository": {"full_name": repo}, "head_commit": {"tree_id": tree},
                "conclusion": conclusion, "event": event, "html_url": "https://github.com/example/run/42"}
-        jobs = [{"name": name, "conclusion": "skipped" if skipped else "success"} for name in ci.JOBS["node-tests"]]
+        jobs = [{"name": name, "conclusion": "skipped" if skipped else "success"} for name in ci.JOBS["ui"]]
         def request(path):
             return {"workflow_runs": [run]} if "/workflows/" in path else {"jobs": jobs}
-        return ci.successful_source("node-tests", "owner/repo", "same", request)
+        return ci.successful_source("ui", "owner/repo", "same", request)
 
     def test_reuses_only_successful_same_repository_tree(self):
         self.assertIsNotNone(self.evidence())
@@ -55,13 +86,14 @@ class CIRequiredTests(unittest.TestCase):
 
     def test_manual_nightly_and_tagged_release_always_run(self):
         with patch.dict(os.environ, {"GITHUB_REF": "refs/tags/v1.0.0"}):
-            for event in ["schedule", "workflow_dispatch", "push"]:
-                self.assertTrue(ci.required("node-tests", event, {})[0])
+            for event in ["schedule", "workflow_dispatch", "workflow_call", "push"]:
+                for workflow in ci.PATTERNS:
+                    self.assertTrue(ci.required(workflow, event, {})[0])
 
     def test_pull_requests_do_not_reuse_other_run_evidence(self):
         with patch.object(ci, "git", return_value="Sources/WalletCore/Wallet.swift"), \
              patch.object(ci, "successful_source", side_effect=AssertionError("must not reuse PR checks")):
-            self.assertTrue(ci.required("node-tests", "pull_request", {
+            self.assertTrue(ci.required("ui", "pull_request", {
                 "pull_request": {"base": {"sha": "a" * 40}}})[0])
 
     def test_api_failure_runs_checks_and_explains_the_fallback(self):

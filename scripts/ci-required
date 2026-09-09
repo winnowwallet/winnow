@@ -8,13 +8,20 @@ import subprocess
 import sys
 
 
+NODE_INPUTS = (r"Sources/|Tests/Support/|Package\.(swift|resolved)$|project\.yml$|"
+               r"scripts/(signet-fixture|ios-simulator|install-xcodegen|ci-required|tests/test_ci_required\.py)$|"
+               r"\.github/workflows/node-tests\.yml$")
+APP_RESOURCES = r"docs/(site\.css|mobile\.html|read-side\.html|write-side\.html|vaults\.html|import\.html)$"
+
 PATTERNS = {
     "ci": r"^(Sources/|Tools/|Tests/|AppTests/|UITests/|Package\.(swift|resolved)$|project\.yml$|\.swiftlint\.yml$|scripts/|\.github/workflows/(ci|node-tests)\.yml$|docs/(site\.css|mobile\.html|read-side\.html|write-side\.html|vaults\.html|import\.html)$)",
-    "node-tests": r"^(Sources/|Tests/|AppTests/|UITests/|Package\.(swift|resolved)$|project\.yml$|scripts/(signet-fixture|ios-simulator|install-xcodegen|ci-required|tests/test_ci_required\.py)$|\.github/workflows/node-tests\.yml$)",
+    "differential": rf"^({NODE_INPUTS}|Tests/DifferentialTests/)",
+    "ui": rf"^({NODE_INPUTS}|UITests/|{APP_RESOURCES})",
 }
 JOBS = {
     "ci": {"complexity", "package", "app-build", "package-tests-intel"},
-    "node-tests": {"ui", "differential"},
+    "differential": {"differential"},
+    "ui": {"ui"},
 }
 
 
@@ -35,7 +42,8 @@ def api(path):
 def successful_source(workflow, repository, tree, request=api):
     # PR jobs explicitly check out their head SHA. The complete source tree
     # includes the workflow and this selector, so older policies cannot match.
-    runs = request(f"repos/{repository}/actions/workflows/{workflow}.yml/runs"
+    workflow_file = "ci" if workflow == "ci" else "node-tests"
+    runs = request(f"repos/{repository}/actions/workflows/{workflow_file}.yml/runs"
                    "?event=pull_request&status=success&per_page=20")["workflow_runs"]
     for run in runs:
         if (run["head_repository"]["full_name"] != repository
@@ -71,7 +79,7 @@ def required(workflow, event, payload):
 def main():
     workflow = sys.argv[1]
     if workflow not in PATTERNS:
-        raise SystemExit("usage: ci-required ci|node-tests")
+        raise SystemExit("usage: ci-required ci|differential|ui")
     try:
         payload = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
         run, reason = required(workflow, os.environ["GITHUB_EVENT_NAME"], payload)

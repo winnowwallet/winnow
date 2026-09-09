@@ -6,7 +6,7 @@ import TestSupport
 /// MempoolWindow against loopback nodes (docs/read-side.md §2.8): the relay
 /// bit at connect time, inv dedupe across peers, watched-script matching,
 /// broadcast echo detection, bounded buffers and teardown.
-@Suite("MempoolWindow")
+@Suite("MempoolWindow", .timeLimit(.minutes(2)))
 struct MempoolWindowTests {
     /// P2TR-shaped watched script (also the output of makeFakeSegwitTx()).
     static let watchedScript = Data([0x51, 0x20] + repeatElement(0x77, count: 32))

@@ -66,8 +66,25 @@ struct BIP380Tests {
         for key in valid {
             #expect(throws: Never.self) { try Descriptor("tr(\(key))") }
         }
-        for key in invalid {
-            #expect((try? Descriptor("tr(\(key))")) == nil, "accepted: \(key)")
+        let errors: [DescriptorError] = [
+            .invalidOrigin,                 // wildcard in origin
+            .invalidPath,                   // trailing slash in origin
+            .invalidOrigin,                 // short fingerprint
+            .unexpectedCharacter("f"),      // long fingerprint
+            .unexpectedCharacter("f"),      // unsupported hardened marker
+            .invalidPath,                   // negative index
+            .unexpectedCharacter("H"),      // uppercase hardened marker in origin
+            .unexpectedCharacter("H"),      // uppercase hardened marker in derivation
+            .invalidPath, .invalidPath,      // WIF keys cannot derive children
+            .invalidPath,                   // index above 2^31 - 1
+            .unexpectedCharacter("a"),      // nonnumeric index suffix
+            .invalidKey, .invalidKey,        // doubled or missing origin bracket
+            .invalidOrigin,                 // nonhex fingerprint
+            .invalidKey,                    // origin without a key
+        ]
+        try #require(invalid.count == errors.count)
+        for (key, error) in zip(invalid, errors) {
+            #expect(throws: error, "\(key)") { try Descriptor("tr(\(key))") }
         }
     }
 }

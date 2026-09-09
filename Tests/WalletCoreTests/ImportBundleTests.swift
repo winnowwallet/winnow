@@ -93,7 +93,9 @@ struct ImportBundleTests {
         #expect(try await restored.history[0].transaction() == payment)
         bundle.transactions[0].rawTransaction = payment.serialized(includeWitness: false)
         bundle.transactions[0].txid = Data(repeating: 2, count: 32).displayHex
-        #expect(throws: WalletError.self) { try Wallet.importing(bundle, keyStore: InMemoryKeyStore()) }
+        #expect(throws: WalletError.invalidBundle("payment details do not match the transaction ID")) {
+            try Wallet.importing(bundle, keyStore: InMemoryKeyStore())
+        }
     }
 
     @Test("fee-replacement history survives export and import")
@@ -125,7 +127,10 @@ struct ImportBundleTests {
         // A claimed scriptPubKey that isn't what the descriptor derives.
         var bogus = bundle
         bogus.utxos[0].scriptPubKey = "5120ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-        #expect(throws: WalletError.self) { _ = try Wallet.importing(bogus, keyStore: InMemoryKeyStore()) }
+        #expect(throws: WalletError.invalidBundle(
+            "utxo \(bogus.utxos[0].txid):\(bogus.utxos[0].vout) scriptPubKey does not match the descriptor")) {
+            try Wallet.importing(bogus, keyStore: InMemoryKeyStore())
+        }
         // Neither descriptor nor mnemonic.
         var empty = bundle
         empty.descriptor = nil
@@ -136,7 +141,9 @@ struct ImportBundleTests {
         // Unknown network / future version.
         var badNetwork = bundle
         badNetwork.network = " PlutoNet "
-        #expect(throws: WalletError.self) { _ = try Wallet.importing(badNetwork, keyStore: InMemoryKeyStore()) }
+        #expect(throws: WalletError.invalidBundle("unknown network \(badNetwork.network)")) {
+            try Wallet.importing(badNetwork, keyStore: InMemoryKeyStore())
+        }
         var future = bundle
         future.version = 99
         #expect(throws: WalletError.invalidBundle("unsupported version 99")) {
@@ -498,8 +505,11 @@ struct ImportBundleTests {
     func deeplyNestedJSONRefused(_ depth: Int) {
         let nested = String(repeating: "[", count: depth) + String(repeating: "]", count: depth)
         let json = Self.bundle(extra: ",\"junk\":\(nested)")
-        #expect(throws: (any Error).self) {
-            _ = try ImportBundle.decode(json: json)
+        #expect {
+            try ImportBundle.decode(json: json)
+        } throws: { error in
+            if case DecodingError.dataCorrupted = error { return true }
+            return false
         }
     }
 
@@ -512,7 +522,8 @@ struct ImportBundleTests {
     func tooManyEntriesRefused() throws {
         let coins = Array(repeating: Self.coin, count: ImportBundle.maximumEntries + 1)
             .joined(separator: ",")
-        #expect(throws: WalletError.self) {
+        #expect(throws: WalletError.invalidBundle(
+            "bundle declares \(ImportBundle.maximumEntries + 1) coins, above the \(ImportBundle.maximumEntries) limit")) {
             _ = try ImportBundle.decode(json: Self.bundle(utxos: coins))
         }
     }
@@ -522,7 +533,8 @@ struct ImportBundleTests {
         let filler = String(repeating: "a", count: ImportBundle.maximumSerializedBytes)
         let json = Self.bundle(extra: ",\"descriptor\":\"\(filler)\"")
         #expect(json.utf8.count > ImportBundle.maximumSerializedBytes)
-        #expect(throws: WalletError.self) {
+        #expect(throws: WalletError.invalidBundle(
+            "bundle is \(json.utf8.count) bytes, above the \(ImportBundle.maximumSerializedBytes)-byte limit")) {
             _ = try ImportBundle.decode(json: json)
         }
     }
@@ -548,8 +560,11 @@ struct ImportBundleTests {
     /// Malformed input still fails as an error rather than anything worse.
     @Test("truncated JSON is refused")
     func truncatedJSONRefused() {
-        #expect(throws: (any Error).self) {
-            _ = try ImportBundle.decode(json: #"{"version":2,"network":"sig"#)
+        #expect {
+            try ImportBundle.decode(json: #"{"version":2,"network":"sig"#)
+        } throws: { error in
+            if case DecodingError.dataCorrupted = error { return true }
+            return false
         }
     }
 }

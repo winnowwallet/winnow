@@ -593,6 +593,7 @@ struct WalletTests {
     @Test("a failed persist on the first send leaves memory and disk in agreement")
     func commitPersistFailureLeavesStateUntouched() async throws {
         let url = tempFileURL("commit-rollback-wallet.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let keyStore = InMemoryKeyStore()
         let (wallet, _) = try await fundedWallet(storageURL: url, keyStore: keyStore,
                                                 coins: [(.receive, 0, 150_000, 100)])
@@ -605,7 +606,6 @@ struct WalletTests {
         // The state file becomes unwritable: a directory now sits at its path.
         try FileManager.default.removeItem(at: url)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
-        defer { try? FileManager.default.removeItem(at: url) }
 
         await #expect(throws: (any Error).self) { try await wallet.commit(prepared) }
         // Nothing moved in memory either: the coin is still spendable, no

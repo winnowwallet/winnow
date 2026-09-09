@@ -29,8 +29,16 @@ struct BIP390Tests {
 
     @Test("invalid musig descriptors are rejected at parse or derive time")
     func invalidDescriptors() throws {
-        for text in try Vectors.descriptorVectors("bip-0390.mediawiki", in: .module).invalid {
-            #expect((try? Descriptor(text).derived(index: 0)) == nil, "accepted: \(text)")
+        let invalid = try Vectors.descriptorVectors("bip-0390.mediawiki", in: .module).invalid
+        let errors: [DescriptorError] = [
+            .unknownExpression("pk"), .unknownExpression("pkh"), .unknownExpression("wpkh"),
+            .unknownExpression("combo"), .unknownExpression("sh"), .unknownExpression("sh"),
+            .unknownExpression("wsh"), .unknownExpression("sh"),
+            .invalidMuSig, .invalidMuSig, .invalidMuSig, .invalidMuSig, .invalidMuSig, .invalidMuSig,
+        ]
+        try #require(invalid.count == errors.count)
+        for (text, error) in zip(invalid, errors) {
+            #expect(throws: error, "\(text)") { try Descriptor(text).derived(index: 0) }
         }
     }
 

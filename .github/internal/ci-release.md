@@ -20,7 +20,10 @@ swift-secp256k1 is remote. Xcode resolution must match that root lockfile.
 
 CI and Node integration first select work on Linux with `scripts/ci-required`.
 README and website-only changes avoid Mac jobs; the HTML/CSS bundled in the app
-still requires an app build. PR jobs check out the PR head explicitly. A main
+still requires an app build and UI journeys. Unit-test edits run the package/app
+checks; `Tests/DifferentialTests` selects Core comparisons and `UITests` selects
+UI journeys. App or wallet code, shared test support, and fixture/build inputs
+select both integration suites. PR jobs check out the PR head explicitly. A main
 push may reuse a successful run of the same workflow only when the entire Git
 tree matches and every required Mac job passed. The selection summary links the
 evidence. API errors, missing evidence and changed trees run fresh checks.

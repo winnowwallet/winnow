@@ -29,7 +29,6 @@ struct FullLoopDiffTests {
         // 1. Tip at start; a fresh wallet whose creation height is that tip.
         let startTip = try UInt32(BitcoinCLI.blockCount())
         let wallet = try await Wallet.create(network: .signet, keyStore: InMemoryKeyStore(),
-                                             storageURL: tempFileURL("wallet.json"),
                                              creationHeight: startTip)
         _ = try await wallet.freshReceiveAddress()
         let fundingScript = try await wallet.scriptPubKey(chain: .receive, index: 0)
@@ -59,14 +58,13 @@ struct FullLoopDiffTests {
         defer { Task { await pool.stop() } }
         let peers = await pool.connectedPeers()
         let peer = try #require(peers.first, "no connection to \(BitcoinCLI.nodeHost):\(BitcoinCLI.p2pPort)")
-        let chain = try HeaderChain(params: params, storageURL: tempFileURL("headers.bin"))
+        let chain = try HeaderChain(params: params)
         try await chain.sync(using: peer, timeout: .seconds(60))
         let tip = try UInt32(BitcoinCLI.blockCount())
         #expect(await chain.height == tip, "header sync tip")
         #expect(await chain.tipHash.displayHex == (try BitcoinCLI.bestBlockHash()), "tip hash")
 
         let sync = try FilterSync(pool: pool, chain: chain, startHeight: startTip,
-                                  storageURL: tempFileURL("filters.json"),
                                   requiredCheckpointPeers: 1)
         func scanWallet() async throws {
             try await sync.sync(watchScripts: wallet.watchScripts()) { match in

@@ -365,7 +365,7 @@ struct PeerPoolTests {
         let endpoint = await slow.endpoint
 
         let file = tempFileURL("peers.json")
-        defer { try? FileManager.default.removeItem(at: file) }
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
         // Seed the file so the endpoint is already "known good" before the
         // timeout, which is the situation a returning user is in.
         try JSONEncoder().encode([endpoint]).write(to: file)
@@ -416,7 +416,7 @@ struct PeerPoolTests {
         let cooledEndpoint = await cooled.endpoint
 
         let file = tempFileURL("peers.json")
-        defer { try? FileManager.default.removeItem(at: file) }
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
         try JSONEncoder().encode([bannedEndpoint, cooledEndpoint]).write(to: file)
 
         let pool = PeerPool(params: synthetic.params, peerCount: 2,
@@ -537,6 +537,7 @@ struct PeerPoolTests {
         // ceiling, which refuses one source class the whole pool, lets both
         // seat.
         let store = tempFileURL("peers.json")
+        defer { try? FileManager.default.removeItem(at: store.deletingLastPathComponent()) }
         try Self.persistedPeersFile([staleEndpoint]).write(to: store)
         let pool = PeerPool(params: synthetic.params, peerCount: 2,
                             manualPeers: [currentEndpoint], peersFileURL: store)
@@ -570,12 +571,11 @@ struct PeerPoolTests {
         var endpoints: [PeerEndpoint] = []
         for node in nodes { endpoints.append(await node.endpoint) }
 
+        let store = tempFileURL("peers.json")
+        defer { try? FileManager.default.removeItem(at: store.deletingLastPathComponent()) }
+        try Self.persistedPeersFile([endpoints[1], endpoints[2]]).write(to: store)
         let pool = PeerPool(params: synthetic.params, peerCount: 3, manualPeers: [endpoints[0]],
-                            peersFileURL: {
-                                let store = tempFileURL("peers.json")
-                                try! Self.persistedPeersFile([endpoints[1], endpoints[2]]).write(to: store)
-                                return store
-                            }())
+                            peersFileURL: store)
         await pool.start()
         _ = await settle(pool) { $0.count == 3 }
         let chain = try HeaderChain(params: synthetic.params)
@@ -623,6 +623,7 @@ struct PeerPoolTests {
         defer { Task { await current.stop() }; Task { await ownNode.stop() } }
         let ownEndpoint = await ownNode.endpoint
         let store = tempFileURL("peers.json")
+        defer { try? FileManager.default.removeItem(at: store.deletingLastPathComponent()) }
         // The current node arrives as a remembered peer, not a manual one.
         try Self.persistedPeersFile([await current.endpoint]).write(to: store)
 
@@ -650,6 +651,7 @@ struct PeerPoolTests {
         // The remembered peer is the one under judgment; a manual peer is
         // exempt, and one manual seat lets the diversity ceiling seat both.
         let store = tempFileURL("peers.json")
+        defer { try? FileManager.default.removeItem(at: store.deletingLastPathComponent()) }
         try Self.persistedPeersFile([rememberedEndpoint]).write(to: store)
         let pool = PeerPool(params: long.params, peerCount: 2,
                             manualPeers: [await manual.endpoint], peersFileURL: store)

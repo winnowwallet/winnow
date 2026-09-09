@@ -1,7 +1,8 @@
 name: Node integration
 
 # Each job owns a disposable custom signet inside its runner VM. Code changes
-# run Core comparisons and app journeys; identical, successful PR evidence can
+# run Core comparisons and app journeys; test edits select their own suite.
+# Identical, successful PR evidence can
 # cover the resulting main push. Nightly, release and confirmed manual runs
 # always execute fresh checks. Forks never reach the runner. Mining suites
 # stay serial within each VM: one listener and one job at a time.
@@ -49,7 +50,8 @@ jobs:
       contents: read
       actions: read
     outputs:
-      required: ${{ steps.select.outputs.required }}
+      differential: ${{ steps.differential.outputs.required }}
+      ui: ${{ steps.ui.outputs.required }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -58,15 +60,19 @@ jobs:
           fetch-depth: 0
       - name: Check CI selection rules
         run: python3 -m unittest discover -s scripts/tests -p test_ci_required.py
-      - id: select
+      - id: differential
         env:
           GH_TOKEN: ${{ github.token }}
-        run: scripts/ci-required node-tests
+        run: scripts/ci-required differential
+      - id: ui
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/ci-required ui
 
   differential:
     needs: changes
     if: >-
-      needs.changes.outputs.required == 'true'
+      needs.changes.outputs.differential == 'true'
       && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
       && (contains('pull_request push schedule', github.event_name) || inputs.confirm_dedicated_fixture)
     runs-on: [self-hosted, macOS, btc-swift, node-e2e]
@@ -128,7 +134,7 @@ jobs:
   ui:
     needs: changes
     if: >-
-      needs.changes.outputs.required == 'true'
+      needs.changes.outputs.ui == 'true'
       && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
       && (contains('pull_request push schedule', github.event_name) || inputs.confirm_dedicated_fixture)
     runs-on: [self-hosted, macOS, btc-swift, node-e2e]

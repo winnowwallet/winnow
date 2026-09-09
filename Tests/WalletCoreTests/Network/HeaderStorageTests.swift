@@ -87,14 +87,14 @@ struct HeaderStorageTests {
     /// Loads a byte image that is expected to succeed, and returns the chain.
     static func load(_ bytes: Data, params: NetworkParams) throws -> HeaderChain {
         let url = try write(bytes)
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         return try HeaderChain(params: params, storageURL: url)
     }
 
     /// Loads a byte image and returns the error, or nil if it loaded.
     static func loadError(_ bytes: Data, params: NetworkParams) throws -> HeaderChainError? {
         let url = try write(bytes)
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         do {
             _ = try HeaderChain(params: params, storageURL: url)
             return nil
@@ -144,7 +144,7 @@ struct HeaderStorageTests {
     func appendToCheckpointRootedFile() async throws {
         let (params, checkpointTip) = try Self.checkpointRooted()
         let url = tempFileURL("headers.dat")
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
 
         let chain = try HeaderChain(params: params, storageURL: url, start: .checkpoint)
         #expect(await chain.startHeight == 3, "fixture precondition: the marker layout")
@@ -172,7 +172,7 @@ struct HeaderStorageTests {
     func appendAfterAppendReloads() async throws {
         let synthetic = makeSyntheticChain(length: 1, watchHeight: 6)
         let url = tempFileURL("headers.dat")
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
 
         let chain = try HeaderChain(params: synthetic.params, storageURL: url)
         let first = Self.headers(after: synthetic.blocks[0].hash, count: 3)
@@ -199,7 +199,7 @@ struct HeaderStorageTests {
     func appendAfterReorgReloads() async throws {
         let synthetic = makeSyntheticChain(length: 1, watchHeight: 6)
         let url = tempFileURL("headers.dat")
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
 
         let chain = try HeaderChain(params: synthetic.params, storageURL: url)
         let original = Self.headers(after: synthetic.blocks[0].hash, count: 4)
@@ -231,7 +231,7 @@ struct HeaderStorageTests {
     func appendAfterReopenReloads() async throws {
         let synthetic = makeSyntheticChain(length: 1, watchHeight: 6)
         let url = tempFileURL("headers.dat")
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
 
         let first = Self.headers(after: synthetic.blocks[0].hash, count: 3)
         do {
@@ -300,7 +300,7 @@ struct HeaderStorageTests {
     func interruptedAppendIsOverwritten() async throws {
         let synthetic = makeSyntheticChain(length: 1, watchHeight: 6)
         let url = tempFileURL("headers.dat")
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
 
         let committed = Self.headers(after: synthetic.blocks[0].hash, count: 3)
         do {
@@ -339,7 +339,7 @@ struct HeaderStorageTests {
     func writeVolumeIsLinear() async throws {
         let synthetic = makeSyntheticChain(length: 1, watchHeight: 6)
         let url = tempFileURL("headers.dat")
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
 
         let chain = try HeaderChain(params: synthetic.params, storageURL: url)
         var parent = synthetic.blocks[0].hash
@@ -386,7 +386,7 @@ struct HeaderStorageTests {
     @Test("an intact header file loads")
     func intactFileLoads() async throws {
         let (url, params, _) = try await Self.persistedChain()
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let reloaded = try HeaderChain(params: params, storageURL: url)
         #expect(await reloaded.height == 4)
     }
@@ -395,7 +395,7 @@ struct HeaderStorageTests {
     @Test("a truncated file is refused")
     func truncatedFileRefused() async throws {
         let (url, params, bytes) = try await Self.persistedChain()
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let error = try Self.loadError(bytes.dropLast(40), params: params)
         guard case let .storageCorrupt(reason)? = error, reason.contains("bad length") else {
             Issue.record("truncation gave \(String(describing: error)) rather than a length refusal")
@@ -417,7 +417,7 @@ struct HeaderStorageTests {
     @Test("a file with trailing bytes loads, ignoring the tail")
     func trailingBytesIgnored() async throws {
         let (url, params, bytes) = try await Self.persistedChain()
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
 
         let intact = try Self.load(bytes, params: params)
         let padded = try Self.load(bytes + Data(repeating: 0, count: 80), params: params)
@@ -430,7 +430,7 @@ struct HeaderStorageTests {
     @Test("a partially written trailing header is ignored")
     func partialTrailingHeaderIgnored() async throws {
         let (url, params, bytes) = try await Self.persistedChain()
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
 
         let intact = try Self.load(bytes, params: params)
         let torn = try Self.load(bytes + Data(repeating: 0xAB, count: 37), params: params)
@@ -445,7 +445,7 @@ struct HeaderStorageTests {
     @Test("a count claiming more headers than the file holds is refused")
     func countBeyondFileRefused() async throws {
         let (url, params, bytes) = try await Self.persistedChain()
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
 
         // Genesis layout: the count is the first four bytes.
         var inflated = bytes
@@ -466,7 +466,7 @@ struct HeaderStorageTests {
     @Test("an unknown format version is refused")
     func unknownFormatVersionRefused() async throws {
         let (url, params, _) = try await Self.persistedChain()
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
 
         var damaged = Data()
         damaged.appendUInt32(0xFFFF_FFFF) // format marker
@@ -488,7 +488,7 @@ struct HeaderStorageTests {
     @Test("a truncated prefix is refused")
     func truncatedPrefixRefused() async throws {
         let (url, params, bytes) = try await Self.persistedChain()
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let error = try Self.loadError(bytes.prefix(10), params: params)
         guard case .storageCorrupt? = error else {
             Issue.record("a 10-byte file gave \(String(describing: error))")
@@ -502,7 +502,7 @@ struct HeaderStorageTests {
     @Test("headers reordered in place are refused")
     func brokenLinkageRefused() async throws {
         let (url, params, bytes) = try await Self.persistedChain()
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         // A genesis-rooted file is a 4-byte count followed by headers, and
         // header 0 is genesis. Swapping the two *after* it leaves the genesis
         // check satisfied so that only the linkage check can object.
@@ -528,7 +528,7 @@ struct HeaderStorageTests {
     @Test("a flipped byte inside a header is refused")
     func flippedByteRefused() async throws {
         let (url, params, bytes) = try await Self.persistedChain()
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let prefix = 4
         var damaged = bytes
         damaged[prefix + 4] ^= 0xFF // inside the first header's previousHash
@@ -540,7 +540,7 @@ struct HeaderStorageTests {
     @Test("an empty file is refused")
     func emptyFileRefused() async throws {
         let (url, params, _) = try await Self.persistedChain()
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         #expect(try Self.loadError(Data(), params: params) != nil)
     }
 
@@ -565,7 +565,7 @@ struct HeaderStorageTests {
     func oversizedHeaderFileRefused() throws {
         let chain = makeSyntheticChain(length: 1, watchHeight: 2)
         let url = try Self.sparseFile(bytes: Int64(HeaderChain.maximumHeaderFileBytes) + 1)
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
 
         // Confirm the fixture really does present an oversized file.
         let size = try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber
@@ -590,7 +590,7 @@ struct HeaderStorageTests {
     func underLimitNotRejectedForSize() throws {
         let chain = makeSyntheticChain(length: 1, watchHeight: 2)
         let url = try Self.sparseFile(bytes: 4_096)
-        defer { try? FileManager.default.removeItem(at: url) }
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
 
         do {
             _ = try HeaderChain(params: chain.params, storageURL: url)

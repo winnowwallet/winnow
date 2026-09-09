@@ -56,14 +56,15 @@ struct BIP32Tests {
         return vectors
     }
 
-    static func invalidKeys() throws -> [String] {
+    static func invalidKeys() throws -> [(key: String, reason: String)] {
         let text = try Vectors.string("bip-0032.mediawiki", in: .module)
         guard let range = text.range(of: "===Test vector 5===") else { throw VectorError.malformed("no vector 5") }
         return text[range.upperBound...].components(separatedBy: .newlines).compactMap { line in
-            guard line.hasPrefix("* "), let key = line.dropFirst(2).components(separatedBy: " (").first,
+            let parts = line.dropFirst(2).components(separatedBy: " (")
+            guard line.hasPrefix("* "), parts.count == 2, let key = parts.first,
                   key.hasPrefix("x") || key.hasPrefix("t") || key.hasPrefix("D")
             else { return nil }
-            return key.trimmingCharacters(in: .whitespaces)
+            return (key, String(parts[1].dropLast()))
         }
     }
 
@@ -121,9 +122,14 @@ struct BIP32Tests {
     func invalidKeysRejected() throws {
         let keys = try Self.invalidKeys()
         #expect(keys.count == 16)
-        for key in keys {
-            #expect(throws: (any Error).self, "\(key)") {
-                try HDKey.deserialize(key)
+        for (key, reason) in keys {
+            switch reason {
+            case "unknown extended key version":
+                #expect(throws: BIP32Error.invalidVersion) { try HDKey.deserialize(key) }
+            case "invalid checksum":
+                #expect(throws: Base58Error.invalidChecksum) { try HDKey.deserialize(key) }
+            default:
+                #expect(throws: BIP32Error.invalidSerializedKey, "\(reason)") { try HDKey.deserialize(key) }
             }
         }
     }

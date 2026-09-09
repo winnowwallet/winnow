@@ -372,48 +372,8 @@ struct VaultInteropDiffTests {
             changeIndex: 0, feeRateSatPerVByte: 2, chainTip: tip)
         #expect(psbt.inputs[0].tapScriptSignatures.isEmpty)
 
-        // 6. The group's leg: BIP327 two rounds over the script-path sighash,
-        //    no tweaks — the aggregate is a leaf key, not an output key.
-        let leaf = try #require(psbt.inputs[0].tapLeafScripts.first)
-        let tx = try psbt.unsignedTransaction()
-        let sighash = try SighashBIP341.sighash(
-            tx: tx, inputIndex: 0, spentOutputs: [utxo.spentOutput], hashType: .default,
-            scriptPath: .init(leafScript: Script(leaf.script), leafVersion: leaf.leafVersion))
-        // The leaf key is the BIP328 child at 0/0, so the session carries
-        // the two non-hardened derivation tweaks — the same shape the
-        // key-path vaults use, applied to a script-path message.
-        let tweak0 = MuSig.bip328Tweak(chainCode: synthetic.chainCode,
-                                       aggregatePublicKey: aggregateCompressed, index: 0)
-        let child0 = try synthetic.derived(path: "0")
-        let tweak00 = MuSig.bip328Tweak(chainCode: child0.chainCode,
-                                        aggregatePublicKey: child0.publicKey, index: 0)
-        let groupLeafKey = try synthetic.derived(path: "0/0").publicKey.dropFirst()
-        let baseAggregateXonly = Data(aggregateCompressed.dropFirst())
-        var nonces: [(secret: Data, public_: Data)] = []
-        for (secret, publicKey) in zip(memberSecrets, memberKeys) {
-            let nonce = try MuSig.nonceGenerate(secretKey: secret, publicKey: publicKey,
-                                                 aggregateKey: baseAggregateXonly, message: sighash)
-            nonces.append((nonce.secretNonce, nonce.publicNonce))
-        }
-        let aggregateNonce = try MuSig.nonceAggregate(publicNonces: nonces.map(\.public_))
-        let session = MuSig.Session(aggregateNonce: aggregateNonce, publicKeys: memberKeys,
-                                     tweaks: [tweak0, tweak00],
-                                     isXOnlyTweaks: [false, false], message: sighash)
-        var partials: [Data] = []
-        for (index, member) in memberSecrets.enumerated() {
-            var secretNonce = nonces[index].secret
-            let partial = try MuSig.partialSign(secretNonce: &secretNonce, secretKey: member,
-                                                 session: session)
-            #expect(try MuSig.partialVerify(partialSignature: partial,
-                                            publicNonce: nonces[index].public_,
-                                            publicKey: memberKeys[index], session: session),
-                    "member \(index)'s partial signature failed verification")
-            partials.append(partial)
-        }
-        let groupSignature = try MuSig.partialSigAggregate(partialSignatures: partials,
-                                                            session: session)
-        psbt.inputs[0].pairs.append(PSBT.KeyValue(
-            type: 0x14, keyData: Data(groupLeafKey) + leaf.leafHash, value: groupSignature))
+        // 6. The group's software fixture signs; Core checks the combined result below.
+        psbt = try GroupSigner.sign(psbt, memberSecrets: memberSecrets, synthetic: synthetic)
         trace("group produced one BIP342 signature from two partials")
 
         // 7. Core signs its leg from our envelope.
