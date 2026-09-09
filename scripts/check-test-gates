@@ -31,10 +31,10 @@ for name in $names; do
   fi
 done
 
-# 2. Conditional suites belong to the node lane. One live-network proof is
-# explicitly run by scripts/check-live-tor during release verification.
-if grep -rn 'enabled(if:' "${TEST_DIRS[@]}" | sed -E 's/^([^:]+):[0-9]+:/\1:/' | grep -v 'diffEnabled' | grep -vF 'Tests/WalletCoreTests/Network/RoutingTests.swift:    @Test(.enabled(if: ProcessInfo.processInfo.environment["WINNOW_LIVE_TOR_PORT"] != nil))'; then
-  echo "::error::a suite is conditionally enabled on something other than diffEnabled"
+# 2. Node/live-Tor gates are run explicitly. File-protection attributes are
+# measured where the OS records them; the same suite is included in iOS AppTests.
+if grep -rn 'enabled(if:' "${TEST_DIRS[@]}" | sed -E 's/^([^:]+):[0-9]+:/\1:/' | grep -v 'diffEnabled' | grep -vF 'Tests/WalletCoreTests/Network/RoutingTests.swift:    @Test(.enabled(if: ProcessInfo.processInfo.environment["WINNOW_LIVE_TOR_PORT"] != nil))' | grep -vF 'Tests/WalletCoreTests/FileProtectionTests.swift:@Suite("Persisted file protection", .enabled(if: fileProtectionRecorded))'; then
+  echo "::error::an undocumented conditional test suite was found"
   status=1
 fi
 
