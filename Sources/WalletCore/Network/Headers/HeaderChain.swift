@@ -5,8 +5,7 @@ public enum HeaderChainError: LocalizedError, Equatable {
     case invalidTarget(height: UInt32)
     case targetAbovePowLimit(height: UInt32)
     case insufficientProofOfWork(height: UInt32)
-    /// The header's `bits` differ from its parent's inside a retarget period,
-    /// where neither mainnet nor signet allows a change.
+    /// The header's target differs from the network's required difficulty.
     case unexpectedDifficulty(height: UInt32)
     case reorgWithoutMoreWork
     case storageCorrupt(String)
@@ -31,7 +30,7 @@ public enum HeaderChainError: LocalizedError, Equatable {
         case let .insufficientProofOfWork(height):
             "A peer sent a header without enough proof of work at block \(height)."
         case let .unexpectedDifficulty(height):
-            "A peer changed the proof-of-work difficulty at block \(height), where Bitcoin does not allow a change."
+            "A peer sent the wrong proof-of-work difficulty at block \(height)."
         case .reorgWithoutMoreWork:
             "A peer offered an older or weaker Bitcoin chain."
         case let .storageCorrupt(reason):
@@ -50,29 +49,20 @@ public enum HeaderChainError: LocalizedError, Equatable {
 /// - previous-hash linkage to the known chain,
 /// - compact bits decodes to a valid target ≤ consensus powLimit,
 /// - SHA256d(header) ≤ target (proof of work),
-/// - `bits` repeat the parent's except at a retarget boundary (every
-///   `difficultyAdjustmentInterval` blocks). Mainnet and signet both retarget
-///   on that schedule with no minimum-difficulty exception, so a change
-///   inside a period is a lie about difficulty — the way a peer would extend
-///   our tip with cheap headers until an honest branch replaced them. A
-///   checkpoint-rooted chain applies this from its first new header: the
-///   mainnet checkpoint at 900,000 is mid-period, so 900,001 is checked
-///   against the checkpoint itself.
+/// - the required difficulty, including the timespan-based adjustment every
+///   2,016 blocks on mainnet and signet. The same rule applies during sync,
+///   a reorg, and loading saved headers.
 ///
 /// What is NOT validated (documented deviation from full validation):
-/// - the *value* `bits` take at a retarget boundary (the timespan-based
-///   recomputation; deferred and tracked separately), so a boundary header
-///   is held only to its own claimed target,
+/// - the first adjustment after a mid-period checkpoint, when the preceding
+///   period's first header is unavailable. From the 900,000 checkpoint this
+///   skips 901,152; adjustments from 903,168 onward are verified,
 /// - timestamps (no median-time-past / future-drift rules),
 /// - anything below the header (merkle root, signet block signatures).
 /// Fork choice is cumulative-work; competing branches replace ours only with
 /// strictly more work.
 public actor HeaderChain {
     public static let maxHeadersPerRequest = 2_000
-    /// Blocks per difficulty period — Core's `DifficultyAdjustmentInterval()`,
-    /// the same on mainnet and signet. `bits` may change only at a multiple.
-    static let difficultyAdjustmentInterval: UInt32 = 2016
-
     public let params: NetworkParams
     private let storageURL: URL?
 
@@ -82,8 +72,6 @@ public actor HeaderChain {
     /// the whole chain up to and including `headers[0]`, so fork choice keeps
     /// comparing totals even when the chain does not start at genesis.
     private var chainwork: [UInt256]
-    /// Absolute heights, not indices.
-    private var heightByHash: [Data: UInt32]
     /// How many headers the file on disk currently claims. Tracked so an
     /// append knows where the record area ends without re-reading the file,
     /// and so any divergence falls back to a full rewrite rather than writing
@@ -137,8 +125,7 @@ public actor HeaderChain {
         let checkpoint = start == .checkpoint ? params.checkpoint : nil
 
         if let storageURL, FileManager.default.fileExists(atPath: storageURL.path) {
-            let loaded: (headers: [BlockHeader], chainwork: [UInt256],
-                         heightByHash: [Data: UInt32], baseHeight: UInt32)
+            let loaded: (headers: [BlockHeader], chainwork: [UInt256], baseHeight: UInt32)
             do {
                 loaded = try Self.load(from: storageURL, params: params)
             } catch let error as HeaderChainError {
@@ -150,7 +137,6 @@ public actor HeaderChain {
             try Self.checkStoredStart(loaded.baseHeight, headers: loaded.headers, wanted: checkpoint)
             headers = loaded.headers
             chainwork = loaded.chainwork
-            heightByHash = loaded.heightByHash
             baseHeight = loaded.baseHeight
             persistedCount = loaded.headers.count
         } else if let checkpoint {
@@ -160,14 +146,12 @@ public actor HeaderChain {
             _ = try Self.checkedWork(for: header, params: params, height: checkpoint.height)
             headers = [header]
             chainwork = [UInt256(bigEndian: checkpoint.chainwork)]
-            heightByHash = [header.hash: checkpoint.height]
             baseHeight = checkpoint.height
         } else {
             let genesis = HeaderChain.genesisHeader(for: params)
             headers = [genesis]
             // Seed cumulative work for genesis.
             chainwork = [try Self.checkedWork(for: genesis, params: params, height: 0)]
-            heightByHash = [genesis.hash: 0]
             baseHeight = 0
         }
     }
@@ -243,16 +227,33 @@ public actor HeaderChain {
         return work
     }
 
-    /// Refuses a `bits` change anywhere but the first block of a retarget
-    /// period. What a boundary header may claim is not recomputed here; inside
-    /// a period the rule needs no arithmetic, only the parent. `previous` is
-    /// nil when the parent lies below `baseHeight`, unknown to a
-    /// checkpoint-rooted chain — nothing to compare against, so it passes.
-    static func requireStableBits(_ header: BlockHeader, previous: BlockHeader?, height: UInt32) throws {
-        guard let previous, height % difficultyAdjustmentInterval != 0,
-              header.bits != previous.bits
-        else { return }
-        throw HeaderChainError.unexpectedDifficulty(height: height)
+    /// Core's CalculateNextWorkRequired for the two supported networks.
+    /// nil means a checkpoint omitted the history needed for this adjustment.
+    static func expectedBits(height: UInt32, previous: BlockHeader,
+                             periodFirst: BlockHeader?, params: NetworkParams) throws -> UInt32? {
+        guard height % params.difficultyAdjustmentInterval == 0 else { return previous.bits }
+        guard let periodFirst else { return nil }
+        guard let target = UInt256.target(compact: previous.bits) else {
+            throw HeaderChainError.invalidTarget(height: height - 1)
+        }
+        let timespan = Int64(params.powTargetTimespan)
+        let elapsed = min(max(Int64(previous.time) - Int64(periodFirst.time), timespan / 4), timespan * 4)
+        let adjusted = target.multiplied(by: UInt32(elapsed))
+            .quotientAndRemainder(dividingBy: UInt256(UInt64(timespan))).quotient
+        return min(adjusted, UInt256(littleEndian: params.powLimit)).compact
+    }
+
+    /// The caller supplies the preceding branch by index, so an uncommitted
+    /// batch and a replacement branch use their own period-start header.
+    private static func requireDifficulty(_ header: BlockHeader, height: UInt32, baseHeight: UInt32,
+                                          params: NetworkParams, preceding: (Int) -> BlockHeader) throws {
+        guard height > baseHeight else { return }
+        let interval = params.difficultyAdjustmentInterval
+        let firstIndex = Int(height) - Int(interval) - Int(baseHeight)
+        let first = height % interval == 0 && firstIndex >= 0 ? preceding(firstIndex) : nil
+        let expected = try expectedBits(height: height, previous: preceding(Int(height - baseHeight) - 1),
+                                        periodFirst: first, params: params)
+        if let expected, header.bits != expected { throw HeaderChainError.unexpectedDifficulty(height: height) }
     }
 
     /// Target decoding and block-work division depend only on `bits`. Header
@@ -279,36 +280,34 @@ public actor HeaderChain {
     /// an existing branch -- the one fact a consumer needs in order to rewind.
     @discardableResult
     public func connect(_ newHeaders: [BlockHeader]) throws -> ConnectOutcome {
-        // Headers the chain already holds, at the height they claim, are not
-        // news and not a competing branch. A peer replays them legitimately:
-        // a `headers` announcement of a block we then also fetch, a reply to
-        // a getheaders whose locator sat below the tip, or a reply left
-        // waiting behind a request that was answered from the announcement.
-        // Read as a branch they carry no more work than the chain, and the
-        // pool then condemned an honest peer for "an older or weaker chain"
-        // — and with a single manual peer, that left the app peerless until
-        // relaunch. Skip them; judge only what is new.
-        var remaining = newHeaders[...]
-        while let first = remaining.first,
-              let known = heightByHash[first.hash],
-              let previous = heightByHash[first.previousHash],
-              known == previous + 1 {
-            remaining = remaining.dropFirst()
-        }
-        let newHeaders = Array(remaining)
-        guard !newHeaders.isEmpty else { return ConnectOutcome(appended: 0) }
-        guard let forkHeight = heightByHash[newHeaders[0].previousHash] else {
+        guard let first = newHeaders.first else { return ConnectOutcome(appended: 0) }
+        guard let parent = index(of: first.previousHash) else {
             throw HeaderChainError.doesNotConnect
         }
-        // Fast path: extending the tip, which is every batch of an ordinary
-        // sync. The staged path copies both arrays and rebuilds the whole
-        // hash index, so its cost grows with the chain — 460 batches against
-        // mainnet meant hundreds of millions of redundant operations (#86).
-        // An append touches only the new headers.
-        if forkHeight == height {
+        // A reply can repeat known headers before extending the chain. Find
+        // its parent once, then compare the known prefix in chain order.
+        var nextIndex = parent + 1
+        var remaining = newHeaders[...]
+        while let first = remaining.first, nextIndex < headers.count, first == headers[nextIndex] {
+            remaining = remaining.dropFirst()
+            nextIndex += 1
+        }
+        guard !remaining.isEmpty else { return ConnectOutcome(appended: 0) }
+        let newHeaders = Array(remaining)
+        if nextIndex == headers.count {
             return try appendToTip(newHeaders)
         }
-        return try replaceBranch(with: newHeaders, forkHeight: forkHeight)
+        return try replaceBranch(with: newHeaders, forkHeight: baseHeight + UInt32(nextIndex - 1))
+    }
+
+    /// Ordinary sync extends the tip. For an older parent, the next stored
+    /// header already contains its hash; search backwards without retaining
+    /// a second hash index for the entire chain. Element zero's predecessor
+    /// is outside the chain, including when it starts at a checkpoint.
+    private func index(of hash: Data) -> Int? {
+        if hash == tipHash { return headers.count - 1 }
+        guard let child = headers.lastIndex(where: { $0.previousHash == hash }), child > 0 else { return nil }
+        return child - 1
     }
 
     /// The ordinary-sync path: proof-of-work-check and append, with the
@@ -327,23 +326,21 @@ public actor HeaderChain {
                 throw HeaderChainError.doesNotConnect
             }
             work = work + (try Self.checkedWork(for: header, params: params, height: height))
-            try Self.requireStableBits(header, previous: previous, height: height)
+            try Self.requireDifficulty(header, height: height, baseHeight: baseHeight, params: params) { index in
+                index < headers.count ? headers[index] : appended[index - headers.count]
+            }
             appended.append(header)
             appendedWork.append(work)
             previous = header
         }
-        let firstNewHeight = baseHeight + UInt32(headers.count)
         headers.append(contentsOf: appended)
         chainwork.append(contentsOf: appendedWork)
-        for (offset, header) in appended.enumerated() {
-            heightByHash[header.hash] = firstNewHeight + UInt32(offset)
-        }
         try persistAppended(from: headers.count - appended.count)
         return ConnectOutcome(appended: newHeaders.count)
     }
 
     /// The reorg path: stage the replacement branch from the fork, admit it
-    /// only with strictly more work, then swap and rebuild the index.
+    /// only with strictly more work, then swap the stored chain.
     private func replaceBranch(with newHeaders: [BlockHeader],
                                forkHeight: UInt32) throws -> ConnectOutcome {
         let forkIndex = Int(forkHeight - baseHeight)
@@ -356,7 +353,9 @@ public actor HeaderChain {
                 throw HeaderChainError.doesNotConnect
             }
             let work = try Self.checkedWork(for: header, params: params, height: height)
-            try Self.requireStableBits(header, previous: previous, height: height)
+            try Self.requireDifficulty(header, height: height, baseHeight: baseHeight, params: params) {
+                stagedHeaders[$0]
+            }
             stagedHeaders.append(header)
             stagedWork.append(stagedWork[stagedWork.count - 1] + work)
         }
@@ -370,10 +369,6 @@ public actor HeaderChain {
         let disconnected = headers.count - 1 - forkIndex
         headers = stagedHeaders
         chainwork = stagedWork
-        heightByHash = heightByHash.filter { $0.value <= forkHeight }
-        for (index, header) in headers.enumerated() where heightByHash[header.hash] == nil {
-            heightByHash[header.hash] = baseHeight + UInt32(index)
-        }
         try persist()
         return ConnectOutcome(appended: newHeaders.count,
                               forkHeight: disconnected > 0 ? forkHeight : nil,
@@ -405,7 +400,7 @@ public actor HeaderChain {
                 // consumed in place of the real one.
                 answeredNothing = connected.appended == 0
             } catch HeaderChainError.reorgWithoutMoreWork
-                where batch.count == 1 && heightByHash[batch[0].previousHash] == height - 1 {
+                where batch.count == 1 && batch[0].previousHash == tip.previousHash {
                 // A sibling of our tip with no more work: the losing block
                 // of a race the peer saw first. Being on the losing side is
                 // a state, not a lie, so it counts as a batch that answered
@@ -590,7 +585,7 @@ public actor HeaderChain {
     static let maximumHeaderFileBytes = 256 * 1_024 * 1_024
 
     private static func load(from url: URL, params: NetworkParams) throws
-        -> (headers: [BlockHeader], chainwork: [UInt256], heightByHash: [Data: UInt32], baseHeight: UInt32) {
+        -> (headers: [BlockHeader], chainwork: [UInt256], baseHeight: UInt32) {
         let data = try readBoundedHeaderFile(at: url)
         var reader = ByteReader(data)
         let (baseHeight, baseWork, count, prefix) = try parsedHeaderFilePrefix(&reader)
@@ -646,12 +641,13 @@ public actor HeaderChain {
             }
             try checkLineage(of: header, at: index, baseHeight: baseHeight,
                              genesis: genesis, loaded: loadedHeaders)
+            try requireDifficulty(header, height: baseHeight + index, baseHeight: baseHeight, params: params) {
+                loadedHeaders[$0]
+            }
             loadedHeaders.append(header)
             loadedWork.append(work)
         }
-        let index = Dictionary(uniqueKeysWithValues:
-            loadedHeaders.enumerated().map { ($1.hash, baseHeight + UInt32($0)) })
-        return (loadedHeaders, loadedWork, index, baseHeight)
+        return (loadedHeaders, loadedWork, baseHeight)
     }
 
     /// A loaded header must be the genesis where the file starts at genesis,

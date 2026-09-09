@@ -2,27 +2,27 @@
   {
     "id": "setup",
     "section": "everyday",
-    "title": "Create a wallet and finish its backup",
-    "description": "Create keys on the phone, write down the recovery phrase, and resume an unfinished backup after reopening the app.",
+    "title": "Set up your wallet",
+    "description": "Create a wallet and write down your recovery words. If you stop partway through, you can finish the backup when you return.",
     "journey": [
-      "Create the wallet before network sync finishes.",
-      "Complete the backup; reopen and reveal it only through the protected flow."
+      "Create a wallet while it connects to the network.",
+      "Leave the backup unfinished, reopen the app, and finish it. Check that viewing the recovery words requires unlocking."
     ],
     "tests": [
       "test01OnboardingCreateWallet",
       "test09BackupResumeAndReveal"
     ],
     "image": "01-onboarding",
-    "limitations": "A recovery phrase alone does not reconstruct this wallet’s historical scan. Keep the history-carrying backup too."
+    "limitations": "Save a backup file too. Winnow needs it to find your past payments when you restore the wallet."
   },
   {
     "id": "receive",
     "section": "everyday",
-    "title": "Receive and recognize a payment",
-    "description": "Show a fresh address and QR code. While Receive is open, peer-relayed payments appear as unconfirmed; confirmed payments enter the wallet’s history.",
+    "title": "Receive bitcoin",
+    "description": "Share your address or QR code. Keep Receive open to watch for a payment, then check its confirmation in your wallet.",
     "journey": [
-      "Mine a payment and find it through compact filters.",
-      "Receive a normal transaction before mining it, then observe its confirmation in the app."
+      "Confirm a payment on the test network and check that it appears in the wallet.",
+      "Watch a new payment arrive on Receive before it is confirmed, then check that its status updates after confirmation."
     ],
     "tests": [
       "test02ReceiveAndFunding",
@@ -33,11 +33,12 @@
   {
     "id": "send",
     "section": "everyday",
-    "title": "Review, send, and follow confirmation",
-    "description": "Enter a destination and amount, review the fee and change, then authorize the payment. Follow it from relay to confirmation.",
+    "title": "Send bitcoin",
+    "description": "Choose an account, recipient, and amount. Check the address, fee, and total before sending or continuing to the account’s approvals.",
     "journey": [
-      "Fill the actual send form and review the transaction.",
-      "Check that the node received the payment and the app later shows it confirmed."
+      "Enter an address and amount on the simple send screen.",
+      "Edit a reviewed payment, then verify the new amount, full address, fee, and total before sending.",
+      "Check that Bitcoin Core received the payment, open its details, and wait for the app to show it as confirmed."
     ],
     "tests": [
       "test03Send"
@@ -47,55 +48,81 @@
   {
     "id": "people",
     "section": "everyday",
-    "title": "Pay a person",
-    "description": "Add a person’s public card and pay them using a fresh address derived from their account key.",
+    "title": "Pay someone again",
+    "description": "Name someone you’ve paid, or save their payment card. Next time, choose them in Send.",
     "journey": [
-      "Import a card and choose the person from the app.",
-      "Review and send the payment; verify the destination and next-address behavior."
+      "Send to a new address, open that payment in Wallet, save the recipient, and rename them.",
+      "Reopen the app and check the name on the payment. Remove and re-add the saved recipient without losing the label.",
+      "Choose a saved address in Send and check the address-reuse notice. Pay a saved card, then check that the next payment uses a fresh address."
     ],
     "tests": [
-      "test10PeopleAddAndPay"
+      "test10SaveRecipientFromPayment"
     ],
-    "image": "24-people"
+    "image": "24-saved-recipient"
   },
   {
     "id": "savings",
     "section": "everyday",
-    "title": "Hold savings together",
-    "description": "Choose co-owners and an approval threshold. Share the savings policy and ask the other owners to approve a proposed payment.",
+    "title": "Save with other people",
+    "description": "Choose who shares the wallet and how many approvals a payment needs. With two approvals out of three, one person can be away and the other two can still pay.",
     "journey": [
-      "Create shared savings from people’s signer keys.",
-      "Fund it, prepare a spend, and export an approval request."
+      "Create shared savings from Wallet and choose who can approve payments.",
+      "Back up the funded account from its detail screen, then open Send, choose a saved recipient, and check the account, amount, and fee.",
+      "Continue straight to approvals without copying the request into another screen. Complete two approvals without the third person."
     ],
     "tests": [
-      "test12SharedSavingsCreateAndAsk"
+      "test12SharedSavingsCreateAndAsk",
+      "test07ApproveRequest"
     ],
-    "image": "27-ask-approval",
-    "limitations": "Co-owners must preserve their own keys and the shared policy. The approval threshold determines who must participate."
+    "image": "27-shared-payment-review",
+    "limitations": "For shared control, each person must keep their own key. If you choose just one required approval, any one of them can spend.",
+    "guide": "/vaults"
+  },
+  {
+    "id": "second-device",
+    "section": "advanced",
+    "title": "Combine your phone with another signer",
+    "description": "Use 2-of-2 MuSig2 so your phone and a separate key must both approve every payment. You can also use a MuSig2 group as one cosigner in a larger threshold vault.",
+    "journey": [
+      "Set up an account with one key on the phone and another generated by Bitcoin Core.",
+      "Receive test funds and save a backup that includes the account.",
+      "Use Send to review the account, address, amount, and fee, then continue directly to the second-signer screen.",
+      "Leave a signing exchange, then start again with fresh signing data.",
+      "Review and approve on the phone, exchange replies with Core, and confirm a payment with one on-chain signature.",
+      "Restore the earlier backup with the recovery words and check that it finds the payment and the remaining balance.",
+      "In a separate flow, approve on the phone and share the raw request with a MuSig2 group acting as one signer. Import the group’s reply through Approve a request, then send."
+    ],
+    "tests": [
+      "test16MuSig2RequiresSecondDevice",
+      "test13GroupCosignerVault"
+    ],
+    "guide": "/core-cosigner",
+    "image": "35-extra-device-policy",
+    "limitations": "Bitcoin Core 31.1 is the tested second signer. A hardware wallet needs its own compatibility test. Keep the wallet backup file, the phone’s recovery words, and a separate backup of the other signer’s key. Every key is required."
   },
   {
     "id": "recovery",
     "section": "everyday",
-    "title": "Export and restore a wallet",
-    "description": "Export a history-carrying bundle and verify it when importing. Secret-bearing exports require an explicit protected action.",
+    "title": "Back up and restore",
+    "description": "Save a backup file with your payment history and shared accounts. Keep your recovery words too. You need both to restore the wallet and sign again.",
     "journey": [
-      "Export watch-only and secret-bearing bundles through their distinct controls.",
-      "Import a funded bundle and check its verification report and wallet state."
+      "Export a backup with private keys and one without them.",
+      "Restore a wallet that has funds and check that the backup is valid and the funds are found."
     ],
     "tests": [
       "test06ImportBundleVerification",
       "test08ExportBundle"
     ],
-    "limitations": "Recovery is forward verification from the bundle’s saved history, not a historical rescan from twelve words."
+    "limitations": "Keep both your recovery words and your backup file. The words alone won’t restore your payment history."
   },
   {
     "id": "controls",
     "section": "everyday",
-    "title": "Keep everyday controls simple",
-    "description": "Use Wallet, Send, People, and Settings without protocol controls crowding the normal flow. Turn on Advanced mode when those controls are useful.",
+    "title": "More options when you need them",
+    "description": "Start with the basics. Turn on Advanced mode in Settings to adjust fees and manage network connections.",
     "journey": [
-      "Check the beginner navigation and hidden advanced controls.",
-      "Turn Advanced mode on and verify the controls become available."
+      "Check which tabs and controls appear in normal mode.",
+      "Turn Advanced mode on and off, checking that fee and network settings appear and disappear."
     ],
     "tests": [
       "test11BeginnerShellHidesAdvancedControls"
@@ -105,7 +132,7 @@
   {
     "id": "vaults",
     "section": "advanced",
-    "title": "Descriptors, vaults, and approvals",
+    "title": "Inspect and import signing policies",
     "description": "Create a Taproot vault from public signer keys and coordinate approvals using PSBT text. Inspect the policy and reviewed transaction explicitly.",
     "journey": [
       "Create a vault through the advanced form.",
@@ -116,22 +143,7 @@
       "test07ApproveRequest"
     ],
     "image": "11-vault-list",
-    "guide": "/core-cosigner",
-    "limitations": "Bitcoin Core interoperability is separately tested for script-path vaults. MuSig2 exchanges with Core have a documented round-two compatibility gap; do not assume every external signer can complete them."
-  },
-  {
-    "id": "groups",
-    "section": "advanced",
-    "title": "Use a group as a vault cosigner",
-    "description": "Combine a group cosigner with a threshold vault, then complete the required approvals and broadcast the resulting spend.",
-    "journey": [
-      "Build and fund a vault containing the group’s synthetic key.",
-      "Complete its signing rounds and confirm the final spend through the app."
-    ],
-    "tests": [
-      "test13GroupCosignerVault"
-    ],
-    "limitations": "This requires the full group signing ceremony and its other vault approvals. Losing required participants can prevent spending."
+    "guide": "/core-cosigner"
   },
   {
     "id": "fees",
@@ -139,7 +151,7 @@
     "title": "Replace a pending payment with a higher fee",
     "description": "Review a replacement’s fee and change before authorizing it. The original remains visible as replaced.",
     "journey": [
-      "Send a payment and leave it in the node’s mempool.",
+      "Disconnect the test node before sending. Reopen the app, find the pending payment, then reconnect and check that the same payment reaches the node.",
       "Use Bump fee, review and sign the replacement, then confirm it and inspect the app’s history."
     ],
     "tests": [

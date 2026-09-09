@@ -3,8 +3,24 @@
 # The iPhone wallet
 
 SwiftUI screens and AppModel turn wallet and network state into receiving,
-sending, recovery, people, and shared-savings flows. The app owns user review,
+sending, recovery, saved recipients, and shared accounts. The app owns user review,
 authentication, presentation, and lifecycle; WalletCore owns the Bitcoin rules.
+
+Wallet is the one account and transaction list. Payment details save or rename a
+recipient; Send holds the account and saved-recipient pickers. Ordinary payments,
+shared savings, and extra-device accounts use the same form and review. The
+reviewed proposal goes directly to the account's approval screen; each signing
+method keeps its own approval rules. Every script-path account uses Approve a
+request, including raw PSBTs and group co-signers; there is no second Advanced
+signing screen for the same account. Advanced mode exposes Raw PSBT for exchanges
+with other wallets. MuSig2 keeps its separate two-round exchange.
+Shared savings and extra-device accounts also use one detail screen for receiving,
+balances, Send, and backup. Their approval actions follow the descriptor's rules;
+co-owner cards belong to shared savings. Advanced mode keeps coins and the raw
+descriptor under Technical details.
+Removing a shortcut preserves
+past labels, signer identities, and fresh-address counters in the existing
+people.json store. Receive shares the wallet’s payment card.
 
 [Documented journeys](../../docs/journeys.json) identify the supported experiences.
 [App tests](../../AppTests/README.md) check state and protected actions;

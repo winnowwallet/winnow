@@ -548,7 +548,7 @@ final class PeopleStoreSecurityTests: XCTestCase {
         XCTAssertEqual(records, [record], "the live snapshot rolled forward")
     }
 
-    func testRemoveAndUpdate() async throws {
+    func testRenameAndUnsavePreserveKeysAndAddressCounter() async throws {
         let alice = try fixture(0xA1)
         let bob = try fixture(0xB2)
         let store = PeopleStore()
@@ -556,23 +556,22 @@ final class PeopleStoreSecurityTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
         await store.configure(storageURL: url, network: .signet)
         let a = try await store.add(name: "Alice", payTo: alice.payTo, signerKey: alice.signer)
-        let b = try await store.add(name: "Bob", payTo: bob.payTo, signerKey: nil)
-
-        var renamed = b
-        renamed.name = "Robert"
-        renamed.signerKey = bob.signer
-        try await store.update(renamed)
-        var stolen = renamed
-        stolen.signerKey = alice.signer
-        do {
-            try await store.update(stolen)
-            XCTFail("an update took another person's key")
-        } catch PeopleStorageError.duplicate(let existing) {
-            XCTAssertEqual(existing, "Alice")
-        }
-        try await store.remove(id: a.id)
-        let records = await store.all
-        XCTAssertEqual(records, [renamed])
+        let b = try await store.add(name: "Bob", payTo: bob.payTo, signerKey: bob.signer)
+        try await store.advancePaymentIndex(id: b.id, past: 6)
+        try await store.updateRecipient(id: b.id, name: "Robert", saved: true)
+        let renamed = try await store.updateRecipient(id: b.id, saved: false)
+        XCTAssertEqual(renamed.name, "Robert")
+        XCTAssertEqual(renamed.nextPaymentIndex, 7)
+        XCTAssertTrue(a.isSavedRecipient, "older records without the flag remain saved")
+        let reopened = PeopleStore()
+        await reopened.configure(storageURL: url, network: .signet)
+        let hidden = await reopened.record(id: b.id)
+        XCTAssertFalse(try XCTUnwrap(hidden).isSavedRecipient)
+        let restored = try await reopened.add(name: "Robert", payTo: bob.payTo, signerKey: bob.signer)
+        XCTAssertEqual(restored.id, b.id)
+        XCTAssertEqual(restored.nextPaymentIndex, 7)
+        XCTAssertEqual(restored.signerKey, bob.signer)
+        XCTAssertTrue(restored.isSavedRecipient)
     }
 
     // MARK: Fixtures
@@ -791,7 +790,7 @@ final class RelayStoreQuarantineTests: XCTestCase {
 /// Vault coins are marked spent rather than deleted (#127, groundwork).
 ///
 /// The vault store had the same destructive removal as the wallet, in two
-/// places, and one extra hazard: `VaultDetailView` passes `record.utxos`
+/// places, and one extra hazard: `AppModel` passes `record.utxos`
 /// straight into `createSpend`. So the filter has to live on the accessor
 /// rather than at the call sites, or a spent vault coin is one forgotten
 /// filter away from being selected for a spend.

@@ -69,6 +69,7 @@ final class WinnowAppUITests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        continueAfterFailure = false
         executionTimeAllowance = 600
     }
 
@@ -235,28 +236,55 @@ final class WinnowAppUITests: XCTestCase {
         })
 
         app.tabBars.buttons["Send"].tap()
+        XCTAssertFalse(app.buttons["reviewButton"].isEnabled)
+        XCTAssertFalse(app.textFields["feeOverrideField"].exists)
+        XCTAssertFalse(app.staticTexts["Network floor"].exists)
         app.typeInto("destinationField", destination)
-        app.typeInto("amountField", "1000000")
-        Screenshots.capture(app, "05-send-form", testCase: self)
-
+        app.typeInto("amountField", "100000")
         app.buttons["reviewButton"].tap()
-        // The Review section is appended below the fold; SwiftUI Forms
-        // materialize rows lazily, so scroll it into existence.
         let sendButton = app.buttons["sendButton"]
-        if !scrollUntilExists(app, sendButton, maxSwipes: 5) {
-            Screenshots.capture(app, "debug-03-scrolled", testCase: self)
-            print("E2E debug buttons after scroll: \(app.buttons.allElementsBoundByIndex.map(\.identifier))")
-            app.buttons["reviewButton"].tap() // in case the tap was eaten by the keyboard
-            _ = scrollUntilExists(app, sendButton, maxSwipes: 5)
-        }
-        if !sendButton.exists {
-            _ = scrollUntilExists(app, app.staticTexts["sendError"], up: true)
-            if app.staticTexts["sendError"].exists {
-                print("E2E send error: \(app.staticTexts["sendError"].label)")
-            }
-            Screenshots.capture(app, "debug-03-send", testCase: self)
-        }
-        XCTAssertTrue(sendButton.exists, "no review section")
+        XCTAssertTrue(sendButton.waitForExistence(timeout: 30), "review did not replace the form")
+        XCTAssertTrue(sendButton.isHittable, "sending should not require scrolling past the form")
+        XCTAssertEqual(app.staticTexts["reviewDestination"].label, destination, "show the full address")
+        XCTAssertFalse(app.textFields["amountField"].exists)
+
+        // Editing preserves the fields and withdraws authorization. Only a
+        // fresh review of the changed amount can expose Send again.
+        app.buttons["editPaymentButton"].tap()
+        XCTAssertEqual(app.textFields["destinationField"].value as? String, destination)
+        XCTAssertEqual(app.textFields["amountField"].value as? String, "100000")
+        XCTAssertFalse(sendButton.exists)
+        app.typeInto("amountField", String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6) + "1000000")
+        app.buttons["reviewButton"].tap()
+        XCTAssertTrue(sendButton.waitForExistence(timeout: 30))
+        XCTAssertTrue(sendButton.isHittable)
+        let amount = try XCTUnwrap(app.staticTexts["reviewAmount"].value as? String)
+        let fee = try XCTUnwrap(app.staticTexts["reviewFee"].value as? String)
+        let total = try XCTUnwrap(app.staticTexts["reviewTotal"].value as? String)
+        XCTAssertEqual(Int64(amount.filter(\.isNumber)), 1_000_000)
+        XCTAssertEqual(Int64(total.filter(\.isNumber)), 1_000_000 + (try XCTUnwrap(Int64(fee.filter(\.isNumber)))))
+        XCTAssertFalse(app.staticTexts["Inputs"].exists)
+
+        // A custom fee from Advanced mode must not silently survive in a
+        // beginner payment after its controls have been hidden.
+        app.buttons["editPaymentButton"].tap()
+        app.tabBars.buttons["Settings"].tap()
+        let advancedToggle = app.switches["advancedModeToggle"]
+        XCTAssertTrue(scrollUntilExists(app, advancedToggle))
+        app.flipSwitch(advancedToggle)
+        app.tabBars.buttons["Send"].tap()
+        app.typeInto("feeOverrideField", "99")
+        XCTAssertFalse(app.keyboards.firstMatch.exists, "Done must dismiss the fee keypad")
+        app.tabBars.buttons["Settings"].tap()
+        XCTAssertTrue(scrollUntilExists(app, advancedToggle, up: true))
+        app.flipSwitch(advancedToggle)
+        app.tabBars.buttons["Send"].tap()
+        XCTAssertFalse(app.textFields["feeOverrideField"].exists)
+        Screenshots.capture(app, "05-send-form", testCase: self)
+        app.buttons["reviewButton"].tap()
+        XCTAssertTrue(sendButton.waitForExistence(timeout: 30))
+        XCTAssertEqual(app.staticTexts["reviewFee"].value as? String, fee)
+        XCTAssertEqual(app.staticTexts["reviewTotal"].value as? String, total)
         Screenshots.capture(app, "06-send-review", testCase: self)
 
         let mempoolBefore = Set(try BitcoinCLI.mempoolTxids())
@@ -266,7 +294,16 @@ final class WinnowAppUITests: XCTestCase {
             app.staticTexts["broadcastPending"].exists || app.staticTexts["broadcastConfirmed"].exists
         })
         Timings.record("send", step: "form→broadcast", from: broadcastStart)
+        XCTAssertFalse(sendButton.exists, "a sent payment must not offer Send again")
+        XCTAssertFalse(app.textFields["destinationField"].exists)
+        XCTAssertFalse(app.buttons["copyRawTransactionButton"].exists)
         Screenshots.capture(app, "07-send-broadcast", testCase: self)
+        // Recovery diagnostics remain reachable without crowding the status.
+        let details = app.buttons["transactionDetailsButton"]
+        XCTAssertTrue(details.waitForExistence(timeout: 10))
+        details.tap()
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["copyRawTransactionButton"], maxSwipes: 2))
+        app.navigationBars["Transaction details"].buttons["Payment"].tap()
 
         // Wait until the node actually has the tx (inv → getdata relay takes
         // a moment after the UI reports the broadcast), THEN mine.
@@ -279,8 +316,7 @@ final class WinnowAppUITests: XCTestCase {
         let confirmStart = Date()
         try await SignetMiner.mineOntoTip(payingTo: payout)
 
-        // The "Seen in block N" label is a lazily-materialized row below the
-        // fold — nudge syncs from the Wallet tab, then scroll to it.
+        // The same status screen changes to confirmed after the wallet syncs.
         poll(timeout: 240, interval: 5, "send confirmation") {
             app.tabBars.buttons["Wallet"].tap()
             self.nudgeSync(app)
@@ -289,6 +325,10 @@ final class WinnowAppUITests: XCTestCase {
         }
         Timings.record("send", step: "mine→confirmed", from: confirmStart)
         Screenshots.capture(app, "08-send-confirmed", testCase: self)
+        app.buttons["newPaymentButton"].tap()
+        XCTAssertTrue(app.textFields["destinationField"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["reviewButton"].isEnabled)
+        XCTAssertFalse(sendButton.exists)
 
         app.tabBars.buttons["Wallet"].tap()
         self.nudgeSync(app)
@@ -335,10 +375,10 @@ final class WinnowAppUITests: XCTestCase {
     }
 
     func test04VaultCreate() throws {
-        // The raw vault tools live in the Vaults section of the People tab,
+        // The raw vault tools live in Wallet,
         // in Advanced mode; beginners see the same records as shared savings.
         let app = launchApp(advanced: true)
-        app.tabBars.buttons["People"].tap()
+        app.tabBars.buttons["Wallet"].tap()
         let createStart = Date()
         let newVault = app.buttons["newVaultButton"]
         XCTAssertTrue(scrollUntilExists(app, newVault), "no Vaults section in Advanced mode")
@@ -351,6 +391,16 @@ final class WinnowAppUITests: XCTestCase {
             app.typeInto("cosignerField", try Self.fixtureCosigner(byte))
             app.buttons["addPastedKeyButton"].tap()
         }
+        let threshold = app.steppers["vaultThresholdStepper"]
+        XCTAssertTrue(scrollUntilExists(app, threshold, up: true))
+        threshold.buttons["vaultThresholdStepper-Decrement"].tap()
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["buildDescriptorButton"]))
+        app.buttons["buildDescriptorButton"].tap()
+        XCTAssertTrue(scrollUntilExists(app, app.staticTexts["vaultSingleKeyRule"]))
+        XCTAssertEqual(app.staticTexts["vaultSingleKeyRule"].label, "One signing key can spend these funds.")
+        XCTAssertTrue(scrollUntilExists(app, threshold, up: true))
+        threshold.buttons["vaultThresholdStepper-Increment"].tap()
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["buildDescriptorButton"]))
         app.buttons["buildDescriptorButton"].tap()
         // The descriptor preview is a CopyableTextBlock whose Text starts
         // with "tr(" — below the fold, and SwiftUI Forms materialize rows
@@ -367,7 +417,7 @@ final class WinnowAppUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["E2E Vault"].firstMatch.waitForExistence(timeout: 30),
                       "vault was not saved")
         Timings.record("vault", step: "create", from: createStart)
-        XCTAssertTrue(scrollUntilExists(app, app.staticTexts["2-of-3 · script path"]),
+        XCTAssertTrue(scrollUntilExists(app, app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH '2 of 3 keys required'")).firstMatch),
                       "the Vaults section does not describe the policy")
         Screenshots.capture(app, "11-vault-list", testCase: self)
     }
@@ -408,6 +458,9 @@ final class WinnowAppUITests: XCTestCase {
         // Opening a transaction is the privacy boundary: capture the warning
         // and cancel before iOS contacts the selected endpoint.
         app.tabBars.buttons["Wallet"].tap()
+        let payment = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'historyPayment-'" )).firstMatch
+        XCTAssertTrue(scrollUntilExists(app, payment))
+        payment.tap()
         let explorerLink = app.buttons["explorerTransactionButton"].firstMatch
         XCTAssertTrue(scrollUntilExists(app, explorerLink), "no transaction explorer link")
         explorerLink.tap()
@@ -527,7 +580,7 @@ final class WinnowAppUITests: XCTestCase {
             try BitcoinCLI.unspents(scriptHex: savingsScript.hex).filter { $0.height >= startHeight }
         }
         var app = launchApp()
-        app.tabBars.buttons["People"].tap()
+        app.tabBars.buttons["Wallet"].tap()
         let savingsRow = app.staticTexts["E2E Vault"].firstMatch
         XCTAssertTrue(savingsRow.waitForExistence(timeout: 30),
                       "savings from test04 missing — run the full suite")
@@ -535,7 +588,7 @@ final class WinnowAppUITests: XCTestCase {
         // coins from earlier attempts, so "non-zero" would not prove the
         // app has scanned the coin this request is about to spend.
         savingsRow.tap()
-        let balance = app.staticTexts["savingsBalance"]
+        let balance = app.staticTexts["accountBalance"]
         func shownBalance() -> Int64 {
             guard balance.exists else { return -1 }
             let text = balance.label.isEmpty ? ((balance.value as? String) ?? "") : balance.label
@@ -571,17 +624,14 @@ final class WinnowAppUITests: XCTestCase {
         guard let coin = try freshCoins().max(by: { $0.height < $1.height }) else {
             return XCTFail("the savings were not funded")
         }
-        app.tabBars.buttons["People"].tap()
+        app.tabBars.buttons["Wallet"].tap()
         if !balance.exists { savingsRow.tap() }
         let target = max(balanceBefore + fundedNow, 1)
         XCTAssertTrue(poll(timeout: 240, interval: 5, "the savings see their coin") {
             if shownBalance() >= target { return true }
             app.tabBars.buttons["Wallet"].tap()
+            if app.navigationBars.buttons["Winnow"].exists { app.navigationBars.buttons["Winnow"].tap() }
             self.nudgeSync(app)
-            app.tabBars.buttons["People"].tap()
-            if !savingsRow.exists, app.navigationBars.buttons["People"].exists {
-                app.navigationBars.buttons["People"].tap()
-            }
             if savingsRow.exists { savingsRow.tap() }
             return false
         })
@@ -605,7 +655,7 @@ final class WinnowAppUITests: XCTestCase {
         // 3. This phone reads it, approves, and finishes.
         app.terminate()
         app = launchApp(clipboard: request)
-        app.tabBars.buttons["People"].tap()
+        app.tabBars.buttons["Wallet"].tap()
         XCTAssertTrue(savingsRow.waitForExistence(timeout: 30))
         savingsRow.tap()
         let approve = app.buttons["approveRequestButton"]
@@ -627,7 +677,7 @@ final class WinnowAppUITests: XCTestCase {
                       "review lists no payment")
         XCTAssertTrue(app.staticTexts["Back into E2E Vault"].exists, "review lists no output back into the savings")
         XCTAssertTrue(progress.label.contains("1 of 2"), progress.label)
-        XCTAssertTrue(progress.label.contains("not in People"), "an unknown co-owner should be named as such: \(progress.label)")
+        XCTAssertTrue(progress.label.contains("unnamed co-owner"), "an unknown co-owner should be named as such: \(progress.label)")
         Timings.record("vault", step: "cosign-review", from: reviewStart)
         Screenshots.capture(app, "15-approve-request", testCase: self)
 
@@ -660,91 +710,148 @@ final class WinnowAppUITests: XCTestCase {
         XCTAssertFalse(progress.waitForExistence(timeout: 3), "approval review survived backgrounding")
     }
 
-    // MARK: - 10 People: add, pay a fresh address, refuse a duplicate (mines)
+    // MARK: - 10 Save a recipient from a payment, then pay a fresh card address
 
-    /// Alice's card is the fixture 0xA1 key. Paying her derives her receive
-    /// address 0, and the counter moves once the send commits, so the next
-    /// review derives address 1. Adding her again, however her key is
-    /// spelled, is refused by name.
-    func test10PeopleAddAndPay() async throws {
+    func test10SaveRecipientFromPayment() async throws {
+        let address = try Self.fixtureAddress(0xE1)
+        var app = launchApp()
+        app.tabBars.buttons["Send"].tap()
+        app.typeInto("destinationField", address)
+        app.typeInto("amountField", "20000")
+        app.buttons["reviewButton"].tap()
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["sendButton"]))
+        let before = Set(try BitcoinCLI.mempoolTxids())
+        app.buttons["sendButton"].tap()
+        XCTAssertTrue(poll(timeout: 60, interval: 1, "payment reaches Core") {
+            ((try? Set(BitcoinCLI.mempoolTxids()).subtracting(before).isEmpty) ?? true) == false
+        })
+        let txid = try XCTUnwrap(Set(try BitcoinCLI.mempoolTxids()).subtracting(before).first)
+        let payout = try AddressDecoder.scriptPubKey(for: Self.fixtureAddress(0xD4), network: .signet)
+        try await SignetMiner.mineOntoTip(payingTo: payout)
+        app.tabBars.buttons["Wallet"].tap()
+        openPayment(txid, in: app)
+        let save = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'savePaymentRecipient-'" )).firstMatch
+        XCTAssertTrue(scrollUntilExists(app, save), "the outgoing address has no save action")
+        save.tap()
+        app.typeInto("personNameField", "Coffee")
+        app.buttons["savePersonButton"].tap()
+        XCTAssertTrue(app.buttons["Rename recipient"].waitForExistence(timeout: 20))
+        save.tap()
+        app.typeInto("personNameField", String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6) + "Cafe")
+        app.buttons["savePersonButton"].tap()
+        XCTAssertTrue(app.staticTexts["Cafe"].waitForExistence(timeout: 20))
+
+        // The name belongs to the address and survives reopening the wallet.
+        app.terminate()
+        app = launchApp()
+        XCTAssertTrue(scrollUntilExists(app, app.staticTexts["Sent to Cafe"]), "the payment lost its name after restart")
+        openPayment(txid, in: app)
+        XCTAssertTrue(poll(timeout: 10, interval: 0.2, "payment details fully on screen") {
+            save.exists && save.isHittable && save.frame.maxX <= app.frame.maxX
+        })
+        Screenshots.capture(app, "24-saved-recipient", testCase: self)
+        let remove = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'removePaymentRecipient-'" )).firstMatch
+        XCTAssertTrue(scrollUntilExists(app, remove))
+        remove.tap()
+        XCTAssertTrue(app.buttons["Save recipient"].waitForExistence(timeout: 20))
+        app.tabBars.buttons["Send"].tap()
+        app.buttons["savedRecipientsButton"].tap()
+        XCTAssertTrue(app.buttons["addRecipientButton"].waitForExistence(timeout: 20))
+        XCTAssertFalse(app.buttons["chooseRecipient-Cafe"].exists)
+        app.buttons["Done"].tap()
+        app.tabBars.buttons["Wallet"].tap()
+        XCTAssertTrue(app.staticTexts["Sent to Cafe"].exists, "removing a shortcut erased the old label")
+        save.tap()
+        app.buttons["savePersonButton"].tap()
+        XCTAssertTrue(app.buttons["Rename recipient"].waitForExistence(timeout: 20))
+        app.tabBars.buttons["Send"].tap()
+        app.buttons["savedRecipientsButton"].tap()
+        XCTAssertTrue(app.buttons["chooseRecipient-Cafe"].waitForExistence(timeout: 20))
+        app.buttons["chooseRecipient-Cafe"].tap()
+        app.typeInto("amountField", "1000")
+        app.buttons["reviewButton"].tap()
+        XCTAssertTrue(scrollUntilExists(app, app.staticTexts["reviewRecipient"]))
+        XCTAssertEqual(app.staticTexts["reviewDestination"].label, address)
+        XCTAssertTrue(scrollUntilExists(app, app.descendants(matching: .any)["addressReuseWarning"]),
+                      "a saved fixed address must explain reuse")
+
+        // A card uses a fresh address for each committed payment.
         let aliceKey = try Self.fixtureCosigner(0xA1)
         let card = try PersonCard(network: .signet, name: "Alice", payTo: "tr(\(aliceKey))",
                                   signerKey: aliceKey).serialized()
-        let app = launchApp(clipboard: card)
-        app.tabBars.buttons["People"].tap()
-        if !app.buttons["personRow-Alice"].exists {
-            app.buttons["addPersonButton"].tap()
-            XCTAssertTrue(app.buttons["personPasteButton"].waitForExistence(timeout: 20), "no add-person sheet")
-            app.buttons["personPasteButton"].tap()
-            XCTAssertTrue(app.staticTexts["personPayToSummary"].waitForExistence(timeout: 10), "the card was not understood")
-            XCTAssertEqual(app.staticTexts["personPayToSummary"].label, "Fresh address each payment")
-            XCTAssertEqual(app.staticTexts["personSignerSummary"].label, "Can co-own savings")
-            app.buttons["savePersonButton"].tap()
-        }
-        let row = app.buttons["personRow-Alice"]
-        XCTAssertTrue(row.waitForExistence(timeout: 30), "Alice was not saved")
-        Screenshots.capture(app, "24-people", testCase: self)
-
-        // Pay her: the review names her and shows the fresh address.
-        row.tap()
-        let pay = app.buttons["payPersonButton"]
-        XCTAssertTrue(pay.waitForExistence(timeout: 20), "no Pay button on the person")
-        pay.tap()
-        XCTAssertTrue(app.staticTexts["selectedPersonName"].waitForExistence(timeout: 20), "send sheet has no recipient")
+        app.terminate()
+        app = launchApp(clipboard: card)
+        app.tabBars.buttons["Send"].tap()
+        app.buttons["savedRecipientsButton"].tap()
+        addPastedRecipient("Alice", in: app)
+        app.buttons["chooseRecipient-Alice"].tap()
         app.typeInto("amountField", "20000")
-        app.dismissKeyboard()
         app.buttons["reviewButton"].tap()
         let recipient = app.staticTexts["reviewRecipient"]
-        XCTAssertTrue(scrollUntilExists(app, recipient), "review does not name the person")
+        XCTAssertTrue(scrollUntilExists(app, recipient))
         let destination = app.staticTexts["reviewDestination"]
-        XCTAssertTrue(destination.exists)
         let firstAddress = destination.label
-        XCTAssertTrue(firstAddress.hasPrefix("tb1p"), firstAddress)
-        let expectedIndex = try (0 ..< 5).first { index in
-            try Self.fixtureReceiveAddress(0xA1, index: UInt32(index)) == firstAddress
-        }
-        XCTAssertNotNil(expectedIndex, "the review address is not one of Alice's first five")
-        XCTAssertFalse(app.staticTexts["addressReuseWarning"].exists, "a card-holder is never warned about reuse")
+        XCTAssertEqual(firstAddress, try Self.fixtureReceiveAddress(0xA1, index: 0))
+        XCTAssertFalse(app.staticTexts["addressReuseWarning"].exists)
         Screenshots.capture(app, "25-pay-person-review", testCase: self)
-
-        // The review section sits below the fold, and off-screen Form rows
-        // are not in the accessibility tree until scrolled to.
-        XCTAssertTrue(scrollUntilExists(app, app.buttons["sendButton"], maxSwipes: 5), "no send button")
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["sendButton"]))
+        let beforeAlice = Set(try BitcoinCLI.mempoolTxids())
         app.buttons["sendButton"].tap()
-        // The Broadcast section lands below the fold of the sheet on a
-        // 6.3-inch class, and an off-screen row is not in the tree.
-        XCTAssertTrue(poll(timeout: 60, "broadcast to Alice") {
-            self.scrollUntilExists(app, app.staticTexts["broadcastPending"], maxSwipes: 2)
-                || app.staticTexts["broadcastConfirmed"].exists
+        XCTAssertTrue(poll(timeout: 60, interval: 1, "payment to Alice reaches Core") {
+            ((try? Set(BitcoinCLI.mempoolTxids()).subtracting(beforeAlice).isEmpty) ?? true) == false
         })
-        let payout = try AddressDecoder.scriptPubKey(for: Self.fixtureAddress(0xD4), network: .signet)
         try await SignetMiner.mineOntoTip(payingTo: payout)
-        app.buttons["sendSheetDoneButton"].tap()
-
-        // The counter moved: the next review derives the next address.
-        XCTAssertTrue(pay.waitForExistence(timeout: 20))
-        pay.tap()
-        XCTAssertTrue(app.staticTexts["selectedPersonName"].waitForExistence(timeout: 20))
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["newPaymentButton"]))
+        app.buttons["newPaymentButton"].tap()
+        app.buttons["savedRecipientsButton"].tap()
+        app.buttons["chooseRecipient-Alice"].tap()
         app.typeInto("amountField", "1000")
-        app.dismissKeyboard()
         app.buttons["reviewButton"].tap()
         XCTAssertTrue(scrollUntilExists(app, recipient))
-        XCTAssertNotEqual(destination.label, firstAddress, "the second payment reused the first address")
-        XCTAssertEqual(destination.label, try Self.fixtureReceiveAddress(0xA1, index: UInt32(expectedIndex! + 1)))
-        app.buttons["sendSheetDoneButton"].tap()
+        XCTAssertEqual(destination.label, try Self.fixtureReceiveAddress(0xA1, index: 1))
+    }
 
-        // The same key, spelled with h instead of ', is still Alice.
-        app.navigationBars.buttons["People"].tap()
-        app.buttons["addPersonButton"].tap()
-        XCTAssertTrue(app.textFields["personPasteField"].waitForExistence(timeout: 20) || app.textViews["personPasteField"].waitForExistence(timeout: 5))
-        app.typeInto("personNameField", "Alice again")
-        app.typeInto("personPasteField", aliceKey.replacingOccurrences(of: "'", with: "h"))
-        app.dismissKeyboard()
-        XCTAssertTrue(scrollUntilExists(app, app.buttons["savePersonButton"]))
+    private func reviewFromAccount(_ app: XCUIApplication, name: String, address: String, amount: String,
+                                   chooseInSend: Bool = false) {
+        if chooseInSend {
+            app.tabBars.buttons["Send"].tap()
+            if app.buttons["newPaymentButton"].exists { app.buttons["newPaymentButton"].tap() }
+            let picker = app.buttons["sendAccountPicker"]
+            XCTAssertTrue(picker.waitForExistence(timeout: 20))
+            picker.tap()
+            app.buttons[name].firstMatch.tap()
+        } else {
+            XCTAssertTrue(scrollUntilExists(app, app.buttons["sendFromAccountButton"]))
+            app.buttons["sendFromAccountButton"].tap()
+        }
+        XCTAssertTrue(app.tabBars.buttons["Send"].isSelected)
+        app.typeInto("destinationField", address)
+        app.typeInto("amountField", amount)
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["reviewButton"]))
+        app.buttons["reviewButton"].tap()
+        XCTAssertTrue(app.staticTexts["reviewAccount"].waitForExistence(timeout: 30))
+        XCTAssertEqual(app.staticTexts["reviewAccount"].label, name)
+        XCTAssertEqual(app.staticTexts["reviewDestination"].label, address)
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["sendButton"]))
+        XCTAssertEqual(app.buttons["sendButton"].label, "Continue to approvals")
+    }
+
+    private func openPayment(_ txid: String, in app: XCUIApplication) {
+        let row = app.buttons["historyPayment-\(txid)"]
+        XCTAssertTrue(scrollUntilExists(app, row, maxSwipes: 12), "payment missing from Wallet")
+        row.tap()
+    }
+
+    private func addPastedRecipient(_ name: String, in app: XCUIApplication) {
+        let row = app.buttons["chooseRecipient-\(name)"]
+        if row.exists { return }
+        app.buttons["addRecipientButton"].tap()
+        XCTAssertTrue(app.buttons["personPasteButton"].waitForExistence(timeout: 20))
+        app.buttons["personPasteButton"].tap()
+        XCTAssertTrue(app.staticTexts["personPayToSummary"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.staticTexts["personPayToSummary"].label, "Fresh address each payment")
         app.buttons["savePersonButton"].tap()
-        let error = app.staticTexts["personError"]
-        XCTAssertTrue(scrollUntilExists(app, error), "the duplicate was accepted")
-        XCTAssertTrue(error.label.contains("already belongs to Alice"), error.label)
+        XCTAssertTrue(row.waitForExistence(timeout: 30), "recipient was not saved")
     }
 
     /// Alice's receive address at `index`, as her wallet would derive it from
@@ -758,7 +865,7 @@ final class WinnowAppUITests: XCTestCase {
 
     // MARK: - 11 Beginner shell (mine-free)
 
-    /// A fresh wallet shows four tabs, one line of sync status, and a
+    /// A fresh wallet shows three tabs, one line of sync status, and a
     /// Settings screen without the expert rows; the Advanced switch brings
     /// them back and takes them away again without deleting anything.
     func test11BeginnerShellHidesAdvancedControls() throws {
@@ -773,43 +880,50 @@ final class WinnowAppUITests: XCTestCase {
         backupDone.tap()
         XCTAssertTrue(app.staticTexts["balanceText"].waitForExistence(timeout: 60), "home did not appear")
 
-        XCTAssertTrue(app.tabBars.buttons["People"].exists)
-        XCTAssertFalse(app.tabBars.buttons["Vaults"].exists, "beginners never see a Vaults tab")
+        XCTAssertEqual(app.tabBars.buttons.count, 3)
+        XCTAssertFalse(app.tabBars.buttons["People"].exists)
+        XCTAssertTrue(app.buttons["walletSharedSavingsButton"].exists)
+        XCTAssertFalse(app.buttons["walletExtraDeviceButton"].exists)
+        app.buttons["walletSharedSavingsButton"].tap()
+        XCTAssertTrue(app.buttons["addSavingsCoOwnerButton"].waitForExistence(timeout: 20))
+        app.buttons["addSavingsCoOwnerButton"].tap()
+        XCTAssertTrue(app.textFields["personNameField"].waitForExistence(timeout: 20))
+        app.navigationBars["Add co-owner"].buttons["Cancel"].tap()
+        app.navigationBars["New shared savings"].buttons["Cancel"].tap()
         // The one-liner is a ProgressView, a Label or a Text depending on the
         // phase, so match the identifier across every element type.
         let syncSummary = app.descendants(matching: .any).matching(identifier: "syncSummaryText").firstMatch
         XCTAssertTrue(syncSummary.waitForExistence(timeout: 10) || app.buttons["retryPeersButton"].exists,
                       "no one-line sync status")
-        XCTAssertFalse(app.staticTexts["Filter scan"].exists, "filter scan detail shown to a beginner")
-        XCTAssertTrue(app.buttons["syncNowButton"].exists)
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["syncNowButton"]))
 
+        app.tabBars.buttons["Send"].tap()
+        XCTAssertTrue(app.textFields["amountField"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.textFields["feeOverrideField"].exists)
         app.tabBars.buttons["Settings"].tap()
         let toggle = app.switches["advancedModeToggle"]
         XCTAssertTrue(scrollUntilExists(app, toggle), "no Advanced mode switch")
         XCTAssertTrue(app.buttons["exportBundleButton"].exists)
-        XCTAssertFalse(scrollUntilExists(app, app.buttons["refreshPeersButton"], maxSwipes: 4),
-                       "connected peers shown to a beginner")
-        XCTAssertFalse(app.buttons["explorerProviderPicker"].exists, "explorer setting shown to a beginner")
-        XCTAssertFalse(app.switches["verifyFromGenesisToggle"].exists, "chain verification shown to a beginner")
-        XCTAssertFalse(app.staticTexts["Manual peers"].exists, "manual peers shown with none configured")
-        XCTAssertTrue(scrollUntilExists(app, app.buttons["deleteWalletButton"], maxSwipes: 4))
         Screenshots.capture(app, "23-settings-beginner", testCase: self)
 
         XCTAssertTrue(scrollUntilExists(app, toggle, up: true))
         app.flipSwitch(toggle)
-        XCTAssertTrue(scrollUntilExists(app, app.buttons["refreshPeersButton"]), "Advanced mode did not reveal the peers")
-        app.tabBars.buttons["People"].tap()
+        app.tabBars.buttons["Send"].tap()
+        XCTAssertTrue(scrollUntilExists(app, app.textFields["feeOverrideField"]), "Advanced mode did not reveal fee controls")
+        app.tabBars.buttons["Wallet"].tap()
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["walletExtraDeviceButton"], up: true))
         XCTAssertTrue(scrollUntilExists(app, app.buttons["newVaultButton"]), "Advanced mode did not reveal the Vaults section")
         app.tabBars.buttons["Settings"].tap()
         XCTAssertTrue(scrollUntilExists(app, toggle, up: true))
         app.flipSwitch(toggle)
-        XCTAssertFalse(scrollUntilExists(app, app.buttons["refreshPeersButton"], maxSwipes: 4),
-                       "turning Advanced off left the peers visible")
+        app.tabBars.buttons["Send"].tap()
+        XCTAssertTrue(app.textFields["amountField"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.textFields["feeOverrideField"].exists)
     }
 
-    // MARK: - 12 Shared savings from People (mines)
+    // MARK: - 12 Shared savings from Wallet (mines)
 
-    /// Create "Savings with Alice, Bob" from the address book (2 of 3 with
+    /// Create "Savings with Alice, Bob" from Wallet (2 of 3 with
     /// this phone), share the card, fund it from the wallet, and ask Alice
     /// for approval of a payment to her. The approve-and-finish half is
     /// test07; this is the creation half a beginner does.
@@ -822,34 +936,28 @@ final class WinnowAppUITests: XCTestCase {
         let bobCard = try PersonCard(network: .signet, name: "Bob", payTo: "tr(\(bobKey))",
                                      signerKey: bobKey).serialized()
         var app = launchApp(clipboard: bobCard)
-        app.tabBars.buttons["People"].tap()
-        if !app.buttons["personRow-Bob"].exists {
-            app.buttons["addPersonButton"].tap()
-            XCTAssertTrue(app.buttons["personPasteButton"].waitForExistence(timeout: 20))
-            app.buttons["personPasteButton"].tap()
-            XCTAssertTrue(app.staticTexts["personSignerSummary"].waitForExistence(timeout: 10))
-            app.buttons["savePersonButton"].tap()
-            XCTAssertTrue(app.buttons["personRow-Bob"].waitForExistence(timeout: 30), "Bob was not saved")
-        }
-        if !app.buttons["personRow-Alice"].exists {
+        app.tabBars.buttons["Send"].tap()
+        app.buttons["savedRecipientsButton"].tap()
+        addPastedRecipient("Bob", in: app)
+        if !app.buttons["chooseRecipient-Alice"].exists {
             let aliceCard = try PersonCard(network: .signet, name: "Alice", payTo: "tr(\(aliceKey))",
                                            signerKey: aliceKey).serialized()
             app.terminate()
             app = launchApp(clipboard: aliceCard)
-            app.tabBars.buttons["People"].tap()
-            app.buttons["addPersonButton"].tap()
-            XCTAssertTrue(app.buttons["personPasteButton"].waitForExistence(timeout: 20))
-            app.buttons["personPasteButton"].tap()
-            XCTAssertTrue(app.staticTexts["personSignerSummary"].waitForExistence(timeout: 10))
-            app.buttons["savePersonButton"].tap()
-            XCTAssertTrue(app.buttons["personRow-Alice"].waitForExistence(timeout: 30), "Alice was not saved")
+            app.tabBars.buttons["Send"].tap()
+            app.buttons["savedRecipientsButton"].tap()
+            addPastedRecipient("Alice", in: app)
         }
+        app.buttons["Done"].tap()
+        app.tabBars.buttons["Wallet"].tap()
 
         let savingsName = "Savings with Alice, Bob"
         let creationHeight = UInt32(try BitcoinCLI.blockCount())
         if !app.staticTexts[savingsName].exists {
             let createStart = Date()
-            app.buttons["newSharedSavingsButton"].tap()
+            app.tabBars.buttons["Wallet"].tap()
+            XCTAssertTrue(scrollUntilExists(app, app.buttons["walletSharedSavingsButton"], up: true))
+            app.buttons["walletSharedSavingsButton"].tap()
             XCTAssertTrue(app.buttons["coOwnerToggle-Alice"].waitForExistence(timeout: 20), "no co-owner picker")
             app.buttons["coOwnerToggle-Alice"].tap()
             app.buttons["coOwnerToggle-Bob"].tap()
@@ -857,6 +965,7 @@ final class WinnowAppUITests: XCTestCase {
             let threshold = app.descendants(matching: .any).matching(
                 NSPredicate(format: "label CONTAINS '2 of 3' OR value CONTAINS '2 of 3'")).firstMatch
             XCTAssertTrue(threshold.waitForExistence(timeout: 5), "the threshold did not settle at 2 of 3")
+            app.typeInto("savingsNameField", savingsName)
             XCTAssertTrue(scrollUntilExists(app, app.buttons["createSharedSavingsButton"]))
             app.buttons["createSharedSavingsButton"].tap()
             XCTAssertTrue(app.staticTexts["savingsShareNotice"].waitForExistence(timeout: 60),
@@ -864,11 +973,13 @@ final class WinnowAppUITests: XCTestCase {
             Timings.record("vault", step: "shared-savings-create", from: createStart)
             Screenshots.capture(app, "26-savings-share", testCase: self)
             app.buttons["savingsShareDoneButton"].tap()
-            XCTAssertTrue(app.staticTexts[savingsName].waitForExistence(timeout: 30), "the savings were not listed")
         }
 
         // Fund it from the wallet, then ask Alice for approval of 20,000 to her.
-        app.staticTexts[savingsName].firstMatch.tap()
+        app.tabBars.buttons["Wallet"].tap()
+        let savingsRow = app.buttons["walletSavings-\(savingsName)"]
+        XCTAssertTrue(scrollUntilExists(app, savingsRow, up: true), "the savings were not listed")
+        savingsRow.tap()
         let addressBlock = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'tb1p'")).firstMatch
         XCTAssertTrue(addressBlock.waitForExistence(timeout: 20), "no receive address on the savings")
         let savingsAddress = addressBlock.label
@@ -892,40 +1003,54 @@ final class WinnowAppUITests: XCTestCase {
             })
             let payout = try AddressDecoder.scriptPubKey(for: Self.fixtureAddress(0xD4), network: .signet)
             try await SignetMiner.mineOntoTip(payingTo: payout)
-            app.tabBars.buttons["People"].tap()
-            app.staticTexts[savingsName].firstMatch.tap()
+            app.tabBars.buttons["Wallet"].tap()
         }
-        let ask = app.buttons["askApprovalButton"]
+        XCTAssertTrue(scrollUntilExists(app, app.staticTexts["vaultRequiredKeys"]))
+        XCTAssertEqual(app.staticTexts["vaultRequiredKeys"].label, "2 of 3 signing keys required")
+        XCTAssertTrue(scrollUntilExists(app, app.staticTexts["vaultSingleKeyRule"]))
+        XCTAssertEqual(app.staticTexts["vaultSingleKeyRule"].label, "One signing key cannot spend these funds.")
+        let ask = app.buttons["sendFromAccountButton"]
         XCTAssertTrue(poll(timeout: 240, interval: 5, "the savings see their coin") {
             if self.scrollUntilExists(app, ask, maxSwipes: 2), ask.isEnabled { return true }
-            app.tabBars.buttons["Wallet"].tap()
+            app.navigationBars.buttons["Winnow"].tap()
+            XCTAssertTrue(self.scrollUntilExists(app, app.buttons["syncNowButton"]))
             self.nudgeSync(app)
-            app.tabBars.buttons["People"].tap()
-            if !app.staticTexts[savingsName].exists, app.navigationBars.buttons["People"].exists {
-                app.navigationBars.buttons["People"].tap()
-            }
-            app.staticTexts[savingsName].firstMatch.tap()
+            XCTAssertTrue(self.scrollUntilExists(app, savingsRow, up: true))
+            savingsRow.tap()
             return false
         })
+        let backup = try accountBackup(in: app)
+        let savedAccount = try XCTUnwrap(backup.vaults?.first { $0.name == savingsName })
+        XCTAssertFalse(savedAccount.utxos.isEmpty, "the shared-account backup lost its funded outputs")
+        XCTAssertTrue(scrollUntilExists(app, ask, up: true))
         ask.tap()
-        let aliceItem = app.buttons["askChoosePerson-Alice"]
-        XCTAssertTrue(aliceItem.waitForExistence(timeout: 20), "Alice is not offered")
+        XCTAssertTrue(app.tabBars.buttons["Send"].isSelected)
+        app.buttons["savedRecipientsButton"].tap()
+        let aliceItem = app.buttons["chooseRecipient-Alice"]
+        XCTAssertTrue(aliceItem.waitForExistence(timeout: 20))
         aliceItem.tap()
-        app.typeInto("askAmountField", "20000")
-        app.dismissKeyboard()
-        app.buttons["buildApprovalRequestButton"].tap()
-        // Cards are sorted-key JSON, so the kind sits at the end of the text.
-        app.dismissKeyboard()
-        XCTAssertTrue(scrollUntilExists(app, app.descendants(matching: .any).matching(
-            NSPredicate(format: "label CONTAINS '\"winnow\":\"approval\"'")).firstMatch),
-            "no request was built")
-        Screenshots.capture(app, "27-ask-approval", testCase: self)
+        app.typeInto("amountField", "20000")
+        app.buttons["reviewButton"].tap()
+        XCTAssertTrue(app.staticTexts["reviewAccount"].waitForExistence(timeout: 20))
+        XCTAssertEqual(app.staticTexts["reviewAccount"].label, savingsName)
+        XCTAssertEqual(app.staticTexts["reviewRecipient"].label, "Alice")
+        Screenshots.capture(app, "27-shared-payment-review", testCase: self)
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["sendButton"]))
+        XCTAssertEqual(app.buttons["sendButton"].label, "Continue to approvals")
+        app.buttons["sendButton"].tap()
+        XCTAssertTrue(app.staticTexts["approvalProgress"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["approvalProgress"].label.contains("No approvals yet"))
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["finishApprovalButton"]))
+        XCTAssertFalse(app.buttons["finishApprovalButton"].isEnabled)
+        let request = app.staticTexts.matching(NSPredicate(format: "label CONTAINS '\"winnow\":\"approval\"'")).firstMatch
+        XCTAssertTrue(scrollUntilExists(app, request), "reviewed payment was not handed to approvals")
+
     }
 
     // MARK: - 13 Group cosigner (Advanced mode, mines)
 
     /// Two-level custody through the app, in the Advanced-mode vault tools
-    /// that live inside the People tab: a MuSig2 2-of-2 *group* — entered
+    /// that live inside Wallet: a MuSig2 2-of-2 *group* — entered
     /// as its BIP328 synthetic xpub, like any pasted cosigner — is one
     /// signer of a 2-of-3, and the app carries the whole ceremony: create
     /// the vault, create the spend, accept the group's signature from the
@@ -953,7 +1078,7 @@ final class WinnowAppUITests: XCTestCase {
         //    silent third.
         let vaultName = "Group Vault \(UInt16.random(in: 100 ..< 999))"
         var app = launchApp(advanced: true)
-        app.tabBars.buttons["People"].tap()
+        app.tabBars.buttons["Wallet"].tap()
         let newVault = app.buttons["newVaultButton"]
         XCTAssertTrue(scrollUntilExists(app, newVault), "no Vaults section in Advanced mode")
         newVault.tap()
@@ -989,79 +1114,80 @@ final class WinnowAppUITests: XCTestCase {
         // 3. Relaunch so the scan credits the coin, then create the spend in
         //    the UI and read the PSBT off the screen.
         app = launchApp(advanced: true)
-        app.tabBars.buttons["People"].tap()
+        app.tabBars.buttons["Wallet"].tap()
         let vaultRow = app.staticTexts[vaultName].firstMatch
         XCTAssertTrue(scrollUntilExists(app, vaultRow), "group vault row not reachable")
         vaultRow.tap()
-        // People opens the shared-savings detail, which shows a balance
-        // rather than the raw vault's individual coin rows.
-        let fundedBalance = app.staticTexts["savingsBalance"]
+        // Read the account's confirmed balance before spending.
+        let fundedBalance = app.staticTexts["accountBalance"]
         XCTAssertTrue(scrollUntilExists(app, fundedBalance), "no shared-savings balance")
         poll(timeout: 300, interval: 5, "group vault funding scanned in") {
             if fundedBalance.exists, !fundedBalance.label.isEmpty, fundedBalance.label != "0 sats" {
                 return true
             }
             app.tabBars.buttons["Wallet"].tap()
+            if app.navigationBars.buttons["Winnow"].exists { app.navigationBars.buttons["Winnow"].tap() }
             self.nudgeSync(app)
-            app.tabBars.buttons["People"].tap()
+            if vaultRow.exists { vaultRow.tap() }
             return false
         }
-        XCTAssertTrue(scrollUntilExists(app, app.buttons["Create spend PSBT…"]))
-        app.buttons["Create spend PSBT…"].tap()
-        app.typeInto("Destination address", try Self.fixtureAddress(0xE5))
-        app.typeInto("Amount (sats)", "1000000")
-        let createButton = app.buttons["Create spend PSBT"]
-        XCTAssertTrue(scrollUntilExists(app, createButton), "create button not reachable")
-        createButton.tap()
-        let psbtText = app.staticTexts.matching(
-            NSPredicate(format: "label BEGINSWITH 'cHNidP'")).firstMatch
-        XCTAssertTrue(psbtText.waitForExistence(timeout: 20), "no PSBT produced")
-        let unsigned = psbtText.label
+        reviewFromAccount(app, name: vaultName, address: try Self.fixtureAddress(0xE5), amount: "1000000", chooseInSend: true)
         Screenshots.capture(app, "31-group-spend-created", testCase: self)
+        app.buttons["sendButton"].tap()
+        let progress = app.staticTexts["approvalProgress"]
+        XCTAssertTrue(scrollUntilExists(app, progress))
+        XCTAssertTrue(progress.label.contains("No approvals yet"))
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["approveButton"]))
+        app.buttons["approveButton"].tap()
+        XCTAssertTrue(poll(timeout: 60, "phone approves before the group") {
+            self.scrollUntilExists(app, progress, up: true) && progress.label.contains("1 of 2")
+        })
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["finishApprovalButton"]))
+        XCTAssertFalse(app.buttons["finishApprovalButton"].isEnabled, "phone approval alone enabled sending")
+        let rawDisclosure = app.buttons["approvalRawPSBTDisclosure"]
+        XCTAssertTrue(scrollUntilExists(app, rawDisclosure))
+        rawDisclosure.tap()
+        let rawRequest = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'cHNidP'")).firstMatch
+        XCTAssertTrue(scrollUntilExists(app, rawRequest))
+        let phoneSigned = rawRequest.label
+        XCTAssertEqual(try PSBT(base64: phoneSigned).inputs.first?.tapScriptSignatures.count, 1)
 
-        // 4. The group signs (the test is both members).
-        let signed = try Self.groupSign(base64: unsigned, memberSecrets: memberSecrets,
+        // 4. The group signs the raw request exported by the phone.
+        let signed = try Self.groupSign(base64: phoneSigned, memberSecrets: memberSecrets,
                                         synthetic: synthetic)
 
         // 5. Relaunch with the group's PSBT on the clipboard; the app pastes,
-        //    reviews, signs the device leg, finalizes, and broadcasts.
+        //    reviews both approvals, finalizes, and broadcasts.
         app = launchApp(clipboard: signed, advanced: true)
-        app.tabBars.buttons["People"].tap()
+        app.tabBars.buttons["Wallet"].tap()
         let signingVaultRow = app.staticTexts[vaultName].firstMatch
         XCTAssertTrue(scrollUntilExists(app, signingVaultRow), "group vault row not reachable")
         signingVaultRow.tap()
-        let signButton = app.buttons.matching(
-            NSPredicate(format: "label BEGINSWITH 'Sign / combine'")).firstMatch
-        XCTAssertTrue(scrollUntilExists(app, signButton))
-        signButton.tap()
-        XCTAssertTrue(app.buttons["psbtPasteButton"].waitForExistence(timeout: 20))
-        app.buttons["psbtPasteButton"].tap()
-        // The maturity check compares against the app's synced tip, and a
-        // fresh launch may still be catching up its headers — the persisted
-        // coin row proves nothing about the tip. Re-adding re-reviews at the
-        // current height, which is exactly what a person would do.
-        let review = app.staticTexts["Review — what you are signing"]
-        poll(timeout: 240, interval: 5, "review accepted once the tip caught up") {
-            app.buttons["addPSBTButton"].tap()
-            _ = review.waitForExistence(timeout: 3)
-            return review.exists
-        }
-        if !review.exists {
-            Screenshots.capture(app, "debug-10-review-missing", testCase: self)
-            let unsafe = app.staticTexts.matching(
-                NSPredicate(format: "label CONTAINS 'unsafe' OR label CONTAINS 'invalid'")).firstMatch
-            XCTFail("review did not appear; sheet says: \(unsafe.exists ? unsafe.label : "no error text")")
-            return
-        }
-        _ = scrollUntilExists(app, review)
-        XCTAssertTrue(scrollUntilExists(app, app.buttons["Sign with this device"]))
-        app.buttons["Sign with this device"].tap()
-        let finalize = app.buttons.matching(
-            NSPredicate(format: "label BEGINSWITH 'Finalize'")).firstMatch
-        XCTAssertTrue(scrollUntilExists(app, finalize), "finalize button missing")
-        finalize.tap()
-        XCTAssertTrue(app.staticTexts["Broadcast"].waitForExistence(timeout: 60),
-                      "broadcast confirmation missing")
+        XCTAssertFalse(app.buttons["Continue signing"].exists, "shared accounts still have a second signing entry")
+        let approveRequest = app.buttons["approveRequestButton"]
+        XCTAssertTrue(scrollUntilExists(app, approveRequest))
+        approveRequest.tap()
+        XCTAssertTrue(app.buttons["approvalPasteButton"].waitForExistence(timeout: 20))
+        app.buttons["approvalPasteButton"].tap()
+        let resumedProgress = app.staticTexts["approvalProgress"]
+        XCTAssertTrue(poll(timeout: 240, interval: 5, "group approval reviewed once the tip caught up") {
+            let review = app.buttons["reviewApprovalButton"]
+            guard self.scrollUntilExists(app, review) else { return false }
+            review.tap()
+            return self.scrollUntilExists(app, resumedProgress)
+        })
+        XCTAssertTrue(resumedProgress.label.contains("2 of 2"), "both approvals were not retained")
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["approveButton"]))
+        XCTAssertFalse(app.buttons["approveButton"].isEnabled, "the phone can approve a second time")
+        let finish = app.buttons["finishApprovalButton"]
+        XCTAssertTrue(scrollUntilExists(app, finish) && finish.isEnabled)
+        finish.tap()
+        XCTAssertTrue(poll(timeout: 60, "shared approval flow sends the group payment") {
+            self.scrollUntilExists(app, app.staticTexts["approvalBroadcast"])
+        })
+        XCTAssertFalse(app.staticTexts["Winnow cannot safely review this request"].exists,
+                       "a successful payment is still showing a stale-coin warning")
+        XCTAssertTrue(app.navigationBars["Payment"].exists)
         Screenshots.capture(app, "32-group-broadcast", testCase: self)
 
         // 6. The node is the judge — patiently: the app broadcasts over P2P
@@ -1257,6 +1383,20 @@ final class WinnowAppUITests: XCTestCase {
         importApp.terminate()
     }
 
+    /// Both account types use the same backup action and omit the phone key by default.
+    private func accountBackup(in app: XCUIApplication) throws -> ImportBundle {
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["accountBackupButton"]))
+        app.buttons["accountBackupButton"].tap()
+        XCTAssertTrue(app.buttons["exportConfirmButton"].waitForExistence(timeout: 20))
+        app.buttons["exportConfirmButton"].tap()
+        let preview = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "\"lastKnownHeight\"")).firstMatch
+        XCTAssertTrue(scrollUntilExists(app, preview))
+        let backup = try ImportBundle.decode(json: preview.label)
+        XCTAssertNil(backup.mnemonic, "the normal backup must not expose the phone key")
+        app.buttons["Close"].tap()
+        return backup
+    }
+
     // MARK: - 08 Export bundle (Settings -> Backup, #18)
 
     /// Walks the export flow on the funded "main" wallet: watch-only by
@@ -1379,22 +1519,44 @@ final class WinnowAppUITests: XCTestCase {
     }
 
     func test15ReviewAndReplacePendingPayment() async throws {
-        let app = launchApp(advanced: true)
+        var app = launchApp(advanced: true)
         app.tabBars.buttons["Send"].tap()
         app.typeInto("amountField", "20000")
         app.typeInto("destinationField", try Self.fixtureAddress(0xD5))
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["reviewButton"]))
         app.buttons["reviewButton"].tap()
         XCTAssertTrue(scrollUntilExists(app, app.buttons["sendButton"], maxSwipes: 5))
         let before = Set(try BitcoinCLI.mempoolTxids())
+        // Cut only the disposable node's P2P connections; RPC stays available
+        // to prove the payment has not reached it and to restore service.
+        _ = try BitcoinCLI.run(["setnetworkactive", "false"])
+        defer { _ = try? BitcoinCLI.run(["setnetworkactive", "true"]) }
         app.buttons["sendButton"].tap()
-        XCTAssertTrue(poll(timeout: 60, interval: 1, "original payment in Core mempool") {
-            ((try? Set(BitcoinCLI.mempoolTxids()).subtracting(before).isEmpty) ?? true) == false
-        })
-        let original = try XCTUnwrap(Set(try BitcoinCLI.mempoolTxids()).subtracting(before).first)
+        XCTAssertTrue(app.staticTexts["broadcastPending"].waitForExistence(timeout: 60))
+        XCTAssertFalse(app.buttons["sendButton"].exists, "a saved payment must not offer Send again")
+        app.buttons["transactionDetailsButton"].tap()
+        let identifier = app.staticTexts.matching(NSPredicate(format: "label MATCHES %@", "[0-9a-f]{64}")).firstMatch
+        XCTAssertTrue(identifier.waitForExistence(timeout: 10))
+        let original = identifier.label
+        XCTAssertEqual(try BitcoinCLI.mempoolTxids().sorted(), before.sorted(), "the offline node received a payment")
 
-        app.tabBars.buttons["Wallet"].tap()
+        app.terminate()
+        app = launchApp(advanced: true)
+        openPayment(original, in: app)
+        XCTAssertTrue(app.staticTexts["awaiting confirmation"].waitForExistence(timeout: 20))
+        XCTAssertFalse(app.staticTexts["transactionConfirmation-\(original)"].exists)
+        Screenshots.capture(app, "39-payment-after-disconnect", testCase: self)
+        _ = try BitcoinCLI.run(["setnetworkactive", "true"])
+        XCTAssertTrue(poll(timeout: 180, interval: 1, "saved payment resumes relay after reopening") {
+            (try? Set(BitcoinCLI.mempoolTxids()).subtracting(before)) == [original]
+        })
+        // The original payment survived the interruption. Its existing fee
+        // replacement journey continues from the same history entry.
+        app.navigationBars.buttons["Winnow"].tap()
+        XCTAssertEqual(app.buttons.matching(identifier: "historyPayment-\(original)").count, 1)
+        openPayment(original, in: app)
         let bump = app.buttons["bumpFeeButton"].firstMatch
-        XCTAssertTrue(bump.waitForExistence(timeout: 30))
+        XCTAssertTrue(scrollUntilExists(app, bump, maxSwipes: 8))
         bump.tap()
         let rate = app.textFields["bumpFeeRateField"]
         XCTAssertTrue(rate.waitForExistence(timeout: 30))
@@ -1418,6 +1580,7 @@ final class WinnowAppUITests: XCTestCase {
         XCTAssertTrue(scrollUntilExists(app, replaced, maxSwipes: 5),
                       "the original payment was not marked replaced in history")
         XCTAssertTrue(replaced.label.contains(String(replacement.prefix(8))))
+        app.navigationBars.buttons["Winnow"].tap()
         let payout = try AddressDecoder.scriptPubKey(for: Self.fixtureAddress(0xD4), network: .signet)
         try await SignetMiner.mineOntoTip(payingTo: payout)
         XCTAssertTrue(scrollUntilExists(app, app.buttons["syncNowButton"], maxSwipes: 5, up: true))
@@ -1427,4 +1590,166 @@ final class WinnowAppUITests: XCTestCase {
         })
     }
 
+
+    // The phone and Bitcoin Core each hold one key and exchange ordinary
+    // PSBT files. No test-side Winnow signer stands in for the second device.
+    func test16MuSig2RequiresSecondDevice() async throws {
+        let external = try CoreSigner(wallet: "ui-musig-\(UUID().uuidString)")
+        let externalKey = external.publicExpression
+        let ownKey = String(try Self.deviceKeyExpression().dropLast("/<0;1>/*".count))
+        let vault = try Vault("tr(musig(\(ownKey),\(externalKey))/<0;1>/*)", network: .signet)
+        try external.importVault(vault)
+        let name = "Extra device \(UUID().uuidString.prefix(6))"
+        var app = launchApp(advanced: true)
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["walletExtraDeviceButton"]))
+        app.buttons["walletExtraDeviceButton"].tap()
+        XCTAssertTrue(app.staticTexts["vaultPurpose"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["vaultPurpose"].label.contains("Every key is needed"))
+        app.typeInto("vaultNameField", name)
+        app.buttons["addDeviceKeyButton"].tap()
+        app.typeInto("cosignerField", externalKey)
+        app.buttons["addPastedKeyButton"].tap()
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["buildDescriptorButton"]))
+        app.buttons["buildDescriptorButton"].tap()
+        XCTAssertTrue(scrollUntilExists(app, app.staticTexts["vaultRequiredKeys"]))
+        XCTAssertEqual(app.staticTexts["vaultRequiredKeys"].label, "2 of 2 signing keys required")
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["saveVaultButton"]))
+        app.buttons["saveVaultButton"].tap()
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["walletSavings-\(name)"], up: true))
+
+        let script = try vault.scriptPubKey(index: 0)
+        let block = try await SignetMiner.mineOntoTip(payingTo: script)
+        let fundingTxid = try BitcoinCLI.coinbaseTxid(blockHash: block)
+        try await SignetMiner.ensureChainHeight(
+            atLeast: (try BitcoinCLI.blockHeight(of: block)) + Int(Wallet.coinbaseMaturity) - 1)
+        let coin = try XCTUnwrap(BitcoinCLI.unspents(scriptHex: script.hex).first { $0.txid == fundingTxid })
+        app = launchApp(advanced: true)
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["walletSavings-\(name)"]))
+        app.buttons["walletSavings-\(name)"].tap()
+        XCTAssertTrue(poll(timeout: 240, interval: 5, "extra-device balance scanned") {
+            if self.scrollUntilExists(app, app.staticTexts["accountBalance"]),
+               app.staticTexts["accountBalance"].label != "0 sats" { return true }
+            app.navigationBars.buttons["Winnow"].tap()
+            self.nudgeSync(app)
+            _ = self.scrollUntilExists(app, app.buttons["walletSavings-\(name)"], up: true)
+            app.buttons["walletSavings-\(name)"].tap()
+            return false
+        })
+        XCTAssertTrue(scrollUntilExists(app, app.staticTexts["vaultSingleKeyRule"]))
+        XCTAssertEqual(app.staticTexts["vaultSingleKeyRule"].label, "One signing key cannot spend these funds.")
+        Screenshots.capture(app, "35-extra-device-policy", testCase: self)
+        var backup = try accountBackup(in: app)
+        let backedUpAccount = try XCTUnwrap(backup.vaults?.first { $0.name == name })
+        XCTAssertEqual(backedUpAccount.descriptor, vault.descriptor.serialized())
+        XCTAssertEqual(backedUpAccount.utxos.count, 1)
+
+        reviewFromAccount(app, name: name, address: try Self.fixtureAddress(0xE5), amount: "1000000")
+        app.buttons["sendButton"].tap()
+        let psbtOutput = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'cHNidP'")).firstMatch
+        XCTAssertTrue(scrollUntilExists(app, psbtOutput), "payment was not handed straight to the second-signer flow")
+        let unsigned = psbtOutput.label
+
+        func combine(_ text: String) {
+            XCTAssertTrue(scrollUntilExists(app, app.textFields["psbtField"], up: true))
+            app.typeInto("psbtField", text)
+            app.buttons["addPSBTButton"].tap()
+        }
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["musigSignButton"]))
+        XCTAssertFalse(app.buttons["musigSignButton"].isEnabled, "round two needs both nonces")
+        XCTAssertFalse(app.buttons["musigBroadcastButton"].isEnabled)
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["musigNonceButton"], up: true))
+        app.buttons["musigNonceButton"].tap()
+        XCTAssertTrue(poll(timeout: 30, interval: 1, "first nonce session") {
+            self.scrollUntilExists(app, psbtOutput)
+                && (try? PSBT(base64: psbtOutput.label).inputs[0].musig2PubNonces.count) == 1
+        })
+        let abandoned = psbtOutput.label
+        app.buttons["Done"].tap()
+        app.tabBars.buttons["Wallet"].tap()
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["Continue signing"]))
+        app.buttons["Continue signing"].tap()
+        combine(abandoned)
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["musigSignButton"]))
+        XCTAssertFalse(app.buttons["musigSignButton"].isEnabled, "reopening must not restore secret nonces")
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["musigRestartButton"]))
+        app.buttons["musigRestartButton"].tap()
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["musigNonceButton"]))
+        app.buttons["musigNonceButton"].tap()
+        XCTAssertTrue(poll(timeout: 30, interval: 1, "fresh nonce after abandoning session") {
+            self.scrollUntilExists(app, psbtOutput) && psbtOutput.label != abandoned
+                && (try? PSBT(base64: psbtOutput.label).inputs[0].musig2PubNonces.count) == 1
+        })
+
+        // Core starts with the original proposal so it only contributes a
+        // nonce. The phone must still review and approve before either side
+        // can complete the payment.
+        let coreNonce = try external.process(PSBT(base64: unsigned))
+        XCTAssertEqual(coreNonce.inputs[0].musig2PubNonces.count, 1)
+        XCTAssertTrue(coreNonce.inputs[0].musig2PartialSigs.isEmpty)
+        let bothNonces = try PSBT(base64: psbtOutput.label).combined(with: [coreNonce])
+        combine(try bothNonces.base64V0())
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["musigSignButton"]))
+        XCTAssertTrue(app.buttons["musigSignButton"].isEnabled)
+        XCTAssertTrue(scrollUntilExists(app, app.staticTexts["Check this payment"], up: true))
+        Screenshots.capture(app, "36-extra-device-review", testCase: self)
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["musigSignButton"]))
+        app.buttons["musigSignButton"].tap()
+        XCTAssertTrue(poll(timeout: 30, interval: 1, "phone partial signature") {
+            self.scrollUntilExists(app, psbtOutput)
+                && (try? PSBT(base64: psbtOutput.label).inputs[0].musig2PartialSigs.count) == 1
+        })
+        let phoneSigned = try PSBT(base64: psbtOutput.label)
+        XCTAssertTrue(scrollUntilExists(app, app.staticTexts["musigNextStep"], up: true))
+        Screenshots.capture(app, "37-extra-device-waiting", testCase: self)
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["musigBroadcastButton"], up: true))
+        XCTAssertFalse(app.buttons["musigBroadcastButton"].isEnabled, "phone alone must not spend")
+        let signed = try external.process(phoneSigned)
+        XCTAssertEqual(signed.inputs[0].musig2PartialSigs.count, 2)
+        combine(try signed.base64V0())
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["musigBroadcastButton"]))
+        XCTAssertTrue(app.buttons["musigBroadcastButton"].isEnabled)
+        let before = Set(try BitcoinCLI.mempoolTxids())
+        app.buttons["musigBroadcastButton"].tap()
+        XCTAssertTrue(poll(timeout: 60, interval: 1, "MuSig2 spend accepted by Core") {
+            ((try? Set(BitcoinCLI.mempoolTxids()).subtracting(before).isEmpty) ?? true) == false
+        })
+        XCTAssertTrue(app.staticTexts["vaultPaymentSent"].waitForExistence(timeout: 60))
+        XCTAssertFalse(app.staticTexts["Winnow cannot safely review this proposal"].exists)
+        XCTAssertFalse(app.buttons["musigBroadcastButton"].exists)
+        Screenshots.capture(app, "39-extra-device-sent", testCase: self)
+        let txid = try XCTUnwrap(Set(BitcoinCLI.mempoolTxids()).subtracting(before).first)
+        let tx = try BitcoinCLI.runObject(["getrawtransaction", txid, "true"])
+        let inputs = try XCTUnwrap(tx["vin"] as? [[String: Any]])
+        let witness = try XCTUnwrap(inputs.first?["txinwitness"] as? [String])
+        XCTAssertEqual(witness.count, 1, "key-path spend exposed a script")
+        XCTAssertEqual(witness.first?.count, 128, "expected one 64-byte signature")
+        _ = try await SignetMiner.mineOntoTip(payingTo: AddressDecoder.scriptPubKey(
+            for: Self.fixtureAddress(0xD4), network: .signet))
+        let spent = try BitcoinCLI.runJSON(["gettxout", fundingTxid, String(coin.vout)])
+        XCTAssertTrue(spent == nil || spent is NSNull, "the funded output was not spent")
+        backup.mnemonic = Self.mnemonic // represents the separately saved words
+        let expectedChange = try XCTUnwrap(signed.outputs.first { output in
+            output.script == (try? vault.scriptPubKey(index: 0, choice: 1))
+        }?.amount)
+        app = launchApp(run: "musig-restore", reset: true,
+                        clipboard: try backup.serialized(), expectOnboarding: true, advanced: true)
+        app.buttons["importWalletButton"].tap()
+        XCTAssertTrue(app.buttons["importPasteButton"].waitForExistence(timeout: 20))
+        app.buttons["importPasteButton"].tap()
+        XCTAssertTrue(poll(timeout: 15, interval: 1, "backup pasted for restore") {
+            if app.buttons["Allow Paste"].exists { app.buttons["Allow Paste"].tap() }
+            return ((app.textViews["importJSONEditor"].value as? String) ?? "").contains("lastKnownHeight")
+        })
+        app.buttons["importVerifyButton"].tap()
+        XCTAssertTrue(app.staticTexts["Verification report"].waitForExistence(timeout: 180))
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["importContinueButton"]))
+        app.buttons["importContinueButton"].tap()
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["walletSavings-\(name)"]))
+        app.buttons["walletSavings-\(name)"].tap()
+        XCTAssertTrue(scrollUntilExists(app, app.staticTexts["accountBalance"]))
+        let restoredBalance = app.staticTexts["accountBalance"].label.filter(\.isNumber)
+        XCTAssertEqual(Int64(restoredBalance), expectedChange, "restoring replayed the old balance")
+        Screenshots.capture(app, "38-extra-device-restored", testCase: self)
+
+    }
 }

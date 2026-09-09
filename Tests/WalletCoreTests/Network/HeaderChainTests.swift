@@ -33,15 +33,19 @@ struct HeaderChainTests {
         #expect(!work4.isEmpty)
     }
 
-    @Test("rejects a header that does not link to the chain")
-    func rejectsUnlinked() async throws {
+    @Test("rejects a header that does not link to the chain", arguments: [UInt8(0x99), 0])
+    func rejectsUnlinked(parentByte: UInt8) async throws {
         let chain = makeSyntheticChain(length: 3, watchHeight: 6)
         let headerChain = try HeaderChain(params: chain.params)
-        let orphan = minedHeader(previousHash: Data(repeating: 0x99, count: 32),
+        try await headerChain.connect(chain.blocks.dropFirst().map(\.header))
+        // Zero is genesis's previous hash, not a block this chain contains.
+        let orphan = minedHeader(previousHash: Data(repeating: parentByte, count: 32),
                                  merkleRoot: Data(repeating: 0, count: 32), time: 1_600_100_000)
         await #expect(throws: HeaderChainError.doesNotConnect) {
             try await headerChain.connect([orphan])
         }
+        #expect(await headerChain.height == 3)
+        #expect(await headerChain.tipHash == chain.blocks[3].hash)
     }
 
     @Test("rejects headers failing proof of work")
@@ -114,29 +118,6 @@ struct HeaderChainTests {
         }
         #expect(await headerChain.height == 2)
         #expect(await headerChain.tipHash == tipBefore)
-    }
-
-    @Test("bits may change at a period boundary; an unknown parent is not judged")
-    func stableBitsRuleEdges() throws {
-        let chain = makeSyntheticChain(length: 1, watchHeight: 6)
-        let genesis = chain.blocks[0].header
-        let harder = BlockHeader(version: 1, previousHash: genesis.hash,
-                                 merkleRoot: Data(repeating: 0xD3, count: 32),
-                                 time: genesis.time + 600, bits: 0x207F_FFFE, nonce: 0)
-        let interval = HeaderChain.difficultyAdjustmentInterval
-        #expect(throws: HeaderChainError.unexpectedDifficulty(height: 1)) {
-            try HeaderChain.requireStableBits(harder, previous: genesis, height: 1)
-        }
-        #expect(throws: HeaderChainError.unexpectedDifficulty(height: interval + 1)) {
-            try HeaderChain.requireStableBits(harder, previous: genesis, height: interval + 1)
-        }
-        // The first block of a period is where the schedule allows a change.
-        try HeaderChain.requireStableBits(harder, previous: genesis, height: interval)
-        try HeaderChain.requireStableBits(harder, previous: genesis, height: interval * 3)
-        // Unchanged bits pass anywhere inside the period.
-        try HeaderChain.requireStableBits(genesis, previous: genesis, height: 1)
-        // A parent below the chain's base is unknown: nothing to compare against.
-        try HeaderChain.requireStableBits(harder, previous: nil, height: 1)
     }
 
     @Test("a longer branch replaces; a shorter one is refused")
@@ -453,6 +434,10 @@ struct HeaderChainTests {
         let next = try BlockHeader.decode(Self.block900_001)
         #expect(try await chain.connect([next]).appended == 1)
         #expect(await chain.height == cp.height + 1)
+        // The checkpoint's predecessor is outside this retained chain.
+        await #expect(throws: HeaderChainError.doesNotConnect) {
+            try await chain.connect([BlockHeader.decode(cp.header)])
+        }
         let workAfter = await chain.tipWork
 
         // Reopening must land on exactly the same chain — this is the format

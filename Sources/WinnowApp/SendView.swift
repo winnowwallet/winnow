@@ -15,6 +15,8 @@ struct SendReviewInputs: Equatable {
     /// derived at, so a review made for an earlier address is never reused.
     var personID: String?
     var paymentIndex: UInt32?
+    var accountID: String?
+    var walletID: String?
 
     var trimmedDestination: String {
         destination.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -30,17 +32,17 @@ struct SendReviewInputs: Equatable {
 /// ("seen in block N").
 struct SendView: View {
     @Environment(AppModel.self) private var model
+    @Binding var accountID: String?
 
-    /// Preselected when opened from a person's screen, where the view is a
-    /// sheet and needs its own way out.
-    init(recipient: PersonRecord? = nil) {
-        _selectedPersonID = State(initialValue: recipient?.id)
-        presentedAsSheet = recipient != nil
+    private struct Approval: Identifiable {
+        let record: VaultRecord
+        let psbt: PSBT
+        var id: String { record.id }
     }
+    @State private var approval: Approval?
 
-    private let presentedAsSheet: Bool
-    @Environment(\.dismiss) private var dismiss
     @State private var selectedPersonID: String?
+    @State private var showRecipients = false
     @State private var destination = ""
     @State private var amountText = ""
     @State private var priority: FeePolicy.Priority = .medium
@@ -48,6 +50,7 @@ struct SendView: View {
     @State private var resolvedRate: Double?
     @State private var preview: AppModel.SendPreview?
     @State private var error: String?
+    @State private var reviewing = false
     @State private var sending = false
     @State private var sentTxid: Data?
     /// Hex of the signed transaction, while it is still pending.
@@ -56,32 +59,27 @@ struct SendView: View {
     @State private var relayedPeers: Set<String> = []
     @State private var feeFloorNotice = false
     @State private var confirmedHeight: UInt32?
-    @FocusState private var amountFocused: Bool
-
-    private var override: Double? {
-        Double(overrideText.trimmingCharacters(in: .whitespaces))
-    }
+    private enum Field { case destination, amount, fee }
+    @FocusState private var focusedField: Field?
 
     private var selectedPerson: PersonRecord? {
         guard let selectedPersonID else { return nil }
-        return model.people.first { $0.id == selectedPersonID && $0.payTo != nil }
-    }
-
-    private var payablePeople: [PersonRecord] {
-        model.people.filter { $0.payTo != nil }
+        return model.people.first { $0.id == selectedPersonID && $0.isSavedRecipient }
     }
 
     private var reviewInputs: SendReviewInputs {
         SendReviewInputs(destination: selectedPerson == nil ? destination : "",
                          amountText: amountText,
-                         priority: priority, overrideText: overrideText,
+                         priority: model.advancedMode ? priority : .medium,
+                         overrideText: model.advancedMode ? overrideText : "",
                          network: model.network,
                          personID: selectedPerson?.id,
-                         paymentIndex: selectedPerson?.nextPaymentIndex)
+                         paymentIndex: selectedPerson?.nextPaymentIndex,
+                         accountID: accountID, walletID: model.walletID)
     }
 
     private var canReview: Bool {
-        guard Int64(amountText) != nil else { return false }
+        guard let amount = Int64(amountText), amount > 0 else { return false }
         if selectedPerson != nil { return true }
         return !destination.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -89,72 +87,13 @@ struct SendView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Destination") {
-                    if let person = selectedPerson {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(person.name)
-                                    .accessibilityIdentifier("selectedPersonName")
-                                Text(person.derivesFreshAddresses ? "Fresh address for this payment" : "Their single address")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Button("Change") { selectedPersonID = nil }
-                                .accessibilityIdentifier("changeRecipientButton")
-                        }
-                    } else {
-                        TextField("Bitcoin address", text: $destination)
-                            .font(.system(.footnote, design: .monospaced))
-                            .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
-                            .accessibilityIdentifier("destinationField")
-                        Button("Paste") {
-                            destination = UIPasteboard.general.string ?? ""
-                        }
-                        .accessibilityIdentifier("pasteDestinationButton")
-                        if !payablePeople.isEmpty {
-                            Menu("Choose a person") {
-                                ForEach(payablePeople) { person in
-                                    Button(person.name) {
-                                        selectedPersonID = person.id
-                                        destination = ""
-                                    }
-                                    .accessibilityIdentifier("choosePerson-\(person.name)")
-                                }
-                            }
-                            .accessibilityIdentifier("choosePersonMenu")
-                        }
-                    }
-                    TextField("Amount (sats)", text: $amountText)
-                        .keyboardType(.numberPad)
-                        .focused($amountFocused)
-                        .accessibilityIdentifier("amountField")
-                        .toolbar {
-                            ToolbarItemGroup(placement: .keyboard) {
-                                Spacer()
-                                Button("Done") { amountFocused = false }
-                            }
-                        }
+                if let sentTxid {
+                    paymentStatus(sentTxid)
+                } else if let preview {
+                    paymentReview(preview)
+                } else {
+                    paymentForm
                 }
-
-
-                Section {
-                    Picker("Priority", selection: $priority) {
-                        Text("Low").tag(FeePolicy.Priority.low)
-                        Text("Medium").tag(FeePolicy.Priority.medium)
-                        Text("High").tag(FeePolicy.Priority.high)
-                    }
-                    LabeledContent("Resolved rate", value: resolvedRate.map(feeRateText) ?? "—")
-                    LabeledContent("Network floor", value: model.status.feeFloorSatPerVByte.map(feeRateText) ?? "unknown")
-                    TextField("Override (sat/vB, optional)", text: $overrideText)
-                        .keyboardType(.decimalPad)
-                } header: {
-                    Text("Fee")
-                } footer: {
-                    Text("A filter-only wallet cannot see the fee market: the rate is the override, then your own confirmed transactions' median, then a conservative preset — never below the peers' relay floor.")
-                }
-
                 if let error {
                     Section {
                         Text(error)
@@ -163,144 +102,47 @@ struct SendView: View {
                             .accessibilityIdentifier("sendError")
                     }
                 }
-
-                if sentTxid == nil {
-                    Section {
-                        Button("Review payment") { review() }
-                            .accessibilityIdentifier("reviewButton")
-                            .disabled(!canReview)
-                    }
-                }
-
-                if let preview, sentTxid == nil {
-                    Section("Review") {
-                        if let recipient = preview.recipient {
-                            VStack(alignment: .leading, spacing: 3) {
-                                LabeledContent("Pays", value: recipient.name)
-                                    .accessibilityIdentifier("reviewRecipient")
-                                Text(preview.destination)
-                                    .font(.system(.caption2, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                    .textSelection(.enabled)
-                                    .accessibilityIdentifier("reviewDestination")
-                            }
-                            if !recipient.derivesFreshAddresses {
-                                Label("\(recipient.name) gave you a single address, so this payment reuses it. Anyone watching the chain can tie your payments to \(recipient.name) together. Ask \(recipient.name) for a Winnow contact card to get a fresh address each time.",
-                                      systemImage: "eye")
-                                    .font(.footnote)
-                                    .foregroundStyle(.orange)
-                                    .accessibilityIdentifier("addressReuseWarning")
-                            }
-                        } else {
-                            LabeledContent("Pays", value: abbreviated(preview.destination))
-                        }
-                        LabeledContent("Amount",
-                                       value: satsText(preview.payments.map(\.amount).reduce(0, +)))
-                        LabeledContent("Fee", value: satsText(preview.fee))
-                        LabeledContent("Rate", value: feeRateText(preview.feeRateSatPerVByte))
-                        LabeledContent("Inputs", value: "\(preview.inputCount)")
-                        if let change = preview.changeAmount {
-                            LabeledContent("Change back", value: satsText(change))
-                        }
-                        // Warn, never block. A small consolidating or test
-                        // payment is legitimate and the user may mean it;
-                        // refusing outright would be worse than the current
-                        // silence (#140).
-                        if let proportion = preview.feeProportion {
-                            Label(proportion.message(sats: satsText),
-                                  systemImage: "exclamationmark.triangle")
-                                .font(.footnote)
-                                .foregroundStyle(.orange)
-                                .accessibilityIdentifier("feeProportionWarning")
-                        }
-                        // #151: sending mid-sync stamps a locktime below the
-                        // real tip, a gap Core-built transactions essentially
-                        // never show. The send is allowed; the disclosure is
-                        // made here so it is at least informed.
-                        if preview.locktimeLagsTip {
-                            Label("Header sync is still catching up, so this transaction will "
-                                  + "carry a locktime behind the network tip — on-chain, that "
-                                  + "reveals it was signed mid-sync. Waiting for sync avoids it.",
-                                  systemImage: "clock.arrow.circlepath")
-                                .font(.footnote)
-                                .foregroundStyle(.orange)
-                                .accessibilityIdentifier("locktimeLagWarning")
-                        }
-                        Button(sending ? "Signing & broadcasting…" : "Sign & broadcast") { send() }
-                            .accessibilityIdentifier("sendButton")
-                            .disabled(sending)
-                    }
-                }
-
-                if let sentTxid {
-                    Section("Broadcast") {
-                        CopyableIdentifier(value: sentTxid.displayHex,
-                                           accessibilityID: "copyBroadcastTransactionIDButton")
-                        // Winnow relays over its own peers and has no fallback
-                        // submission path, so when relay is not working the
-                        // signed bytes are the only way out of the device.
-                        // Withdrawn once a block has it: at that point the
-                        // transaction is public and the txid is the handle,
-                        // so offering the bytes only invites confusion.
-                        if let rawTransaction, confirmedHeight == nil {
-                            CopyableIdentifier(value: rawTransaction, abbreviated: true,
-                                               label: "Copy raw",
-                                               accessibilityID: "copyRawTransactionButton")
-                        }
-                        WarnedExplorerLink(
-                            title: "View transaction",
-                            url: model.esploraTransactionURL(sentTxid),
-                            exposedItem: "transaction ID",
-                            accessibilityID: "explorerBroadcastButton")
-                        if !relayedPeers.isEmpty {
-                            Text("Relayed to \(relayedPeers.count) peer(s)")
-                                .font(.footnote)
-                                .accessibilityIdentifier("relayedCount")
-                        }
-                        if feeFloorNotice {
-                            Label("The network relay floor is now above this fee — it may not propagate; consider a higher fee.",
-                                  systemImage: "exclamationmark.triangle")
-                                .font(.footnote)
-                                .foregroundStyle(.orange)
-                                .accessibilityIdentifier("feeFloorNotice")
-                        }
-                        ForEach(Array(relayLog.enumerated()), id: \.offset) { _, line in
-                            Text(line).font(.footnote)
-                        }
-                        if let confirmedHeight {
-                            Label("Seen in block \(confirmedHeight)", systemImage: "checkmark.seal")
-                                .foregroundStyle(.green)
-                                .accessibilityIdentifier("broadcastConfirmed")
-                        } else {
-                            Text("Awaiting confirmation — a filter match will report the block here.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .accessibilityIdentifier("broadcastPending")
-                        }
-                        Button("New payment") { reset() }
-                    }
+            }
+            .disabled(sending)
+            // Each step starts at the top, including after editing a long form.
+            .id(sentTxid != nil ? "sent" : preview != nil ? "review" : "form")
+            .navigationTitle(sentTxid != nil ? "Payment" : preview != nil ? "Review payment" : "Send")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { focusedField = nil }
                 }
             }
-            .navigationTitle("Send")
-            .toolbar {
-                if presentedAsSheet {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Done") { dismiss() }
-                            .accessibilityIdentifier("sendSheetDoneButton")
-                    }
+            .sheet(isPresented: $showRecipients) {
+                SavedRecipientsView { person in
+                    selectedPersonID = person.id
+                    destination = ""
+                }
+            }
+            .sheet(item: $approval, onDismiss: reset) { approval in
+                if (try? model.vault(for: approval.record).isScriptPath) == true {
+                    ApprovalView(recordID: approval.record.id, initialPSBT: approval.psbt)
+                } else {
+                    MuSig2SignView(recordID: approval.record.id, initialPSBT: approval.psbt)
                 }
             }
             .task(id: feeInputs) {
-                resolvedRate = await model.resolvedFeeRate(priority: priority, override: override)
+                let inputs = reviewInputs
+                resolvedRate = await model.resolvedFeeRate(
+                    priority: inputs.priority, override: Double(inputs.overrideText.trimmingCharacters(in: .whitespaces)))
             }
             .task(id: sentTxid) {
                 await watchBroadcastEvents()
             }
             .onChange(of: reviewInputs) { _, _ in
-                // Any edit invalidates the authorization review immediately.
-                // The async request guard in review() also prevents an older
-                // request from restoring it after this change.
-                preview = nil
+                // Edits invalidate authorization, but never rewrite a receipt.
+                if sentTxid == nil, !sending { preview = nil }
+            }
+            .onChange(of: accountID) { _, _ in reset() }
+            .onChange(of: model.walletID) { _, _ in accountID = nil; reset() }
+            .onChange(of: model.vaults.map(\.id)) { _, ids in
+                if let accountID, !ids.contains(accountID) { self.accountID = nil }
             }
             .onChange(of: model.status.history) { _, history in
                 guard let sentTxid, confirmedHeight == nil,
@@ -311,17 +153,256 @@ struct SendView: View {
         }
     }
 
-    /// Recomputes the resolved rate when priority/override/floor change.
-    private var feeInputs: String {
-        "\(priority.rawValue)|\(overrideText)|\(model.status.feeFloorSatPerVByte ?? -1)"
+    private var paymentForm: some View {
+        Group {
+            if !model.vaults.isEmpty {
+                Section("From") {
+                    Picker("Account", selection: $accountID) {
+                        Text("Everyday wallet").tag(String?.none)
+                        ForEach(model.vaults) { record in
+                            Text(record.name).tag(Optional(record.id))
+                        }
+                    }
+                    .accessibilityIdentifier("sendAccountPicker")
+                    LabeledContent("Available", value: satsText(
+                        model.vaults.first { $0.id == accountID }?.balance ?? model.status.balance))
+                }
+            }
+            Section("To") {
+                if let person = selectedPerson {
+                    HStack {
+                        Text(person.name)
+                            .accessibilityIdentifier("selectedPersonName")
+                        Spacer()
+                        Button("Change") { selectedPersonID = nil }
+                            .accessibilityIdentifier("changeRecipientButton")
+                    }
+                } else {
+                    HStack {
+                        TextField("Bitcoin address", text: $destination)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .focused($focusedField, equals: .destination)
+                            .accessibilityIdentifier("destinationField")
+                        Button("Paste") {
+                            destination = UIPasteboard.general.string ?? ""
+                        }
+                        .accessibilityIdentifier("pasteDestinationButton")
+                    }
+                    Button("Saved recipients") { showRecipients = true }
+                        .accessibilityIdentifier("savedRecipientsButton")
+                }
+            }
+            Section {
+                HStack {
+                    TextField("0", text: $amountText)
+                        .keyboardType(.numberPad)
+                        .focused($focusedField, equals: .amount)
+                        .accessibilityLabel("Amount in sats")
+                        .accessibilityIdentifier("amountField")
+                    Text("sats").foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Amount")
+            } footer: {
+                Text("You'll see the network fee before you send.")
+            }
+            if model.advancedMode { feeControls }
+            Section {
+                Button(reviewing ? "Preparing review…" : "Review payment") { review() }
+                    .accessibilityIdentifier("reviewButton")
+                    .disabled(!canReview || reviewing)
+            }
+        }
     }
 
-    private func abbreviated(_ destination: String) -> String {
-        guard destination.count > 32 else { return destination }
-        return "\(destination.prefix(16))…\(destination.suffix(12))"
+    private var feeControls: some View {
+        Section {
+            Picker("Priority", selection: $priority) {
+                Text("Low").tag(FeePolicy.Priority.low)
+                Text("Medium").tag(FeePolicy.Priority.medium)
+                Text("High").tag(FeePolicy.Priority.high)
+            }
+            .accessibilityIdentifier("feePriorityPicker")
+            LabeledContent("Resolved rate", value: resolvedRate.map(feeRateText) ?? "—")
+            LabeledContent("Network floor", value: model.status.feeFloorSatPerVByte.map(feeRateText) ?? "unknown")
+            TextField("Override (sat/vB, optional)", text: $overrideText)
+                .keyboardType(.decimalPad)
+                .focused($focusedField, equals: .fee)
+                .accessibilityIdentifier("feeOverrideField")
+        } header: {
+            Text("Fee")
+        } footer: {
+            Text("The rate uses your override, recent confirmed fees, or a preset, never below the peers' relay floor. It is not a live fee-market estimate.")
+        }
+    }
+
+    private func paymentAmounts(_ preview: AppModel.SendPreview) -> some View {
+        Section {
+            LabeledContent("Amount", value: satsText(preview.amountSent))
+                .accessibilityIdentifier("reviewAmount")
+                .accessibilityValue(satsText(preview.amountSent))
+            LabeledContent("Network fee", value: satsText(preview.fee))
+                .accessibilityIdentifier("reviewFee")
+                .accessibilityValue(satsText(preview.fee))
+            LabeledContent("Total", value: satsText(preview.amountSent + preview.fee))
+                .bold()
+                .accessibilityIdentifier("reviewTotal")
+                .accessibilityValue(satsText(preview.amountSent + preview.fee))
+        }
+    }
+
+    private func paymentReview(_ preview: AppModel.SendPreview) -> some View {
+        Group {
+            if case let .vault(record, _) = preview.source {
+                Section("From") {
+                    Text(record.name).accessibilityIdentifier("reviewAccount")
+                    if let vault = try? model.vault(for: record) {
+                        Text(vault.isScriptPath
+                             ? "Any \(vault.threshold) of \(vault.signerCount) keys must approve."
+                             : "Every signing device must approve.")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } else if !model.vaults.isEmpty {
+                Section("From") {
+                    Text("Everyday wallet").accessibilityIdentifier("reviewAccount")
+                }
+            }
+            Section("To") {
+                if let recipient = preview.recipient {
+                    Text(recipient.name)
+                        .accessibilityIdentifier("reviewRecipient")
+                }
+                ReviewAddress(address: preview.destination)
+            }
+            paymentAmounts(preview)
+            reviewWarnings(preview)
+            Section {
+                Button(actionTitle(preview)) { send() }
+                    .accessibilityIdentifier("sendButton")
+                    .disabled(sending)
+                Button("Edit payment") {
+                    self.preview = nil
+                    error = nil
+                }
+                .accessibilityIdentifier("editPaymentButton")
+                .disabled(sending)
+            }
+            if model.advancedMode {
+                Section("Transaction details") {
+                    LabeledContent("Rate", value: feeRateText(preview.feeRateSatPerVByte))
+                    LabeledContent("Inputs", value: "\(preview.inputCount)")
+                    if let change = preview.changeAmount {
+                        LabeledContent("Change back", value: satsText(change))
+                    }
+                }
+            }
+        }
+    }
+
+    private func actionTitle(_ preview: AppModel.SendPreview) -> String {
+        if sending { return "Working…" }
+        switch preview.source {
+        case .wallet: return "Send payment"
+        case .vault: return "Continue to approvals"
+        }
+    }
+
+    private func reviewWarnings(_ preview: AppModel.SendPreview) -> some View {
+        Group {
+            if let recipient = preview.recipient, !recipient.derivesFreshAddresses {
+                Section {
+                    Label("This address has been saved for reuse. Repeated payments can be linked. Ask \(recipient.name) for a fresh address or Winnow contact card.", systemImage: "eye")
+                        .accessibilityIdentifier("addressReuseWarning")
+                }
+            }
+            if let proportion = preview.feeProportion {
+                Section {
+                    Label(proportion.message(sats: satsText), systemImage: "exclamationmark.triangle")
+                        .accessibilityIdentifier("feeProportionWarning")
+                }
+            }
+            if preview.locktimeLagsTip {
+                Section {
+                    Label("Your wallet is still syncing. Sending now can reveal that on the Bitcoin network. Wait for sync to finish for better privacy.", systemImage: "clock.arrow.circlepath")
+                        .accessibilityIdentifier("locktimeLagWarning")
+                }
+            }
+        }
+        .font(.footnote)
+        .foregroundStyle(.orange)
+    }
+
+    private func paymentStatus(_ txid: Data) -> some View {
+        Group {
+            Section {
+                if confirmedHeight != nil {
+                    Label("Payment confirmed", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .accessibilityIdentifier("broadcastConfirmed")
+                } else {
+                    Label("Waiting for confirmation", systemImage: "clock")
+                        .accessibilityIdentifier("broadcastPending")
+                    Text("You can leave this screen. Follow this payment in Wallet.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                if feeFloorNotice {
+                    Label("The network now requires a higher fee. This payment may be delayed. Advanced mode lets you raise its fee in Wallet.", systemImage: "exclamationmark.triangle")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                        .accessibilityIdentifier("feeFloorNotice")
+                }
+            }
+            if let preview { paymentAmounts(preview) }
+            Section {
+                Button("New payment") { reset() }
+                    .accessibilityIdentifier("newPaymentButton")
+            }
+            Section {
+                NavigationLink {
+                    Form {
+                        CopyableIdentifier(value: txid.displayHex,
+                                           accessibilityID: "copyBroadcastTransactionIDButton")
+                        // Keep signed bytes available if peer relay fails.
+                        if let rawTransaction, confirmedHeight == nil {
+                            CopyableIdentifier(value: rawTransaction, abbreviated: true,
+                                               label: "Copy raw transaction",
+                                               accessibilityID: "copyRawTransactionButton")
+                        }
+                        WarnedExplorerLink(
+                            title: "View transaction",
+                            url: model.esploraTransactionURL(txid),
+                            exposedItem: "transaction ID",
+                            accessibilityID: "explorerBroadcastButton")
+                        if !relayedPeers.isEmpty {
+                            Text("Relayed to \(relayedPeers.count) peer(s)")
+                                .accessibilityIdentifier("relayedCount")
+                        }
+                        ForEach(Array(relayLog.enumerated()), id: \.offset) { _, line in
+                            Text(line).font(.footnote)
+                        }
+                        if let confirmedHeight {
+                            LabeledContent("Block", value: "\(confirmedHeight)")
+                        }
+                    }
+                    .navigationTitle("Transaction details")
+                } label: {
+                    Text("Transaction details")
+                }
+                .accessibilityIdentifier("transactionDetailsButton")
+            }
+        }
+    }
+
+    private var feeInputs: String {
+        "\(reviewInputs.priority.rawValue)|\(reviewInputs.overrideText)|\(model.status.feeFloorSatPerVByte ?? -1)"
     }
 
     private func review() {
+        guard !reviewing else { return }
+        focusedField = nil
         error = nil
         preview = nil
         let requested = reviewInputs
@@ -330,16 +411,19 @@ struct SendView: View {
             return
         }
         let person = selectedPerson
+        reviewing = true
         Task {
+            defer { reviewing = false }
             do {
                 let override = Double(requested.overrideText.trimmingCharacters(in: .whitespaces))
                 let candidate = if let person {
                     try await model.previewSend(to: person, amount: amount,
-                                                priority: requested.priority, override: override)
+                                                priority: requested.priority, override: override,
+                                                accountID: requested.accountID)
                 } else {
                     try await model.previewSend(
                         destination: requested.destination, amount: amount,
-                        priority: requested.priority, override: override)
+                        priority: requested.priority, override: override, accountID: requested.accountID)
                 }
                 guard requested == reviewInputs else { return }
                 preview = candidate
@@ -357,12 +441,28 @@ struct SendView: View {
         // check just keeps an accidental second tap from surfacing an error
         // banner instead of doing nothing.
         guard let preview, !sending else { return }
+        let requested = reviewInputs
         sending = true
         error = nil
         Task {
             do {
+                if case let .vault(record, psbt) = preview.source {
+                    try await model.prepareVaultApproval(preview)
+                    if requested.accountID == accountID, requested.walletID == model.walletID {
+                        approval = Approval(record: record, psbt: psbt)
+                    }
+                    sending = false
+                    return
+                }
                 let txid = try await model.send(preview: preview)
+                guard requested.accountID == accountID, requested.walletID == model.walletID else {
+                    sending = false
+                    return
+                }
                 sentTxid = txid
+                // Paying a person advances their address index during send().
+                // Keep the authorized snapshot as the receipt after that edit.
+                self.preview = preview
                 rawTransaction = await model.rawTransactionHex(txid)
             } catch {
                 self.error = error.localizedDescription
@@ -442,5 +542,33 @@ struct SendView: View {
                 break
             }
         return false
+    }
+}
+
+/// Addresses must wrap literally: prose layout can insert a visible hyphen
+/// that is not part of the address. UIKit exposes character wrapping directly.
+struct ReviewAddress: UIViewRepresentable {
+    let address: String
+
+    func makeUIView(context: Context) -> UILabel {
+        let label = UILabel()
+        label.accessibilityIdentifier = "reviewDestination"
+        label.numberOfLines = 0
+        label.lineBreakMode = .byCharWrapping
+        label.adjustsFontForContentSizeCategory = true
+        label.font = UIFontMetrics(forTextStyle: .footnote).scaledFont(
+            for: .monospacedSystemFont(ofSize: 13, weight: .regular))
+        label.textAlignment = .left
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return label
+    }
+
+    func updateUIView(_ label: UILabel, context: Context) {
+        label.text = address
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UILabel, context: Context) -> CGSize? {
+        guard let width = proposal.width else { return nil }
+        return uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
     }
 }

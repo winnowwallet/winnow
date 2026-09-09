@@ -40,6 +40,25 @@ app release version.
 
 ## Which tests say what
 
+The two multiple-key stories have separate acceptance evidence. Shared control
+uses a 2-of-3 account: two approvals complete the payment while the third signer
+is absent. The extra-device MuSig2 journey requires both keys, refuses to finish
+with only the phone's signature, abandons nonces when its signing screen closes,
+and completes a single-signature key-path spend with Bitcoin Core 31.1 as the
+second signer. Both shared-payment flows check that sending ends on a clear
+success screen, without leaving an obsolete signing review in view. The MuSig2
+journey saves a backup before payment and restores it afterward, checking the
+remaining account balance. It does not establish hardware-wallet
+or custody-provider compatibility. A group nested inside a threshold account is a
+separate advanced composition, not substitute evidence for the direct MuSig2 UI.
+
+Policy explanations must come from the actual descriptor, including 1-of-n.
+Names, contact mappings, and PSBT metadata must not change signing requirements
+or establish output ownership. Keep adversarial checks for altered policies,
+forged change metadata, missing signatures, and nonce reuse. Provider, trust,
+physical key separation, and coercion claims require evidence outside a
+simulator; their unverified integrations belong on the roadmap.
+
 - UITests drives setup/backup, receipt, send, recovery/export, people, shared
   savings, beginner controls, advanced approvals, group signing, fee replacement,
   and disclosure controls. CI runs the complete ordered suite for app/protocol

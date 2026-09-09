@@ -2,65 +2,6 @@ import SwiftUI
 import UIKit
 import WalletCore
 
-/// The raw vault list (k-of-n script-path and n-of-n MuSig2), as a section
-/// of the People tab in Advanced mode. Beginners see the same vaults as
-/// shared savings; this is the expert view of the same records.
-struct VaultsSection: View {
-    @Environment(AppModel.self) private var model
-    @State private var showCreate = false
-
-    var body: some View {
-        Section {
-            if model.vaults.isEmpty {
-                Text("No vaults yet. A vault is a shared-custody Taproot descriptor watched by the same filter stream as the wallet.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(model.vaults) { record in
-                NavigationLink(destination: VaultDetailView(recordID: record.id)) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(record.name)
-                        Text(policySummary(record))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Text(satsText(record.balance))
-                        .font(.subheadline)
-                }
-            }
-            .onDelete { offsets in
-                for index in offsets {
-                    Task { await model.removeVault(id: model.vaults[index].id) }
-                }
-            }
-            // The sheet hangs off the row, not the Section: a modifier on a
-            // Section inside a List is dropped, and the sheet never presents.
-            Button("New vault") { showCreate = true }
-                .accessibilityIdentifier("newVaultButton")
-                .sheet(isPresented: $showCreate) {
-                    VaultCreateView()
-                }
-        } header: {
-            Text("Vaults")
-        } footer: {
-            Text("The descriptors behind shared savings, and MuSig2 vaults, with their PSBT tools.")
-        }
-    }
-
-    private func policySummary(_ record: VaultRecord) -> String {
-        guard let vault = try? Vault(record.descriptor, network: model.network) else {
-            return "invalid descriptor"
-        }
-        switch vault.policy {
-        case let .multiA(threshold, _, cosigners, _):
-            return "\(threshold)-of-\(cosigners.count) · script path"
-        case let .muSig2(participants, _):
-            return "\(participants.count)-of-\(participants.count) · MuSig2 key path"
-        }
-    }
-}
-
 /// Builds a vault descriptor from cosigner key expressions (pasted, or this
 /// device's own wallet key), previews the descriptor and first address, and
 /// saves it into the vault store.
@@ -75,6 +16,10 @@ struct VaultCreateView: View {
     @State private var error: String?
     @State private var saving = false
 
+    init(role: VaultCosignerRole = .scriptPath) {
+        _draft = State(initialValue: VaultDraft(role: role))
+    }
+
     private var isMuSig2: Bool { draft.role == .muSig2 }
     private var policyName: String { isMuSig2 ? "MuSig2" : "k-of-n" }
 
@@ -84,7 +29,7 @@ struct VaultCreateView: View {
                 Section {
                     TextField("Vault name", text: $name)
                         .accessibilityIdentifier("vaultNameField")
-                    Picker("Policy", selection: Binding(
+                    Picker("Who must approve", selection: Binding(
                         get: { draft.role },
                         set: { role in
                             if draft.setRole(role) {
@@ -93,9 +38,10 @@ struct VaultCreateView: View {
                             }
                         }
                     )) {
-                        Text("k-of-n (script path)").tag(VaultCosignerRole.scriptPath)
-                        Text("n-of-n (MuSig2)").tag(VaultCosignerRole.muSig2)
+                        Text("Choose a threshold").tag(VaultCosignerRole.scriptPath)
+                        Text("Every signing key").tag(VaultCosignerRole.muSig2)
                     }
+                    .accessibilityIdentifier("vaultPolicyPicker")
                     .disabled(!draft.cosigners.isEmpty)
                     if !isMuSig2 {
                         if draft.cosigners.count >= 2 {
@@ -121,6 +67,11 @@ struct VaultCreateView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                } footer: {
+                    Text(isMuSig2
+                         ? "Use separate keys for this phone and another signing device. Every key is needed for every payment; losing a required key can lock the funds. External signers must support Winnow’s MuSig2 exchange; hardware-wallet compatibility is not yet verified."
+                         : "Share control with a threshold such as 2 of 3. Any two keys can authorize a payment; one can be unavailable. Keep the keys separate if you want one device to be insufficient.")
+                        .accessibilityIdentifier("vaultPurpose")
                 }
 
                 Section {
@@ -167,6 +118,7 @@ struct VaultCreateView: View {
                 }
 
                 if let builtDescriptor, let vault = try? Vault(descriptor: builtDescriptor, network: model.network) {
+                    VaultPolicySection(vault: vault)
                     Section("Descriptor") {
                         CopyableTextBlock(text: builtDescriptor.serialized())
                             .accessibilityIdentifier("descriptorBlock")

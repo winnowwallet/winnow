@@ -48,6 +48,10 @@ private final class EffectCollector: @unchecked Sendable {
 /// and are not in this schema — a restored wallet falls back to presets
 /// until it observes new sends.
 ///
+/// Optional `rawTransaction` is the non-witness transaction, encoded as base64.
+/// Its txid must match the history entry. Older backups omit it; the app can
+/// fetch the known block when the user opens that payment, without rescanning.
+///
 /// Legacy `silentPaymentTweak` signing data is read only to refuse unsupported
 /// coins safely. Version 1 remains readable for ordinary descriptor UTXOs;
 /// writers always emit version 2.
@@ -101,19 +105,21 @@ public struct ImportBundle: Codable, Equatable, Sendable {
         /// The transaction that superseded this one through fee replacement.
         /// Optional so existing v1/v2 bundles remain readable.
         public var replacedBy: String?
+        public var rawTransaction: Data?
 
         public init(txid: String, height: UInt32, received: Int64, spent: Int64,
-                    fee: Int64? = nil, replacedBy: String? = nil) {
+                    fee: Int64? = nil, replacedBy: String? = nil, rawTransaction: Data? = nil) {
             self.txid = txid
             self.height = height
             self.received = received
             self.spent = spent
             self.fee = fee
             self.replacedBy = replacedBy
+            self.rawTransaction = rawTransaction
         }
 
         private enum CodingKeys: String, CodingKey {
-            case txid, height, received, spent, fee, replacedBy
+            case txid, height, received, spent, fee, replacedBy, rawTransaction
         }
 
         public func encode(to encoder: any Encoder) throws {
@@ -124,6 +130,7 @@ public struct ImportBundle: Codable, Equatable, Sendable {
             try container.encode(spent, forKey: .spent)
             try container.encodeIfPresent(fee, forKey: .fee)
             try container.encodeIfPresent(replacedBy, forKey: .replacedBy)
+            try container.encodeIfPresent(rawTransaction, forKey: .rawTransaction)
         }
     }
 
@@ -134,6 +141,8 @@ public struct ImportBundle: Codable, Equatable, Sendable {
     public var lastKnownHeight: UInt32
     public var utxos: [UTXO]
     public var transactions: [KnownTransaction]
+    /// Shared and extra-device accounts. Older backups omit them.
+    public var vaults: [VaultRecord]?
     /// Next unused BIP86 receive index. Absent from v1 files and from
     /// writers that only knew UTXO-derived maxima; the importer then
     /// falls back to `max(receive UTXO index) + 1`.
@@ -176,7 +185,7 @@ public struct ImportBundle: Codable, Equatable, Sendable {
             transactions: history.map { entry in
                 KnownTransaction(txid: entry.txid.displayHex, height: entry.height,
                                  received: entry.received, spent: entry.spent, fee: entry.fee,
-                                 replacedBy: entry.replacedBy?.displayHex)
+                                 replacedBy: entry.replacedBy?.displayHex, rawTransaction: entry.rawTransaction)
             },
             nextReceiveIndex: nextReceiveIndex,
             nextChangeIndex: nextChangeIndex
@@ -197,6 +206,7 @@ public struct ImportBundle: Codable, Equatable, Sendable {
     /// then materialised and scanned.
     public static let maximumSerializedBytes = 8 * 1024 * 1024
     public static let maximumEntries = 50_000
+    public static let maximumVaults = 100
 
     /// Decodes a bundle from untrusted text, refusing implausible sizes before
     /// allocating anything proportional to them.
@@ -220,6 +230,10 @@ public struct ImportBundle: Codable, Equatable, Sendable {
         guard bundle.transactions.count <= maximumEntries else {
             throw WalletError.invalidBundle(
                 "bundle declares \(bundle.transactions.count) transactions, above the \(maximumEntries) limit")
+        }
+        guard (bundle.vaults?.count ?? 0) <= maximumVaults,
+              (bundle.vaults ?? []).reduce(0, { $0 + $1.allUtxos.count }) <= maximumEntries else {
+            throw WalletError.invalidBundle("too many shared accounts or account coins")
         }
         return bundle
     }
@@ -250,11 +264,12 @@ public struct ImportBundle: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case version, network, descriptor, mnemonic, lastKnownHeight, utxos, transactions
-        case nextReceiveIndex, nextChangeIndex
+        case nextReceiveIndex, nextChangeIndex, vaults
     }
 
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(vaults, forKey: .vaults)
         try container.encode(version, forKey: .version)
         try container.encode(network, forKey: .network)
         try container.encodeIfPresent(descriptor, forKey: .descriptor)
@@ -499,9 +514,11 @@ extension Wallet {
                   (0 ... BitcoinAmount.maximum).contains(known.spent),
                   known.fee.map({ (0 ... BitcoinAmount.maximum).contains($0) }) ?? true
             else { throw WalletError.invalidBundle("transaction history has invalid amounts") }
-            return HistoryEntry(txid: Data(txid.reversed()), height: known.height,
+            let entry = HistoryEntry(txid: Data(txid.reversed()), height: known.height,
                                 received: known.received, spent: known.spent, fee: known.fee,
-                                replacedBy: replacedBy)
+                                replacedBy: replacedBy, rawTransaction: known.rawTransaction)
+            _ = try entry.transaction()
+            return entry
         }
     }
 
@@ -509,11 +526,14 @@ extension Wallet {
     /// consuming every matched block, and comparing the outcome against the
     /// bundle's claims (docs/import.md §3). Mismatches — e.g. a claimed
     /// UTXO discovered spent — surface in the report, never silently.
-    public func verifyImport(_ bundle: ImportBundle, using sync: FilterSync) async throws -> ImportReport {
+    public func verifyImport(_ bundle: ImportBundle, using sync: FilterSync,
+                             additionalScripts: [Data] = [],
+                             onMatch: (@Sendable (BlockMatch) async throws -> Void)? = nil) async throws -> ImportReport {
         let fromHeight = await sync.nextScanHeight
         let collector = EffectCollector()
-        try await sync.sync(watchScripts: watchScripts()) { match in
+        try await sync.sync(watchScripts: watchScripts() + additionalScripts) { match in
             collector.add(try await self.apply(match: match))
+            try await onMatch?(match)
         }
         let toHeight = await sync.lastScannedHeight
         return try ImportReport.make(bundle: bundle, effects: collector.effects, finalUTXOs: utxos,

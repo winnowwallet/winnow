@@ -2,17 +2,13 @@ import WalletCore
 import SwiftUI
 import UIKit
 
-/// Signer/combiner/finalizer roles for vault spends (BIP370/371/373).
-///
-/// multi_a k-of-n: collect partial-signed PSBTs, sign with this device's key,
-/// combine when every input carries k signatures, finalize → broadcast.
-///
 /// MuSig2 n-of-n: round 1 attaches this device's public nonce (the secret
 /// nonces stay in this screen's memory — leaving before round 2 abandons the
 /// session), cosigners' nonce-bearing PSBTs are combined, round 2 signs,
 /// partials are combined, aggregated → broadcast.
-struct VaultSignView: View {
+struct MuSig2SignView: View {
     let recordID: String
+    var initialPSBT: PSBT?
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -52,18 +48,12 @@ struct VaultSignView: View {
     private var record: VaultRecord? { model.vaults.first { $0.id == recordID } }
     private var vault: Vault? { record.flatMap { try? Vault($0.descriptor, network: model.network) } }
 
-    private var threshold: Int? {
-        guard case let .multiA(k, _, _, _) = vault?.policy else { return nil }
-        return k
-    }
-
     private var participantCount: Int? {
         guard case let .muSig2(participants, _) = vault?.policy else { return nil }
         return participants.count
     }
 
     /// The lowest per-input count — the spend is ready only when every input is.
-    private var minSignatures: Int { working?.inputs.map(\.tapScriptSignatures.count).min() ?? 0 }
     private var minNonces: Int { working?.inputs.map(\.musig2PubNonces.count).min() ?? 0 }
     private var minPartialSigs: Int { working?.inputs.map(\.musig2PartialSigs.count).min() ?? 0 }
     private var workingInputsRemainAvailable: Bool { spendReview != nil }
@@ -87,54 +77,29 @@ struct VaultSignView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    TextField("Paste a PSBT (Base64)", text: $pasted)
-                        .font(.system(.caption, design: .monospaced))
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .accessibilityIdentifier("psbtField")
-                    Button("Paste from clipboard") {
-                        pasted = UIPasteboard.general.string ?? ""
-                    }
-                    .accessibilityIdentifier("psbtPasteButton")
-                    Button("Add / combine PSBT") { addPasted() }
-                        .accessibilityIdentifier("addPSBTButton")
-                        .disabled(authorizing
-                            || pasted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                } footer: {
-                    Text("The first PSBT becomes the working copy; further PSBTs are combined into it (BIP174 combiner role).")
-                }
-
-                if working != nil {
-                    reviewSection
-                    progressSection
-                    actionsSection
-                }
-
-                if let error {
-                    Section { Text(error).foregroundStyle(.red).font(.footnote) }
-                }
-
-                if let output {
-                    Section("PSBT to share") {
-                        CopyableTextBlock(text: output)
-                    }
-                }
-
                 if let broadcastTxid {
                     Section {
-                        Label("Broadcast", systemImage: "checkmark.seal")
+                        Text("Payment sent")
+                            .font(.headline)
                             .foregroundStyle(.green)
+                            .accessibilityIdentifier("vaultPaymentSent")
                         Text(broadcastTxid.displayHex)
                             .font(.system(.caption2, design: .monospaced))
                             .textSelection(.enabled)
-                        Text("A filter match will confirm it in a block; the vault's balance updates then.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                    } footer: {
+                        Text("You can close this screen.")
                     }
+                } else {
+                    signingSections
                 }
             }
-            .navigationTitle("Sign / combine")
+            .navigationTitle(broadcastTxid == nil ? "Approve payment" : "Payment")
+            .onAppear {
+                if let initialPSBT, working == nil {
+                    pasted = initialPSBT.base64
+                    addPasted()
+                }
+            }
             .task(id: trustedStateIdentity) {
                 refreshSpendReview()
             }
@@ -155,6 +120,38 @@ struct VaultSignView: View {
         }
     }
 
+    @ViewBuilder
+    private var signingSections: some View {
+        Section {
+            TextField("Paste a PSBT (Base64)", text: $pasted)
+                .font(.system(.caption, design: .monospaced))
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .accessibilityIdentifier("psbtField")
+            Button("Paste from clipboard") {
+                pasted = UIPasteboard.general.string ?? ""
+            }
+            .accessibilityIdentifier("psbtPasteButton")
+            Button("Add reply") { addPasted() }
+                .accessibilityIdentifier("addPSBTButton")
+                .disabled(authorizing
+                    || pasted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        } footer: {
+            Text("Paste the payment or the other signer’s reply here.")
+        }
+        if working != nil {
+            reviewSection
+            progressSection
+            actionsSection
+        }
+        if let error {
+            Section { Text(error).foregroundStyle(.red).font(.footnote) }
+        }
+        if let output {
+            Section("PSBT to share") { CopyableTextBlock(text: output) }
+        }
+    }
+
     // MARK: - Review (what you are signing)
 
     private struct OutputLine {
@@ -163,20 +160,10 @@ struct VaultSignView: View {
         let isVaultOwned: Bool
     }
 
-    private var hrp: String { model.network == .mainnet ? "bc" : "tb" }
-
     /// Best-effort scriptPubKey → address; falls back to hex for non-standard
     /// scripts so an unrecognized destination is shown, never hidden.
     private func destination(forScript script: Data) -> String {
-        guard script.count >= 4, let first = script.first else { return script.hex }
-        let version: Int? = first == 0x00 ? 0 : (first >= 0x51 && first <= 0x60 ? Int(first) - 0x50 : nil)
-        guard let version else { return script.hex }
-        let pushLength = Int(script[script.index(script.startIndex, offsetBy: 1)])
-        let program = Data(script.dropFirst(2))
-        guard program.count == pushLength, (2 ... 40).contains(program.count),
-              let address = try? SegwitAddress.encode(hrp: hrp, version: version, program: program)
-        else { return script.hex }
-        return address
+        AddressDecoder.address(for: script, network: model.network) ?? script.hex
     }
 
     /// Outputs the spend pays, materialized once when review succeeds rather
@@ -221,27 +208,29 @@ struct VaultSignView: View {
                     let line = reviewedOutputLines[index]
                     VStack(alignment: .leading, spacing: 3) {
                         HStack {
-                            Text(line.isVaultOwned ? "Vault-owned output" : "Pays")
+                            Text(line.isVaultOwned ? "Back to this account" : "Pays")
                                 .font(.caption)
                                 .foregroundStyle(line.isVaultOwned ? Color.secondary : Color.primary)
                             Spacer()
                             Text("\(line.amount) sat")
                                 .font(.system(.callout, design: .monospaced))
                         }
-                        Text(line.destination)
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
+                        ReviewAddress(address: line.destination)
                     }
                     .padding(.vertical, 1)
                 }
                 if let feeAmount {
                     LabeledContent("Fee", value: "\(feeAmount) sat")
                 }
-                LabeledContent("Sighash", value: sighashLabel)
-                LabeledContent("Version", value: String(spendReview?.transactionVersion ?? 0))
-                LabeledContent("Locktime", value: locktimeLabel)
-                LabeledContent("Sequence", value: sequenceLabel)
+                NavigationLink("Transaction details") {
+                    Form {
+                        LabeledContent("Sighash", value: sighashLabel)
+                        LabeledContent("Version", value: String(spendReview?.transactionVersion ?? 0))
+                        LabeledContent("Locktime", value: locktimeLabel)
+                        LabeledContent("Sequence", value: sequenceLabel)
+                    }
+                    .navigationTitle("Transaction details")
+                }
             } else {
                 Label("Winnow cannot safely review this proposal", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.red)
@@ -250,28 +239,24 @@ struct VaultSignView: View {
                     .foregroundStyle(.red)
             }
         } header: {
-            Text("Review — what you are signing")
+            Text("Check this payment")
         } footer: {
             Text(spendReview == nil
-                 ? "Signing and broadcasting remain disabled until the proposal passes every check."
-                 : "A cosigner can propose any transaction. Winnow verifies known inputs and vault-owned output scripts; your signature authorizes exactly the destinations and fee shown here.")
+                 ? "Fix the problem above before approving this payment."
+                 : "Check the address, amount, and fee on both devices before approving.")
         }
     }
 
     @ViewBuilder
     private var progressSection: some View {
-        if let threshold {
-            Section("Progress") {
-                LabeledContent("Signatures", value: "\(minSignatures) of \(threshold) per input")
-            }
-        } else if let participantCount {
-            Section("Progress") {
-                LabeledContent("Public nonces", value: "\(minNonces) of \(participantCount) per input")
-                LabeledContent("Partial signatures", value: "\(minPartialSigs) of \(participantCount) per input")
+        if let participantCount {
+            Section("Next step") {
+                Text(signingInstruction(required: participantCount))
+                    .accessibilityIdentifier("musigNextStep")
                 if !secretNonces.isEmpty {
-                    Text("This device's secret nonces live only on this screen — leaving before round 2 abandons the session.")
+                    Text("Keep this screen open while you use the other signer. If you leave or lock the phone, start a fresh exchange on both devices.")
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -279,40 +264,56 @@ struct VaultSignView: View {
 
     @ViewBuilder
     private var actionsSection: some View {
-        if let threshold {
+        if let participantCount {
             Section("Actions") {
-                Button("Sign with this device") { signMultiA() }
-                    .disabled(authorizing || !workingInputsRemainAvailable || broadcastTxid != nil)
-                Button(broadcasting ? "Broadcasting…" : "Finalize & broadcast") {
-                    finalizeAndBroadcast()
-                }
-                .disabled(minSignatures < threshold || !workingInputsRemainAvailable
-                    || authorizing || broadcasting || broadcastTxid != nil)
-                if !workingInputsRemainAvailable {
-                    stalePSBTMessage
-                }
-            }
-        } else if let participantCount {
-            Section("Actions") {
-                Button("Round 1 — attach this device's nonce") { attachNonces() }
+                Button("Prepare this phone") { attachNonces() }
+                    .accessibilityIdentifier("musigNonceButton")
                     .disabled(nonceSessionStarted || minNonces >= participantCount
                         || minPartialSigs > 0 || !workingInputsRemainAvailable
                         || authorizing || broadcastTxid != nil)
-                Button("Round 2 — sign with this device") { signMuSig2() }
+                Button("Approve on this phone") { signMuSig2() }
+                    .accessibilityIdentifier("musigSignButton")
                     .disabled(!nonceSessionStarted || signedMuSig2ThisSession
                         || secretNonces.isEmpty || minNonces < participantCount
                         || minPartialSigs >= participantCount || !workingInputsRemainAvailable
                         || authorizing)
-                Button(broadcasting ? "Broadcasting…" : "Aggregate & broadcast") {
+                Button(broadcasting ? "Sending…" : "Send payment") {
                     aggregateAndBroadcast()
                 }
+                .accessibilityIdentifier("musigBroadcastButton")
                 .disabled(minPartialSigs < participantCount || !workingInputsRemainAvailable
                     || authorizing || broadcasting || broadcastTxid != nil)
                 if !workingInputsRemainAvailable {
                     stalePSBTMessage
                 }
+                if minNonces > 0 && broadcastTxid == nil {
+                    Button("Start again") { restartExchange() }
+                        .accessibilityIdentifier("musigRestartButton")
+                        .disabled(authorizing || broadcasting)
+                }
             }
         }
+    }
+
+    private func restartExchange() {
+        guard var proposal = working else { return }
+        for index in proposal.inputs.indices {
+            proposal.inputs[index].pairs.removeAll {
+                [PSBT.InType.musig2PubNonce, PSBT.InType.musig2PartialSig,
+                 PSBT.InType.tapKeySignature, PSBT.InType.finalScriptWitness].contains($0.type)
+            }
+        }
+        clearSensitiveSigningState()
+        working = proposal
+        refreshSpendReview()
+    }
+
+    private func signingInstruction(required: Int) -> String {
+        if minPartialSigs >= required { return "Every approval is here. You can send the payment." }
+        if signedMuSig2ThisSession { return "Copy the request below to the other signer, then add its signed reply here." }
+        if minNonces >= required && nonceSessionStarted { return "The signers are ready. Check the payment, then approve it on this phone." }
+        if nonceSessionStarted { return "Copy the request below to the other signer, then paste its reply above." }
+        return "Check the payment, then prepare this phone for the signing exchange."
     }
 
     private var stalePSBTMessage: some View {
@@ -370,6 +371,7 @@ struct VaultSignView: View {
             reviewedOutputLines = outputLines(for: review)
             spendReviewError = nil
             working = candidate
+            output = try candidate.base64V0()
             if let working { model.journalPSBT(stage: "vault-psbt-combined", psbt: working) }
             pasted = ""
         } catch {
@@ -384,61 +386,6 @@ struct VaultSignView: View {
               let utxo = record.utxos.first(where: { $0.txid == txid && $0.vout == vout })
         else { throw SignError.unknownInput }
         return try vault.muSig2Context(choice: utxo.chain.rawValue, index: utxo.index)
-    }
-
-    // MARK: - multi_a
-
-    private func signMultiA() {
-        guard let initial = working else {
-            error = SignError.noWorkingPSBT.localizedDescription
-            return
-        }
-        operationTask?.cancel()
-        let token = operationEpoch.begin()
-        authorizing = true
-        error = nil
-        operationTask = Task { @MainActor in
-            do {
-                guard let record else { throw SignError.unknownInput }
-                let psbt = try await model.partialSignVaultSpend(
-                    initial, record: record, reason: "Sign this shared-vault transaction")
-                try Task.checkCancellation()
-                guard accepts(token) else { return }
-                working = psbt
-                output = psbt.base64
-            } catch is CancellationError {
-                // Inactive/background transitions deliberately abandon output.
-            } catch {
-                if accepts(token) { self.error = error.localizedDescription }
-            }
-            guard accepts(token) else { return }
-            authorizing = false
-            operationTask = nil
-        }
-    }
-
-    private func finalizeAndBroadcast() {
-        guard !broadcasting, broadcastTxid == nil,
-              let psbt = working, let record else { return }
-        operationTask?.cancel()
-        let token = operationEpoch.begin()
-        broadcasting = true
-        operationTask = Task { @MainActor in
-            do {
-                try Task.checkCancellation()
-                let txid = try await model.finalizeAndBroadcastVaultSpend(psbt, record: record)
-                guard accepts(token) else { return }
-                broadcastTxid = txid
-            } catch is CancellationError {
-                // Broadcast may already have crossed its external commit
-                // point; AppModel remains the source of truth after dismissal.
-            } catch {
-                if accepts(token) { self.error = error.localizedDescription }
-            }
-            guard accepts(token) else { return }
-            broadcasting = false
-            operationTask = nil
-        }
     }
 
     // MARK: - MuSig2
@@ -472,10 +419,11 @@ struct VaultSignView: View {
                 }
                 try Task.checkCancellation()
                 guard accepts(token) else { return }
+                let reply = try result.0.base64V0()
                 secretNonces = result.1
                 nonceSessionStarted = true
                 working = result.0
-                output = result.0.base64
+                output = reply
                 model.journalPSBT(stage: "musig2-public-nonces", psbt: result.0)
             } catch is CancellationError {
                 // Secret nonces produced for an invalidated presentation are
@@ -521,8 +469,9 @@ struct VaultSignView: View {
                 }
                 try Task.checkCancellation()
                 guard accepts(token) else { return }
+                let reply = try psbt.base64V0()
                 working = psbt
-                output = psbt.base64
+                output = reply
                 secretNonces.removeAll(keepingCapacity: false)
                 signedMuSig2ThisSession = true
                 model.journalPSBT(stage: "musig2-partial-signed", psbt: psbt)
@@ -565,8 +514,8 @@ struct VaultSignView: View {
                 guard accepts(token) else { return }
                 broadcastTxid = txid
             } catch is CancellationError {
-                // See finalizeAndBroadcast: the persistent model reconciles
-                // an operation that crossed the broadcast boundary.
+                // The persistent model reconciles an operation that already
+                // crossed the broadcast boundary.
             } catch {
                 if accepts(token) { self.error = error.localizedDescription }
             }

@@ -154,36 +154,31 @@ final class PrivacyShield {
     }
 }
 
-/// The four sections of the wallet shell.
+/// Wallet, Send, and Settings.
 struct MainTabView: View {
     private enum Tab: String, Hashable {
-        case wallet, send, people, settings
-
-        /// `vaults` is what older test launches asked for; the People tab is
-        /// where vaults live now.
-        init?(requested: String) {
-            self.init(rawValue: requested == "vaults" ? "people" : requested)
-        }
+        case wallet, send, settings
     }
 
     @State private var selection: Tab
+    @State private var sendAccountID: String?
 
     init() {
-        let requested = E2EMode.current?.initialTab.flatMap(Tab.init(requested:))
+        let requested = E2EMode.current?.initialTab.flatMap(Tab.init(rawValue:))
         _selection = State(initialValue: requested ?? .wallet)
     }
 
     var body: some View {
         TabView(selection: $selection) {
-            HomeView()
+            HomeView { accountID in
+                sendAccountID = accountID
+                selection = .send
+            }
                 .tabItem { Label("Wallet", systemImage: "bitcoinsign.circle") }
                 .tag(Tab.wallet)
-            SendView()
+            SendView(accountID: $sendAccountID)
                 .tabItem { Label("Send", systemImage: "arrow.up.circle") }
                 .tag(Tab.send)
-            PeopleView()
-                .tabItem { Label("People", systemImage: "person.2") }
-                .tag(Tab.people)
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gear") }
                 .tag(Tab.settings)
