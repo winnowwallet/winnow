@@ -493,7 +493,7 @@ struct WalletTests {
         _ = try await wallet.freshReceiveAddress()
         try await fund(wallet, amount: 42_000, height: 100)
 
-        let reopened = try await Wallet.open(storageURL: url, keyStore: keyStore)
+        let reopened = try Wallet.open(storageURL: url, keyStore: keyStore)
         let reopenedID = await reopened.id
         #expect(reopenedID == "73c5da0a")
         #expect(await reopened.balance == 42_000)

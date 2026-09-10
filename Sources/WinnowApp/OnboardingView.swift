@@ -23,7 +23,7 @@ struct OnboardingView: View {
         NavigationStack {
             List {
                 Section {
-                    Text("A Taproot-only wallet that learns about your money from Bitcoin peers using compact block filters, without asking a wallet server about your addresses. Blocks provide the confirmed record; while Receive is open, Winnow can also show a temporary unconfirmed observation from peer relay traffic. Sync runs while the app is open.")
+                    Text("Your bitcoin, on your phone. Winnow connects directly to the Bitcoin network. Keep the app open while it syncs.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -53,12 +53,12 @@ struct OnboardingView: View {
                         Button {
                             showImport = true
                         } label: {
-                            Label("Import wallet bundle", systemImage: "square.and.arrow.down")
+                            Label("Restore from backup", systemImage: "square.and.arrow.down")
                         }
                         .accessibilityIdentifier("importWalletButton")
                     }
                 } footer: {
-                    Text("Your backup appears immediately; peer and header synchronization continues while you secure it.")
+                    Text("First, write down your recovery words. Then save a backup file from Settings.")
                 }
                 // Settings is not reachable from here, so the network has to
                 // be. Without this, switching to a network with no wallet
@@ -78,7 +78,7 @@ struct OnboardingView: View {
                     } footer: {
                         Text(model.e2e?.forcedNetwork != nil
                              ? "This debug session is locked to public signet."
-                             : "Each network has its own wallet on this device. Switching opens that network's wallet, or this screen when it has none.")
+                             : "Each network has a separate wallet. Signet uses test coins with no value.")
                     }
                 }
                 if let busy {
@@ -222,7 +222,7 @@ private struct MnemonicBackupView: View {
         NavigationStack {
             List {
                 Section {
-                    Text("Write these \(words.count) words down, in order, and keep them offline. They are the only backup of this wallet — they are stored in this device's Keychain and never leave it.")
+                    Text("Write these \(words.count) words down in order and keep them private. You'll also need a backup file from Settings to restore your history and shared accounts.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -247,9 +247,9 @@ private struct MnemonicBackupView: View {
                         ProgressView(progress)
                             .accessibilityIdentifier("backupSyncProgress")
                     } header: {
-                        Text("Wallet synchronization")
+                        Text("Connecting to Bitcoin")
                     } footer: {
-                        Text("You can copy or write down the phrase while Winnow validates headers from Bitcoin peers. Backup does not wait for synchronization.")
+                        Text("You can finish writing down the words while Winnow connects.")
                     }
                 }
                 Section {
@@ -290,25 +290,27 @@ private struct ImportBundleView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    TextEditor(text: $json)
-                        .font(.system(.caption, design: .monospaced))
-                        // Keep real bundles scrollable inside the editor. A
-                        // minimum-only height lets TextEditor expand to the
-                        // full JSON and can push the import action thousands
-                        // of points off-screen.
-                        .frame(height: 160)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .accessibilityIdentifier("importJSONEditor")
-                    Button("Paste from clipboard") {
-                        json = UIPasteboard.general.string ?? ""
+                if !imported {
+                    Section {
+                        TextEditor(text: $json)
+                            .font(.system(.caption, design: .monospaced))
+                            // Keep real bundles scrollable inside the editor. A
+                            // minimum-only height lets TextEditor expand to the
+                            // full JSON and can push the import action thousands
+                            // of points off-screen.
+                            .frame(height: 160)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .accessibilityIdentifier("importJSONEditor")
+                        Button("Paste from clipboard") {
+                            json = UIPasteboard.general.string ?? ""
+                        }
+                        .accessibilityIdentifier("importPasteButton")
+                    } header: {
+                        Text("Paste your backup file (JSON)")
+                    } footer: {
+                        Text("Use the file saved from Settings → Back up wallet. Keep your recovery words too. Backups from other wallets may not include every coin type.")
                     }
-                    .accessibilityIdentifier("importPasteButton")
-                } header: {
-                    Text("Import bundle (JSON)")
-                } footer: {
-                    Text("Exported by Winnow (Settings → Export wallet bundle) or by previous wallet software: descriptor and/or mnemonic, known UTXOs and transactions, and the last scanned height. There is no back-scan — the bundle is the history; filters verify it from its height forward.\n\nOnly coins derived from the wallet descriptor can be restored here. Keep your original wallet and backup for any unsupported coin types.")
                 }
                 if busy {
                     Section { ProgressView("Importing and verifying…") }

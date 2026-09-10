@@ -85,7 +85,7 @@ extension Vectors {
                   let blockHash = Data(hex: row[1] as! String),
                   let previousHeader = Data(hex: row[4] as! String)
             else { throw VectorError.badHex(String(describing: row[0])) }
-            let prevScripts = try (row[3] as! [String]).map { hex -> Data in
+            let prevScripts = (row[3] as! [String]).map { hex -> Data in
                 // Empty prev output scripts occur (spent outputs with empty scriptPubKey).
                 hex.isEmpty ? Data() : Data(hex: hex)!
             }

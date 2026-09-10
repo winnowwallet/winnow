@@ -720,9 +720,9 @@ public struct Vault: Sendable {
         for index in psbt.inputs.indices {
             var secrets: [Data] = []
             for (xonly, origin) in psbt.inputs[index].tapBIP32Derivation {
-                guard origin.masterFingerprint == master.fingerprint else { continue }
-                var key = master
-                for step in origin.path { key = try key.child(at: step) }
+                guard origin.masterFingerprint == master.fingerprint,
+                      let key = try Self.key(along: origin.path, from: master)
+                else { continue }
                 guard let secret = key.privateKey,
                       let schnorr = try? P256K.Schnorr.PrivateKey(dataRepresentation: secret),
                       Data(schnorr.xonly.bytes) == xonly
@@ -732,6 +732,19 @@ public struct Vault: Sendable {
             guard !secrets.isEmpty else { throw VaultError.noCosignerKey(input: index) }
             try psbt.signScriptPath(input: index, privateKeys: secrets)
         }
+    }
+
+    /// The master walked along a PSBT entry's origin path, or nil when the
+    /// path is one no BIP32 key can have: the entry is not ours, whatever
+    /// its fingerprint says, and is skipped like any other mismatch.
+    private static func key(along path: [UInt32], from master: HDKey) throws -> HDKey? {
+        var key = master
+        do {
+            for step in path { key = try key.child(at: step) }
+        } catch BIP32Error.depthExhausted {
+            return nil
+        }
+        return key
     }
 
     /// The reproducible story runner operates on deterministic, public test

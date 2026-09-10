@@ -518,6 +518,27 @@ struct VaultSpendTests {
         #expect(result.keyCount == 3)
     }
 
+    /// A PSBT's derivation entries are written by the other cosigners. One
+    /// that names our fingerprint with a path no BIP32 key can have is not
+    /// ours, whatever it claims: it is skipped like any other mismatch, so a
+    /// hostile or buggy entry cannot stop us signing a spend we hold a key for.
+    @Test("a derivation entry too deep for any key is ignored, not fatal")
+    func impossibleDerivationEntryIgnored() throws {
+        let (vault, masters) = try TestVaults.multiAVault(threshold: 2)
+        let utxo = try TestVaults.funding(vault: vault, amount: 100_000)
+        let owned = [Vault.OutputCoordinate(choice: 1, index: 0)]
+        let created = try vault.createSpend(
+            utxos: [utxo], payments: [Payment(amount: 50_000, scriptPubKey: destination)],
+            changeIndex: 0, feeRateSatPerVByte: 2, chainTip: testChainTip, randomness: { 0.5 })
+
+        var psbt = try PSBT(base64: created.base64)
+        psbt.inputs[0].tapBIP32Derivation[Data(repeating: 0x02, count: 32)] = PSBT.KeyOrigin(
+            masterFingerprint: masters[0].fingerprint, path: Array(repeating: 0, count: 256))
+        try vault.partialSign(&psbt, master: masters[0], knownUTXOs: [utxo],
+                              ownedOutputCoordinates: owned, chainTip: testChainTip)
+        #expect(psbt.inputs[0].tapScriptSignatures.count == 1)
+    }
+
     /// The other half of the promise: no single cosigner can spend a 2-of-3,
     /// checked for each of the three in turn rather than for one sample.
     @Test("no single cosigner can finalize a 2-of-3", arguments: [0, 1, 2])

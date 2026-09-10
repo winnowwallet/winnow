@@ -682,6 +682,13 @@ public actor Wallet {
               let origin = key.origin,
               key.derivation.elements == [.multipath([0, 1]), .wildcard(hardened: false)]
         else { throw WalletError.invalidDescriptor("expected tr([fp/86'/c'/a']xpub/<0;1>/*)") }
+        // The chain and the index are still derived below the account key,
+        // and a serialized key can name any depth. Refuse here, which both
+        // importing and open run before trusting a file, rather than at the
+        // first address of a wallet that has already been written.
+        if case let .extended(account, _) = key.base, account.depth > UInt8.max - 2 {
+            throw WalletError.invalidDescriptor("account key at depth \(account.depth) has no room for <0;1>/*")
+        }
         return origin
     }
 

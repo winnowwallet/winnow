@@ -28,9 +28,9 @@ struct FullLoopDiffTests {
 
         // 1. Tip at start; a fresh wallet whose creation height is that tip.
         let startTip = try UInt32(BitcoinCLI.blockCount())
-        let wallet = try await Wallet.create(network: .signet, keyStore: InMemoryKeyStore(),
-                                             storageURL: tempFileURL("wallet.json"),
-                                             creationHeight: startTip)
+        let wallet = try Wallet.create(network: .signet, keyStore: InMemoryKeyStore(),
+                                       storageURL: tempFileURL("wallet.json"),
+                                       creationHeight: startTip)
         _ = try await wallet.freshReceiveAddress()
         let fundingScript = try await wallet.scriptPubKey(chain: .receive, index: 0)
 

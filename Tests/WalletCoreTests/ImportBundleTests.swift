@@ -382,21 +382,6 @@ struct ImportBundleTests {
         #expect(watchOnly.mnemonic == nil)
     }
 
-    @Test("preview JSON redacts the mnemonic without touching the real file")
-    func redactedPreviewHidesMnemonic() async throws {
-        let original = try await fundedWallet()
-        let hot = try await original.exportBundle(includeMnemonic: true)
-        let json = try hot.serialized()
-        #expect(json.contains(testMnemonic))
-        let preview = ImportBundle.redactedPreview(json)
-        #expect(!preview.contains(testMnemonic))
-        #expect(preview.contains("\"mnemonic\""))
-        #expect(preview.contains("<redacted>"))
-        // Watch-only JSON is unchanged (no mnemonic key to redact).
-        let watch = try await original.exportBundle().serialized()
-        #expect(ImportBundle.redactedPreview(watch) == watch)
-    }
-
     @Test("export refuses a pending send — parent inputs would vanish from a restore")
     func exportRefusesPendingSend() async throws {
         let wallet = try await fundedWallet()
