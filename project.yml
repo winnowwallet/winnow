@@ -90,8 +90,8 @@ targets:
         DEVELOPMENT_TEAM: "2858MX5336"
 
   # End-to-end UI tests (XCUITest): drive the app on the local custom-signet
-  # node and capture screenshots of every major use case into
-  # docs/screenshots/. Node access (bitcoin-cli mining/funding) happens from
+  # node and capture screenshots of every major use case into run artifacts.
+  # Node access (bitcoin-cli mining/funding) happens from
   # the macOS test-runner process. The miner and RPC helpers live in the
   # package's TestSupport library (Tests/Support), shared with the SwiftPM
   # differential suite, so they have one implementation.

@@ -409,6 +409,8 @@ final class WinnowAppUITests: XCTestCase {
             NSPredicate(format: "label BEGINSWITH 'tr('")).firstMatch
         XCTAssertTrue(scrollUntilExists(app, descriptor), "descriptor preview did not appear")
         app.dismissKeyboard()
+        XCTAssertTrue(scrollUntilExists(app, app.textFields["vaultNameField"], up: true, fullyVisible: true),
+                      "account name and signing threshold are off-screen")
         Screenshots.capture(app, "10-vault-create", testCase: self)
 
         XCTAssertTrue(scrollUntilExists(app, app.buttons["saveVaultButton"]),
@@ -546,6 +548,7 @@ final class WinnowAppUITests: XCTestCase {
             print("E2E debug import staticTexts: \(texts)")
         }
         XCTAssertTrue(reportVisible, "no verification report")
+        XCTAssertFalse(app.textViews["importJSONEditor"].exists, "completed import left an empty editor")
         Screenshots.capture(app, "14-import-report", testCase: self)
         XCTAssertTrue(scrollUntilExists(app, app.buttons["importContinueButton"]),
                       "no Continue button after report")
@@ -1399,14 +1402,8 @@ final class WinnowAppUITests: XCTestCase {
 
     // MARK: - 08 Export bundle (Settings -> Backup, #18)
 
-    /// Walks the export flow on the funded "main" wallet: watch-only by
-    /// default (no mnemonic key and no seed words in the preview, which for
-    /// watch-only IS the real JSON), the staged share link and its system
-    /// share sheet, then the seed path behind the explicit confirm with the
-    /// on-screen preview redacted to "<redacted>". The shared file's real
-    /// content and deletion lifecycle are unit-tested (ExportStagingFile /
-    /// ImportBundle tests); test06 walks the import UI on an equivalent
-    /// bundle, closing the round trip.
+    /// Save a backup, open the share sheet, then explicitly include the key.
+    /// Inspect the real staged files and their deletion after dismissal.
     func test08ExportBundle() throws {
         let app = launchApp()
         app.tabBars.buttons["Settings"].tap()
@@ -1417,19 +1414,19 @@ final class WinnowAppUITests: XCTestCase {
         // Watch-only is the default: no toggle flip, straight to export.
         let confirm = app.buttons["exportConfirmButton"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 20), "no export confirm button")
-        XCTAssertEqual(confirm.label, "Export watch-only bundle",
-                       "seed export must not be the default")
+        let toggle = app.switches["exportIncludeMnemonicToggle"]
+        XCTAssertEqual(toggle.value as? String, "0", "seed export must not be the default")
         confirm.tap()
         let shareLink = app.buttons["exportShareLink"]
         XCTAssertTrue(shareLink.waitForExistence(timeout: 60), "no staged share link after export")
-        let preview = app.staticTexts.matching(
-            NSPredicate(format: "label CONTAINS %@", "\"version\"")).firstMatch
-        XCTAssertTrue(preview.waitForExistence(timeout: 20), "no bundle preview")
-        var json = preview.label
-        XCTAssertTrue(json.contains("\"descriptor\""), "preview lacks the descriptor")
-        XCTAssertTrue(json.contains("\"lastKnownHeight\""), "preview lacks the scan frontier")
-        XCTAssertFalse(json.contains("mnemonic"), "watch-only preview has a mnemonic key")
-        XCTAssertFalse(json.contains(Self.mnemonic), "watch-only preview contains the seed")
+        let note = app.staticTexts["backupContentsNote"]
+        XCTAssertTrue(note.waitForExistence(timeout: 20))
+        XCTAssertEqual(note.label, "Recovery words are not included. Keep them separately.")
+        let watchOnly = try stagedBackup()
+        XCTAssertNil(watchOnly.bundle.mnemonic)
+        XCTAssertNotNil(watchOnly.bundle.descriptor)
+        XCTAssertFalse(watchOnly.bundle.utxos.isEmpty, "backup lost the funded wallet")
+        XCTAssertFalse(watchOnly.bundle.transactions.isEmpty, "backup lost the payment history")
         Screenshots.capture(app, "16-export-watch-only", testCase: self)
 
         // The share link stages a real file and opens the system share sheet.
@@ -1452,9 +1449,7 @@ final class WinnowAppUITests: XCTestCase {
         }
         // Back on the export form (the next step's scroll asserts the toggle).
 
-        // Seed path: the toggle resets the export, the alert gates it, and
-        // the on-screen preview redacts the phrase.
-        let toggle = app.switches["exportIncludeMnemonicToggle"]
+        // Including the key replaces the staged file only after confirmation.
         XCTAssertTrue(scrollUntilExists(app, toggle, up: true), "no seed toggle")
         app.flipSwitch(toggle)
         XCTAssertTrue(confirm.waitForExistence(timeout: 10), "toggle did not reset the export")
@@ -1464,28 +1459,46 @@ final class WinnowAppUITests: XCTestCase {
         Screenshots.capture(app, "18-export-seed-confirm", testCase: self)
         alert.buttons["Export with phrase"].tap()
         XCTAssertTrue(shareLink.waitForExistence(timeout: 60), "no share link after seed export")
-        XCTAssertTrue(preview.waitForExistence(timeout: 20), "no seed-export preview")
-        json = preview.label
-        XCTAssertTrue(json.contains("\"mnemonic\""), "seed preview lacks the mnemonic key")
-        XCTAssertTrue(json.contains("<redacted>"), "seed preview is not redacted")
-        XCTAssertFalse(json.contains(Self.mnemonic), "on-screen preview shows the real phrase")
-        XCTAssertTrue(app.staticTexts["The recovery phrase is in the shared file, not shown here."]
-            .exists, "no shared-file note")
-        Screenshots.capture(app, "19-export-seed-redacted", testCase: self)
+        XCTAssertTrue(note.waitForExistence(timeout: 20))
+        XCTAssertEqual(note.label, "Includes your recovery words. Keep this file private.")
+        let withKey = try stagedBackup()
+        XCTAssertEqual(withKey.bundle.mnemonic, Self.mnemonic)
+        XCTAssertEqual(withKey.bundle.utxos, watchOnly.bundle.utxos)
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", Self.mnemonic)).firstMatch.exists,
+                       "backup screen exposed the recovery words")
+        Screenshots.capture(app, "19-export-with-phrase", testCase: self)
 
-        XCUIDevice.shared.press(.home)
-        app.activate()
-        // The clear happens on the scene's background transition, which a
-        // slow simulator delivers a moment after the app is back: wait for
-        // the link to go, rather than reading it in the first three seconds.
+        backgroundAndReturn(app)
         XCTAssertTrue(poll(timeout: 15, interval: 1, "staged seed export cleared on backgrounding") {
             !shareLink.exists
         }, "staged seed export survived backgrounding")
         XCTAssertFalse(shareLink.exists,
                        "staged seed export survived backgrounding")
+        XCTAssertNotEqual(watchOnly.path, withKey.path)
+        for path in [watchOnly.path, withKey.path] {
+            let exists = try HostProcess.run("/bin/test", ["-e", path])
+            XCTAssertNotEqual(exists.status, 0, "backup file survived replacement or dismissal")
+        }
         XCTAssertTrue(scrollUntilExists(app, exportButton, up: true),
                       "seed export sheet did not dismiss to Settings")
     }
+
+    private func stagedBackup() throws -> (path: String, bundle: ImportBundle) {
+        let device = try XCTUnwrap(ProcessInfo.processInfo.environment["SIMULATOR_UDID"])
+        let container = try HostProcess.run("/usr/bin/xcrun", ["simctl", "get_app_container", device,
+                                                             "com.btcswift.app", "data"])
+        XCTAssertEqual(container.status, 0, container.stderr)
+        let root = container.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let files = try HostProcess.run("/usr/bin/find", [root + "/tmp", "-path", "*/winnow-export-*/*.json", "-type", "f"])
+        XCTAssertEqual(files.status, 0, files.stderr)
+        let paths = files.stdout.split(separator: "\n").map(String.init)
+        XCTAssertEqual(paths.count, 1, "expected exactly one staged backup file")
+        let path = try XCTUnwrap(paths.first)
+        let file = try HostProcess.run("/bin/cat", [path])
+        XCTAssertEqual(file.status, 0, file.stderr)
+        return (path, try ImportBundle.decode(json: file.stdout))
+    }
+
     func test14IncomingPaymentBeforeConfirmation() async throws {
         let payer = "ui-incoming"
         try BitcoinCLI.ensureWallet(payer)
@@ -1635,7 +1648,7 @@ final class WinnowAppUITests: XCTestCase {
             app.buttons["walletSavings-\(name)"].tap()
             return false
         })
-        XCTAssertTrue(scrollUntilExists(app, app.staticTexts["vaultSingleKeyRule"]))
+        XCTAssertTrue(scrollUntilExists(app, app.staticTexts["vaultSingleKeyRule"], fullyVisible: true))
         XCTAssertEqual(app.staticTexts["vaultSingleKeyRule"].label, "One signing key cannot spend these funds.")
         Screenshots.capture(app, "35-extra-device-policy", testCase: self)
         var backup = try accountBackup(in: app)
