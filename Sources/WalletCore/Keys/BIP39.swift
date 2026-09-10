@@ -30,8 +30,11 @@ public enum BIP39 {
     }
 
     /// Validates a mnemonic sentence against the wordlist and its checksum.
+    /// Separators are exactly one space: `seed` hashes the sentence as
+    /// written, so a doubled or leading space that validation forgave would
+    /// derive a seed no other wallet agrees with.
     public static func validate(mnemonic: String) throws {
-        let words = mnemonic.split(separator: " ").map(String.init)
+        let words = mnemonic.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
         guard [12, 15, 18, 21, 24].contains(words.count) else {
             throw BIP39Error.invalidWordCount
         }
@@ -54,9 +57,12 @@ public enum BIP39 {
     }
 
     /// Mnemonic -> 64-byte seed via PBKDF2-HMAC-SHA512, salt "mnemonic"+passphrase, 2048 rounds.
+    /// BIP39 normalizes both the sentence and the passphrase NFKD. NFD agrees on
+    /// ASCII and differs on compatibility characters (U+3000, ligatures, fullwidth
+    /// forms), where it would derive a seed no other wallet agrees with.
     public static func seed(mnemonic: String, passphrase: String = "") throws -> Data {
-        let password = Data(mnemonic.decomposedStringWithCanonicalMapping.utf8)
-        let salt = Data(("mnemonic" + passphrase).decomposedStringWithCanonicalMapping.utf8)
+        let password = Data(mnemonic.decomposedStringWithCompatibilityMapping.utf8)
+        let salt = Data(("mnemonic" + passphrase).decomposedStringWithCompatibilityMapping.utf8)
         return try PBKDF2.hmacSHA512(password: password, salt: salt)
     }
 }

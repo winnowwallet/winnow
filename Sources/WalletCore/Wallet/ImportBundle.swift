@@ -250,18 +250,6 @@ public struct ImportBundle: Codable, Equatable, Sendable {
         return text
     }
 
-    /// Same JSON as `serialized()`, but a present mnemonic is replaced with
-    /// `"<redacted>"` so an on-screen preview cannot screenshot or copy the
-    /// seed. The shared file stays the real bundle.
-    public static func redactedPreview(_ json: String) -> String {
-        guard let data = json.data(using: .utf8),
-              var bundle = try? JSONDecoder().decode(ImportBundle.self, from: data),
-              bundle.mnemonic != nil
-        else { return json }
-        bundle.mnemonic = "<redacted>"
-        return (try? bundle.serialized()) ?? json
-    }
-
     private enum CodingKeys: String, CodingKey {
         case version, network, descriptor, mnemonic, lastKnownHeight, utxos, transactions
         case nextReceiveIndex, nextChangeIndex, vaults

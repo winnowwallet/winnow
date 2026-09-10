@@ -50,13 +50,13 @@ struct SettingsView: View {
                         if model.e2e?.forcedNetwork != nil {
                             Text("This debug session is locked to public signet.")
                         } else {
-                            Text("Each network has its own wallet on this device. Switching opens that network's wallet, or onboarding when it has none. Signet coins have no value; use it to rehearse.")
+                            Text("Each network has a separate wallet. Signet uses test coins with no value.")
                         }
                     }
                 }
 
                 Section {
-                    Button("Export wallet bundle") { showExport = true }
+                    Button("Back up wallet") { showExport = true }
                         .disabled(model.walletID == nil)
                         .accessibilityIdentifier("exportBundleButton")
                     Button("Show recovery phrase") { reveal() }
@@ -68,7 +68,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Backup")
                 } footer: {
-                    Text("The bundle is the history. A new phone cannot recover this wallet from the 12 words alone — export this file and keep it with the words. Showing the phrase asks for device authentication first.")
+                    Text("Keep both your recovery words and a backup file. The file restores your history and shared accounts; the words restore your signing key.")
                 }
 
                 Section {
@@ -78,7 +78,7 @@ struct SettingsView: View {
                     ))
                     .accessibilityIdentifier("advancedModeToggle")
                 } footer: {
-                    Text("Shows the controls most people never need: fee bumping, the test network, your own peers, chain verification, the block explorer, build details and the raw vault tools. Off, the wallet sends, receives and saves with people. Nothing is deleted: a peer or setting you already have stays visible until you remove it.")
+                    Text("Adds fee controls, network settings and custom signing tools. Turning it off keeps your existing settings.")
                 }
 
                 if model.showsManualPeers {
@@ -333,10 +333,6 @@ struct ExportBundleView: View {
 
     @State private var includeMnemonic = false
     @State private var confirmSeed = false
-    /// Display-only JSON. A seed-bearing export is redacted before it enters
-    /// view state; the complete value goes directly to the protected staging
-    /// file and is then released.
-    @State private var previewJSON: String?
     @State private var fileURL: URL?
     @State private var error: String?
     @State private var busy = false
@@ -359,28 +355,23 @@ struct ExportBundleView: View {
                             .font(.footnote)
                     }
                 } footer: {
-                    Text("The file includes your payment history and shared accounts. Keep your recovery phrase separately to restore signing. Back up the other signer's key on that device too.")
+                    Text("The file saves your history and shared accounts. Each signer needs their own key backup.")
                 }
                 if let error {
                     Section { Text(error).foregroundStyle(.red).font(.footnote) }
                 }
-                if let previewJSON {
-                    Section("Bundle") {
-                        CopyableTextBlock(text: previewJSON)
-                            .accessibilityIdentifier("backupPreview")
-                        if includeMnemonic {
-                            Text("The recovery phrase is in the shared file, not shown here.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                        if let fileURL {
-                            ShareLink("Share \(fileURL.lastPathComponent)", item: fileURL)
-                                .accessibilityIdentifier("exportShareLink")
-                        }
+                if let fileURL {
+                    Section("Backup ready") {
+                        Text(includeMnemonic
+                             ? "Includes your recovery words. Keep this file private."
+                             : "Recovery words are not included. Keep them separately.")
+                            .accessibilityIdentifier("backupContentsNote")
+                        ShareLink("Save or share backup", item: fileURL)
+                            .accessibilityIdentifier("exportShareLink")
                     }
                 } else {
                     Section {
-                        Button(includeMnemonic ? "Export with recovery phrase" : "Export watch-only bundle") {
+                        Button("Create backup file") {
                             if includeMnemonic {
                                 confirmSeed = true
                             } else {
@@ -392,7 +383,7 @@ struct ExportBundleView: View {
                     }
                 }
             }
-            .navigationTitle("Export wallet")
+            .navigationTitle("Back up wallet")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -406,7 +397,7 @@ struct ExportBundleView: View {
                 Button("Export with phrase", role: .destructive) { export() }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("The file will contain the 12 words. Treat it as cash.")
+                Text("This adds your phone's signing key to the file. Anyone with the file can use that key.")
             }
             .onChange(of: scenePhase) { _, phase in
                 guard phase == .background else { return }
@@ -421,7 +412,6 @@ struct ExportBundleView: View {
         exportEpoch.invalidate()
         exportTask?.cancel()
         exportTask = nil
-        previewJSON = nil
         fileURL = nil
         error = nil
         busy = false
@@ -460,7 +450,6 @@ struct ExportBundleView: View {
                 }
                 staging.remove()
                 staging = operationStaging
-                previewJSON = seedBearing ? ImportBundle.redactedPreview(text) : text
                 fileURL = url
             } catch is CancellationError {
                 operationStaging.remove()
@@ -468,7 +457,6 @@ struct ExportBundleView: View {
                 operationStaging.remove()
                 if exportEpoch.accepts(token, whilePresentationIsAllowed: scenePhase != .background) {
                     fileURL = nil
-                    previewJSON = nil
                     self.error = error.localizedDescription
                 }
             }
@@ -506,7 +494,7 @@ private struct RevealPhraseView: View {
                     .privacySensitive()
                     .accessibilityIdentifier("revealedPhraseGrid")
                 } footer: {
-                    Text("These words are the wallet. Anyone who sees them can spend — keep them offline, on paper, and close this screen when done.")
+                    Text("These words restore this phone's signing key. Keep them private, and save a backup file for your history and shared accounts.")
                 }
                 Section {
                     RecoveryPhraseCopyButton(

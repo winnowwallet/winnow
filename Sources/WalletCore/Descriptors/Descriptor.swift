@@ -8,6 +8,15 @@ public enum DescriptorError: Error, Equatable {
     case unexpectedCharacter(Character)
     case unknownExpression(String)
     case invalidOrigin
+    /// A key origin naming more steps than a BIP32 key can be deep. `HDKey.depth`
+    /// is a byte and every walk down the path derives one child per step; the
+    /// origin is walked when signing (`Wallet`, `Vault`), not by the descriptor's
+    /// own key resolution, which walks only the suffix. Refused at the parse.
+    case originTooDeep
+    /// A key in the descriptor is already too deep for its own derivation
+    /// suffix: a serialized key names any depth, and `HDKey.child(at:)`
+    /// refuses past 255. Named here so it is not reported as a tweak failure.
+    case keyDepthExhausted
     case invalidKey
     case invalidPath
     case invalidThreshold
@@ -354,6 +363,8 @@ public struct Descriptor: Sendable, Equatable {
                 }
             } catch let error as DescriptorError {
                 throw error
+            } catch BIP32Error.depthExhausted {
+                throw DescriptorError.keyDepthExhausted
             } catch {
                 throw DescriptorError.derivationFailed
             }
@@ -471,6 +482,10 @@ struct Parser {
     /// can be stopped.
     static let maximumTreeDepth = 128
 
+    /// The most steps a key origin may name: the largest `HDKey.depth`, since
+    /// a key at depth 255 has no child a byte can count.
+    static let maximumOriginSteps = Int(UInt8.max)
+
     mutating func parseTree(depth: Int = 0) throws -> Descriptor.ScriptTree {
         guard depth <= Self.maximumTreeDepth else { throw DescriptorError.treeTooDeep }
         if consume("{") {
@@ -541,6 +556,9 @@ struct Parser {
         var path: [UInt32] = []
         while consume("/") {
             guard peek() != "*" else { throw DescriptorError.invalidOrigin }
+            // Bounded at the depth a key can have, because the walk that would
+            // otherwise refuse this is `depth + 1` on a `UInt8`, which traps.
+            guard path.count < Self.maximumOriginSteps else { throw DescriptorError.originTooDeep }
             path.append(try parsePathStep())
         }
         try expect("]")

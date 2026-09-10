@@ -202,7 +202,7 @@ struct WalletReorgTests {
             payments: [Payment(amount: 100_000, scriptPubKey: destination)], feeRateSatPerVByte: 2,
             chainTip: testChainTip, randomness: { 0.5 })
         try await wallet.commit(prepared)
-        #expect(try Wallet.open(storageURL: url, keyStore: keyStore) != nil, "the untouched file loads")
+        _ = try Wallet.open(storageURL: url, keyStore: keyStore) // the untouched file loads
 
         // The spent row's amount is corrupted. A rollback past the spend
         // would have turned it into a live coin with that amount.
