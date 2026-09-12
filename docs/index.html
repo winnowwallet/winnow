@@ -20,6 +20,7 @@ dialog::backdrop{background:rgb(0 0 0 / .55)} html:has(dialog[open]){overflow:hi
 .dialog-heading h2{margin:0;padding:0;border:0} .dialog-heading form{flex-shrink:0}
 dialog a{overflow-wrap:anywhere}
 .action{display:inline-block;background:var(--seed);color:var(--paper);padding:.7rem 1rem;border-radius:.6rem;font-weight:650}
+.cta-note{margin-top:-.4rem;font-size:.9rem}
 .jump-links{display:flex;flex-wrap:wrap;gap:.6rem 1rem;margin:1.5rem 0;font-size:.95rem}
 .limit{border-left:2px solid var(--rule-2);padding-left:1rem}
 .signing-choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2rem}
@@ -38,7 +39,8 @@ dialog a{overflow-wrap:anywhere}
 <p class="lede">Early access · open source</p>
 <h1>A Bitcoin wallet for your iPhone.</h1>
 <p class="lede">Send and receive bitcoin, keep track of payments, and save with other people.</p>
-<p><a class="action" href="https://testflight.apple.com/join/83djpNE7">Try it on TestFlight</a></p>
+<p><a class="action" href="https://apps.apple.com/app/id6801502501">Download on the App Store</a></p>
+<p class="cta-note">Pre-release builds ship through <a href="https://testflight.apple.com/join/83djpNE7">TestFlight</a>.</p>
 <p class="connection-note">Your phone connects directly to Bitcoin.</p>
 <section id="signing-choices"><h2>Two ways to protect your bitcoin</h2><div class="signing-choices"><article class="signing-story"><h3>Protect your key.</h3><fieldset class="signing-switch" hidden><legend>Choose an example</legend><label><input type="radio" name="devices-example" value="attack" aria-controls="attack-scene" checked>Stolen key</label><label><input type="radio" name="devices-example" value="payment" aria-controls="payment-scene">Your payment</label></fieldset><div class="signing-scene" id="attack-scene" data-scene="attack" data-step="3">
 <h4 class="signing-scene-title">Stolen hardware-wallet key</h4>

@@ -2,7 +2,7 @@
 
 A private, opinionated, modern Bitcoin wallet for iOS — 100% Swift, one dependency.
 
-**[Early access on TestFlight](https://testflight.apple.com/join/83djpNE7)** — mainnet by default; signet is one Advanced-mode toggle away. The official beta is planned for 0.9; see the [release roadmap](https://winnowwallet.com/roadmap).
+**[Download on the App Store](https://apps.apple.com/app/id6801502501)** — pre-release builds ship through [TestFlight](https://testflight.apple.com/join/83djpNE7). Mainnet by default; signet is one Advanced-mode toggle away. The broader beta is planned for 0.9; see the [release roadmap](https://winnowwallet.com/roadmap).
 
 - **Pure P2P by default.** The read side is BIP157/158 compact block filters served by full-node peers — no server ever learns your addresses. Bounded **mempool windows** (short full-relay subscriptions while the Receive or Send screen is open) give 0-conf payment detection and propagation tracking without any server. Read [how it works](docs/architecture.html).
 - **Taproot today.** Current receiving uses P2TR (BIP86), with no ECDSA signing path. The planned 0.7 P2WSH Safe is a separate, opt-in addition.
