@@ -1,22 +1,28 @@
 // GENERATED FILE — edit by regenerating, not by hand.
 //
 // scripts/generate-fallback-peers rewrites this file on the release path
-// (#161) with `winnow-debug generate fallback-peers` (Tools/Debug): it crawls
-// mainnet starting from the DNS seeds — every verified peer is asked for its
-// addr gossip, and candidates pre-filtered by their advertised
-// NODE_COMPACT_FILTERS bit are dialled with the same PeerConnection the
-// app uses, whose handshake already refuses any peer not advertising
-// that bit — and keeps a /16-spread selection, checked by the same
-// `PeerEndpoint.netblock` the pool's diversity policy uses.
+// (#161) with `winnow-debug generate fallback-peers` (Tools/Debug). The input
+// is the winnow-census CI's peers.json — a crawler that descends from the
+// btcnodes snapshot and re-crawls mainnet continuously, so this list inherits
+// the census's view of the network rather than the generating host's. Every
+// clearnet entry is re-verified offline before it is written: public IP
+// literal, port 8333, one per /16 by the same `PeerEndpoint.netblock` the
+// pool's diversity policy uses, and a reported height within 100 of the
+// artifact's recorded tip in either direction (ahead of the tip is another
+// chain). With no usable artifact, `--from-crawl` crawls mainnet from the DNS
+// seeds instead, dialling candidates pre-filtered by their advertised
+// NODE_COMPACT_FILTERS bit with the same PeerConnection the app uses, whose
+// handshake already refuses any peer not advertising that bit.
 //
 // The committed copy is the last verified generation and the build's fallback;
 // a release regenerates so freshness tracks releases rather than memory.
 // `PeerPolicyTests` validates this file on every CI run.
 //
 // What this is not, recorded so it is not over-claimed: the list inherits
-// whatever the generating host could see, and generation is not reproducible —
-// two runs give different lists. The generation log is kept as a release
-// artifact so the list is auditable even though it is not reproducible.
+// whatever the census — or, from a crawl, the generating host — could see,
+// and generation is not reproducible: two runs give different lists. The
+// generation log is kept as a release artifact so the list is auditable even
+// though it is not reproducible.
 //
 // Generation: 2026-08-25T00:42:03Z, 42 peers verified, median reported
 // tip 963930.

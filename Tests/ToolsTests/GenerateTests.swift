@@ -51,9 +51,10 @@ struct WinnowGenerateTests {
         #expect(FileManager.default.fileExists(atPath: manifest.path))
     }
 
-    @Test("fallback-peers options: defaults, overrides, and a floor above the target refused")
+    @Test("fallback-peers options: census by default, crawl on request, never both")
     func fallbackOptions() throws {
         let defaults = try FallbackPeerGenerator.Options(["fallback-peers"])
+        #expect(defaults.source == .census(FallbackPeerGenerator.Options.defaultCensusURL))
         #expect(defaults.target == 96)
         #expect(defaults.floor == 24)
         #expect(defaults.maxDials == 4_000)
@@ -66,14 +67,29 @@ struct WinnowGenerateTests {
         #expect(custom.floor == 10)
         #expect(custom.maxDials == 500)
         #expect(custom.out.path == "/tmp/peers.swift")
+        // The input is the census unless --from-crawl asks for the crawl.
+        #expect(try FallbackPeerGenerator.Options(["fallback-peers", "--from-census"]).source
+            == .census(FallbackPeerGenerator.Options.defaultCensusURL))
+        #expect(try FallbackPeerGenerator.Options(["fallback-peers", "--from-census", "/tmp/peers.json"]).source
+            == .census("/tmp/peers.json"))
+        #expect(try FallbackPeerGenerator.Options(
+            ["fallback-peers", "--from-census", "https://example.test/peers.json"]).source
+            == .census("https://example.test/peers.json"))
+        #expect(try FallbackPeerGenerator.Options(["fallback-peers", "--from-crawl"]).source == .crawl)
         #expect(throws: GenerateError.self) {
-            try FallbackPeerGenerator.Options(["fallback-peers", "--floor", "200"])
+            _ = try FallbackPeerGenerator.Options(["fallback-peers", "--from-census", "p.json", "--from-crawl"])
         }
         #expect(throws: GenerateError.self) {
-            try FallbackPeerGenerator.Options(["fallback-peers", "--target", "many"])
+            _ = try FallbackPeerGenerator.Options(["fallback-peers", "--from-census", "--out", "/tmp/x"])
         }
         #expect(throws: GenerateError.self) {
-            try FallbackPeerGenerator.Options(["fallback-peers", "--max-dials", "0"])
+            _ = try FallbackPeerGenerator.Options(["fallback-peers", "--floor", "200"])
+        }
+        #expect(throws: GenerateError.self) {
+            _ = try FallbackPeerGenerator.Options(["fallback-peers", "--target", "many"])
+        }
+        #expect(throws: GenerateError.self) {
+            _ = try FallbackPeerGenerator.Options(["fallback-peers", "--max-dials", "0"])
         }
     }
 
@@ -152,6 +168,151 @@ struct WinnowGenerateTests {
         #expect(stale.map(\.endpoint.host) == ["3.3.3.3"])
         // One liar cannot move the median.
         #expect(FallbackPeerGenerator.medianTip(peers + [peer("6.6.6.6", height: .max)]) == 1_000)
+    }
+
+    // MARK: Census input
+
+    private typealias CensusArtifact = FallbackPeerGenerator.CensusArtifact
+
+    /// A GMT calendar day as a Date — the artifact's `date` counts days, not
+    /// seconds, so the fixtures pick a day rather than a timestamp.
+    private func today(_ text: String) throws -> Date {
+        Date(timeIntervalSince1970: TimeInterval(try #require(FallbackPeerGenerator.censusDay(text)) * 86_400))
+    }
+
+    private func entry(_ host: String, port: UInt16 = 8_333,
+                       height: Int32 = 966_774) -> CensusArtifact.Entry {
+        CensusArtifact.Entry(host: host, port: port, userAgent: "/Satoshi:31.1.0/", startHeight: height)
+    }
+
+    private func artifact(date: String = "2026-09-12", tip: Int32 = 966_774,
+                          clearnet: [CensusArtifact.Entry],
+                          schemaVersion: Int = 1) -> CensusArtifact {
+        CensusArtifact(schemaVersion: schemaVersion, date: date, tip: tip,
+                       networks: [.clearnet: clearnet])
+    }
+
+    @Test("a peers.json parses into every overlay, tor and i2p included")
+    func censusParses() throws {
+        let json = """
+        {
+          "schemaVersion": 1,
+          "date": "2026-09-12",
+          "tip": 966774,
+          "networks": {
+            "clearnet": [
+              {"host": "47.206.253.100", "port": 8333, "userAgent": "/Satoshi:31.1.0/", "startHeight": 966770}
+            ],
+            "tor": [
+              {"host": "exampleonionaddressisherebutnotreal5581xyz.onion", "port": 8333,
+               "userAgent": "/Satoshi:31.1.0/", "startHeight": 966770}
+            ],
+            "i2p": [
+              {"host": "exampleb32addressisherebutnotrealaaaaaaaaaaaaaaaaaaaa.b32.i2p", "port": 8333,
+               "userAgent": "/Satoshi:31.1.0/", "startHeight": 966770}
+            ]
+          }
+        }
+        """
+        let parsed = try FallbackPeerGenerator.censusArtifact(from: Data(json.utf8))
+        #expect(parsed.schemaVersion == 1)
+        #expect(parsed.date == "2026-09-12")
+        #expect(parsed.tip == 966_774)
+        // The overlay lists are parsed into the model even though nothing
+        // renders them yet — that is what the parser being "ready" means.
+        #expect(parsed.networks[.clearnet]?.map(\.host) == ["47.206.253.100"])
+        #expect(parsed.networks[.tor]?.map(\.host) == ["exampleonionaddressisherebutnotreal5581xyz.onion"])
+        #expect(parsed.networks[.i2p]?.map(\.host)
+            == ["exampleb32addressisherebutnotrealaaaaaaaaaaaaaaaaaaaa.b32.i2p"])
+        #expect(parsed.networks[.tor]?.first?.startHeight == 966_770)
+    }
+
+    @Test("anything that is not the fixed schema-v1 shape is refused, not half-read")
+    func censusMalformed() {
+        #expect(throws: GenerateError.self) {
+            _ = try FallbackPeerGenerator.censusArtifact(from: Data("not json".utf8))
+        }
+        #expect(throws: GenerateError.self) {
+            _ = try FallbackPeerGenerator.censusArtifact(from: Data("{}".utf8))
+        }
+        // An unknown network key: the schema is clearnet/tor/i2p, exactly.
+        let unknownNetwork = """
+        {"schemaVersion": 1, "date": "2026-09-12", "tip": 966774,
+         "networks": {"clearnet": [], "fakenet": []}}
+        """
+        #expect(throws: GenerateError.self) {
+            _ = try FallbackPeerGenerator.censusArtifact(from: Data(unknownNetwork.utf8))
+        }
+    }
+
+    @Test("the census artifact comes from a file; a missing path is a refusal")
+    func censusFromFile() async throws {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("peers-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        try Data("{}".utf8).write(to: file)
+        #expect(try await FallbackPeerGenerator.censusData(from: file.path) == Data("{}".utf8))
+        await #expect(throws: GenerateError.self) {
+            _ = try await FallbackPeerGenerator.censusData(from: file.path + ".missing")
+        }
+    }
+
+    @Test("every clearnet invariant is re-verified offline, in both tip directions")
+    func censusFiltering() throws {
+        let tolerance = Int32(PeerPool.staleTipTolerance)
+        let tip: Int32 = 966_774
+        let checked = try FallbackPeerGenerator.verifiedClearnetPeers(from: artifact(tip: tip, clearnet: [
+            entry("47.206.253.100"),                       // kept
+            entry("47.206.1.1"),                           // second in its /16
+            entry("74.209.75.75", port: 18_333),           // the list is :8333 only
+            entry("node.example.com"),                     // no hostnames
+            entry("192.168.1.10"),                         // not a public literal
+            entry("9.9.9.9", height: tip - tolerance),     // kept: exactly at the floor
+            entry("8.8.8.8", height: tip - tolerance - 1), // stale
+            entry("1.1.1.1", height: tip + tolerance),     // kept: exactly at the ceiling
+            entry("2.2.2.2", height: tip + tolerance + 1), // ahead of tip: another chain
+            entry("2001:478:1:2::1"),                      // kept: v6 literal
+        ]), defaultPort: 8_333, today: today("2026-09-13"))
+        #expect(checked.map(\.endpoint.host) == ["47.206.253.100", "9.9.9.9", "1.1.1.1", "2001:478:1:2::1"])
+        #expect(checked.allSatisfy { $0.userAgent == "/Satoshi:31.1.0/" })
+    }
+
+    @Test("a census artifact that is not schema v1, dated wrong, or too old is refused")
+    func censusRefusals() throws {
+        let peers = [entry("47.206.253.100")]
+        let recent = try today("2026-09-13")
+        #expect(throws: GenerateError.self) {
+            _ = try FallbackPeerGenerator.verifiedClearnetPeers(
+                from: artifact(clearnet: peers, schemaVersion: 2), defaultPort: 8_333, today: recent)
+        }
+        #expect(throws: GenerateError.self) {
+            _ = try FallbackPeerGenerator.verifiedClearnetPeers(
+                from: artifact(date: "not-a-date", clearnet: peers), defaultPort: 8_333, today: recent)
+        }
+        // 2026-02-30 is not a real day.
+        #expect(FallbackPeerGenerator.censusDay("2026-02-30") == nil)
+        #expect(FallbackPeerGenerator.censusDay("2026-9-13") == nil, "days are zero-padded")
+        // Seven days old is the most an artifact may be; eight is refused.
+        _ = try FallbackPeerGenerator.verifiedClearnetPeers(
+            from: artifact(date: "2026-09-06", clearnet: peers), defaultPort: 8_333, today: recent)
+        #expect(throws: GenerateError.self) {
+            _ = try FallbackPeerGenerator.verifiedClearnetPeers(
+                from: artifact(date: "2026-09-05", clearnet: peers), defaultPort: 8_333, today: recent)
+        }
+        // An artifact from the future is fresher than today, not older.
+        _ = try FallbackPeerGenerator.verifiedClearnetPeers(
+            from: artifact(date: "2026-09-14", clearnet: peers), defaultPort: 8_333, today: recent)
+    }
+
+    @Test("the census generation line names the artifact and its tip")
+    func censusRender() {
+        let peers = [peer("9.9.9.9"), peer("1.2.3.4")]
+        let source = FallbackPeerGenerator.render(peers, tip: 966_774, date: "2026-09-13T00:42:03Z",
+                                                  provenance: .census(artifactDate: "2026-09-12"))
+        // scripts/check-release-policy still reads the date off this line.
+        #expect(source.contains("\n// Generation: 2026-09-13T00:42:03Z, 2 peers re-verified offline"
+                                + " from the\n// winnow-census artifact of 2026-09-12, recorded tip 966774.\n"))
+        #expect(source.contains("PeerEndpoint(host: \"1.2.3.4\", port: 8333)"))
     }
 
     @Test("the rendered source is the shape the release policy and the list test read")

@@ -4,11 +4,12 @@ import Foundation
 /// Release-path generators for two constants the app ships: the mainnet
 /// fallback-peer list (#161) and the mainnet header checkpoint (#89).
 ///
-/// Both need something `swift test` never has — the live network, or a 77 MB
-/// genesis-validated header file — so as env-gated test suites they never ran.
-/// These explicit development commands use WalletCore outside the shipping app.
+/// Both need something `swift test` never has — a published census artifact
+/// (or, from-crawl, the live network), or a 77 MB genesis-validated header
+/// file — so as env-gated test suites they never ran. These explicit
+/// development commands use WalletCore outside the shipping app.
 ///
-///   winnow-debug generate fallback-peers [--out PATH] [--target 96] [--floor 24] [--max-dials 4000]
+///   winnow-debug generate fallback-peers [--from-census URL-OR-PATH | --from-crawl] [--out PATH] [--floor 24]
 ///   winnow-debug generate checkpoint <headers.bin> [--height H] [--vector-out PATH]
 enum WinnowGenerate {
     static func execute(_ arguments: [String]) async throws {
@@ -53,12 +54,17 @@ enum WinnowGenerate {
     static let usageText = """
     Winnow release-path generators
 
-      swift run winnow-debug generate fallback-peers [--out PATH] [--target 96] [--floor 24] [--max-dials 4000]
-          Crawl mainnet starting from the DNS seeds: every verified peer is
-          asked once for its addr gossip, and candidates pre-filtered by their
-          advertised NODE_COMPACT_FILTERS bit are dialled with the app's own
-          PeerConnection. Keep a /16-spread selection near the median tip and
-          rewrite Sources/WalletCore/Network/Protocol/FallbackPeersGenerated.swift.
+      swift run winnow-debug generate fallback-peers [--from-census URL-OR-PATH | --from-crawl] [--out PATH] [--floor 24]
+          Re-verify the winnow-census peers.json offline — public IP literals
+          on port 8333, one per /16, reported heights within 100 of the
+          artifact's recorded tip in either direction — and rewrite
+          Sources/WalletCore/Network/Protocol/FallbackPeersGenerated.swift.
+          With no --from-census the published artifact is fetched; a local
+          path reads a file. --from-crawl crawls mainnet from the DNS seeds
+          instead, asking every verified peer for its addr gossip and
+          dialling candidates pre-filtered by their advertised
+          NODE_COMPACT_FILTERS bit (a crawl also honours --target 96 and
+          --max-dials 4000).
 
       swift run winnow-debug generate checkpoint <headers.bin> [--height H] [--vector-out PATH]
           Derive the mainnet checkpoint at H (default: the shipped height) from a
@@ -73,6 +79,7 @@ enum GenerateError: LocalizedError {
     case usage(String)
     case thinList(String)
     case badSource(String)
+    case badCensus(String)
     case divergence(String)
 
     var errorDescription: String? {
@@ -80,6 +87,7 @@ enum GenerateError: LocalizedError {
         case let .usage(detail): "\(detail)\n\n\(WinnowGenerate.usageText)"
         case let .thinList(detail): "\(detail) — refusing to ship a thin list"
         case let .badSource(detail): "unusable header file: \(detail)"
+        case let .badCensus(detail): "unusable census artifact: \(detail)"
         case let .divergence(detail): "checkpoint disagreement: \(detail)"
         }
     }
