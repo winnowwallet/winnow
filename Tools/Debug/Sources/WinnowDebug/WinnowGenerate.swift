@@ -8,7 +8,7 @@ import Foundation
 /// genesis-validated header file — so as env-gated test suites they never ran.
 /// These explicit development commands use WalletCore outside the shipping app.
 ///
-///   winnow-debug generate fallback-peers [--out PATH] [--target 96] [--floor 24]
+///   winnow-debug generate fallback-peers [--out PATH] [--target 96] [--floor 24] [--max-dials 4000]
 ///   winnow-debug generate checkpoint <headers.bin> [--height H] [--vector-out PATH]
 enum WinnowGenerate {
     static func execute(_ arguments: [String]) async throws {
@@ -53,9 +53,11 @@ enum WinnowGenerate {
     static let usageText = """
     Winnow release-path generators
 
-      swift run winnow-debug generate fallback-peers [--out PATH] [--target 96] [--floor 24]
-          Resolve the mainnet DNS seeds, dial candidates with the app's own
-          PeerConnection, keep a /16-spread selection near the median tip and
+      swift run winnow-debug generate fallback-peers [--out PATH] [--target 96] [--floor 24] [--max-dials 4000]
+          Crawl mainnet starting from the DNS seeds: every verified peer is
+          asked once for its addr gossip, and candidates pre-filtered by their
+          advertised NODE_COMPACT_FILTERS bit are dialled with the app's own
+          PeerConnection. Keep a /16-spread selection near the median tip and
           rewrite Sources/WalletCore/Network/Protocol/FallbackPeersGenerated.swift.
 
       swift run winnow-debug generate checkpoint <headers.bin> [--height H] [--vector-out PATH]

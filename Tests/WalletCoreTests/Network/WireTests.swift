@@ -165,6 +165,12 @@ struct WireTests {
             .ping(0x0102_0304_0506_0708),
             .pong(0xDEAD_BEEF),
             .sendheaders,
+            .getaddr,
+            .addr([PeerAddress(time: 1_700_000_000, services: PeerConnection.nodeCompactFilters,
+                               ipv4: (47, 206, 253, 100), port: 8_333),
+                   PeerAddress(time: 1_600_000_000, services: 1,
+                               ip: Data(repeating: 0xAB, count: 16), port: 8_333)]),
+            .addr([]),
             .feefilter(2_500), // BIP133 sat/kvB
             .inv(inv),
             .getdata(inv),
@@ -255,6 +261,55 @@ struct WireTests {
         var payload = Data()
         payload.appendCompactSize(2_001)
         #expect(throws: WireError.self) { _ = try PeerMessage.decode(command: "headers", payload: payload) }
+    }
+
+    /// The legacy ceiling (net.h MAX_ADDR_TO_SEND): a full reply is 30,003
+    /// bytes and must survive a round-trip intact.
+    @Test("a 1000-entry addr round-trips")
+    func addrFull() throws {
+        let addresses: [PeerAddress] = (0 ..< 1_000).map { index in
+            let octets: (UInt8, UInt8, UInt8, UInt8) = (47, 206, UInt8(index / 256), UInt8(index % 256))
+            return PeerAddress(time: UInt32(1_700_000_000 + index), services: UInt64(index),
+                               ipv4: octets, port: 8_333)
+        }
+        let payload = PeerMessage.addr(addresses).payload
+        #expect(payload.count == 3 + 1_000 * 30) // compactSize(1000) is three bytes
+        #expect(try PeerMessage.decode(command: "addr", payload: payload) == .addr(addresses))
+    }
+
+    @Test("addr refuses an over-limit count, a truncated record and trailing bytes")
+    func addrGuards() {
+        var tooMany = Data()
+        tooMany.appendCompactSize(1_001)
+        #expect(throws: WireError.self) { _ = try PeerMessage.decode(command: "addr", payload: tooMany) }
+
+        var truncated = Data()
+        truncated.appendCompactSize(1)
+        truncated.append(PeerAddress(services: 1, ipv4: (1, 2, 3, 4), port: 8_333)
+            .serialized(includeTime: true).dropLast(5))
+        #expect(throws: WireError.self) { _ = try PeerMessage.decode(command: "addr", payload: truncated) }
+
+        let trailing = PeerMessage.addr([]).payload + Data([0x00])
+        #expect(throws: WireError.self) { _ = try PeerMessage.decode(command: "addr", payload: trailing) }
+
+        // getaddr is an ask, not a payload: anything in it is junk.
+        #expect(throws: WireError.self) { _ = try PeerMessage.decode(command: "getaddr", payload: Data([0x00])) }
+    }
+
+    /// Gossip arrives as 16-byte IPs; the generator dials the host string, so
+    /// it must read the way the rest of the stack spells addresses.
+    @Test("a peer address renders as a dialable host string")
+    func peerAddressHost() {
+        #expect(PeerAddress(services: 0, ipv4: (47, 206, 253, 100), port: 8_333).host == "47.206.253.100")
+        let v6 = PeerAddress(services: 0, ip: Data(hex: "20010478000100020000000000000001")!, port: 8_333)
+        #expect(v6.host == "2001:478:1:2::1")
+        #expect(v6.endpointDescription == "[2001:478:1:2::1]:8333")
+        // A lone zero group stays literal; the all-zero address collapses fully.
+        let singleZero = PeerAddress(services: 0, ip: Data(hex: "20010000000200030004000500060007")!, port: 8_333)
+        #expect(singleZero.host == "2001:0:2:3:4:5:6:7")
+        #expect(PeerAddress(services: 0, ip: Data(repeating: 0, count: 16), port: 0).host == "::")
+        // netblock re-parses the rendering — the generator's spread depends on it.
+        #expect(PeerEndpoint(host: v6.host, port: 8_333).netblock == "v6:2001:0478")
     }
 
     @Test("a filter element count above UInt32.max is rejected, not force-cast")

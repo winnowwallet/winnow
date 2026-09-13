@@ -56,12 +56,15 @@ struct WinnowGenerateTests {
         let defaults = try FallbackPeerGenerator.Options(["fallback-peers"])
         #expect(defaults.target == 96)
         #expect(defaults.floor == 24)
+        #expect(defaults.maxDials == 4_000)
         #expect(defaults.out == WinnowGenerate.packageRoot
             .appending(path: FallbackPeerGenerator.Options.defaultOutput))
         let custom = try FallbackPeerGenerator.Options(
-            ["fallback-peers", "--target", "40", "--floor", "10", "--out", "/tmp/peers.swift"])
+            ["fallback-peers", "--target", "40", "--floor", "10", "--max-dials", "500",
+             "--out", "/tmp/peers.swift"])
         #expect(custom.target == 40)
         #expect(custom.floor == 10)
+        #expect(custom.maxDials == 500)
         #expect(custom.out.path == "/tmp/peers.swift")
         #expect(throws: GenerateError.self) {
             try FallbackPeerGenerator.Options(["fallback-peers", "--floor", "200"])
@@ -69,6 +72,55 @@ struct WinnowGenerateTests {
         #expect(throws: GenerateError.self) {
             try FallbackPeerGenerator.Options(["fallback-peers", "--target", "many"])
         }
+        #expect(throws: GenerateError.self) {
+            try FallbackPeerGenerator.Options(["fallback-peers", "--max-dials", "0"])
+        }
+    }
+
+    /// The crawl ends when the queue runs dry or the dial budget is spent,
+    /// whichever comes first; the batch never exceeds the parallel width.
+    @Test("the dial budget caps each batch and ends the crawl")
+    func dialBudget() {
+        #expect(FallbackPeerGenerator.nextBatchSize(queued: 100, dialed: 0, maxDials: 4_000) == 24)
+        #expect(FallbackPeerGenerator.nextBatchSize(queued: 10, dialed: 0, maxDials: 4_000) == 10)
+        #expect(FallbackPeerGenerator.nextBatchSize(queued: 100, dialed: 3_990, maxDials: 4_000) == 10)
+        #expect(FallbackPeerGenerator.nextBatchSize(queued: 100, dialed: 4_000, maxDials: 4_000) == 0)
+        #expect(FallbackPeerGenerator.nextBatchSize(queued: 0, dialed: 0, maxDials: 4_000) == 0)
+        // A budget under the batch width still dials what it can.
+        #expect(FallbackPeerGenerator.nextBatchSize(queued: 100, dialed: 0, maxDials: 7) == 7)
+    }
+
+    /// Gossip is pre-filtered before it costs a dial: the service bit the
+    /// handshake would demand, the port the committed list may carry, a
+    /// public IP literal — and every survivor deduplicated.
+    @Test("gossip candidates keep only dialable peers, each exactly once")
+    func gossipFilter() {
+        let bit = PeerConnection.nodeCompactFilters
+        func gossip(_ host: (UInt8, UInt8, UInt8, UInt8), services: UInt64 = bit,
+                    port: UInt16 = 8_333) -> PeerAddress {
+            PeerAddress(time: 1_700_000_000, services: services, ipv4: host, port: port)
+        }
+        let v6 = PeerAddress(time: 1_700_000_000, services: bit,
+                             ip: Data(hex: "20010478000100020000000000000001")!, port: 8_333)
+        let seen: Set<PeerEndpoint> = [PeerEndpoint(host: "9.9.9.9", port: 8_333)]
+        let candidates = FallbackPeerGenerator.gossipCandidates([
+            gossip((47, 206, 253, 100)),                 // kept
+            gossip((47, 206, 253, 100)),                 // repeat inside the reply
+            gossip((9, 9, 9, 9)),                        // already queued
+            gossip((1, 2, 3, 4), services: 1),           // cannot serve filters
+            gossip((1, 2, 3, 5), services: bit - 1),     // every bit but the one
+            gossip((1, 2, 3, 6), port: 18_333),          // unlistable port
+            gossip((192, 168, 1, 1)),                    // not a public literal
+            gossip((74, 209, 75, 75), services: bit | 1),// kept; other bits irrelevant
+            v6,                                          // kept, rendered compressed
+        ], defaultPort: 8_333, alreadySeen: seen)
+        #expect(candidates == [PeerEndpoint(host: "47.206.253.100", port: 8_333),
+                               PeerEndpoint(host: "74.209.75.75", port: 8_333),
+                               PeerEndpoint(host: "2001:478:1:2::1", port: 8_333)])
+        // A second reply repeating all of it yields nothing new.
+        #expect(FallbackPeerGenerator.gossipCandidates(
+            [gossip((47, 206, 253, 100)), v6],
+            defaultPort: 8_333, alreadySeen: seen.union(candidates)).isEmpty)
     }
 
     @Test("one peer per netblock, first seen wins; hostnames and private addresses are dropped")

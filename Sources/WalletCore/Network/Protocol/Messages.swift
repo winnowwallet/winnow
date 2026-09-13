@@ -276,6 +276,13 @@ public enum PeerMessage: Equatable, Sendable {
     case ping(UInt64)
     case pong(UInt64)
     case sendheaders
+    /// Address gossip: `getaddr` (empty payload) asks, `addr` answers with a
+    /// CompactSize count and that many timestamped `PeerAddress` records —
+    /// the legacy format, at most 1000 entries. There is deliberately no
+    /// BIP155 addrv2: the fallback-peer generator is the only consumer, and
+    /// what it wants from a peer is dialable IPv4/IPv6 literals.
+    case getaddr
+    case addr([PeerAddress])
     /// BIP133: minimum feerate (sat/kvB) the peer relays to us.
     case feefilter(Int64)
     case inv(InventoryPayload)
@@ -300,6 +307,8 @@ public enum PeerMessage: Equatable, Sendable {
         case .ping: "ping"
         case .pong: "pong"
         case .sendheaders: "sendheaders"
+        case .getaddr: "getaddr"
+        case .addr: "addr"
         case .feefilter: "feefilter"
         case .inv: "inv"
         case .getdata: "getdata"
@@ -321,7 +330,12 @@ public enum PeerMessage: Equatable, Sendable {
     public var payload: Data {
         switch self {
         case let .version(message): return message.serialized
-        case .verack, .sendheaders: return Data()
+        case .verack, .sendheaders, .getaddr: return Data()
+        case let .addr(addresses):
+            var data = Data()
+            data.appendCompactSize(UInt64(addresses.count))
+            for address in addresses { data.append(address.serialized(includeTime: true)) }
+            return data
         case let .ping(nonce), let .pong(nonce):
             var data = Data()
             data.appendUInt64(nonce)
@@ -370,6 +384,20 @@ public enum PeerMessage: Equatable, Sendable {
         case "sendheaders":
             try ByteReader(payload).requireEnd()
             return .sendheaders
+        case "getaddr":
+            try ByteReader(payload).requireEnd()
+            return .getaddr
+        case "addr":
+            var reader = ByteReader(payload)
+            let count = try reader.readVarInt()
+            guard count <= 1_000 else { throw WireError.malformed("addr count \(count)") }
+            var addresses: [PeerAddress] = []
+            addresses.reserveCapacity(Int(count))
+            for _ in 0 ..< count {
+                addresses.append(try PeerAddress.decode(from: &reader, includeTime: true))
+            }
+            try reader.requireEnd()
+            return .addr(addresses)
         case "feefilter":
             var reader = ByteReader(payload)
             let feeRate = try reader.readInt64()

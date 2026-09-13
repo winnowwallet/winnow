@@ -18,13 +18,18 @@ scripts/generate-fallback-peers
 scripts/refresh-checkpoint ~/…/mainnet/headers.bin [height]
 ```
 
-`fallback-peers` resolves the mainnet DNS seeds, dials candidates with the
-same `PeerConnection` the app uses — whose handshake already refuses any peer
-not advertising NODE_COMPACT_FILTERS — keeps one peer per /16 (the pool's own
-`netblock` rule), drops peers more than `PeerPool.staleTipTolerance` behind
-the median reported tip, and rewrites
-`Sources/WalletCore/Network/Protocol/FallbackPeersGenerated.swift`. The run fails
-rather than shipping fewer than `--floor` peers. Generation is deliberately
+`fallback-peers` crawls mainnet starting from the DNS seeds. Seed results
+seed the dial queue, and every peer that verifies is sent one `getaddr`; the
+`addr` reply queues more candidates. Gossiped candidates are dialled only when
+they advertise NODE_COMPACT_FILTERS, sit on the default port and are public IP
+literals, so most dials reach a peer that could actually be listed — the
+handshake (the same `PeerConnection` the app uses, which refuses any peer not
+advertising NODE_COMPACT_FILTERS) remains the authoritative check. The run
+keeps one peer per /16 (the pool's own `netblock` rule), drops peers more than
+`PeerPool.staleTipTolerance` behind the median reported tip, and rewrites
+`Sources/WalletCore/Network/Protocol/FallbackPeersGenerated.swift`. The crawl is
+bounded by `--max-dials` (default 4000) so it terminates, and fails rather than
+shipping fewer than `--floor` peers. Generation is deliberately
 not reproducible; keep the log as the release artifact.
 
 `checkpoint` truncates a genesis-rooted `headers.bin` to the wanted height

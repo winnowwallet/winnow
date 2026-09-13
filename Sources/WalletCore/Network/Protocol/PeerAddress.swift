@@ -46,16 +46,38 @@ public struct PeerAddress: Equatable, Sendable {
         return PeerAddress(time: time, services: services, ip: ip, port: portBE.bigEndian)
     }
 
-    /// Human-readable "host:port" (IPv4-mapped addresses shown as IPv4).
-    public var endpointDescription: String {
-        let host: String
+    /// The IP as a dialable host string: dotted quad for IPv4-mapped
+    /// addresses, RFC 5952 canonical IPv6 (lowercase, longest zero run
+    /// collapsed) otherwise — the same spelling DNS answers and getaddrinfo
+    /// produce, so a peer learned from `addr` gossip reads exactly like one
+    /// from a seed. `PeerEndpoint.netblock` re-parses both forms.
+    public var host: String {
         if ip.prefix(10).allSatisfy({ $0 == 0 }), ip[10] == 0xFF, ip[11] == 0xFF {
-            host = "\(ip[12]).\(ip[13]).\(ip[14]).\(ip[15])"
-        } else {
-            host = "[" + stride(from: 0, to: 16, by: 2).map {
-                String(UInt16(ip[$0]) << 8 | UInt16(ip[$0 + 1]), radix: 16)
-            }.joined(separator: ":") + "]"
+            return "\(ip[12]).\(ip[13]).\(ip[14]).\(ip[15])"
         }
-        return "\(host):\(port)"
+        let groups = stride(from: 0, to: 16, by: 2).map { UInt16(ip[$0]) << 8 | UInt16(ip[$0 + 1]) }
+        var collapsed: Range<Int>?
+        var index = 0
+        while index < 8 {
+            guard groups[index] == 0 else { index += 1; continue }
+            var end = index
+            while end < 8, groups[end] == 0 { end += 1 }
+            // A lone zero group stays literal (RFC 5952 §4.2.2).
+            if end - index >= 2, end - index > (collapsed?.count ?? 0) { collapsed = index ..< end }
+            index = end
+        }
+        let head = groups[..<(collapsed?.lowerBound ?? 8)].map { String($0, radix: 16) }
+        let tail = groups[(collapsed?.upperBound ?? 8)...].map { String($0, radix: 16) }
+        return collapsed == nil ? head.joined(separator: ":")
+            : head.joined(separator: ":") + "::" + tail.joined(separator: ":")
+    }
+
+    /// Human-readable "host:port" (IPv4-mapped addresses shown as IPv4, IPv6
+    /// bracketed the way URIs bracket them).
+    public var endpointDescription: String {
+        if ip.prefix(10).allSatisfy({ $0 == 0 }), ip[10] == 0xFF, ip[11] == 0xFF {
+            return "\(host):\(port)"
+        }
+        return "[\(host)]:\(port)"
     }
 }
