@@ -665,7 +665,11 @@ public actor PeerPool {
         for endpoint in knownGood.subtracting(manualPeers) {
             ordered.append(PeerCandidate(endpoint: endpoint, source: rememberedSource(endpoint)))
         }
-        for endpoint in params.fallbackPeers {
+        for endpoint in params.fallbackPeers where endpoint.overlay == .clearnet {
+            // A tor/i2p entry here is a data error — overlays without a
+            // transport live in `overlayFallbackPeers`, which this queue
+            // deliberately never reads — but a dial that must fail must not
+            // spend a slot in the race even then.
             ordered.append(PeerCandidate(endpoint: endpoint, source: .fallback))
         }
         var seen = connected

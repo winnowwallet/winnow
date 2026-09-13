@@ -59,6 +59,39 @@ public struct PeerEndpoint: Equatable, Sendable, Codable, Hashable, CustomString
     }
 
     public var description: String { "\(host):\(port)" }
+
+    /// Which overlay dialing this endpoint needs. The pool consults it to
+    /// keep endpoints out of a queue that cannot reach them: a tor or i2p
+    /// peer without a transport can never answer, and a dial that must fail
+    /// must not spend a slot in the race.
+    public var overlay: OverlayNetwork { OverlayNetwork(ofHost: host) }
+}
+
+/// The overlay network an endpoint is reached over, by host suffix.
+///
+/// Classification exists to *separate* dial queues, not to route anything:
+/// a `.onion` (RFC 7686) or `.i2p` name resolves only inside its own overlay,
+/// so until a transport that speaks one exists the classification's job is to
+/// keep those endpoints out of the clearnet queue. Clearnet — IP literals
+/// and ordinary DNS names alike — is what `PeerConnection` dials directly.
+public enum OverlayNetwork: String, Sendable, Codable, CaseIterable {
+    case clearnet
+    case tor
+    case i2p
+
+    /// `.onion` is Tor; `.b32.i2p`, like every `.i2p` name, is I2P; anything
+    /// else is clearnet. Hostnames are case-insensitive, so the suffix test
+    /// is too.
+    public init(ofHost host: String) {
+        let lowered = host.lowercased()
+        if lowered.hasSuffix(".onion") {
+            self = .tor
+        } else if lowered.hasSuffix(".i2p") {
+            self = .i2p
+        } else {
+            self = .clearnet
+        }
+    }
 }
 
 /// Unsolicited things a peer tells us outside request/response exchanges.

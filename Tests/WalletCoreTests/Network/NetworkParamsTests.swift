@@ -78,6 +78,12 @@ struct NetworkParamsTests {
             #expect(peer.netblock != nil, "\(peer.host) is not a public IP literal")
         }
         #expect(NetworkParams.signet.fallbackPeers.isEmpty)
+        // No overlay has a transport yet, so no network ships tor/i2p
+        // fallbacks: the lists exist in the model and stay empty until one
+        // does. Clearnet is `fallbackPeers` itself.
+        #expect(NetworkParams.mainnet.fallbackPeers(for: .clearnet) == NetworkParams.mainnet.fallbackPeers)
+        #expect(NetworkParams.mainnet.fallbackPeers(for: .tor).isEmpty)
+        #expect(NetworkParams.mainnet.fallbackPeers(for: .i2p).isEmpty)
     }
 
     @Test("bits → target known values", arguments: [

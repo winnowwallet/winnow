@@ -28,10 +28,17 @@ public struct NetworkParams: Sendable, Equatable {
     public let powTargetSpacing: UInt32
     public var difficultyAdjustmentInterval: UInt32 { powTargetTimespan / powTargetSpacing }
     public let dnsSeeds: [String]
-    /// Hardcoded last-resort peers (IP literals, verified filter-serving —
-    /// see the per-network value's comment). Dialed alongside the DNS-seed
-    /// results so a fresh launch works even when seed results are dead.
+    /// Hardcoded last-resort clearnet peers (IP literals, verified
+    /// filter-serving — see the per-network value's comment). Dialed
+    /// alongside the DNS-seed results so a fresh launch works even when
+    /// seed results are dead.
     public let fallbackPeers: [PeerEndpoint]
+    /// Last-resort peers for the overlays without a transport yet, keyed so
+    /// the model can state per overlay what there is to dial. A `.onion` or
+    /// `.i2p` endpoint is unreachable until a transport that speaks its
+    /// overlay exists, and listing one before then would only buy failed
+    /// dials — so both lists stay empty, and the pool never reads them.
+    public let overlayFallbackPeers: [OverlayNetwork: [PeerEndpoint]]
     /// Optional trusted start for header sync (#89). Present only where
     /// syncing from genesis is slow enough to matter, which today is mainnet.
     public let checkpoint: Checkpoint?
@@ -62,6 +69,7 @@ public struct NetworkParams: Sendable, Equatable {
                 genesisTime: UInt32, genesisBits: UInt32, genesisNonce: UInt32,
                 genesisMerkleRoot: Data, genesisHash: Data, powLimit: Data,
                 dnsSeeds: [String], fallbackPeers: [PeerEndpoint] = [],
+                overlayFallbackPeers: [OverlayNetwork: [PeerEndpoint]] = [:],
                 checkpoint: Checkpoint? = nil,
                 powTargetTimespan: UInt32 = 14 * 24 * 60 * 60,
                 powTargetSpacing: UInt32 = 600) {
@@ -81,6 +89,14 @@ public struct NetworkParams: Sendable, Equatable {
         self.dnsSeeds = dnsSeeds
         self.checkpoint = checkpoint
         self.fallbackPeers = fallbackPeers
+        self.overlayFallbackPeers = overlayFallbackPeers
+    }
+
+    /// The last-resort peers for one overlay network. Clearnet is
+    /// `fallbackPeers` itself — the generated literals; the tor and i2p
+    /// lists stay empty until a transport that can dial them exists.
+    public func fallbackPeers(for overlay: OverlayNetwork) -> [PeerEndpoint] {
+        overlay == .clearnet ? fallbackPeers : overlayFallbackPeers[overlay] ?? []
     }
 
     /// Custom BIP325 signets (magic ≠ public signet) may keep RFC1918 /
