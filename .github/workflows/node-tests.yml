@@ -5,8 +5,15 @@ name: Node integration
 # cover the resulting main push. Nightly, release and confirmed manual runs
 # always execute fresh checks. Forks never reach the runner. Mining suites
 # stay serial within each VM: one listener and one job at a time.
+#
+# Pull requests reach the node lane only when they target main: a stacked
+# PR re-runs the same tree its base is already running. `edited` is listened
+# to solely so that retargeting a stacked PR to main, once its base merges,
+# triggers the run it now needs; every job ignores an edit that changed
+# only the title or body.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
   schedule:
@@ -72,6 +79,8 @@ jobs:
     if: >-
       needs.changes.outputs.required == 'true'
       && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      && (github.event_name != 'pull_request' || github.event.pull_request.base.ref == 'main')
+      && (github.event.action != 'edited' || github.event.changes.base != null)
       && (contains('pull_request push schedule', github.event_name) || inputs.confirm_dedicated_fixture)
     runs-on: [self-hosted, macOS, btc-swift, node-e2e]
     # First measured run under this lane: 5 m 20 s (run 34056640602).
@@ -132,22 +141,39 @@ jobs:
           retention-days: 14
 
   ui:
-    name: ui-${{ matrix.device }}
+    name: ui-${{ matrix.device }}-${{ matrix.story }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - device: iPhone
-            runner: [self-hosted, macOS, btc-swift, node-e2e]
-          # The Intel VM's iPad compositor aborts in CA::OGL::push_surface
-          # during lifecycle tests. Keep the full journey on native arm64;
-          # iPhone and package lanes retain Intel coverage.
-          - device: iPad
-            runner: macos-latest
+      # The journeys are four stories (UITests/WinnowAppUITests.swift), one
+      # job each, so they run side by side on the VMs instead of one after
+      # another in a single hour-long job. Pull requests run the iPhone
+      # stories on the self-hosted VMs only. The iPad stories — on hosted
+      # Apple silicon — run for main pushes, the nightly and confirmed manual
+      # runs. The Intel VM's iPad compositor aborts in CA::OGL::push_surface
+      # during lifecycle tests, which is why iPad never runs there; iPhone
+      # and package lanes retain Intel coverage.
+      matrix: >-
+        ${{ fromJSON(github.event_name == 'pull_request'
+          && '{"include":[
+                {"device":"iPhone","story":"first-wallet","class":"StoryFirstWallet","runner":["self-hosted","macOS","btc-swift","node-e2e"]},
+                {"device":"iPhone","story":"paying-people","class":"StoryPayingPeople","runner":["self-hosted","macOS","btc-swift","node-e2e"]},
+                {"device":"iPhone","story":"shared-savings","class":"StorySharedSavings","runner":["self-hosted","macOS","btc-swift","node-e2e"]},
+                {"device":"iPhone","story":"devices-network","class":"StoryDevicesAndNetwork","runner":["self-hosted","macOS","btc-swift","node-e2e"]}]}'
+          || '{"include":[
+                {"device":"iPhone","story":"first-wallet","class":"StoryFirstWallet","runner":["self-hosted","macOS","btc-swift","node-e2e"]},
+                {"device":"iPhone","story":"paying-people","class":"StoryPayingPeople","runner":["self-hosted","macOS","btc-swift","node-e2e"]},
+                {"device":"iPhone","story":"shared-savings","class":"StorySharedSavings","runner":["self-hosted","macOS","btc-swift","node-e2e"]},
+                {"device":"iPhone","story":"devices-network","class":"StoryDevicesAndNetwork","runner":["self-hosted","macOS","btc-swift","node-e2e"]},
+                {"device":"iPad","story":"first-wallet","class":"StoryFirstWallet","runner":"macos-latest"},
+                {"device":"iPad","story":"paying-people","class":"StoryPayingPeople","runner":"macos-latest"},
+                {"device":"iPad","story":"shared-savings","class":"StorySharedSavings","runner":"macos-latest"},
+                {"device":"iPad","story":"devices-network","class":"StoryDevicesAndNetwork","runner":"macos-latest"}]}') }}
     needs: changes
     if: >-
       needs.changes.outputs.required == 'true'
       && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      && (github.event_name != 'pull_request' || github.event.pull_request.base.ref == 'main')
+      && (github.event.action != 'edited' || github.event.changes.base != null)
       && (contains('pull_request push schedule', github.event_name) || inputs.confirm_dedicated_fixture)
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
@@ -175,7 +201,14 @@ jobs:
           echo "RESULTS_DIR=$RESULTS_DIR" >> "$GITHUB_ENV"
           echo "WINNOW_DATADIR=$RESULTS_DIR/winnow-signet-fixture" >> "$GITHUB_ENV"
 
+      # A self-hosted runner keeps a snapshot of the fixture with the UI
+      # stories' "bank" wallet already mined to maturity
+      # (scripts/signet-fixture snapshot); starting from it saves each story
+      # the six minutes of mining 101 blocks through the simulator's
+      # host-process bridge. A hosted runner has none and mines.
       - name: Start this run's isolated fixture
+        env:
+          WINNOW_FIXTURE_TEMPLATE: ${{ matrix.device == 'iPhone' && '/Users/macdev/Library/Caches/winnow-signet-template' || '' }}
         run: |
           test -d /Applications/Xcode.app/Contents/Developer
           command -v bitcoind
@@ -190,7 +223,7 @@ jobs:
           done
           scripts/signet-fixture up
           bitcoin-cli -datadir="$WINNOW_DATADIR" -rpcport="$WINNOW_RPC_PORT" getblockchaininfo \
-            | python3 -c 'import json,sys; info=json.load(sys.stdin); assert info["chain"] == "signet" and info["blocks"] == 0, "expected a fresh signet fixture"'
+            | python3 -c 'import json,sys; info=json.load(sys.stdin); assert info["chain"] == "signet", "expected the signet fixture"; print("fixture at height", info["blocks"])'
 
       - name: Python with standard TOML support
         run: |
@@ -201,11 +234,32 @@ jobs:
           "$python_prefix/bin/python3.12" -c 'import tomllib'
           echo "$python_prefix/libexec/bin" >> "$GITHUB_PATH"
 
+      # The framework changes only when the bridge's locked source or its
+      # build script does, and building it from Rust source costs 9–12
+      # minutes per job. The key names every input, so a stale framework
+      # cannot be restored against changed source; a hit still re-checks the
+      # license evidence and the lockfile hash the build recorded.
+      - name: Restore the pinned app Tor framework
+        id: tor-cache
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: TorBridge/build
+          key: tor-bridge-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('TorBridge/Cargo.lock', 'TorBridge/Cargo.toml', 'TorBridge/rust-toolchain.toml', 'TorBridge/src/**', 'TorBridge/include/**', 'scripts/build-tor-bridge', 'scripts/install-rust') }}
+
       - name: Build pinned app Tor framework
+        if: steps.tor-cache.outputs.cache-hit != 'true'
         run: |
           scripts/install-rust
           export PATH="$HOME/.cargo/bin:$PATH"
           scripts/build-tor-bridge
+
+      - name: Check the restored Tor framework against its locked source
+        if: steps.tor-cache.outputs.cache-hit == 'true'
+        run: |
+          scripts/render-tor-notices --check
+          cd TorBridge
+          grep ' Cargo.lock$' build/source-and-binary-sha256.txt | shasum -a 256 -c -
+          test -d build/WinnowTor.xcframework
 
       - name: Install pinned XcodeGen
         run: scripts/install-xcodegen
@@ -223,14 +277,22 @@ jobs:
             echo "WINNOW_SCREENSHOT_DIR=$RESULTS_DIR/node-screenshots"
           } > "$HOME/.winnow-node.env"
 
-      - name: App UI tests
+      # A self-hosted runner keeps its build products between runs, so the
+      # app and the test runner rebuild incrementally instead of from scratch
+      # (two to three minutes per job). Hosted runners start empty anyway.
+      - name: Reuse the runner's build products
+        if: matrix.device == 'iPhone'
+        run: echo "DERIVED_DATA=$HOME/Library/Caches/winnow-node-app" >> "$GITHUB_ENV"
+
+      - name: App UI tests (${{ matrix.story }})
         run: |
           set -o pipefail
           xcodebuild test -project WinnowApp.xcodeproj -scheme WinnowApp \
             -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
-            -derivedDataPath "$RUNNER_TEMP/winnow-node-app" \
+            -derivedDataPath "${DERIVED_DATA:-$RUNNER_TEMP/winnow-node-app}" \
             -resultBundlePath "$RESULTS_DIR/NodeUI.xcresult" \
-            -only-testing:WinnowAppUITests \
+            -only-testing:WinnowAppUITests/HostProcessProbeTests \
+            -only-testing:WinnowAppUITests/${{ matrix.class }} \
             -skipPackagePluginValidation -skipMacroValidation \
             2>&1 | tee "$RESULTS_DIR/node-ui.log"
 
@@ -252,7 +314,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: node-ui-${{ matrix.device }}-${{ github.run_id }}
+          name: node-ui-${{ matrix.device }}-${{ matrix.story }}-${{ github.run_id }}
           path: |
             ${{ env.RESULTS_DIR }}/node-ui.log
             ${{ env.RESULTS_DIR }}/NodeUI.xcresult

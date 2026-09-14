@@ -37,12 +37,17 @@ actor VaultStore {
     private var storageURL: URL?
     private var network: BitcoinNetwork = .signet
     private let writeData: @Sendable (Data, URL) throws -> Void
+    /// Reads verify and writes seal, under a key the app container cannot
+    /// reach. `validate` catches a harmful shape; only the seal catches a
+    /// well-formed record this app did not write.
+    private let seal: StoreSeal
 
-    init(writeData: @escaping @Sendable (Data, URL) throws -> Void = { data, url in
+    init(keys: any StoreKeyVault, writeData: @escaping @Sendable (Data, URL) throws -> Void = { data, url in
         // Atomic, and unreadable until the device has been unlocked once
         // since boot: the same class the submission store uses for its file.
         try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }) {
+        seal = StoreSeal(store: "vaults", keys: keys)
         self.writeData = writeData
     }
 
@@ -60,14 +65,17 @@ actor VaultStore {
             return .missing
         }
         do {
-            let data = try Data(contentsOf: storageURL)
-            let decoded = try JSONDecoder().decode([VaultRecord].self, from: data)
+            let file = try seal.read(try Self.boundedRead(storageURL), network: network)
+            let decoded = try JSONDecoder().decode([VaultRecord].self, from: file.payload)
             try Self.validate(decoded, network: network)
             records = decoded
+            // A file from before sealing is adopted as it is and sealed now;
+            // a failed write leaves it for the next launch to adopt again.
+            if file.predatesSealing { try? persist() }
             return .loaded
         } catch {
             records = []
-            return .damaged(Self.damagedStorageMessage)
+            return .damaged(Self.damagedStorageMessage(for: error))
         }
     }
 
@@ -99,8 +107,24 @@ actor VaultStore {
         records.first { $0.id == id }
     }
 
+    /// The most a vault file may weigh: a hundred vaults with ten thousand
+    /// coins each is far under this, so a larger file was not written here.
+    static let maximumFileBytes = 16 * 1_024 * 1_024
+
+    /// Measures before reading, so a planted file is refused rather than held.
+    static func boundedRead(_ url: URL) throws -> Data {
+        let size = try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int ?? Int.max
+        guard size <= maximumFileBytes else { throw VaultStorageError.invalidState("vault file too large") }
+        let data = try Data(contentsOf: url)
+        guard data.count <= maximumFileBytes else { throw VaultStorageError.invalidState("vault file too large") }
+        return data
+    }
+
     @discardableResult
     func add(name: String, descriptor: Descriptor, createdAtHeight: UInt32) throws -> VaultRecord {
+        guard DisplayName.normalized(name) == name else {
+            throw VaultStorageError.invalidState("an account needs a short, single-line name")
+        }
         let serialized = descriptor.serialized()
         let id = String(serialized.split(separator: "#").last ?? Substring(serialized))
         guard !records.contains(where: { $0.id == id }) else {
@@ -367,6 +391,13 @@ actor VaultStore {
     private static let damagedStorageMessage =
         "Winnow found local vault data but could not safely read it. The file and protected keys were left untouched. Retry; if this continues, restore from a known-good wallet bundle or ask for help before changing anything."
 
+    private static let unverifiedStorageMessage =
+        "Winnow found shared-account data it could not verify: the file was not written by Winnow on this device, or its protected key is gone. The file and protected keys were left untouched. Restore your shared accounts from a known-good wallet bundle, or ask for help before changing anything."
+
+    private static func damagedStorageMessage(for error: any Error) -> String {
+        error is SealedStoreFile.Failure ? unverifiedStorageMessage : damagedStorageMessage
+    }
+
     static func validate(_ records: [VaultRecord], network: BitcoinNetwork) throws {
         var recordIDs = Set<String>()
         var outpoints = Set<Transaction.Outpoint>()
@@ -385,6 +416,9 @@ actor VaultStore {
     /// record's identity, derivable at both chains, with indices in range.
     private static func validatedRecordShape(_ record: VaultRecord,
                                              network: BitcoinNetwork) throws -> Vault {
+        guard DisplayName.normalized(record.name) == record.name else {
+            throw VaultStorageError.invalidState("a vault has no usable name")
+        }
         let descriptor = try Descriptor(record.descriptor)
         let canonical = descriptor.serialized()
         guard canonical == record.descriptor,
@@ -472,6 +506,6 @@ actor VaultStore {
     private func persist() throws {
         guard let storageURL else { return }
         let data = try JSONEncoder().encode(records)
-        try writeData(data, storageURL)
+        try seal.write(data, network: network, to: storageURL, using: writeData)
     }
 }

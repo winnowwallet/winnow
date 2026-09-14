@@ -439,12 +439,15 @@ struct MuSig2SignView: View {
 
     private func signMuSig2() {
         guard let initial = working else { return }
-        let initialNonces = secretNonces
+        var initialNonces = secretNonces
         operationTask?.cancel()
         let token = operationEpoch.begin()
         authorizing = true
         error = nil
         operationTask = Task { @MainActor in
+            // Whatever happens below, the copy this task took of the secret
+            // nonces is overwritten before it is freed.
+            defer { Self.scrub(&initialNonces) }
             do {
                 let psbt = try await model.withMasterKey(
                     reason: "Complete signing this MuSig2 vault transaction") { master in
@@ -454,6 +457,7 @@ struct MuSig2SignView: View {
                     // session untouched and retryable.
                     var psbt = initial
                     var stagedNonces = initialNonces
+                    defer { Self.scrub(&stagedNonces) }
                     for index in psbt.inputs.indices {
                         let signingContext = try context(
                             for: psbt.inputs[index], vault: inputs.vault, record: inputs.record)
@@ -472,7 +476,7 @@ struct MuSig2SignView: View {
                 let reply = try psbt.base64V0()
                 working = psbt
                 output = reply
-                secretNonces.removeAll(keepingCapacity: false)
+                Self.scrub(&secretNonces)
                 signedMuSig2ThisSession = true
                 model.journalPSBT(stage: "musig2-partial-signed", psbt: psbt)
             } catch is CancellationError {
@@ -531,12 +535,7 @@ struct MuSig2SignView: View {
     /// UTXO set (inputs out, change in pending — the `Wallet.send` rule).
     private func commitAndBroadcast(_ transaction: BitcoinTransaction, vault: Vault,
                                     record: VaultRecord) async throws -> Data {
-        let txid = try await model.broadcast(transaction)
-        let changeIndex = record.nextChangeIndex
-        let changeScript = try? vault.scriptPubKey(index: changeIndex, choice: AddressChain.change.rawValue)
-        _ = await model.recordVaultSpend(id: record.id, transaction: transaction,
-                                         changeScriptPubKey: changeScript, changeIndex: changeIndex)
-        return txid
+        try await model.broadcastVaultSpend(transaction, vault: vault, record: record)
     }
 
     private func accepts(_ token: SensitivePresentationEpoch.Token) -> Bool {
@@ -554,8 +553,23 @@ struct MuSig2SignView: View {
         broadcastTxid = nil
         broadcasting = false
         authorizing = false
-        secretNonces.removeAll(keepingCapacity: false)
+        Self.scrub(&secretNonces)
         nonceSessionStarted = false
         signedMuSig2ThisSession = false
+    }
+
+    /// Overwrites every secret nonce before dropping the dictionary. Best
+    /// effort: a `Data` still shared with a copy elsewhere is copied rather
+    /// than zeroed by `resetBytes`, so the keys are materialised first (a
+    /// `keys` view would itself keep the storage shared) and the view's own
+    /// copies are scrubbed on every exit path.
+    private static func scrub(_ nonces: inout [Int: [Data: Data]]) {
+        for input in Array(nonces.keys) {
+            for key in Array(nonces[input]?.keys ?? [:].keys) {
+                let count = nonces[input]?[key]?.count ?? 0
+                nonces[input]?[key]?.resetBytes(in: 0 ..< count)
+            }
+        }
+        nonces.removeAll(keepingCapacity: false)
     }
 }

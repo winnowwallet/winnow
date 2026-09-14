@@ -1,5 +1,5 @@
-• Support for iPad and the iOS app on Apple silicon Macs.
-• Optional Tor routing for Bitcoin peers, discovery, peer-list downloads and consented explorer lookups. Tor is off by default and never silently falls back to a direct connection.
-• Refresh the public census peer list in Advanced settings, or separately reset and shuffle automatic peers while preserving manual settings.
-• Add local name-only labels to received payments. Attach a destination only when you choose one, with consent before each explorer lookup.
-• Updated privacy papers and clearer explanations of peer discovery, address reuse and external-browser routing.
+• Every key that can approve a shared-savings payment is now listed with a fingerprint — the person it belongs to, you, or a key that is not one of your people — and your own card shows the same fingerprint for co-owners to compare.
+• Your saved recipients and shared accounts are now sealed under a key held in the device's protected storage, so a file that Winnow did not write on this phone is refused rather than trusted.
+• The recovery phrase hides itself while the screen is being recorded or mirrored.
+• Peer discovery is harder to steer: automatic peers of one kind can no longer outvote the others on which filters are genuine, headers dated far in the future are refused, and a peer that promises headers and delivers none is dropped.
+• A custom block explorer must use https. Peer connections use less memory over long sessions and drop peers that stop answering.

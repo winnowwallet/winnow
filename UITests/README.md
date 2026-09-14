@@ -12,7 +12,15 @@ and raw PSBTs signed by a group both go through Approve a request. The group
 journey approves on the phone, exports the raw request to the group, imports its
 reply, and sends. It checks that Advanced mode adds no second signing entry.
 
-[WinnowAppUITests.swift](WinnowAppUITests.swift) contains the scenarios.
+[WinnowAppUITests.swift](WinnowAppUITests.swift) contains the scenarios,
+grouped into four stories — `StoryFirstWallet`, `StoryPayingPeople`,
+`StorySharedSavings`, `StoryDevicesAndNetwork` — each a wallet its journeys
+share and build on, in the alphabetical order XCTest runs a class's methods.
+The first failure in a story fails the rest of it as "blocked". A "bank" node
+wallet, mined to maturity once, pays every wallet and vault with an ordinary
+transaction and one block. CI runs one story per runner
+(`-only-testing:WinnowAppUITests/<Story>`); to run one locally against the
+fixture: `xcodebuild test … -only-testing:WinnowAppUITests/StoryFirstWallet`.
 [The journey inventory](../docs/journeys.json) maps them to the public website;
 [build-site](../scripts/build-site) validates selectors and named screenshot captures.
 [Node support](../Tests/Support/Node/README.md) supplies transactions and mined blocks.

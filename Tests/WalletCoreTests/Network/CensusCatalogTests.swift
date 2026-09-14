@@ -22,6 +22,15 @@ struct CensusCatalogTests {
         #expect(CensusCatalog.day("0000-01-01") == nil)
         #expect(throws: CensusCatalog.Invalid.size) { try CensusCatalog.decode(Data(repeating: 0, count: CensusCatalog.maximumBytes + 1)) }
     }
+    @Test func aThinListIsRefusedOnlyWhereAFloorApplies() throws {
+        _ = try catalog().validated(now: now)
+        #expect(throws: CensusCatalog.Invalid.thin) { try catalog().validated(now: now, minimumEntries: 2) }
+        var c = catalog()
+        c.networks["i2p"] = []
+        _ = try c.validated(now: now, minimumEntries: 1) // I2P has no floor
+        c.networks["tor"] = []
+        #expect(throws: CensusCatalog.Invalid.thin) { try c.validated(now: now, minimumEntries: 1) }
+    }
     @Test func extremeHeightsAndAliases() throws {
         #expect(!CensusCatalog.nearTip(.min, tip: .max))
         #expect(!CensusCatalog.nearTip(.max, tip: .min))

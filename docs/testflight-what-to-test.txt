@@ -1,23 +1,25 @@
-Peer discovery, Tor and people labels
+Security review fixes
 
-This build supports iPhone, iPad and the same iOS app on Apple silicon Macs (macOS 14 or later). On iPad, check portrait and landscape layouts, sheets, keyboard entry and multitasking. On Mac, check window resizing, keyboard entry, clipboard import/export, peer refresh and Tor foreground recovery.
+This build carries the fixes from the September security review. Most of them are below the surface; these are the places where you can see them.
 
-In Advanced settings, use Refresh peer list. Check the observation date and clearnet/Tor counts. Existing connections should stay connected. A failed download must show an error and preserve the previous catalog. Reset and shuffle peers is separate: it should preserve manual peer settings and the downloaded catalog while rebuilding automatic connections.
+Update in place first: install this build over 0.6.3 with saved recipients and at least one shared account. Everything should still be there after the first launch. (The files are sealed on that launch; a missing person or account would be a defect, not the design.)
 
-Tor is off by default. Enable it in Advanced settings and wait for Ready. Peer connections, discovery, census downloads and consented explorer lookups must use Tor. Background and reopen Winnow: it should bootstrap again and recover. A Tor failure must leave networking offline until recovery or explicit disablement. Opening an external browser shows a separate warning because the browser has its own routing. I2P transport is not included.
+Key fingerprints
 
-Open a received payment and save a name without attaching an address. Restart and check that the name persists. A name-only person cannot send until you explicitly attach a supplied address/payment card or choose a funding-address suggestion. Explorer lookup must ask each time before disclosing the transaction ID; even a sole result must remain unselected until you choose it. Funding-address suggestions are unverified. Sending should use the normal amount and confirmation screens and explain address reuse.
+Open a shared account. The Co-owners section now lists every approving key with a fingerprint like "ab12 cd34": the person it belongs to, "you", or, in red, a key that is not one of your people. Open Receive → Share my card on each co-owner's phone: the "Your key" fingerprint there must match the one shown next to their name on yours. Create a new shared account: each candidate co-owner in the picker shows the fingerprint under their name.
 
-Saved recipients and shared savings
+Recovery phrase while recording
 
-Send a payment, then open it in Wallet and save the recipient. Rename them and restart the app: the payment should show the new name. Remove them from Saved recipients in Send: the old payment should keep its name. You can save them again from that payment.
+Start a screen recording from Control Center, then open Settings → Recovery phrase, and also the phrase screen during onboarding of a new wallet. The words must be replaced by "Hidden while the screen is being recorded or mirrored." Stop the recording: the words come back. The same should hold while mirroring to an external display.
 
-Open Receive and tap Share my card. Give it a name and share it with another device. There, open Send → Saved recipients → Add and paste the card. It should say “Fresh address each payment.” Pay twice and check that each review names the recipient and uses a different address. A saved fixed address should explain that repeated payments can be linked.
+Peers and the network
 
-Create shared savings from Wallet and choose the co-owners. Share the account card and add it on the other phone before funding it. Once funded, tap Send on the account or select it in the Send tab. Choose a saved recipient or paste an address, enter the amount, and review the account, address, amount, and fee. Continue to approvals should open the prepared request directly. Finish sends the payment once enough people have approved.
+In Advanced settings, Refresh peer list should still succeed and show the observation date and counts. Set a custom block explorer with a plain http:// address: it must be refused; https:// is accepted. Turn Tor on and wait for Ready: sync, refresh and explorer lookups should behave as before. Leave the app syncing for a longer session (an hour or more) and check that it stays responsive and memory does not climb without bound.
 
-Use the same Send screen for a phone-plus-Core account. Continue to approvals should open the second-signer screen with the payment already loaded. The phone alone must not be able to send. Exchange replies with Core, approve on both sides, and check that the payment is accepted.
+Shared payments
 
-Beginner mode
+Prepare and approve a shared-savings payment as before, with a saved recipient and with a pasted address. After Finish, if a payment was sent but could not be recorded, the app now says so with the transaction id instead of staying silent; report the exact message if you see it.
 
-The wallet has three tabs: Wallet, Send, Settings. Turn on Advanced mode in Settings to see network and fee controls. Custom account creation appears in Wallet alongside your other accounts. Turn Advanced off again: those controls disappear and your saved settings remain.
+Everything else
+
+iPhone, iPad and the Mac build; sending, receiving, labels, backups and import should behave as in 0.6.3.

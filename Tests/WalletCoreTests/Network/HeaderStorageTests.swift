@@ -149,9 +149,9 @@ struct HeaderStorageTests {
         let chain = try HeaderChain(params: params, storageURL: url, start: .checkpoint)
         #expect(await chain.startHeight == 3, "fixture precondition: the marker layout")
 
-        let first = Self.headers(after: checkpointTip, count: 3, time: 1_900_000_000)
+        let first = Self.headers(after: checkpointTip, count: 3, time: 1_650_000_000)
         _ = try await chain.connect(first)
-        let second = Self.headers(after: first[first.count - 1].hash, count: 4, time: 1_900_100_000)
+        let second = Self.headers(after: first[first.count - 1].hash, count: 4, time: 1_650_100_000)
         _ = try await chain.connect(second)
         #expect(await chain.height == 10)
 
@@ -213,7 +213,7 @@ struct HeaderStorageTests {
 
         // Now append onto the reorganised chain.
         let continuation = Self.headers(after: replacement[replacement.count - 1].hash,
-                                        count: 2, time: 1_800_000_000)
+                                        count: 2, time: 1_750_000_000)
         _ = try await chain.connect(continuation)
         #expect(await chain.height == 8)
 

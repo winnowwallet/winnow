@@ -1,4 +1,5 @@
 import WalletCore
+import CryptoKit
 import Foundation
 import LocalAuthentication
 import SwiftUI
@@ -55,6 +56,9 @@ final class AppModel {
         case deviceAuthUnavailable
         case deviceAuthFailed
         case spendAlreadyInFlight
+        /// The transaction was broadcast but the vault's coins could not be
+        /// updated; carries the txid so the user has the receipt.
+        case vaultSpendNotRecorded(txid: Data, reason: String)
         /// No storage directory, so a rollback target cannot be recorded.
         case noStorage
         case paymentDetailsUnavailable
@@ -78,6 +82,9 @@ final class AppModel {
             case .deviceAuthUnavailable: "Set a device passcode first — sensitive wallet actions require device authentication."
             case .deviceAuthFailed: "Device authentication failed."
             case .spendAlreadyInFlight: "Another payment is already being signed and broadcast. Wait for it to finish."
+            case let .vaultSpendNotRecorded(txid, reason):
+                "The payment was sent (\(txid.displayHex)) but this account's coins could not be updated (\(reason)). "
+                    + "Reopen the account before spending from it again."
             case .noStorage: "Winnow could not reach its storage, so a chain reorganisation could not be recorded. Syncing has stopped rather than continue on stale data."
             }
         }
@@ -290,8 +297,8 @@ final class AppModel {
     /// E2E test mode (E2EMode) uses a separate Keychain service so test runs
     /// never touch a real wallet's secrets.
     let keyStore: any KeyStore
-    let vaultStore = VaultStore()
-    let peopleStore = PeopleStore()
+    let vaultStore: VaultStore
+    let peopleStore: PeopleStore
     private let defaults: UserDefaults
     let tor: TorController
     private var changingNetwork = false
@@ -366,11 +373,18 @@ final class AppModel {
     }
 
     init(deviceAuthenticator: any DeviceAuthenticating = LocalDeviceAuthenticator(),
-         e2e: E2EMode? = E2EMode.current, defaults: UserDefaults = .standard) {
+         e2e: E2EMode? = E2EMode.current, defaults: UserDefaults = .standard,
+         storeKeys: (any StoreKeyVault)? = nil) {
         self.deviceAuthenticator = deviceAuthenticator
         self.e2e = e2e
         e2e?.wipeIfRequested()
-        keyStore = e2e.map { KeychainStore(service: $0.keychainService) } ?? KeychainStore()
+        let keychainService = e2e?.keychainService ?? KeychainStore.defaultService
+        keyStore = KeychainStore(service: keychainService)
+        // The people and vault files' seal keys sit under the same service,
+        // so the E2E wipe covers them along with the wallet secret.
+        let storeKeys = storeKeys ?? KeychainStoreKeyVault(service: keychainService)
+        vaultStore = VaultStore(keys: storeKeys)
+        peopleStore = PeopleStore(keys: storeKeys)
         let defaults = e2e?.defaults ?? defaults
         self.defaults = defaults
         tor = TorController(enabled: defaults.bool(forKey: "torEnabled"),
@@ -412,6 +426,9 @@ final class AppModel {
 
     /// Opens the persisted wallet for the current network, if any.
     func boot() async {
+        // A crash with the export sheet open skips its cleanup; the staging
+        // file may carry the recovery phrase, so it does not wait for tmp.
+        ExportStagingFile.sweep()
         guard stage == .loading else { return }
         if let clipboard = e2e?.clipboard {
             UIPasteboard.general.string = clipboard
@@ -626,7 +643,8 @@ final class AppModel {
                                 relayPreference: true,
                                 dialTimeout: tor.enabled ? .seconds(90) : .seconds(5),
                                 seedResolver: .routed(client: tor.client), route: tor.route,
-                                censusCatalog: network == .mainnet ? catalogStore?.load()?.catalog : nil,
+                                censusCatalog: network == .mainnet
+                                    ? catalogStore?.load(trusting: censusTrustedKeys)?.catalog : nil,
                                 avoidOnReset: peersToAvoid)
     }
 
@@ -765,7 +783,8 @@ final class AppModel {
         guard let marker = storageDirectory()?.appending(path: Self.rollbackMarkerName) else {
             throw AppError.noStorage
         }
-        try Data(String(forkHeight).utf8).write(to: marker, options: .atomic)
+        try Data(String(forkHeight).utf8).write(
+            to: marker, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         try await wallet?.rollBack(to: forkHeight)
         try await vaultStore.rollBack(to: forkHeight)
         // Reactivates any own send whose confirming block fell (#157): the
@@ -1881,8 +1900,45 @@ final class AppModel {
         var includesYou: Bool
         var threshold: Int
         var signerCount: Int
+        /// Every key the descriptor carries, in descriptor order, with who it
+        /// is known as. A key that is nobody in the address book is the case
+        /// no validation can show, so its fingerprint goes on screen.
+        var signers: [Signer]
 
         var id: String { record.id }
+
+        struct Signer: Equatable, Identifiable {
+            var fingerprint: String
+            /// The person whose signer key this is; nil for a key that is
+            /// not in the address book.
+            var name: String?
+            var isYou: Bool
+
+            var id: String { fingerprint }
+        }
+    }
+
+    /// Who each of a vault's keys is, by the same derived identities
+    /// `recomputeSharedSavings` matches on.
+    private static func signers(of keys: [Data], identities: [(person: PersonRecord, key: Data)],
+                                ownKey: Data?) -> [SharedSavings.Signer] {
+        keys.map { key in
+            SharedSavings.Signer(fingerprint: PersonKeys.fingerprint(ofIdentity: key),
+                                 name: identities.first { $0.key == key }?.person.name,
+                                 isYou: key == ownKey)
+        }
+    }
+
+    /// The fingerprint of a person's signer key, to compare with the one
+    /// their own phone shows on its card.
+    func signerFingerprint(of person: PersonRecord) -> String? {
+        person.signerKey.flatMap { try? PersonKeys.signerFingerprint($0, network: network) }
+    }
+
+    /// The fingerprint of this wallet's own signer key, as a co-owner's phone
+    /// shows it next to this wallet's name.
+    var ownSignerFingerprint: String? {
+        (try? ownSignerIdentity()).map(PersonKeys.fingerprint(ofIdentity:))
     }
 
     /// Reads the address book file for the current network. Damage is a
@@ -1919,7 +1975,8 @@ final class AppModel {
             let coOwners = identities.filter { signerKeys.contains($0.key) }.map(\.person)
             let includesYou = ownKey.map { signerKeys.contains($0) } ?? false
             return SharedSavings(record: record, coOwners: coOwners, includesYou: includesYou,
-                                 threshold: vault.threshold, signerCount: vault.signerCount)
+                                 threshold: vault.threshold, signerCount: vault.signerCount,
+                                 signers: Self.signers(of: signerKeys, identities: identities, ownKey: ownKey))
         }
     }
 
@@ -2169,18 +2226,23 @@ final class AppModel {
 
     /// Adds this device's script-path signature to every input, after the
     /// review that decides what the signature authorizes.
+    /// Under the same `spending` gate as a wallet send: the review binds the
+    /// signature, but two spends from one vault racing each other could
+    /// still commit conflicting bookkeeping.
     func partialSignVaultSpend(_ psbt: PSBT, record: VaultRecord, reason: String) async throws -> PSBT {
-        let vault = try vault(for: record)
-        let coordinates = vaultAuthorizationCoordinates(for: record)
-        let tip = status.tipHeight
-        let signed = try await withMasterKey(reason: reason) { master in
-            var candidate = psbt
-            try vault.partialSign(&candidate, master: master, knownUTXOs: record.utxos,
-                                  ownedOutputCoordinates: coordinates, chainTip: tip)
-            return candidate
+        try await exclusively(.spending) {
+            let vault = try vault(for: record)
+            let coordinates = vaultAuthorizationCoordinates(for: record)
+            let tip = status.tipHeight
+            let signed = try await withMasterKey(reason: reason) { master in
+                var candidate = psbt
+                try vault.partialSign(&candidate, master: master, knownUTXOs: record.utxos,
+                                      ownedOutputCoordinates: coordinates, chainTip: tip)
+                return candidate
+            }
+            journalPSBT(stage: "multi-a-partial-signed", psbt: signed)
+            return signed
         }
-        journalPSBT(stage: "multi-a-partial-signed", psbt: signed)
-        return signed
     }
 
     /// Finalizes a fully-signed spend, broadcasts it, and commits it to the
@@ -2191,12 +2253,27 @@ final class AppModel {
         let transaction = try vault.finalizeSpend(&working, knownUTXOs: record.utxos,
                                                   ownedOutputCoordinates: vaultAuthorizationCoordinates(for: record),
                                                   chainTip: status.tipHeight)
-        let txid = try await broadcast(transaction)
-        let changeIndex = record.nextChangeIndex
-        let changeScript = try? vault.scriptPubKey(index: changeIndex, choice: AddressChain.change.rawValue)
-        _ = await recordVaultSpend(id: record.id, transaction: transaction,
-                                   changeScriptPubKey: changeScript, changeIndex: changeIndex)
-        return txid
+        return try await broadcastVaultSpend(transaction, vault: vault, record: record)
+    }
+
+    /// Broadcasts a finalized vault spend and commits it, under the
+    /// `spending` gate. A commit that fails after the broadcast is reported,
+    /// not swallowed: the transaction is out, and a spent coin left in the
+    /// record could be selected again by the next spend.
+    func broadcastVaultSpend(_ transaction: BitcoinTransaction, vault: Vault,
+                             record: VaultRecord) async throws -> Data {
+        try await exclusively(.spending) {
+            let txid = try await broadcast(transaction)
+            let changeIndex = record.nextChangeIndex
+            let changeScript = try? vault.scriptPubKey(index: changeIndex, choice: AddressChain.change.rawValue)
+            do {
+                _ = try await recordVaultSpend(id: record.id, transaction: transaction,
+                                               changeScriptPubKey: changeScript, changeIndex: changeIndex)
+            } catch {
+                throw AppError.vaultSpendNotRecorded(txid: txid, reason: error.localizedDescription)
+            }
+            return txid
+        }
     }
 
     func advanceVaultReceiveIndex(id: String) async {
@@ -2204,13 +2281,21 @@ final class AppModel {
         vaults = await vaultStore.all
     }
 
-    /// Commits a broadcast vault spend to the vault's local UTXO set.
+    /// Commits a broadcast vault spend to the vault's local UTXO set. `false`
+    /// means there was nothing to record (already recorded, or no known
+    /// input); a store failure throws rather than reading as `false`.
     @discardableResult
     func recordVaultSpend(id: String, transaction: BitcoinTransaction, changeScriptPubKey: Data?,
-                          changeIndex: UInt32) async -> Bool {
-        let recorded = (try? await vaultStore.recordSpend(
-            id: id, transaction: transaction,
-            changeScriptPubKey: changeScriptPubKey, changeIndex: changeIndex)) ?? false
+                          changeIndex: UInt32) async throws -> Bool {
+        let recorded: Bool
+        do {
+            recorded = try await vaultStore.recordSpend(
+                id: id, transaction: transaction,
+                changeScriptPubKey: changeScriptPubKey, changeIndex: changeIndex)
+        } catch {
+            vaults = await vaultStore.all
+            throw error
+        }
         vaults = await vaultStore.all
         guard recorded else { return false }
         e2e?.journal("vault.spendRecorded", fields: [
@@ -2441,8 +2526,25 @@ final class AppModel {
         await refresh()
     }
 
+    /// The E2E census is a handful of fixture entries, so it has no floor.
     var catalogStore: CensusCatalogStore? {
-        storageDirectory().map { CensusCatalogStore(url: $0.deletingLastPathComponent().appending(path: "mainnet/downloaded-census.json")) }
+        storageDirectory().map {
+            CensusCatalogStore(url: $0.deletingLastPathComponent().appending(path: "mainnet/downloaded-census.json"),
+                               minimumEntries: e2e == nil ? CensusCatalog.minimumOverlayEntries : 0)
+        }
+    }
+
+    /// The publisher keys a census must be signed under: the compiled-in set,
+    /// or the test key an E2E launch names.
+    var censusTrustedKeys: [Curve25519.Signing.PublicKey] {
+        e2e?.censusTrustedKeys ?? CensusPublisher.trustedKeys
+    }
+
+    /// The list's signature, fetched only when a key is trusted: an unsigned
+    /// census is accepted until the owner compiles a key in.
+    private func censusSignature(nextTo catalog: URL) async throws -> Data? {
+        guard !censusTrustedKeys.isEmpty else { return nil }
+        return try await tor.client.get(CensusSignature.endpoint(for: catalog), maximumBytes: CensusSignature.maximumBytes)
     }
 
     func refreshPeerCatalog() async {
@@ -2453,11 +2555,13 @@ final class AppModel {
         let epoch = tor.generation
         defer { refreshingCatalog = false }
         do {
-            let data = try await tor.client.get(e2e?.censusURL ?? CensusCatalog.endpoint, maximumBytes: CensusCatalog.maximumBytes) { [weak self] bytes in
+            let catalogURL = e2e?.censusURL ?? CensusCatalog.endpoint
+            let data = try await tor.client.get(catalogURL, maximumBytes: CensusCatalog.maximumBytes) { [weak self] bytes in
                 Task { @MainActor in if self?.tor.generation == epoch { self?.catalogBytes = bytes } }
             }
+            let signature = try await censusSignature(nextTo: catalogURL)
             guard epoch == tor.generation, isActive, let store = catalogStore else { throw CancellationError() }
-            let download = try store.replace(with: data)
+            let download = try store.replace(with: data, signature: signature, trusting: censusTrustedKeys)
             if network == .mainnet { try await stack?.pool.updateCensusCatalog(download.catalog) }
             let clearnet = download.catalog.networks["clearnet"]?.count ?? 0
             let onion = download.catalog.networks["tor"]?.count ?? 0
@@ -2524,6 +2628,14 @@ final class AppModel {
                              customURLString: esploraURLString, network: network)
     }
 
+    /// Whether a URL host names this device: the one place a plaintext
+    /// explorer cannot be observed or forged in transit.
+    static func isLoopback(_ host: String) -> Bool {
+        let lowered = host.lowercased()
+        return lowered == "localhost" || lowered == "::1" || lowered == "[::1]"
+            || lowered.hasPrefix("127.")
+    }
+
     /// Pure resolution, so the per-network preset table is testable without
     /// an app model. blockstream.info serves no signet explorer, so the
     /// blockstream preset resolves to mempool.space's signet site there —
@@ -2533,9 +2645,13 @@ final class AppModel {
                                 customURLString: String,
                                 network: BitcoinNetwork) -> URL {
         if provider == .custom {
-            if let url = URL(string: customURLString),
-               ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
-               url.host != nil {
+            // HTTPS for any host off this device: the sender lookup sends a
+            // txid and the device IP to this host, and a plaintext answer
+            // could be forged on the path. Loopback has no path, so a local
+            // explorer — or the UI journeys' stub — may stay plain.
+            if let url = URL(string: customURLString), let host = url.host,
+               url.scheme?.lowercased() == "https"
+                || (url.scheme?.lowercased() == "http" && Self.isLoopback(host)) {
                 return url
             }
             return explorerBaseURL(provider: .blockstream, customURLString: "", network: network)

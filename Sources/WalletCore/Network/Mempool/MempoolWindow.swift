@@ -182,8 +182,7 @@ public actor MempoolWindow {
         let deadline = Date().addingTimeInterval(-Self.timeInterval(requestTimeout))
         for (txid, requestedAt) in inFlight where requestedAt < deadline {
             inFlight.removeValue(forKey: txid)
-            seenTxids.remove(txid)
-            if let index = seenOrder.firstIndex(of: txid) { seenOrder.remove(at: index) }
+            forget(txid)
         }
     }
 
@@ -241,8 +240,7 @@ public actor MempoolWindow {
                 // This peer doesn't have it; free the txid so a duplicate
                 // announcement from another peer re-requests it there.
                 inFlight.removeValue(forKey: vector.hash)
-                seenTxids.remove(vector.hash)
-                if let index = seenOrder.firstIndex(of: vector.hash) { seenOrder.remove(at: index) }
+                forget(vector.hash)
             }
         default:
             break
@@ -262,10 +260,7 @@ public actor MempoolWindow {
         } catch {
             // Peer died mid-request; roll back so another peer's announcement
             // re-requests the txs.
-            for vector in request {
-                seenTxids.remove(vector.hash)
-                if let index = seenOrder.firstIndex(of: vector.hash) { seenOrder.remove(at: index) }
-            }
+            for vector in request { forget(vector.hash) }
             return
         }
         let requestedAt = Date()
@@ -296,6 +291,15 @@ public actor MempoolWindow {
             seenTxids.remove(evicted)
         }
         return request
+    }
+
+    /// Drops a txid from the seen set. The ordered list is searched only for
+    /// a txid that was actually seen: a `notfound` naming 50,000 strangers
+    /// must not cost 50,000 scans of it.
+    private func forget(_ txid: Data) {
+        guard seenTxids.remove(txid) != nil,
+              let index = seenOrder.firstIndex(of: txid) else { return }
+        seenOrder.remove(at: index)
     }
 
     /// Matches a fetched transaction against the watch set (once — the

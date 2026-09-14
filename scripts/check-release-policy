@@ -21,6 +21,8 @@ if 'winnow-census artifact of ' in text and not observation:
 if observation:
     if not re.search(r'^// Source SHA256: [0-9a-f]{64}$', text, re.M):
         raise SystemExit('census provenance has no valid source SHA256')
+    if not re.search(r'^// Source commit: [0-9a-f]{40}$', text, re.M):
+        raise SystemExit('census provenance names no census commit; regenerate with --census-commit')
     observed = dt.date.fromisoformat(observation[1])
     observation_age = (dt.datetime.now(dt.timezone.utc).date() - observed).days
     if not 0 <= observation_age <= 7:

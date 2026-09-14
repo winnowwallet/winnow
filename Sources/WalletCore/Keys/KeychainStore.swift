@@ -12,10 +12,13 @@ import Security
 /// that still cannot show is that iOS *honours* it when the device locks —
 /// the simulator has no data protection and no Secure Enclave.
 public struct KeychainStore: KeyStore {
+    /// The service a real wallet's entries live under. E2E runs use their own.
+    public static let defaultService = "org.btc-swift.wallet"
+
     /// kSecAttrService namespace for all entries; the wallet ID is the account.
     public let service: String
 
-    public init(service: String = "org.btc-swift.wallet") {
+    public init(service: String = KeychainStore.defaultService) {
         self.service = service
     }
 

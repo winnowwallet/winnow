@@ -25,9 +25,15 @@ public struct CensusCatalog: Codable, Equatable, Sendable {
     public static let maximumBytes = 4 * 1_024 * 1_024
     public static let overlayCap = 2_000
     public static let maximumAgeDays = 7
+    /// Below this many clearnet or Tor entries a list is thin. The publisher
+    /// never makes one this small — a daily census lists hundreds of clearnet
+    /// and thousands of Tor nodes — so a list that arrives this small was cut
+    /// down somewhere in between, and taking it would empty the automatic
+    /// pool. I2P has no floor: it is delegated-only and may be empty.
+    public static let minimumOverlayEntries = 50
 
     public enum Invalid: String, Error, LocalizedError {
-        case schema, date, expired, future, size, endpoint, height, duplicate, diversity
+        case schema, date, expired, future, size, endpoint, height, duplicate, diversity, thin
         public var errorDescription: String? { "Invalid census peer list: \(rawValue)." }
     }
 
@@ -43,12 +49,17 @@ public struct CensusCatalog: Codable, Equatable, Sendable {
         return Int(floor(date.timeIntervalSince1970 / 86_400))
     }
 
-    public static func decode(_ data: Data, now: Date = Date(), requireFresh: Bool = true) throws -> Self {
+    public static func decode(_ data: Data, now: Date = Date(), requireFresh: Bool = true,
+                              minimumEntries: Int = 0) throws -> Self {
         guard data.count <= maximumBytes else { throw Invalid.size }
-        return try JSONDecoder().decode(Self.self, from: data).validated(now: now, requireFresh: requireFresh)
+        return try JSONDecoder().decode(Self.self, from: data)
+            .validated(now: now, requireFresh: requireFresh, minimumEntries: minimumEntries)
     }
 
-    public func validated(now: Date = Date(), requireFresh: Bool = true) throws -> Self {
+    /// `minimumEntries` is the floor the wallet applies to a list it will
+    /// use (`minimumOverlayEntries`); the publisher and the tests validate
+    /// shape alone.
+    public func validated(now: Date = Date(), requireFresh: Bool = true, minimumEntries: Int = 0) throws -> Self {
         guard schemaVersion == 1, Set(networks.keys) == Set(["clearnet", "tor", "i2p"]) else { throw Invalid.schema }
         guard let observed = Self.day(date) else { throw Invalid.date }
         let age = Int(floor(now.timeIntervalSince1970 / 86_400)) - observed
@@ -57,13 +68,14 @@ public struct CensusCatalog: Codable, Equatable, Sendable {
         guard tip > 0 else { throw Invalid.height }
         var result = self
         for overlay in OverlayNetwork.allCases {
-            result.networks[overlay.rawValue] = try validatedEntries(overlay)
+            result.networks[overlay.rawValue] = try validatedEntries(overlay, minimum: minimumEntries)
         }
         return result
     }
 
-    private func validatedEntries(_ overlay: OverlayNetwork) throws -> [Entry] {
+    private func validatedEntries(_ overlay: OverlayNetwork, minimum: Int) throws -> [Entry] {
         let entries = networks[overlay.rawValue] ?? []
+        guard overlay == .i2p || entries.count >= minimum else { throw Invalid.thin }
         guard entries.count <= (overlay == .clearnet ? 65_536 : Self.overlayCap) else { throw Invalid.size }
         var seen = Set<PeerEndpoint>(), blocks = Set<String>()
         let canonical = try entries.map { input in

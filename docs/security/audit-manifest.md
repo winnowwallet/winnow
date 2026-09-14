@@ -1,16 +1,39 @@
 # Winnow security audit manifest
 
-This is an August 2026 audit record. References to Silent Payments and its tweak
-index describe the implementation reviewed then; those features have since been
-removed. Historical findings and their evidence are retained below.
+This file freezes the source and evidence boundary for the security work. A
+checked box or passing test proves only the named property. It is not a
+general wallet-safety claim, and the mainnet decision is the
+[gate report](gate-report.md)'s, not this file's.
 
-Status: **Phase 0 baseline; not a mainnet approval**
+Two frozen targets are recorded. The August 2026 record is kept as written —
+its evidence rows in the [findings register](findings.md) name that tree, and
+references to Silent Payments, the tweak index, `BitcoinCore`, `BitcoinP2P`
+and `EsploraClient` describe the implementation reviewed then, all since
+removed or folded into `WalletCore`. The 2026-09-14 record re-freezes the
+manifest at the tree the [independent review](independent-review-2026-09-14.md)
+was fixed against (IR-007), so that a reader following the pointers below
+finds the files they name.
 
-This file freezes the source and evidence boundary for the
-security-hardening epic. A checked box or passing
-test proves only the named property. It is not a general wallet-safety claim.
+## Frozen target, 2026-09-14
 
-## Frozen target
+| Item | Value |
+|---|---|
+| Source commit | `2a6a4a40c3a418998676ecd59070ec370e00a5b6` on the review branch (winnow#137); the merge commit that lands it supersedes this row |
+| Commit date | 2026-09-14 15:17:39 -04:00 |
+| Swift | Apple Swift 6.3.3 (`swiftlang-6.3.3.1.3`) |
+| Xcode | 26.6 (`17F113`) |
+| Installed iOS runtimes | 26.4.1, 26.5 |
+| Minimum package platforms | iOS 17, macOS 14 |
+| Baseline commands | `swift test`; `scripts/ci-app-tests` (`WinnowAppTests` on a simulator); `swiftlint lint` |
+| Baseline result | The package suite and the app suite pass at this revision; the counts are the dated rows of 2026-09-14 in the findings register. Lint clean. |
+| CI at this revision | Recorded on winnow#137: `package`, `package-tests-intel`, `differential`, `complexity`, `app-build`, and the four `ui-iPhone-<story>` jobs |
+
+Suites gated by `WINNOW_DIFF` run on the node lane against a local Bitcoin
+Core; the iPad journeys run on `main` and not on the pull-request path (a
+2026-09-14 change). An iOS release configuration is exercised only by the
+release workflow.
+
+## Frozen target, August 2026 (historical)
 
 | Item | Value |
 |---|---|
@@ -34,29 +57,33 @@ baseline, checkpoint generation and the genesis-versus-checkpoint agreement
 check left the test tree for the `winnow-debug generate` subcommand, and the 2,000 headers
 past the checkpoint became a vector that `HeaderChainTests` connects on
 every CI run.) App/UI tests and an iOS release configuration were also outside
-this run. Those are open evidence items, not implied passes.
+this run.
 
 ## Size and dependency boundary
 
-Counts use `cloc 2.08`, exclude comments, blank lines, dependencies, generated
-projects, tests, and documentation, and are measured at the frozen commit.
+Counts use `cloc 2.08` over `Sources/` only (`--include-lang=Swift`), exclude
+comments, blank lines, dependencies, generated projects, tests and
+documentation, and are measured at the 2026-09-14 frozen commit.
 
 | Production surface | Files | Logical lines |
 |---|---:|---:|
-| Bitcoin primitives | 20 | 2,771 |
-| P2P networking | 17 | 3,022 |
-| Optional blockchain backends | 2 | 166 |
-| Wallet and signing core | 19 | 2,501 |
-| iOS application/UI | 14 | 3,501 |
-| **Production total** | **72** | **11,961** |
-| **Core before UI** | **58** | **8,460** |
+| `WalletCore` (primitives, network, wallet and signing core) | 58 | 14,427 |
+| — of which `Network/Protocol/FallbackPeersGenerated.swift` (generated peer list) | 1 | 2,986 |
+| `WinnowApp` (iOS application/UI) | 23 | 5,730 |
+| **Production total** | **81** | **20,157** |
+| **Production total without the generated list** | **80** | **17,171** |
 
-The only external Swift package is
-`21-DOT-DEV/swift-secp256k1` version `0.23.2`, resolved to commit
-`e70a10e036a55fffea31568f0af92d69b6d449cd`. It exposes the `P256K` product
-with MuSig, Schnorr, recovery, and ECDH traits. `Package.resolved` is part of
-this audit branch so builds record the reviewed revision rather than only a
-version label. Provenance review and update policy remain Phase 7 work.
+The August table (72 files, 11,961 lines across five surfaces) is superseded;
+the growth is the network layer's peer-source classes, the census and its
+signature, people and shared savings, the sealed stores and the review's
+fixes.
+
+The only external Swift package is `21-DOT-DEV/swift-secp256k1` version
+`0.23.2`, resolved to commit `e70a10e036a55fffea31568f0af92d69b6d449cd`, and
+`Package.resolved` is in the repository so builds record the reviewed
+revision. The app additionally embeds Arti 0.46.0 built from locked Rust
+source ([TorBridge](../../TorBridge/README.md)); `WalletCore` and the census
+do not link Rust.
 
 ## Severity rules
 
@@ -79,123 +106,122 @@ and credible prerequisites, not by code location.
 2. **Authorization boundary:** SwiftUI review state feeds wallet transaction
    construction, PSBT fields, sighash calculation, signing, finalization, and
    broadcast. Mutation after review must fail closed.
-3. **Untrusted network boundary:** DNS, peers, Esplora, and the experimental
-   silent-payment index supply attacker-controlled bytes or JSON.
+3. **Untrusted network boundary:** DNS, peers, the census list and, when the
+   user opts in, the block explorer supply attacker-controlled bytes or JSON.
 4. **Untrusted interchange boundary:** addresses, descriptors, cosigner keys,
-   PSBTs, and import bundles are attacker-controlled text/files even when they
-   arrive from a known person.
-5. **Persistent-state boundary:** wallet JSON, vault JSON, headers, filter
-   progress, peer cache, settings, export staging files, and E2E journals have
-   different authority and confidentiality.
+   PSBTs, Winnow cards and import bundles are attacker-controlled text/files
+   even when they arrive from a known person.
+5. **Persistent-state boundary:** wallet JSON, the sealed people and vault
+   files, headers, filter progress, peer cache, the downloaded census, settings,
+   export staging files, and E2E journals have different authority and
+   confidentiality.
 6. **Build/distribution boundary:** package revisions, GitHub Actions, Xcode,
-   signing credentials, TestFlight, and published evidence determine whether
-   reviewed source is the source users receive.
+   signing credentials, TestFlight, the census repository and its signing key,
+   and published evidence determine whether reviewed source is the source
+   users receive.
 
 ## External disclosure inventory
 
 Every point at which bytes can leave the device, and what each one carries.
-Re-derive with `grep -rn "URLSession\|NWConnection\|getaddrinfo" Sources/`.
+Re-derived on 2026-09-14 with
+`grep -rn "URLSession\|NWConnection\|getaddrinfo\|openURL" Sources/`; the Arti
+row comes from the Tor bridge, which the grep cannot see.
 
 | Egress | Transport | Carries | When |
 |---|---|---|---|
-| Peer connections | `NWConnection` (`BitcoinP2P/Transport/PeerConnection.swift`) | BIP157/158 filter and header requests, and transactions the user broadcasts | Always: this is how the wallet reads the chain |
-| DNS seeds | DoH over `URLSession`, falling back to `getaddrinfo` (`Peers/SeedResolver.swift`) | Seed hostnames only | At startup, to find peers |
-| Block explorer | Browser handoff via `openURL` | The selected address or transaction and the browser connection’s IP address | Only after the user taps a link and confirms the privacy warning; responses are never used by wallet sync |
+| Peer connections | `NWConnection` (`WalletCore/Network/Transport/PeerConnection.swift`), directly or through Arti's local SOCKS port | BIP157/158 filter and header requests, and transactions the user broadcasts | Always: this is how the wallet reads the chain |
+| DNS seeds | DoH over `URLSession` (`RoutedHTTPClient`), falling back to `getaddrinfo` (`WalletCore/Network/Peers/SeedResolver.swift`) | Seed hostnames only; the answer is capped at 128 KiB | At startup when local candidates do not fill the pool |
+| Census refresh | `RoutedHTTPClient` (`NetworkRoute.swift`), through Tor when Tor is on, to `census.winnowwallet.com` | A GET for `census/peers.json` and, once a publisher key is compiled in, `peers.json.sig`; nothing about the wallet. The answer is capped at 4 MiB, must verify, and must be no thinner than a real census | Only when the user taps refresh in Settings; mainnet only |
+| Explorer sender lookup | `RoutedHTTPClient` to the configured explorer (`WinnowApp/SenderLookup.swift`) | A GET for `/tx/{txid}`: one transaction id, no query string, no body | Only after the user opts in, per lookup |
+| Arti | The embedded Tor client's own connections (`TorBridge/`) | Directory and guard traffic of an ordinary Tor client | Whenever Tor is on |
+| Block explorer link | Browser handoff via `openURL` (`WinnowApp/Components.swift`) | The selected address or transaction and the browser connection's IP address | Only after the user taps a link and confirms the privacy warning; responses are never used by wallet sync |
 
-The unused `BlockchainBackend`/`EsploraClient` module was removed on
-2026-09-07. The current tree also contains no silent-payment tweak-index
-client. Historical references to those clients describe earlier revisions;
-they are not active wallet-read paths. Explorer URLs are built directly by
-`AppModel` and opened only by the warned `ExplorerLink` UI in `Components.swift`.
+`RoutedHTTPClient` follows a redirect only within the host it was asked of
+and never down from https; a custom explorer must be https (plain http only
+on loopback, for the test stub). No silent-payment tweak-index client and no
+`EsploraClient` exist in the tree; historical references to them describe the
+August revision.
 
 ## Production source inventory
 
-Every production file is listed below. “Owner” means the responsible module,
-not a named person; a named human reviewer is still required before Phase 8.
+Every production file is listed below. "Owner" means the responsible module,
+not a named person; a named human reviewer is still required, as the gate
+report records.
 
-### BitcoinCore — owner: primitives review
+### WalletCore — owner: primitives, network/chain and wallet-authorization review
 
-Parsed input and trust boundary: keys, addresses, descriptors, scripts, vector
-and transaction-derived bytes. Secrets: BIP39/BIP32 keys, signing tweaks,
-MuSig2 nonces. Persistence: none directly. Primary test owners:
-`BitcoinCoreTests`, `WalletCoreTests`, and `DifferentialTests`.
+Parsed input and trust boundary: keys, addresses, descriptors, scripts,
+transaction-derived bytes, arbitrary peer and DNS bytes, the census list and
+its signature, persisted wallet state, PSBTs, cosigner keys, Winnow cards and
+import/export bundles. Secrets: BIP39/BIP32 keys, signing tweaks, MuSig2
+nonces, derived signing keys. Persistence: Keychain, wallet JSON, header
+chain, filter frontier, peer cache, broadcaster state, downloaded census and
+export staging files. Primary test owners: `BitcoinCoreTests`,
+`WalletCoreTests`, `DifferentialTests` and the fuzz harness.
 
 - `Crypto/Base58.swift`, `Crypto/Bech32.swift`, `Crypto/GCSFilter.swift`
 - `Crypto/PBKDF2.swift`, `Crypto/RIPEMD160.swift`, `Crypto/SipHash.swift`, `Crypto/TaggedHash.swift`
 - `Descriptors/Descriptor.swift`, `Descriptors/MuSig.swift`, `Descriptors/MuSig2.swift`
-- `Keys/BIP32.swift`, `Keys/BIP39.swift`, `Keys/BIP39Wordlist.swift`, `Keys/BIP86.swift`
-- `Script/Multisig.swift`, `Script/Script.swift`, `Script/Taproot.swift`
-- `SilentPayments/Receiving.swift`, `SilentPayments/Sending.swift`, `SilentPayments/SilentPaymentAddress.swift`
-
-### BitcoinP2P — owner: network/chain review
-
-Parsed input and trust boundary: arbitrary peer and DNS bytes. Secrets: none;
-addresses and watched transaction data are privacy-sensitive. Persistence:
-header chain, filter frontier, peer cache, and broadcaster state. Primary test
-owners: `BitcoinP2PTests` and `DifferentialTests`; the signet assertions that
-were gated by `WINNOW_SIGNET` now run on the node lane under `WINNOW_DIFF=1` as
-`FilterSyncDiffTests`.
-
-- `BitcoinP2P.swift`, `Broadcast/TxBroadcaster.swift`, `Filters/FilterSync.swift`
-- `Headers/HeaderChain.swift`, `Headers/UInt256.swift`, `Mempool/MempoolWindow.swift`
-- `Peers/PeerPool.swift`, `Peers/SeedResolver.swift`
-- `Protocol/Block.swift`, `Protocol/Framing.swift`, `Protocol/Inventory.swift`, `Protocol/Messages.swift`
-- `Protocol/NetworkParams.swift`, `Protocol/PeerAddress.swift`, `Protocol/Transaction.swift`, `Protocol/Wire.swift`
-- `Transport/PeerConnection.swift`
-
-### WalletCore — owner: wallet authorization review
-
-Parsed input and trust boundary: persisted wallet state, addresses, descriptors,
-PSBTs, cosigner keys, and import/export bundles. Secrets: recovery words, master
-keys, derived signing keys, and silent-payment spend/view material. Persistence:
-Keychain, wallet JSON, and export staging files. Primary test owner:
-`WalletCoreTests`, with vector and differential coverage from lower layers.
-
-- `Internal/Serialization.swift`
-- `Keys/KeyStore.swift`, `Keys/KeychainStore.swift`
+- `Keys/BIP32.swift`, `Keys/BIP39.swift`, `Keys/BIP39Wordlist.swift`, `Keys/BIP86.swift`, `Keys/KeyStore.swift`, `Keys/KeychainStore.swift`
+- `Network/Broadcast/TxBroadcaster.swift`, `Network/Filters/FilterSync.swift`
+- `Network/Headers/HeaderChain.swift`, `Network/Headers/UInt256.swift`, `Network/Mempool/MempoolWindow.swift`
+- `Network/Peers/CensusCatalog.swift`, `Network/Peers/CensusCatalogStore.swift`, `Network/Peers/CensusSignature.swift`, `Network/Peers/OnionChecksum.swift`
+- `Network/Peers/PeerDiversity.swift`, `Network/Peers/PeerPool.swift`, `Network/Peers/SeedResolver.swift`
+- `Network/Protocol/Block.swift`, `Network/Protocol/FallbackPeersGenerated.swift`, `Network/Protocol/Framing.swift`, `Network/Protocol/Inventory.swift`
+- `Network/Protocol/Messages.swift`, `Network/Protocol/NetworkParams.swift`, `Network/Protocol/PeerAddress.swift`, `Network/Protocol/Transaction.swift`, `Network/Protocol/Wire.swift`
+- `Network/Transport/NetworkRoute.swift`, `Network/Transport/PeerConnection.swift`
 - `PSBT/PSBT.swift`, `PSBT/PSBTRoles.swift`
-- `Transactions/AddressDecoder.swift`, `Transactions/SighashBIP341.swift`, `Transactions/Signer.swift`
-- `Transactions/SilentPayment.swift`, `Transactions/TransactionBuilder.swift`
-- `Wallet/CoinSelection.swift`, `Wallet/ExportStagingFile.swift`, `Wallet/FeePolicy.swift`
-- `Wallet/ImportBundle.swift`, `Wallet/SilentPaymentSync.swift`, `Wallet/Vault.swift`, `Wallet/VaultSetup.swift`, `Wallet/Wallet.swift`
-- `WalletCore.swift`
+- `Script/Multisig.swift`, `Script/Script.swift`, `Script/Taproot.swift`
+- `Transactions/AddressDecoder.swift`, `Transactions/FundingSources.swift`, `Transactions/SighashBIP341.swift`, `Transactions/Signer.swift`, `Transactions/TransactionBuilder.swift`
+- `Wallet/CoinSelection.swift`, `Wallet/ExportStagingFile.swift`, `Wallet/FeePolicy.swift`, `Wallet/ImportBundle.swift`, `Wallet/People.swift`
+- `Wallet/Vault.swift`, `Wallet/VaultRecord.swift`, `Wallet/VaultSetup.swift`, `Wallet/Wallet.swift`
 
 ### WinnowApp — owner: iOS authorization/UI review
 
-Parsed input and trust boundary: user text, clipboard, files, settings, app
-lifecycle, device authentication, and E2E launch environment. Secrets: recovery
-display/copy, wallet creation handoff, and seed-bearing export. Persistence:
-UserDefaults, app files, vault store, and E2E journal. Primary test owners:
-`AppTests`, `UITests`, plus library tests for logic that remains below the UI.
+Parsed input and trust boundary: user text, clipboard, files, settings, the
+people and vault files, the explorer's answer, app lifecycle, device
+authentication, and the E2E launch environment. Secrets: recovery
+display/copy, wallet creation handoff, seed-bearing export, MuSig2 nonces in
+flight. Persistence: UserDefaults, the sealed people and vault files (HMAC
+under a Keychain-held key), receive labels, the E2E journal. Primary test
+owners: `AppTests` (`WinnowAppTests`), `UITests`, plus library tests for
+logic that remains below the UI.
 
-- `AppModel.swift`, `Components.swift`, `E2EMode.swift`, `HomeView.swift`
-- `OnboardingView.swift`, `ReceiveView.swift`, `SendView.swift`, `SettingsView.swift`
-- `VaultDetailView.swift`, `VaultSignView.swift`, `VaultStore.swift`, `VaultsView.swift`, `WinnowApp.swift`
+- `AccountDetailView.swift`, `AppModel.swift`, `Components.swift`, `E2EMode.swift`, `HomeView.swift`
+- `MuSig2SignView.swift`, `OnboardingView.swift`, `PeopleStore.swift`
+- `ReceiveAddressLabelEditor.swift`, `ReceiveAddressLabelStore.swift`, `ReceiveView.swift`, `RecipientsView.swift`
+- `ScreenCaptureMonitor.swift`, `SendView.swift`, `SenderLookup.swift`, `SensitivePresentationEpoch.swift`, `SettingsView.swift`
+- `SharedSavingsViews.swift`, `StoreAuthentication.swift`, `TorController.swift`
+- `VaultSpendSession.swift`, `VaultStore.swift`, `VaultsView.swift`, `WinnowApp.swift`
 - `Assets.xcassets/AppIcon.appiconset/Contents.json`
+
+The Tor bridge (`TorBridge/`, Rust, Arti 0.46.0) is inventoried by its own
+README and lockfile; the census publisher (winnowwallet/census) consumes
+`WalletCore` as a package dependency and is inventoried in its repository.
 
 ## Baseline evidence and gaps
 
-- Present: BIP/vector suites; parser negatives; wallet create/send/RBF/import;
-  Taproot script-path and MuSig2 flows; peer loopback, failover, filter, and
-  broadcaster tests; story redaction/idempotency checks.
-- Not executed here: Bitcoin Core differential tests, public/custom signet
-  integrations, checkpoint agreement/generation, iOS Keychain behavior, app
-  build, device authentication, background/screenshot/clipboard behavior, UI
-  mutation-after-review, sanitizers, fuzzing, and release provenance.
-- Structural gap: `KeychainStore` states that entitlements prevent SwiftPM
-  coverage. This requires a full-Xcode integration test and manual device check;
-  source review alone is not equivalent evidence.
-- Reproducibility gap addressed in this branch: the dependency lockfile was
-  ignored. The manifest already used an exact version, but did not record the
-  resolved commit in the repository.
-- Hostile-input gap addressed in this branch: PSBT raw/Base64 documents, maps,
-  keys, input/output counts, and known fixed-width fields now have explicit
-  limits and fail with ordinary errors instead of trapping on oversized
-  CompactSize values. The regression is recorded as `SEC-001`.
+- Present: BIP/vector suites; parser negatives and the fuzz harness's fifteen
+  targets; wallet create/send/RBF/import; Taproot script-path and MuSig2 flows;
+  peer loopback, failover, filter-consensus and broadcaster tests; header
+  rules with a generator-proven checkpoint; sealed-store and census-signature
+  tests; story redaction/idempotency checks; Bitcoin Core differential tests
+  and the iPhone journeys on every pull request; Keychain attribute read-back
+  and the privacy cover in the app suite.
+- Not executed on the pull-request path: the iPad journeys (on `main`), the
+  sustained fuzz matrix (weekly), soak runs, device authentication on real
+  hardware, and release provenance (release workflow).
+- Structural gap: the simulator has no data protection and no Secure Enclave,
+  so a protection class is observed to be requested and recorded, never to be
+  honoured; that is Apple's contract and needs real hardware.
+- Owner-gated after the 2026-09-14 review: private vulnerability reporting
+  (IR-009), an access-control class on the Keychain item (IR-023), and the
+  census signing key (IR-003, `docs/census-signing.md`).
 
 ## Change control
 
-The frozen commit remains the comparison base. Each bounded security PR must
-name the invariant, tests, residual risk, and rollback. Unrelated refactors in
-the inventoried modules should wait until the first review pass or be reviewed
-as changes to the audit target. Exploitable findings remain private until fixed.
+The frozen commit remains the comparison base. Each bounded security change
+must name the invariant, tests, residual risk, and rollback. Unrelated
+refactors in the inventoried modules should wait until the next review pass or
+be reviewed as changes to the audit target. Exploitable findings remain
+private until fixed.

@@ -169,6 +169,18 @@ struct PeopleTests {
 
     // MARK: - Shared savings
 
+    @Test("a signer key's fingerprint is eight hex characters, stable, and different per key")
+    func signerFingerprints() throws {
+        let masters = try Self.masters()
+        let alice = try PersonKeys.signerFingerprint(Self.signer(masters[0]), network: .signet)
+        let bob = try PersonKeys.signerFingerprint(Self.signer(masters[1]), network: .signet)
+        #expect(alice != bob)
+        #expect(alice.count == 9 && alice.dropFirst(4).first == " ")
+        #expect(alice.filter(\.isHexDigit).count == 8)
+        #expect(alice == PersonKeys.fingerprint(ofIdentity: try PersonKeys.signerIdentity(Self.signer(masters[0]),
+                                                                                          network: .signet)))
+    }
+
     @Test("a savings vault finds its co-owners by key, whatever the order")
     func savingsSignersMatchPeople() throws {
         let masters = try Self.masters()
@@ -196,6 +208,18 @@ struct PeopleTests {
         }
     }
 
+    @Test("a vault refuses signer keys that belong to another network")
+    func signerKeysMustMatchTheNetwork() throws {
+        // Signet account keys. The builder path refused them for a mainnet
+        // vault; the boundary every restore and card import crosses did not,
+        // so a card carrying tpub keys under "network": "mainnet" was filed
+        // as a mainnet vault whose keys sit at 86'/1'.
+        let keys = try Self.masters().map { try Self.signer($0) }
+        let descriptor = try Vault.multiADescriptor(threshold: 2, cosigners: keys)
+        _ = try Vault(descriptor: descriptor, network: .signet)
+        #expect(throws: VaultError.self) { _ = try Vault(descriptor: descriptor, network: .mainnet) }
+    }
+
     @Test("approvals are counted from script signatures on every input")
     func signersOfASpend() throws {
         let masters = try Self.masters()
@@ -217,6 +241,17 @@ struct PeopleTests {
         try vault.partialSign(&psbt, master: masters[2], knownUTXOs: [utxo],
                               ownedOutputCoordinates: [.init(choice: 1, index: 0)], chainTip: 200)
         #expect(try vault.signers(of: psbt, knownUTXOs: [utxo]).count == 2)
+
+        // A signature entry that merely names a cosigner's key is not that
+        // cosigner's approval: only a signature that verifies is counted, so a
+        // forged reply cannot make the screen say "approved" for a key that
+        // never signed. Before this, presence alone counted — three here.
+        var forged = psbt
+        let leafHash = try #require(forged.inputs[0].tapLeafScripts.first?.leafHash)
+        let unsigned = Data(signerKeys[signerKeys.firstIndex(of: identities[0])!].dropFirst())
+        forged.inputs[0].tapScriptSignatures[PSBT.TapScriptSignatureID(publicKey: unsigned, leafHash: leafHash)]
+            = Data(repeating: 0xAA, count: 64)
+        #expect(try vault.signers(of: forged, knownUTXOs: [utxo]).count == 2)
 
         let request = ApprovalRequest(network: .signet, vault: "abcd1234", name: "Savings", psbt: psbt)
         let envelope = try request.serialized()

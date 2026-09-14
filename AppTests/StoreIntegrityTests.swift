@@ -228,19 +228,22 @@ private func snapshotFile<Record: Encodable>(_ records: [Record], named name: St
 
 final class VaultStoreSecurityTests: XCTestCase {
     func testMissingVaultFileIsAnEmptyStore() async {
+        let keys = InMemoryStoreKeyVault()
         await assertMissingFileIsAnEmptyStore(
-            vaultStoreFixture(VaultStore(), url: tempFileURL("vault-store.json")))
+            vaultStoreFixture(VaultStore(keys: keys), url: tempFileURL("vault-store.json")))
     }
 
     func testMalformedVaultFileFailsClosedAndIsNotRewritten() async throws {
+        let keys = InMemoryStoreKeyVault()
         let url = tempFileURL("vault-store.json")
         defer { try? FileManager.default.removeItem(at: url) }
         try await assertDamagedSnapshotFailsClosedAndIsNotRewritten(
-            vaultStoreFixture(VaultStore(), url: url,
+            vaultStoreFixture(VaultStore(keys: keys), url: url,
                               damage: { try writeBytes(Data("not vault json".utf8), to: url) }))
     }
 
     func testOneInvalidRecordRejectsTheWholeSnapshot() async throws {
+        let keys = InMemoryStoreKeyVault()
         let fixture = try makeFixture()
         var invalid = fixture.record
         invalid.id = "00000000"
@@ -248,11 +251,12 @@ final class VaultStoreSecurityTests: XCTestCase {
         let url = tempFileURL("vault-store.json")
         defer { try? FileManager.default.removeItem(at: url) }
         try await assertOneInvalidRecordRejectsTheWholeSnapshot(
-            vaultStoreFixture(VaultStore(), url: url,
+            vaultStoreFixture(VaultStore(keys: keys), url: url,
                               damage: { try writeSnapshot([fixture.record, damaged], to: url) }))
     }
 
     func testDuplicateVaultAndOutpointSnapshotsFailClosed() async throws {
+        let keys = InMemoryStoreKeyVault()
         let fixture = try makeFixture()
         var funded = fixture.record
         funded.nextReceiveIndex = 1
@@ -263,13 +267,14 @@ final class VaultStoreSecurityTests: XCTestCase {
         for records in [[fixture.record, fixture.record], [duplicateOutpoint]] {
             let url = try snapshotFile(records, named: "vault-store.json")
             defer { try? FileManager.default.removeItem(at: url) }
-            let store = VaultStore()
+            let store = VaultStore(keys: keys)
             guard case .damaged = await store.configure(storageURL: url, network: .signet)
             else { return XCTFail("duplicate persisted identity was accepted") }
         }
     }
 
     func testWrongScriptAndImpossibleAmountsFailClosed() async throws {
+        let keys = InMemoryStoreKeyVault()
         let fixture = try makeFixture()
         var wrongScript = try funding(vault: fixture.vault, amount: 10_000)
         wrongScript.scriptPubKey = Data([0x51])
@@ -288,26 +293,27 @@ final class VaultStoreSecurityTests: XCTestCase {
             record.allUtxos = utxos
             let url = try snapshotFile([record], named: "vault-store.json")
             defer { try? FileManager.default.removeItem(at: url) }
-            let store = VaultStore()
+            let store = VaultStore(keys: keys)
             guard case .damaged = await store.configure(storageURL: url, network: .signet)
             else { return XCTFail("invalid vault output metadata was accepted") }
         }
     }
 
     func testMaximumIndexCannotOverflowLookaheadOrMutation() async throws {
+        let keys = InMemoryStoreKeyVault()
         let fixture = try makeFixture()
         var record = fixture.record
         record.nextReceiveIndex = VaultStore.maximumNextIndex + 1
         let damagedURL = try snapshotFile([record], named: "vault-store.json")
         defer { try? FileManager.default.removeItem(at: damagedURL) }
-        let damagedStore = VaultStore()
+        let damagedStore = VaultStore(keys: keys)
         guard case .damaged = await damagedStore.configure(storageURL: damagedURL, network: .signet)
         else { return XCTFail("oversized persisted index was accepted") }
 
         record.nextReceiveIndex = VaultStore.maximumNextIndex
         let validURL = try snapshotFile([record], named: "vault-store.json")
         defer { try? FileManager.default.removeItem(at: validURL) }
-        let store = VaultStore()
+        let store = VaultStore(keys: keys)
         let result = await store.configure(storageURL: validURL, network: .signet)
         XCTAssertEqual(result, .loaded)
         do {
@@ -320,10 +326,11 @@ final class VaultStoreSecurityTests: XCTestCase {
     }
 
     func testFailedPersistenceRollsBackTheLiveSnapshotAndLeavesFileUntouched() async throws {
+        let keys = InMemoryStoreKeyVault()
         let fixture = try makeFixture()
         let url = tempFileURL("vault-store.json")
         defer { try? FileManager.default.removeItem(at: url) }
-        let store = VaultStore(writeData: { _, _ in throw StoreWriteFailure.expected })
+        let store = VaultStore(keys: keys, writeData: { _, _ in throw StoreWriteFailure.expected })
         try await assertFailedWriteRollsBackAndLeavesTheFileUntouched(
             vaultStoreFixture(store, url: url, record: fixture.record))
         let records = await store.all
@@ -335,10 +342,11 @@ final class VaultStoreSecurityTests: XCTestCase {
     /// coinbase by consensus — and must keep it across a reload: the flag is
     /// state, not something a later scan can rediscover.
     func testCoinbaseOutputsAreFlaggedAndTheFlagSurvivesPersistence() async throws {
+        let keys = InMemoryStoreKeyVault()
         let fixture = try makeFixture()
         let url = try snapshotFile([fixture.record], named: "vault-store.json")
         defer { try? FileManager.default.removeItem(at: url) }
-        let store = VaultStore()
+        let store = VaultStore(keys: keys)
         _ = await store.configure(storageURL: url, network: .signet)
 
         let vaultScript = try fixture.vault.scriptPubKey(index: 0)
@@ -370,7 +378,7 @@ final class VaultStoreSecurityTests: XCTestCase {
         XCTAssertEqual(applied.first { $0.txid == coinbase.txid }?.isCoinbase, true)
         XCTAssertEqual(applied.first { $0.txid == ordinary.txid }?.isCoinbase, false)
 
-        let reloaded = VaultStore()
+        let reloaded = VaultStore(keys: keys)
         _ = await reloaded.configure(storageURL: url, network: .signet)
         let persisted = await reloaded.all.first?.utxos ?? []
         XCTAssertEqual(persisted.first { $0.txid == coinbase.txid }?.isCoinbase, true)
@@ -404,15 +412,17 @@ final class VaultStoreSecurityTests: XCTestCase {
 /// refuses every mutation instead of taking the app down.
 final class PeopleStoreSecurityTests: XCTestCase {
     func testMissingFileIsAnEmptyStore() async {
+        let keys = InMemoryStoreKeyVault()
         await assertMissingFileIsAnEmptyStore(
-            peopleStoreFixture(PeopleStore(), url: tempFileURL("people-store.json")))
+            peopleStoreFixture(PeopleStore(keys: keys), url: tempFileURL("people-store.json")))
     }
 
     func testMalformedFileFailsClosedRefusesMutationsAndIsNotRewritten() async throws {
+        let keys = InMemoryStoreKeyVault()
         let url = tempFileURL("people-store.json")
         defer { try? FileManager.default.removeItem(at: url) }
         let original = Data("not people json".utf8)
-        let store = PeopleStore()
+        let store = PeopleStore(keys: keys)
         try await assertDamagedSnapshotFailsClosedAndIsNotRewritten(
             peopleStoreFixture(store, url: url, damage: { try writeBytes(original, to: url) }))
 
@@ -425,6 +435,7 @@ final class PeopleStoreSecurityTests: XCTestCase {
     }
 
     func testOneInvalidRecordRejectsTheWholeSnapshot() async throws {
+        let keys = InMemoryStoreKeyVault()
         let alice = try fixture(0xA1)
         let good = PersonRecord(id: "one", name: "Alice", payTo: alice.payTo, signerKey: alice.signer)
         var nameless = good
@@ -436,11 +447,12 @@ final class PeopleStoreSecurityTests: XCTestCase {
         let url = tempFileURL("people-store.json")
         defer { try? FileManager.default.removeItem(at: url) }
         try await assertOneInvalidRecordRejectsTheWholeSnapshot(
-            peopleStoreFixture(PeopleStore(), url: url,
+            peopleStoreFixture(PeopleStore(keys: keys), url: url,
                                damage: { try writeSnapshot([good, damaged], to: url) }))
     }
 
     func testPrivateKeysAndSharedKeysInTheFileFailClosed() async throws {
+        let keys = InMemoryStoreKeyVault()
         let alice = try fixture(0xA1)
         let bob = try fixture(0xB2)
         let base = PersonRecord(id: "one", name: "Alice", payTo: alice.payTo, signerKey: alice.signer)
@@ -470,15 +482,16 @@ final class PeopleStoreSecurityTests: XCTestCase {
         ] {
             let url = try snapshotFile(records, named: "people-store.json")
             defer { try? FileManager.default.removeItem(at: url) }
-            let store = PeopleStore()
+            let store = PeopleStore(keys: keys)
             guard case .damaged = await store.configure(storageURL: url, network: .signet)
             else { return XCTFail("\(label) was accepted") }
         }
     }
 
     func testAddRefusesASecondEntryForTheSameKeyEvenRelabelled() async throws {
+        let keys = InMemoryStoreKeyVault()
         let alice = try fixture(0xA1)
-        let store = PeopleStore()
+        let store = PeopleStore(keys: keys)
         let url = tempFileURL("people-store.json")
         defer { try? FileManager.default.removeItem(at: url) }
         await store.configure(storageURL: url, network: .signet)
@@ -507,14 +520,15 @@ final class PeopleStoreSecurityTests: XCTestCase {
         XCTAssertNil(nobody.payTo)
         let records = await store.all
         XCTAssertEqual(records.count, 2)
-        XCTAssertEqual(try JSONDecoder().decode(PeopleFileProbe.self, from: Data(contentsOf: url)).people, records)
+        XCTAssertEqual(try JSONDecoder().decode(PeopleFileProbe.self, from: unsealedPayload(of: url)).people, records)
         XCTAssertTrue(String(decoding: try Data(contentsOf: url), as: UTF8.self).contains("/<0;1>/*"),
                       "the file keeps key expressions readable")
     }
 
     func testPaymentIndexAdvancesMonotonicallyAndIdempotently() async throws {
+        let keys = InMemoryStoreKeyVault()
         let alice = try fixture(0xA1)
-        let store = PeopleStore()
+        let store = PeopleStore(keys: keys)
         let url = tempFileURL("people-store.json")
         defer { try? FileManager.default.removeItem(at: url) }
         await store.configure(storageURL: url, network: .signet)
@@ -531,7 +545,7 @@ final class PeopleStoreSecurityTests: XCTestCase {
         XCTAssertEqual(current, 5, "a smaller index never moves the counter back")
 
         // Reloading sees the persisted counter.
-        let reopened = PeopleStore()
+        let reopened = PeopleStore(keys: keys)
         let result = await reopened.configure(storageURL: url, network: .signet)
         XCTAssertEqual(result, .loaded)
         let persisted = await reopened.record(id: record.id)?.nextPaymentIndex
@@ -543,11 +557,12 @@ final class PeopleStoreSecurityTests: XCTestCase {
     }
 
     func testFailedPersistenceRollsBackTheLiveSnapshotAndLeavesFileUntouched() async throws {
+        let keys = InMemoryStoreKeyVault()
         let alice = try fixture(0xA1)
         let record = PersonRecord(id: "one", name: "Alice", payTo: alice.payTo, signerKey: alice.signer)
         let url = tempFileURL("people-store.json")
         defer { try? FileManager.default.removeItem(at: url) }
-        let store = PeopleStore(writeData: { _, _ in throw StoreWriteFailure.expected })
+        let store = PeopleStore(keys: keys, writeData: { _, _ in throw StoreWriteFailure.expected })
         try await assertFailedWriteRollsBackAndLeavesTheFileUntouched(
             peopleStoreFixture(store, url: url, record: record,
                                newcomer: try fixture(0xB2).payTo))
@@ -556,9 +571,10 @@ final class PeopleStoreSecurityTests: XCTestCase {
     }
 
     func testRenameAndUnsavePreserveKeysAndAddressCounter() async throws {
+        let keys = InMemoryStoreKeyVault()
         let alice = try fixture(0xA1)
         let bob = try fixture(0xB2)
-        let store = PeopleStore()
+        let store = PeopleStore(keys: keys)
         let url = tempFileURL("people-store.json")
         defer { try? FileManager.default.removeItem(at: url) }
         await store.configure(storageURL: url, network: .signet)
@@ -570,7 +586,7 @@ final class PeopleStoreSecurityTests: XCTestCase {
         XCTAssertEqual(renamed.name, "Robert")
         XCTAssertEqual(renamed.nextPaymentIndex, 7)
         XCTAssertTrue(a.isSavedRecipient, "older records without the flag remain saved")
-        let reopened = PeopleStore()
+        let reopened = PeopleStore(keys: keys)
         await reopened.configure(storageURL: url, network: .signet)
         let hidden = await reopened.record(id: b.id)
         XCTAssertFalse(try XCTUnwrap(hidden).isSavedRecipient)

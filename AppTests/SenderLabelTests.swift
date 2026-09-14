@@ -14,14 +14,15 @@ import XCTest
 /// persistence across a reopen, removal, and the pre-labels file shape.
 final class SenderLabelStoreTests: XCTestCase {
     func testNameOnlyLabelPersistsAndDestinationRequiresExplicitAttachment() async throws {
+        let keys = InMemoryStoreKeyVault()
         let url = tempStoreURL()
         defer { try? FileManager.default.removeItem(at: url) }
-        let store = PeopleStore()
+        let store = PeopleStore(keys: keys)
         await store.configure(storageURL: url, network: .signet)
         let person = try await store.add(name: "Alice", payTo: nil, signerKey: nil)
         let txid = String(repeating: "ab", count: 32)
         try await store.labelSender(txidHex: txid, personID: person.id)
-        let reopened = PeopleStore()
+        let reopened = PeopleStore(keys: keys)
         _ = await reopened.configure(storageURL: url, network: .signet)
         let labelled = await reopened.sender(forTxidHex: txid)
         XCTAssertEqual(labelled?.name, "Alice")
@@ -33,7 +34,7 @@ final class SenderLabelStoreTests: XCTestCase {
         XCTAssertEqual(attached?.payTo, destination)
         XCTAssertEqual(attached?.destinationProvenance, .localFunding)
         XCTAssertEqual(attached?.hasUnverifiedFundingDestination, true)
-        let again = PeopleStore()
+        let again = PeopleStore(keys: keys)
         _ = await again.configure(storageURL: url, network: .signet)
         let persisted = await again.sender(forTxidHex: txid)
         XCTAssertEqual(persisted?.destinationSource, txid)
@@ -48,10 +49,11 @@ final class SenderLabelStoreTests: XCTestCase {
     private func tempStoreURL() -> URL { tempFileURL("sender-labels.json") }
 
     func testSenderLabelRoundTripPersistsAcrossAReopenAndRemoves() async throws {
+        let keys = InMemoryStoreKeyVault()
         let alice = try personFixture(0xA1)
         let url = tempStoreURL()
         defer { try? FileManager.default.removeItem(at: url) }
-        let store = PeopleStore()
+        let store = PeopleStore(keys: keys)
         await store.configure(storageURL: url, network: .signet)
         let person = try await store.add(name: "Alice", payTo: alice.payTo, signerKey: alice.signer)
         let txidHex = String(repeating: "ab", count: 32)
@@ -67,7 +69,7 @@ final class SenderLabelStoreTests: XCTestCase {
         XCTAssertEqual(labelled?.name, "Alice")
 
         // The label survives reopening the store on the same file.
-        let reopened = PeopleStore()
+        let reopened = PeopleStore(keys: keys)
         let result = await reopened.configure(storageURL: url, network: .signet)
         XCTAssertEqual(result, .loaded)
         let persisted = await reopened.sender(forTxidHex: txidHex)
@@ -81,11 +83,12 @@ final class SenderLabelStoreTests: XCTestCase {
     }
 
     func testRemovingAPersonDropsTheirSenderLabels() async throws {
+        let keys = InMemoryStoreKeyVault()
         let alice = try personFixture(0xA1)
         let bob = try personFixture(0xB2)
         let url = tempStoreURL()
         defer { try? FileManager.default.removeItem(at: url) }
-        let store = PeopleStore()
+        let store = PeopleStore(keys: keys)
         await store.configure(storageURL: url, network: .signet)
         let a = try await store.add(name: "Alice", payTo: alice.payTo, signerKey: alice.signer)
         let b = try await store.add(name: "Bob", payTo: bob.payTo, signerKey: bob.signer)
@@ -105,7 +108,7 @@ final class SenderLabelStoreTests: XCTestCase {
         } catch PeopleStorageError.unknownPerson {}
 
         // The pruning is on disk too, not just in memory.
-        let reopened = PeopleStore()
+        let reopened = PeopleStore(keys: keys)
         let result = await reopened.configure(storageURL: url, network: .signet)
         XCTAssertEqual(result, .loaded)
         let persistedLabels = await reopened.senderLabels
@@ -113,6 +116,7 @@ final class SenderLabelStoreTests: XCTestCase {
     }
 
     func testAPeopleFileFromBeforeSenderLabelsStillDecodes() async throws {
+        let keys = InMemoryStoreKeyVault()
         let url = tempFileURL("people-store.json")
         defer { try? FileManager.default.removeItem(at: url) }
         // The pre-labels shape: a bare array of people, no envelope.
@@ -120,7 +124,7 @@ final class SenderLabelStoreTests: XCTestCase {
         [{"id":"a1","name":"Alice","payTo":{"kind":"address","value":"tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"},"nextPaymentIndex":0}]
         """#.utf8)
         try legacy.write(to: url, options: .atomic)
-        let store = PeopleStore()
+        let store = PeopleStore(keys: keys)
         let result = await store.configure(storageURL: url, network: .signet)
         XCTAssertEqual(result, .loaded)
         let names = await store.all.map(\.name)
@@ -134,7 +138,7 @@ final class SenderLabelStoreTests: XCTestCase {
         let txidHex = String(repeating: "cd", count: 32)
         try await store.labelSender(txidHex: txidHex, personID: person.id)
         XCTAssertTrue(String(decoding: try Data(contentsOf: url), as: UTF8.self).contains("\"senderByTxid\""))
-        let reopened = PeopleStore()
+        let reopened = PeopleStore(keys: keys)
         let reopenedResult = await reopened.configure(storageURL: url, network: .signet)
         XCTAssertEqual(reopenedResult, .loaded)
         let persisted = await reopened.sender(forTxidHex: txidHex)
@@ -142,11 +146,12 @@ final class SenderLabelStoreTests: XCTestCase {
     }
 
     func testAMalformedLabelInTheFileFailsClosed() async throws {
+        let keys = InMemoryStoreKeyVault()
         let url = tempFileURL("people-store.json")
         defer { try? FileManager.default.removeItem(at: url) }
         let damaged = Data(#"{"people":[],"senderByTxid":{"not-a-txid":"a1"}}"#.utf8)
         try damaged.write(to: url, options: .atomic)
-        let store = PeopleStore()
+        let store = PeopleStore(keys: keys)
         guard case .damaged = await store.configure(storageURL: url, network: .signet) else {
             return XCTFail("a label that names no transaction was accepted")
         }

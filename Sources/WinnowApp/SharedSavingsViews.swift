@@ -77,7 +77,11 @@ struct SharedSavingsCreateView: View {
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(person.name).foregroundStyle(person.canCoOwnSavings ? Color.primary : Color.secondary)
-                                if !person.canCoOwnSavings {
+                                if let fingerprint = model.signerFingerprint(of: person) {
+                                    Text("key \(fingerprint)")
+                                        .font(.system(.caption, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                } else {
                                     Text("needs a signer key").font(.caption).foregroundStyle(.secondary)
                                 }
                             }
@@ -93,7 +97,7 @@ struct SharedSavingsCreateView: View {
             } header: {
                 Text("Co-owners, with you")
             } footer: {
-                Text("You are always a co-owner. Pick at least one person.")
+                Text("You are always a co-owner. Pick at least one person. Each key’s fingerprint should match the one on that person’s own card.")
             }
 
             Section {

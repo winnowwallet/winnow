@@ -104,6 +104,22 @@ private func binaryCorpus(for target: FuzzTarget) -> [Data] {
         return [Data(), Data((address ?? "bc1p").utf8)]
     case .importBundle:
         return [Data(), Data("{\"version\":2,\"network\":\"signet\",\"lastKnownHeight\":0,\"utxos\":[],\"transactions\":[]}".utf8)]
+    case .census:
+        return [Data(), Data(("{\"schemaVersion\":1,\"date\":\"2026-09-13\",\"tip\":900000,\"networks\":{\"clearnet\":"
+                + "[{\"host\":\"8.8.8.8\",\"port\":8333,\"userAgent\":\"/Satoshi:30/\",\"startHeight\":900000}],"
+                + "\"tor\":[],\"i2p\":[]}}").utf8)]
+    case .censusSignature:
+        return [Data(), Data(("{\"algorithm\":\"ed25519\",\"publicKey\":\"\(String(repeating: "ab", count: 32))\","
+                + "\"signature\":\"\(String(repeating: "cd", count: 64))\"}").utf8)]
+    case .dnsJSON:
+        return [Data(), Data("{\"Status\":0,\"Answer\":[{\"name\":\"seed.example.\",\"type\":1,\"TTL\":60,\"data\":\"8.8.8.8\"}]}".utf8)]
+    case .fundingSources:
+        return [Data(), minimalTransaction]
+    case .controlBlock:
+        return [Data(), Data([0xC0]) + generatorXOnly, Data([0xC1]) + generatorXOnly + Data(repeating: 0, count: 32)]
+    case .personPaste:
+        return [Data(), Data("tr(\(generatorXOnly.hex))".utf8),
+                Data("{\"winnow\":\"person-card\",\"version\":1,\"network\":\"signet\",\"name\":\"Alice\"}".utf8)]
     }
 }
 

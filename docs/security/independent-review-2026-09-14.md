@@ -131,6 +131,8 @@ Recorded so that a later reader knows what was looked at and found correct, not 
 
 Filed 2026-09-14 as one public issue per finding, label `security`, at the owner's direction.
 
+**Status, 2026-09-14** — one branch, winnow#137, carries the fixes; census#15 the census side. Fixed there: IR-001, IR-002, IR-003, IR-004, IR-005, IR-007, IR-010 through IR-020, IR-022, IR-024 through IR-033. Closed without a change: IR-006 and IR-019 (fixed upstream before the review's branch landed), IR-008 (the owner recorded GO). Recorded as accepted: IR-021 (`SEC-029`). Owner-gated and still open: IR-009 (`SECURITY.md` now points at private vulnerability reporting, which the repository must enable) and IR-023 (an access-control class on the Keychain item is a device-behaviour decision). The census signing mechanism of IR-003 ships with an empty trusted-key list; the owner's three steps are in `docs/census-signing.md`.
+
 | ID | Issue | ID | Issue | ID | Issue |
 |---|---|---|---|---|---|
 | IR-001 | winnow#98 | IR-012 | winnow#109 | IR-023 | winnow#120 |

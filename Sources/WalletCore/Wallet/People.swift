@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 // MARK: - Pay-to
@@ -181,6 +182,21 @@ public enum PersonKeys {
     public static func signerIdentity(_ expression: String, network: BitcoinNetwork) throws -> Data {
         try VaultCosignerKey(expression, role: .scriptPath, network: network).publicKey(index: 0, choice: 0)
     }
+
+    /// A short, human-comparable form of a signer identity: the first four
+    /// bytes of its SHA-256 as two groups of hex, `ab12 cd34`. Two people
+    /// comparing phones read the same eight characters for the same key, and
+    /// a substituted key — valid, foreign, and otherwise invisible in a list
+    /// of names — reads differently.
+    public static func fingerprint(ofIdentity identity: Data) -> String {
+        let hex = Data(CryptoKit.SHA256.hash(data: identity).prefix(4)).hex
+        return "\(hex.prefix(4)) \(hex.suffix(4))"
+    }
+
+    /// `fingerprint(ofIdentity:)` of a signer expression's identity.
+    public static func signerFingerprint(_ expression: String, network: BitcoinNetwork) throws -> String {
+        fingerprint(ofIdentity: try signerIdentity(expression, network: network))
+    }
 }
 
 // MARK: - Cards
@@ -199,6 +215,24 @@ public enum PersonCardError: Error, Equatable, LocalizedError {
         case let .wrongNetwork(card, wallet):
             "This card is for \(card); this wallet is on \(wallet.rawValue)."
         }
+    }
+}
+
+/// A person's or account's display name as it may be stored: trimmed, at most
+/// `maximumLength` characters, and free of control characters and line
+/// breaks — so a pasted card cannot plant megabytes into a file re-read at
+/// every launch, or a second line above the address on the review screen.
+public enum DisplayName {
+    public static let maximumLength = 120
+
+    public static func normalized(_ text: String) -> String? {
+        let name = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.count <= maximumLength,
+              !name.unicodeScalars.contains(where: {
+                  CharacterSet.controlCharacters.contains($0) || CharacterSet.newlines.contains($0)
+              })
+        else { return nil }
+        return name
     }
 }
 
@@ -340,8 +374,13 @@ enum WinnowCardCoding {
         return String(decoding: try encoder.encode(value), as: UTF8.self)
     }
 
+    /// A card is a name and one or two keys; anything larger is not a card
+    /// and must not be decoded, let alone persisted and re-read at every launch.
+    public static let maximumBytes = 64 * 1_024
+
     static func decode<T: Decodable>(_ text: String, kind: String) throws -> T {
         let data = Data(text.trimmingCharacters(in: .whitespacesAndNewlines).utf8)
+        guard data.count <= maximumBytes else { throw PersonCardError.notACard }
         let decoder = JSONDecoder()
         guard let envelope = try? decoder.decode(Envelope.self, from: data), envelope.winnow == kind else {
             throw PersonCardError.notACard
@@ -439,8 +478,7 @@ public enum PersonPaste {
         if let raw = card.signerKey?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
             signerKey = try VaultCosignerKey(raw, role: .scriptPath, network: network).expression
         }
-        let name = card.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return PersonImport(name: name.isEmpty ? nil : name, payTo: payTo, signerKey: signerKey, source: .card)
+        return PersonImport(name: DisplayName.normalized(card.name), payTo: payTo, signerKey: signerKey, source: .card)
     }
 
     private static func parseDescriptor(_ text: String, network: BitcoinNetwork) throws -> PersonImport {

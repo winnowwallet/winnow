@@ -38,11 +38,27 @@ enum CheckpointGenerator {
         }
     }
 
+    /// A checkpoint on a difficulty-period boundary lets the chain verify
+    /// every retarget after it exactly; a mid-period one leaves the first
+    /// adjustment verifiable only as a bound, because the period's first
+    /// header is below the checkpoint. The shipped 900,000 predates this
+    /// rule; the next refresh moves it to a multiple of the interval.
+    static func requirePeriodBoundary(_ height: UInt32, params: NetworkParams) throws {
+        let interval = params.difficultyAdjustmentInterval
+        guard height % interval == 0 else {
+            throw GenerateError.usage(
+                "checkpoint height \(height) is not a difficulty-period boundary; "
+                    + "use a multiple of \(interval) (for example \(height - height % interval)) "
+                    + "so the first retarget after it can be verified exactly")
+        }
+    }
+
     static func run(_ options: Options) async throws {
         let params = NetworkParams.mainnet
         guard let height = options.height ?? params.checkpoint?.height else {
             throw GenerateError.usage("mainnet ships no checkpoint; pass --height")
         }
+        try requirePeriodBoundary(height, params: params)
         let raw = try Data(contentsOf: options.source)
 
         // Truncate to the checkpoint height and hand the copy to the real

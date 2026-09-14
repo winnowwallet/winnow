@@ -10,6 +10,12 @@
 #   scripts/signet-fixture down        stop the node
 #   scripts/signet-fixture status      report height and wallet state
 #   scripts/signet-fixture destroy     stop and delete the datadir
+#   scripts/signet-fixture snapshot DIR  copy the stopped node's data to DIR (a template)
+#
+# With WINNOW_FIXTURE_TEMPLATE set to such a snapshot, `up` starts a new datadir
+# from it instead of from genesis: the UI lane keeps one with its "bank"
+# wallet already mined to maturity, so no job spends minutes mining 101 blocks
+# through the simulator's host-process bridge.
 #
 # The challenge key below is a published dev constant for a chain that holds
 # nothing. It is deliberately in the repo: a key only one machine has is how the
@@ -78,7 +84,12 @@ ensure_miner_wallet() {
 
 case "${1:-up}" in
   up)
-    [ -f "$DATADIR/bitcoin.conf" ] || write_conf
+    if [ ! -e "$DATADIR" ] && [ -n "${WINNOW_FIXTURE_TEMPLATE:-}" ] && [ -d "$WINNOW_FIXTURE_TEMPLATE" ]; then
+      cp -R "$WINNOW_FIXTURE_TEMPLATE" "$DATADIR"
+      rm -f "$DATADIR"/signet/*.log "$DATADIR"/signet/mempool.dat "$DATADIR"/signet/.lock
+      echo "datadir started from the template at $WINNOW_FIXTURE_TEMPLATE"
+    fi
+    write_conf
     if cli getblockchaininfo >/dev/null 2>&1; then
       echo "already running"
     else
@@ -114,8 +125,28 @@ case "${1:-up}" in
     rm -rf "$DATADIR"
     echo "destroyed $DATADIR"
     ;;
+  snapshot)
+    TARGET="${2:?usage: $0 snapshot DIR}"
+    [ ! -e "$TARGET" ] || { echo "$TARGET already exists" >&2; exit 1; }
+    # Stop the node so the copy is consistent, and wait for the process to be
+    # gone, not just its RPC: the indexes are flushed after the RPC server
+    # stops, and a copy taken in between starts with "best block of txindex
+    # not found". `up` starts the node again.
+    PIDFILE="$DATADIR/signet/bitcoind.pid"
+    NODE_PID=$(cat "$PIDFILE" 2>/dev/null || true)
+    cli stop >/dev/null 2>&1 || true
+    for _ in $(seq 1 60); do
+      if [ -n "$NODE_PID" ]; then kill -0 "$NODE_PID" 2>/dev/null || break; else cli getblockcount >/dev/null 2>&1 || break; fi
+      sleep 1
+    done
+    [ -z "$NODE_PID" ] || ! kill -0 "$NODE_PID" 2>/dev/null || { echo "node $NODE_PID did not exit" >&2; exit 1; }
+    mkdir -p "$TARGET"
+    cp -R "$DATADIR"/. "$TARGET"/
+    rm -f "$TARGET"/signet/*.log "$TARGET"/signet/mempool.dat "$TARGET"/signet/.lock "$TARGET"/signet/.cookie "$TARGET"/signet/bitcoind.pid
+    echo "snapshot written to $TARGET ($(du -sh "$TARGET" | cut -f1)); start the node again with: $0 up"
+    ;;
   *)
-    echo "usage: $0 {up|down|status|destroy}" >&2
+    echo "usage: $0 {up|down|status|destroy|snapshot DIR}" >&2
     exit 2
     ;;
 esac

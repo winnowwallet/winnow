@@ -1,4 +1,5 @@
 import WalletCore
+import CryptoKit
 import Foundation
 
 /// The parsing surfaces the harness mutates inputs for. The raw values are
@@ -13,7 +14,22 @@ public enum FuzzTarget: String, CaseIterable, Sendable {
     case filter
     case address
     case importBundle = "import"
+    // The parsers added after the August audit (IR-030). What the harness
+    // cannot reach: `PeopleStore`, `ReceiveAddressLabelStore` and
+    // `SealedStoreFile` live in the app target, and `PersistedPeers` is
+    // internal to WalletCore; those are covered by AppTests and the package
+    // suite with hand-written hostile inputs instead.
+    case census
+    case censusSignature = "census-signature"
+    case dnsJSON = "dns-json"
+    case fundingSources = "funding-sources"
+    case controlBlock = "control-block"
+    case personPaste = "person-paste"
 }
+
+/// One key for the signature target: verification under a real key is the
+/// path the wallet takes, and generating a key per case would dominate the run.
+private let signatureKey = Curve25519.Signing.PrivateKey()
 
 /// The harness's generator. `exercise` draws from it too, to vary how the
 /// framing target feeds bytes in, so it lives beside the invariants.
@@ -79,7 +95,7 @@ public func exercise(_ target: FuzzTarget, data: Data, rng: inout SplitMix64) th
     case .messages:
         let commands = ["version", "verack", "ping", "pong", "sendheaders", "feefilter", "inv", "getdata",
                         "notfound", "tx", "block", "getheaders", "headers", "getcfilters", "cfilter",
-                        "getcfheaders", "cfheaders", "getcfcheckpt", "cfcheckpt"]
+                        "getcfheaders", "cfheaders", "getcfcheckpt", "cfcheckpt", "addr", "getaddr"]
         for command in commands {
             if let parsed = try? PeerMessage.decode(command: command, payload: data) {
                 try require(try PeerMessage.decode(command: parsed.command, payload: parsed.payload) == parsed,
@@ -134,5 +150,40 @@ public func exercise(_ target: FuzzTarget, data: Data, rng: inout SplitMix64) th
         try require(try JSONDecoder().decode(ImportBundle.self, from: Data(serialized.utf8)) == bundle,
                     "import bundle canonical round trip changed semantics")
         _ = try? bundle.claimedUTXOs()
+    case .census:
+        // Freshness is a matter of the clock, not of parsing, so any
+        // observation date is admitted here.
+        if let catalog = try? CensusCatalog.decode(data, requireFresh: false) {
+            let encoded = try JSONEncoder().encode(catalog)
+            try require(try CensusCatalog.decode(encoded, requireFresh: false) == catalog,
+                        "census catalog canonical round trip changed semantics")
+        }
+    case .censusSignature:
+        if let signature = try? CensusSignature.decode(data) {
+            try require(try CensusSignature.decode(signature.encoded()) == signature,
+                        "census signature canonical round trip changed semantics")
+            _ = try? signature.verify(data, trusting: [signatureKey.publicKey])
+        }
+    case .dnsJSON:
+        _ = try? DNSJSON.hosts(from: data)
+    case .fundingSources:
+        if let parsed = try? Transaction.decode(data) {
+            _ = FundingSources.sources(of: parsed)
+            _ = FundingSources.fundingScripts(of: parsed)
+        }
+    case .controlBlock:
+        if let parsed = try? Taproot.ControlBlock(serialized: data) {
+            try require(parsed.serialized == data, "control block canonical round trip changed bytes")
+        }
+    case .personPaste:
+        let text = String(decoding: data, as: UTF8.self)
+        for network in [BitcoinNetwork.mainnet, .signet] {
+            _ = try? PersonPaste.parse(text, network: network)
+            _ = try? SharedSavingsCard.decode(text, network: network)
+        }
+        if let card = try? PersonCard.decode(text) {
+            try require(try PersonCard.decode(card.serialized()) == card,
+                        "person card canonical round trip changed semantics")
+        }
     }
 }

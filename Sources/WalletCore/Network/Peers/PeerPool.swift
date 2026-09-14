@@ -147,7 +147,7 @@ public actor PeerPool {
         self.seedResolver = seedResolver ?? .routed(client: RoutedHTTPClient(route: route))
         self.now = now
         if let peersFileURL,
-           let data = try? Data(contentsOf: peersFileURL),
+           let data = Self.boundedRead(peersFileURL),
            let stored = PersistedPeers.decode(data) {
             knownGood = Set(stored.map(\.endpoint))
             knownSource = Dictionary(stored.map { ($0.endpoint, $0.source) },
@@ -471,6 +471,7 @@ public actor PeerPool {
     private func settledSync(_ chain: HeaderChain, primary peer: PeerConnection,
                              timeoutPerPeer: Duration) async throws -> HeaderChain.SyncOutcome {
         var outcome = try await chain.sync(using: peer, timeout: timeoutPerPeer)
+        try await Self.requireDelivery(outcome, from: peer, tip: chain.height)
         transportSucceeded(peer.endpoint)
         // The first peer answered, but it may be the one that is behind: a
         // stale peer seated first would otherwise freeze the tip here every
@@ -488,6 +489,22 @@ public actor PeerPool {
             Task { await self.pruneAndReplenish() }
         }
         return outcome
+    }
+
+    /// A primary that claimed a tip well above ours at handshake and then
+    /// delivered nothing has withheld what it advertised: an honest peer
+    /// with a taller chain answers getheaders with headers. Left alone, such
+    /// a peer froze the chain — and every scan behind it — silently, for as
+    /// long as it kept its seat, and was persisted as known-good besides.
+    /// Thrown as a data fault, so the pool condemns it and moves on.
+    private static func requireDelivery(_ outcome: HeaderChain.SyncOutcome, from peer: PeerConnection,
+                                        tip: UInt32) async throws {
+        guard outcome.connected == 0 else { return }
+        let claimed = Int64(await peer.peerStartHeight)
+        guard claimed - Int64(tip) <= staleTipTolerance else {
+            throw HeaderChainError.badPeerResponse(
+                "claimed height \(claimed) at handshake but delivered no headers past \(tip)")
+        }
     }
 
     /// Syncs headers from every other connected peer whose reported height
@@ -752,6 +769,22 @@ public actor PeerPool {
         var seen = connected
         return seeds.filter { route.permits($0) && seen.insert($0).inserted }
             .map { PeerCandidate(endpoint: $0, source: .dnsSeed) }
+    }
+
+    /// The most a peers file may weigh: the writer keeps 100 entries, so a
+    /// larger file was not written by this code and is not read.
+    static let maximumPeersFileBytes = 256 * 1_024
+
+    /// Reads the peers file only after measuring it, so a planted file is
+    /// refused before it is held rather than after.
+    static func boundedRead(_ url: URL) -> Data? {
+        // `attributesOfItem`, not `resourceValues`: the latter caches on the
+        // URL value, so a file rewritten under the same URL keeps its old size.
+        guard let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int,
+              size <= maximumPeersFileBytes,
+              let data = try? Data(contentsOf: url), data.count <= maximumPeersFileBytes
+        else { return nil }
+        return data
     }
 
     private func persistKnownGood() {

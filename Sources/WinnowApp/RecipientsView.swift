@@ -327,10 +327,16 @@ struct ShareMyCardView: View {
                         }
                         CopyableTextBlock(text: cardText)
                             .accessibilityIdentifier("ownCardBlock")
+                        if let fingerprint = model.ownSignerFingerprint {
+                            LabeledContent("Your key") {
+                                Text(fingerprint).font(.system(.body, design: .monospaced))
+                            }
+                            .accessibilityIdentifier("ownSignerFingerprint")
+                        }
                     } header: {
                         Text("Your card")
                     } footer: {
-                        Text("This card carries public keys only. Anyone who has it can pay you and can see every address it derives, the same way your wallet does. People who pay you from their address book use the same list of addresses as your Receive screen, so two people paying at once can land on one address — a privacy detail, never a loss.")
+                        Text("This card carries public keys only. Anyone who has it can pay you and can see every address it derives, the same way your wallet does. People who pay you from their address book use the same list of addresses as your Receive screen, so two people paying at once can land on one address — a privacy detail, never a loss. Your key’s fingerprint is what a co-owner sees next to your name; if theirs reads differently, the card they hold is not yours.")
                     }
                 } else {
                     Section {

@@ -54,11 +54,16 @@ public final class RoutedHTTPClient: Sendable {
     private final class RedirectPolicy: NSObject, URLSessionTaskDelegate {
         let route: NetworkRoute
         init(route: NetworkRoute) { self.route = route }
+        /// A redirect may move within the host it was asked of, and never
+        /// down from https. Every fetch here names one host on purpose — the
+        /// census, an explorer — so an answer that sends the client elsewhere
+        /// is refused rather than followed.
         func urlSession(_ session: URLSession, task: URLSessionTask,
                         willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
                         completionHandler: @escaping (URLRequest?) -> Void) {
             guard let url = request.url, route.permits(url),
-                  !(response.url?.scheme == "https" && url.scheme != "https") else {
+                  !(response.url?.scheme == "https" && url.scheme != "https"),
+                  url.host?.lowercased() == response.url?.host?.lowercased() else {
                 completionHandler(nil); return
             }
             completionHandler(request)

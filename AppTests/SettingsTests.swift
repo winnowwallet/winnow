@@ -148,6 +148,28 @@ final class NetworkScopedSettingsTests: XCTestCase {
                        "https://blockstream.info")
     }
 
+    /// The sender lookup sends a txid and the device address to the custom
+    /// host; a plaintext entry would leak both and let the path forge the
+    /// answer, so it falls back to the preset exactly like an unparsable one.
+    /// Loopback is the exception: there is no path to observe or forge, and
+    /// the UI journeys' stub explorer lives there.
+    func testCustomExplorerRequiresHTTPSOffTheDevice() {
+        XCTAssertEqual(AppModel.explorerBaseURL(provider: .custom, customURLString: "http://esplora.example",
+                                                network: .mainnet).absoluteString,
+                       "https://blockstream.info")
+        XCTAssertEqual(AppModel.explorerBaseURL(provider: .custom, customURLString: "HTTPS://Esplora.example/api",
+                                                network: .mainnet).absoluteString,
+                       "HTTPS://Esplora.example/api")
+        XCTAssertEqual(AppModel.explorerBaseURL(provider: .custom, customURLString: "http://127.0.0.1:8080",
+                                                network: .signet).absoluteString,
+                       "http://127.0.0.1:8080")
+        XCTAssertEqual(AppModel.explorerBaseURL(provider: .custom, customURLString: "http://localhost:3002/api",
+                                                network: .signet).absoluteString,
+                       "http://localhost:3002/api")
+        XCTAssertTrue(AppModel.isLoopback("127.0.0.1"))
+        XCTAssertFalse(AppModel.isLoopback("10.0.0.1"))
+    }
+
     func testExplorerProviderKeyIsPerNetwork() {
         XCTAssertNotEqual(Key.explorerProvider(.signet), Key.explorerProvider(.mainnet))
     }
