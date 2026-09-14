@@ -31,8 +31,31 @@ enum FallbackPeerGenerator {
             /// The default input — the crawl exists for when no usable
             /// artifact is published.
             case census(String)
+            /// `census/peers.json` as committed in the census repository at
+            /// this commit (`--census-commit`): fetched from GitHub at that
+            /// revision, its blob id checked against the repository's tree
+            /// there, and its signature verified. The release path: the
+            /// bundled list then names the commit it came from.
+            case censusCommit(String)
             /// The DNS-seed + getaddr crawl (`--from-crawl`).
             case crawl
+
+            static func parse(_ arguments: [String]) throws -> Source {
+                let census = WinnowGenerate.option("--from-census", in: arguments)
+                let commit = WinnowGenerate.option("--census-commit", in: arguments)
+                let crawl = arguments.contains("--from-crawl")
+                if let census, census.hasPrefix("--") {
+                    throw GenerateError.usage("--from-census needs a URL or a path")
+                }
+                if let commit, commit.count != 40 || !commit.allSatisfy(\.isHexDigit) {
+                    throw GenerateError.usage("--census-commit needs a full 40-character commit id")
+                }
+                guard [census != nil, commit != nil, crawl].filter({ $0 }).count <= 1 else {
+                    throw GenerateError.usage("--from-census, --census-commit and --from-crawl are three different inputs")
+                }
+                if let commit { return .censusCommit(commit.lowercased()) }
+                return crawl ? .crawl : .census(census ?? defaultCensusURL)
+            }
         }
 
         let source: Source
@@ -62,15 +85,7 @@ enum FallbackPeerGenerator {
             guard maxDials >= 1 else {
                 throw GenerateError.usage("--max-dials must be at least 1")
             }
-            let census = WinnowGenerate.option("--from-census", in: arguments)
-            let crawl = arguments.contains("--from-crawl")
-            if let census, census.hasPrefix("--") {
-                throw GenerateError.usage("--from-census needs a URL or a path")
-            }
-            guard census == nil || !crawl else {
-                throw GenerateError.usage("--from-census and --from-crawl are two different inputs")
-            }
-            source = crawl ? .crawl : .census(census ?? Self.defaultCensusURL)
+            source = try Source.parse(arguments)
             out = WinnowGenerate.option("--out", in: arguments).map { URL(fileURLWithPath: $0) }
                 ?? WinnowGenerate.packageRoot.appending(path: Self.defaultOutput)
         }
@@ -85,33 +100,90 @@ enum FallbackPeerGenerator {
 
     static func run(_ options: Options) async throws {
         switch options.source {
-        case let .census(source): try await runCensus(options, source: source)
-        case .crawl: try await runCrawl(options)
+        case let .census(source):
+            try await runCensus(options, input: CensusInput(data: try await censusData(from: source),
+                                                            signature: nil, source: source, commit: nil))
+        case let .censusCommit(commit):
+            try await runCensus(options, input: try await pinnedCensus(commit: commit))
+        case .crawl:
+            try await runCrawl(options)
         }
+    }
+
+    /// The census bytes a run works from, and where they came from.
+    struct CensusInput {
+        let data: Data
+        /// `peers.json.sig` next to the list, when the source had one.
+        let signature: Data?
+        let source: String
+        /// The census commit the list was taken from, when pinned.
+        let commit: String?
     }
 
     /// The census path: fetch (or read) the artifact, re-verify every
     /// clearnet entry offline, and render what survives. Nothing here dials
     /// — the census CI did the reaching; this run decides what to trust.
-    static func runCensus(_ options: Options, source: String) async throws {
-        let data = try await censusData(from: source)
-        let catalog = try CensusCatalog.decode(data)
+    static func runCensus(_ options: Options, input: CensusInput) async throws {
+        try CensusPublisher.verify(input.data, signature: input.signature, trusting: CensusPublisher.trustedKeys)
+        if CensusPublisher.trustedKeys.isEmpty {
+            print("generator: no census publisher key is compiled in; the list is taken "
+                  + (input.signature == nil ? "unsigned" : "unsigned although a signature was published"))
+        }
+        let catalog = try CensusCatalog.decode(input.data, minimumEntries: CensusCatalog.minimumOverlayEntries)
         let peers = (catalog.networks["clearnet"] ?? []).map {
             VerifiedPeer(endpoint: $0.endpoint, userAgent: $0.userAgent, startHeight: $0.startHeight)
         }
         guard peers.count >= options.floor else { throw GenerateError.thinList("too few validated census peers") }
-        let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let hash = SHA256.hash(data: input.data).map { String(format: "%02x", $0) }.joined()
         var text = render(peers, tip: catalog.tip, date: catalog.date + "T00:00:00Z",
                           provenance: .census(artifactDate: catalog.date),
                           torPeers: catalog.networks["tor", default: []].map(\.endpoint))
         text += """
-        // Source: \(commentSafe(source))
+        // Source: \(commentSafe(input.source))
         // Source SHA256: \(hash)
-        // Observation date: \(catalog.date); generated: \(ISO8601DateFormatter().string(from: Date()))
+
         """
-        text += "\n"
+        if let commit = input.commit {
+            text += "// Source commit: \(commit)\n"
+        }
+        text += "// Observation date: \(catalog.date); generated: \(ISO8601DateFormatter().string(from: Date()))\n"
         try Data(text.utf8).write(to: options.out, options: .atomic)
         print("generator: wrote \(peers.count) clearnet and \(catalog.networks["tor"]?.count ?? 0) Tor candidates; observed \(catalog.date); SHA256 \(hash)")
+    }
+
+    static let censusRepository = "winnowwallet/census"
+    static let censusPath = "census/peers.json"
+
+    /// The list at one commit of the census repository. GitHub serves the
+    /// blob at that revision; the tree entry the API reports for the same
+    /// path and revision names the blob id, and the fetched bytes must hash
+    /// to it — so the bundled list is tied to a reviewable commit rather than
+    /// to whatever the live site served on the day.
+    static func pinnedCensus(commit: String) async throws -> CensusInput {
+        let client = RoutedHTTPClient(route: .direct)
+        defer { client.cancel() }
+        let raw = URL(string: "https://raw.githubusercontent.com/\(censusRepository)/\(commit)/\(censusPath)")!
+        let data = try await client.get(raw, maximumBytes: CensusCatalog.maximumBytes)
+        let tree = URL(string: "https://api.github.com/repos/\(censusRepository)/contents/\(censusPath)?ref=\(commit)")!
+        let entry = try JSONDecoder().decode(
+            TreeEntry.self, from: try await client.get(tree, maximumBytes: 64 * 1_024, accept: "application/vnd.github+json"))
+        guard entry.sha == gitBlobID(data) else {
+            throw GenerateError.usage("peers.json fetched at \(commit) is not the blob the census tree names there")
+        }
+        let signature = try? await client.get(CensusSignature.endpoint(for: raw), maximumBytes: CensusSignature.maximumBytes)
+        print("generator: census/peers.json at \(commit) is blob \(entry.sha)"
+              + (signature == nil ? ", unsigned" : ", with its signature"))
+        return CensusInput(data: data, signature: signature, source: "\(censusRepository)@\(commit):\(censusPath)",
+                           commit: commit)
+    }
+
+    private struct TreeEntry: Decodable {
+        let sha: String
+    }
+
+    /// Git's id for a blob: SHA-1 over `blob <size>\0` and the bytes.
+    static func gitBlobID(_ data: Data) -> String {
+        Data(Insecure.SHA1.hash(data: Data("blob \(data.count)\u{0}".utf8) + data)).hex
     }
 
     static func censusData(from source: String) async throws -> Data {

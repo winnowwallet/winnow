@@ -69,17 +69,20 @@ struct RoutingTests {
         #expect(result["IsTor"] as? Bool == true)
     }
 
-    @Test func redirectedNamesStillUseSameProxy() async throws {
+    /// Every fetch names one host on purpose, so a redirect to another host
+    /// — even over the same proxy and scheme — is refused, and the other
+    /// host is never asked.
+    @Test func redirectOffTheAskedHostIsRefused() async throws {
         let proxy = FakeSocksProxy(upstreamPort: nil, httpResponsesByHost: [
             "first.invalid": Data("HTTP/1.1 302 Found\r\nLocation: http://second.invalid/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8),
             "second.invalid": Data("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK".utf8)
         ])
         try await proxy.start()
         let client = RoutedHTTPClient(route: .tor(proxy: await proxy.endpoint))
-        do {
-            #expect(try await client.get(URL(string: "http://first.invalid/")!, maximumBytes: 8) == Data("OK".utf8))
-            #expect(await proxy.requestedHosts == ["first.invalid", "second.invalid"])
-        } catch { client.cancel(); await proxy.stop(); throw error }
+        await #expect(throws: RoutedHTTPClient.HTTPFailure.self) {
+            try await client.get(URL(string: "http://first.invalid/")!, maximumBytes: 8)
+        }
+        #expect(await proxy.requestedHosts == ["first.invalid"])
         client.cancel(); await proxy.stop()
     }
 

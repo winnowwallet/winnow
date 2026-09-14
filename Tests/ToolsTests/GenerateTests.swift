@@ -76,6 +76,17 @@ struct WinnowGenerateTests {
             ["fallback-peers", "--from-census", "https://example.test/peers.json"]).source
             == .census("https://example.test/peers.json"))
         #expect(try FallbackPeerGenerator.Options(["fallback-peers", "--from-crawl"]).source == .crawl)
+        // A pinned census commit is a full id, and is one input like the others.
+        let commit = String(repeating: "ab", count: 20)
+        #expect(try FallbackPeerGenerator.Options(["fallback-peers", "--census-commit", commit.uppercased()]).source
+            == .censusCommit(commit))
+        #expect(throws: GenerateError.self) {
+            _ = try FallbackPeerGenerator.Options(["fallback-peers", "--census-commit", "abc123"])
+        }
+        #expect(throws: GenerateError.self) {
+            _ = try FallbackPeerGenerator.Options(["fallback-peers", "--census-commit", commit, "--from-census", "p.json"])
+        }
+        #expect(FallbackPeerGenerator.gitBlobID(Data("hello\n".utf8)) == "ce013625030ba8dba906f756967f9e9ca394464a")
         #expect(throws: GenerateError.self) {
             _ = try FallbackPeerGenerator.Options(["fallback-peers", "--from-census", "p.json", "--from-crawl"])
         }

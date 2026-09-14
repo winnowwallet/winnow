@@ -1,4 +1,5 @@
 import WalletCore
+import CryptoKit
 import Foundation
 import Security
 
@@ -119,6 +120,16 @@ struct E2EMode {
     var defaults: UserDefaults { UserDefaults(suiteName: defaultsSuiteName) ?? .standard }
     var censusURL: URL? {
         ProcessInfo.processInfo.environment["WINNOW_E2E_CENSUS_URL"].flatMap(URL.init(string:))
+    }
+    /// `WINNOW_E2E_CENSUS_KEYS=hex[,hex]`: the publisher keys the fixture
+    /// census is signed under, in place of the compiled-in set. Unset, the
+    /// compiled-in set applies — so once the owner adds a real key, a
+    /// journey that serves an unsigned fixture must name a test key here.
+    var censusTrustedKeys: [Curve25519.Signing.PublicKey]? {
+        ProcessInfo.processInfo.environment["WINNOW_E2E_CENSUS_KEYS"].map { list in
+            list.split(separator: ",").compactMap { Data(hex: String($0)) }
+                .compactMap { try? Curve25519.Signing.PublicKey(rawRepresentation: $0) }
+        }
     }
     var torDriver: (any TorDriving)? {
         ProcessInfo.processInfo.environment["WINNOW_E2E_TOR_FAILURE"] == "1" ? E2EFailingTorDriver() : nil

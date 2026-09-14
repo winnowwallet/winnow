@@ -9,7 +9,7 @@ import Foundation
 /// file — so as env-gated test suites they never ran. These explicit
 /// development commands use WalletCore outside the shipping app.
 ///
-///   winnow-debug generate fallback-peers [--from-census URL-OR-PATH | --from-crawl] [--out PATH] [--floor 24]
+///   winnow-debug generate fallback-peers [--census-commit SHA | --from-census URL-OR-PATH | --from-crawl] [--out PATH] [--floor 24]
 ///   winnow-debug generate checkpoint <headers.bin> [--height H] [--vector-out PATH]
 enum WinnowGenerate {
     static func execute(_ arguments: [String]) async throws {
@@ -54,12 +54,17 @@ enum WinnowGenerate {
     static let usageText = """
     Winnow release-path generators
 
-      swift run winnow-debug generate fallback-peers [--from-census URL-OR-PATH | --from-crawl] [--out PATH] [--floor 24]
+      swift run winnow-debug generate fallback-peers [--census-commit SHA | --from-census URL-OR-PATH | --from-crawl] [--out PATH] [--floor 24]
           Re-verify the winnow-census peers.json offline — public IP literals
           on port 8333, one per /16, reported heights within 100 of the
           artifact's recorded tip in either direction — and rewrite
           Sources/WalletCore/Network/Protocol/FallbackPeersGenerated.swift.
-          With no --from-census the published artifact is fetched; a local
+          --census-commit takes census/peers.json as committed in
+          winnowwallet/census at that commit, checks the bytes against the
+          blob the repository's tree names there, verifies the publisher's
+          signature when a key is compiled in, and records the commit in the
+          bundle (the release path; scripts/check-release-policy requires
+          it). With no --from-census the published artifact is fetched; a local
           path reads a file. --from-crawl crawls mainnet from the DNS seeds
           instead, asking every verified peer for its addr gossip and
           dialling candidates pre-filtered by their advertised

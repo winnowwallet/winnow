@@ -1,4 +1,5 @@
 import WalletCore
+import CryptoKit
 import Foundation
 import LocalAuthentication
 import SwiftUI
@@ -642,7 +643,8 @@ final class AppModel {
                                 relayPreference: true,
                                 dialTimeout: tor.enabled ? .seconds(90) : .seconds(5),
                                 seedResolver: .routed(client: tor.client), route: tor.route,
-                                censusCatalog: network == .mainnet ? catalogStore?.load()?.catalog : nil,
+                                censusCatalog: network == .mainnet
+                                    ? catalogStore?.load(trusting: censusTrustedKeys)?.catalog : nil,
                                 avoidOnReset: peersToAvoid)
     }
 
@@ -2524,8 +2526,25 @@ final class AppModel {
         await refresh()
     }
 
+    /// The E2E census is a handful of fixture entries, so it has no floor.
     var catalogStore: CensusCatalogStore? {
-        storageDirectory().map { CensusCatalogStore(url: $0.deletingLastPathComponent().appending(path: "mainnet/downloaded-census.json")) }
+        storageDirectory().map {
+            CensusCatalogStore(url: $0.deletingLastPathComponent().appending(path: "mainnet/downloaded-census.json"),
+                               minimumEntries: e2e == nil ? CensusCatalog.minimumOverlayEntries : 0)
+        }
+    }
+
+    /// The publisher keys a census must be signed under: the compiled-in set,
+    /// or the test key an E2E launch names.
+    var censusTrustedKeys: [Curve25519.Signing.PublicKey] {
+        e2e?.censusTrustedKeys ?? CensusPublisher.trustedKeys
+    }
+
+    /// The list's signature, fetched only when a key is trusted: an unsigned
+    /// census is accepted until the owner compiles a key in.
+    private func censusSignature(nextTo catalog: URL) async throws -> Data? {
+        guard !censusTrustedKeys.isEmpty else { return nil }
+        return try await tor.client.get(CensusSignature.endpoint(for: catalog), maximumBytes: CensusSignature.maximumBytes)
     }
 
     func refreshPeerCatalog() async {
@@ -2536,11 +2555,13 @@ final class AppModel {
         let epoch = tor.generation
         defer { refreshingCatalog = false }
         do {
-            let data = try await tor.client.get(e2e?.censusURL ?? CensusCatalog.endpoint, maximumBytes: CensusCatalog.maximumBytes) { [weak self] bytes in
+            let catalogURL = e2e?.censusURL ?? CensusCatalog.endpoint
+            let data = try await tor.client.get(catalogURL, maximumBytes: CensusCatalog.maximumBytes) { [weak self] bytes in
                 Task { @MainActor in if self?.tor.generation == epoch { self?.catalogBytes = bytes } }
             }
+            let signature = try await censusSignature(nextTo: catalogURL)
             guard epoch == tor.generation, isActive, let store = catalogStore else { throw CancellationError() }
-            let download = try store.replace(with: data)
+            let download = try store.replace(with: data, signature: signature, trusting: censusTrustedKeys)
             if network == .mainnet { try await stack?.pool.updateCensusCatalog(download.catalog) }
             let clearnet = download.catalog.networks["clearnet"]?.count ?? 0
             let onion = download.catalog.networks["tor"]?.count ?? 0
