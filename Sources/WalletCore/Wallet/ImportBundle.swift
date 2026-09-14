@@ -293,13 +293,20 @@ public struct ImportBundle: Codable, Equatable, Sendable {
         return claimed
     }
 
+    /// What an error may repeat of bundle-supplied text: enough to find the
+    /// entry, never the whole field — an 8 MB bundle must not become an 8 MB
+    /// alert.
+    static func excerpt(_ text: String) -> String {
+        text.count <= 64 ? text : text.prefix(64) + "…"
+    }
+
     /// Parse and shape-check a claimed coin, refusing unsupported signing data.
     private static func parsedClaimedUTXO(_ utxo: UTXO) throws -> WalletUTXO {
         guard let txid = Data(hex: utxo.txid), txid.count == 32 else {
-            throw WalletError.invalidBundle("bad txid \(utxo.txid)")
+            throw WalletError.invalidBundle("bad txid \(excerpt(utxo.txid))")
         }
         guard let scriptPubKey = Data(hex: utxo.scriptPubKey) else {
-            throw WalletError.invalidBundle("bad scriptPubKey \(utxo.scriptPubKey)")
+            throw WalletError.invalidBundle("bad scriptPubKey \(excerpt(utxo.scriptPubKey))")
         }
         guard let chain = AddressChain(rawValue: utxo.chain) else {
             throw WalletError.invalidBundle("bad chain \(utxo.chain)")
@@ -385,7 +392,7 @@ extension Wallet {
             throw WalletError.invalidBundle("unsupported version \(bundle.version)")
         }
         guard let network = BitcoinNetwork(rawValue: bundle.network) else {
-            throw WalletError.invalidBundle("unknown network \(bundle.network)")
+            throw WalletError.invalidBundle("unknown network \(ImportBundle.excerpt(bundle.network))")
         }
         guard bundle.descriptor != nil || bundle.mnemonic != nil else {
             throw WalletError.invalidBundle("need a descriptor or a mnemonic")
