@@ -59,6 +59,9 @@ public actor LoopbackNode {
     /// Optional delay before the node sends its version message. Tests use
     /// this to make pool connection order deterministic.
     public let versionDelay: Duration
+    /// Whether the node answers ping with pong. False models a peer that
+    /// holds the socket open and sends nothing, for the idle deadline.
+    public let answersPings: Bool
     /// The node's mempool: transactions it serves over getdata (MSG_TX /
     /// MSG_WITNESS_TX) — unknown tx hashes get a notfound.
     public let transactions: [Data: Transaction] // keyed by txid (internal order)
@@ -88,7 +91,9 @@ public actor LoopbackNode {
          cfcheckptCountDelta: Int = 0,
          disconnectOnUnknownStopHash: Bool = false, claimedStartHeight: Int32? = nil,
          autoRequestDelay: Duration? = nil, transactions: [Transaction] = [],
-         startSilent: Bool = false, versionDelay: Duration = .zero) {
+         startSilent: Bool = false, versionDelay: Duration = .zero,
+         answersPings: Bool = true) {
+        self.answersPings = answersPings
         self.disconnectOnUnknownStopHash = disconnectOnUnknownStopHash
         self.claimedStartHeight = claimedStartHeight
         self.params = params
@@ -341,7 +346,9 @@ public actor LoopbackNode {
     private func respond(to message: PeerMessage) async throws {
         switch message {
         case let .ping(nonce):
-            try await send(.pong(nonce))
+            // A node that never answers is how the client's idle deadline is
+            // exercised: the socket stays open and nothing arrives.
+            if answersPings { try await send(.pong(nonce)) }
 
         case let .getheaders(request):
             if withholdHeaders { return } // reachable, but never answers

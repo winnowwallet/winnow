@@ -195,11 +195,22 @@ public actor PeerConnection {
     /// maximal invs, which is every honest burst several times over, and
     /// leaves a hostile peer under one percent of what it could hold before.
     public static let defaultBacklogByteLimit = 8_000_000
+    /// A relayed transaction past the standard 400,000 weight units cannot
+    /// have come from an honest mempool; it is dropped before it is decoded.
+    public static let maximumRelayedTransactionBytes = 400_000
+
+    /// How often the keepalive pings, and how long the peer may stay silent
+    /// before the connection is judged dead. A live peer answers every ping,
+    /// so the deadline is a small multiple of the interval.
+    public let pingInterval: Duration
+    public let readIdleTimeout: Duration
+    private var lastReceivedAt = ContinuousClock.now
 
     public init(endpoint: PeerEndpoint, params: NetworkParams,
                 localServices: UInt64 = 0, localStartHeight: Int32 = 0,
                 relayPreference: Bool = false, socksProxy: PeerEndpoint? = nil,
-                backlogByteLimit: Int = PeerConnection.defaultBacklogByteLimit) {
+                backlogByteLimit: Int = PeerConnection.defaultBacklogByteLimit,
+                pingInterval: Duration = .seconds(60), readIdleTimeout: Duration = .seconds(150)) {
         precondition(backlogByteLimit > 0, "the gossip buffer needs a positive ceiling")
         self.backlogByteLimit = backlogByteLimit
         self.endpoint = endpoint
@@ -208,6 +219,8 @@ public actor PeerConnection {
         self.localStartHeight = localStartHeight
         self.relayPreference = relayPreference
         self.socksProxy = socksProxy
+        self.pingInterval = pingInterval
+        self.readIdleTimeout = readIdleTimeout
         framer = MessageFramer(magic: params.magic)
     }
 
@@ -610,6 +623,7 @@ public actor PeerConnection {
                     }
                 }
                 guard let chunk else { throw PeerError.disconnected("connection closed") }
+                lastReceivedAt = .now
                 framer.append(chunk)
                 // A handler may tear the connection down (an oversized
                 // unsolicited message does); the rest of the chunk is then
@@ -617,6 +631,9 @@ public actor PeerConnection {
                 while !didTeardown, let (command, payload) = try framer.nextMessage() {
                     await handleInbound(command: command, payload: payload)
                 }
+                // Once per chunk, not per message: release what the drain
+                // loop consumed, or the buffer keeps every byte ever received.
+                framer.compact()
             } catch {
                 teardown(error: error)
                 return
@@ -624,15 +641,22 @@ public actor PeerConnection {
         }
     }
 
-    private func handleInbound(command: String, payload: Data) async {
-        let payloadBytes = payload.count
-        let message: PeerMessage
+    /// Decodes one frame, or returns nil when the frame was dropped or the
+    /// connection torn down for a protocol violation.
+    private func decodeInbound(command: String, payload: Data) -> PeerMessage? {
+        // Nothing this client does can solicit a transaction this large,
+        // and decoding it would hand a hostile peer the allocation for free.
+        if command == "tx", payload.count > Self.maximumRelayedTransactionBytes { return nil }
         do {
-            message = try PeerMessage.decode(command: command, payload: payload)
+            return try PeerMessage.decode(command: command, payload: payload)
         } catch {
             teardown(error: PeerError.protocolViolation("\(command): \(error)"))
-            return
+            return nil
         }
+    }
+
+    private func handleInbound(command: String, payload: Data) async {
+        guard let message = decodeInbound(command: command, payload: payload) else { return }
         switch message {
         case let .ping(nonce):
             try? await send(.pong(nonce))
@@ -671,11 +695,15 @@ public actor PeerConnection {
         }
         // No waiter yet: keep it for future waitFor/collect calls (the peer
         // owes us nothing about send/receive ordering) and notify subscribers.
-        buffer(message, bytes: payloadBytes)
+        buffer(message, bytes: payload.count)
     }
 
     /// Buffers an unsolicited message for a later `waitFor`/`collect` and
-    /// hands it to the event subscribers.
+    /// hands it to the event subscribers — unless nothing this client sends
+    /// could have solicited it and nothing consumes it (a block, an addr), in
+    /// which case holding it only serves the peer that sent it. An unknown
+    /// command is kept as ordinary gossip, inside the byte limit like the
+    /// rest.
     ///
     /// Past either bound the oldest gossip goes. That is the recorded choice
     /// for a flood: a peer that announces faster than a subscriber drains
@@ -691,6 +719,10 @@ public actor PeerConnection {
             teardown(error: Self.unsolicitedTooLarge(command: message.command, bytes: bytes,
                                                      limit: backlogByteLimit))
             return
+        }
+        switch message {
+        case .block, .addr: return
+        default: break
         }
         backlog.append(BacklogEntry(message: message, bytes: bytes))
         backlogBytes += bytes
@@ -766,15 +798,28 @@ public actor PeerConnection {
     private func startKeepalive() {
         pingTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(60))
+                guard let interval = self?.pingInterval else { return }
+                try? await Task.sleep(for: interval)
                 guard !Task.isCancelled, let self else { return }
                 do {
+                    try await self.requireRecentBytes()
                     try await self.send(.ping(UInt64.random(in: UInt64.min ... UInt64.max)))
                 } catch {
                     await self.teardown(error: error)
                     return
                 }
             }
+        }
+    }
+
+    /// A peer that has sent nothing — not even the pong to our last ping —
+    /// for longer than `readIdleTimeout` is gone, whatever the socket says.
+    /// Without this a silent or trickling peer kept its seat until the next
+    /// request against it timed out.
+    private func requireRecentBytes() throws {
+        let silence = ContinuousClock.now - lastReceivedAt
+        guard silence <= readIdleTimeout else {
+            throw PeerError.disconnected("no bytes received for \(silence)")
         }
     }
 
