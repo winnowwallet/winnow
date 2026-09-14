@@ -15,24 +15,20 @@ import UIKit
 final class ScreenCaptureMonitor {
     private(set) var isCaptured: Bool
     private let currentlyCaptured: @MainActor () -> Bool
-    private let center: NotificationCenter
-    /// Read once more from `deinit`, which is not on the main actor; the
-    /// token is written only in `init`.
-    private nonisolated(unsafe) var observer: (any NSObjectProtocol)?
+    /// Holds the observation for as long as the monitor lives; the box
+    /// removes it when it goes away, so nothing has to hop actors in `deinit`.
+    private let subscription: NotificationSubscription
 
     init(center: NotificationCenter = .default,
          currentlyCaptured: @escaping @MainActor () -> Bool = ScreenCaptureMonitor.anyScreenIsCaptured) {
-        self.center = center
         self.currentlyCaptured = currentlyCaptured
         isCaptured = currentlyCaptured()
-        observer = center.addObserver(forName: UIScreen.capturedDidChangeNotification, object: nil,
-                                      queue: .main) { [weak self] _ in
+        let box = NotificationSubscription(center: center)
+        subscription = box
+        box.token = center.addObserver(forName: UIScreen.capturedDidChangeNotification, object: nil,
+                                       queue: .main) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
-    }
-
-    deinit {
-        if let observer { center.removeObserver(observer) }
     }
 
     func refresh() {
@@ -45,6 +41,20 @@ final class ScreenCaptureMonitor {
         UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .contains { $0.screen.isCaptured }
+    }
+}
+
+/// A notification observation that ends with the object holding it.
+private final class NotificationSubscription: @unchecked Sendable {
+    let center: NotificationCenter
+    var token: (any NSObjectProtocol)?
+
+    init(center: NotificationCenter) {
+        self.center = center
+    }
+
+    deinit {
+        if let token { center.removeObserver(token) }
     }
 }
 
