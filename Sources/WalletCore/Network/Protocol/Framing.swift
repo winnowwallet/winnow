@@ -42,6 +42,22 @@ public struct MessageFramer: Sendable {
     /// Bytes currently buffered (for tests/diagnostics).
     public var bufferedCount: Int { buffer.count }
 
+    /// Where the buffer's live bytes begin. Non-zero after `removeFirst`,
+    /// which reslices rather than frees; `compact()` brings it back to zero.
+    var bufferStartIndex: Int { buffer.startIndex }
+
+    /// Releases the bytes every consumed frame left behind.
+    ///
+    /// `removeFirst` on `Data` is a reslice: the storage stays, `startIndex`
+    /// moves, and the next `append` grows that same storage in place — so a
+    /// connection's memory would otherwise grow with every byte it has ever
+    /// received. Called once per receive, after the drain loop, this costs at
+    /// most one partial frame per chunk rather than one copy per message.
+    public mutating func compact() {
+        guard buffer.startIndex != 0 else { return }
+        buffer = buffer.isEmpty ? Data() : Data(buffer)
+    }
+
     /// Returns the next complete message, or nil if more bytes are needed.
     /// All indexing is relative to `buffer.startIndex` — `removeFirst` leaves
     /// a Data whose startIndex is not zero.
