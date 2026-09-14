@@ -296,8 +296,8 @@ final class AppModel {
     /// E2E test mode (E2EMode) uses a separate Keychain service so test runs
     /// never touch a real wallet's secrets.
     let keyStore: any KeyStore
-    let vaultStore = VaultStore()
-    let peopleStore = PeopleStore()
+    let vaultStore: VaultStore
+    let peopleStore: PeopleStore
     private let defaults: UserDefaults
     let tor: TorController
     private var changingNetwork = false
@@ -372,11 +372,18 @@ final class AppModel {
     }
 
     init(deviceAuthenticator: any DeviceAuthenticating = LocalDeviceAuthenticator(),
-         e2e: E2EMode? = E2EMode.current, defaults: UserDefaults = .standard) {
+         e2e: E2EMode? = E2EMode.current, defaults: UserDefaults = .standard,
+         storeKeys: (any StoreKeyVault)? = nil) {
         self.deviceAuthenticator = deviceAuthenticator
         self.e2e = e2e
         e2e?.wipeIfRequested()
-        keyStore = e2e.map { KeychainStore(service: $0.keychainService) } ?? KeychainStore()
+        let keychainService = e2e?.keychainService ?? KeychainStore.defaultService
+        keyStore = KeychainStore(service: keychainService)
+        // The people and vault files' seal keys sit under the same service,
+        // so the E2E wipe covers them along with the wallet secret.
+        let storeKeys = storeKeys ?? KeychainStoreKeyVault(service: keychainService)
+        vaultStore = VaultStore(keys: storeKeys)
+        peopleStore = PeopleStore(keys: storeKeys)
         let defaults = e2e?.defaults ?? defaults
         self.defaults = defaults
         tor = TorController(enabled: defaults.bool(forKey: "torEnabled"),
@@ -1891,8 +1898,45 @@ final class AppModel {
         var includesYou: Bool
         var threshold: Int
         var signerCount: Int
+        /// Every key the descriptor carries, in descriptor order, with who it
+        /// is known as. A key that is nobody in the address book is the case
+        /// no validation can show, so its fingerprint goes on screen.
+        var signers: [Signer]
 
         var id: String { record.id }
+
+        struct Signer: Equatable, Identifiable {
+            var fingerprint: String
+            /// The person whose signer key this is; nil for a key that is
+            /// not in the address book.
+            var name: String?
+            var isYou: Bool
+
+            var id: String { fingerprint }
+        }
+    }
+
+    /// Who each of a vault's keys is, by the same derived identities
+    /// `recomputeSharedSavings` matches on.
+    private static func signers(of keys: [Data], identities: [(person: PersonRecord, key: Data)],
+                                ownKey: Data?) -> [SharedSavings.Signer] {
+        keys.map { key in
+            SharedSavings.Signer(fingerprint: PersonKeys.fingerprint(ofIdentity: key),
+                                 name: identities.first { $0.key == key }?.person.name,
+                                 isYou: key == ownKey)
+        }
+    }
+
+    /// The fingerprint of a person's signer key, to compare with the one
+    /// their own phone shows on its card.
+    func signerFingerprint(of person: PersonRecord) -> String? {
+        person.signerKey.flatMap { try? PersonKeys.signerFingerprint($0, network: network) }
+    }
+
+    /// The fingerprint of this wallet's own signer key, as a co-owner's phone
+    /// shows it next to this wallet's name.
+    var ownSignerFingerprint: String? {
+        (try? ownSignerIdentity()).map(PersonKeys.fingerprint(ofIdentity:))
     }
 
     /// Reads the address book file for the current network. Damage is a
@@ -1929,7 +1973,8 @@ final class AppModel {
             let coOwners = identities.filter { signerKeys.contains($0.key) }.map(\.person)
             let includesYou = ownKey.map { signerKeys.contains($0) } ?? false
             return SharedSavings(record: record, coOwners: coOwners, includesYou: includesYou,
-                                 threshold: vault.threshold, signerCount: vault.signerCount)
+                                 threshold: vault.threshold, signerCount: vault.signerCount,
+                                 signers: Self.signers(of: signerKeys, identities: identities, ownKey: ownKey))
         }
     }
 

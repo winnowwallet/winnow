@@ -37,12 +37,17 @@ actor VaultStore {
     private var storageURL: URL?
     private var network: BitcoinNetwork = .signet
     private let writeData: @Sendable (Data, URL) throws -> Void
+    /// Reads verify and writes seal, under a key the app container cannot
+    /// reach. `validate` catches a harmful shape; only the seal catches a
+    /// well-formed record this app did not write.
+    private let seal: StoreSeal
 
-    init(writeData: @escaping @Sendable (Data, URL) throws -> Void = { data, url in
+    init(keys: any StoreKeyVault, writeData: @escaping @Sendable (Data, URL) throws -> Void = { data, url in
         // Atomic, and unreadable until the device has been unlocked once
         // since boot: the same class the submission store uses for its file.
         try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }) {
+        seal = StoreSeal(store: "vaults", keys: keys)
         self.writeData = writeData
     }
 
@@ -60,14 +65,17 @@ actor VaultStore {
             return .missing
         }
         do {
-            let data = try Self.boundedRead(storageURL)
-            let decoded = try JSONDecoder().decode([VaultRecord].self, from: data)
+            let file = try seal.read(try Self.boundedRead(storageURL), network: network)
+            let decoded = try JSONDecoder().decode([VaultRecord].self, from: file.payload)
             try Self.validate(decoded, network: network)
             records = decoded
+            // A file from before sealing is adopted as it is and sealed now;
+            // a failed write leaves it for the next launch to adopt again.
+            if file.predatesSealing { try? persist() }
             return .loaded
         } catch {
             records = []
-            return .damaged(Self.damagedStorageMessage)
+            return .damaged(Self.damagedStorageMessage(for: error))
         }
     }
 
@@ -383,6 +391,13 @@ actor VaultStore {
     private static let damagedStorageMessage =
         "Winnow found local vault data but could not safely read it. The file and protected keys were left untouched. Retry; if this continues, restore from a known-good wallet bundle or ask for help before changing anything."
 
+    private static let unverifiedStorageMessage =
+        "Winnow found shared-account data it could not verify: the file was not written by Winnow on this device, or its protected key is gone. The file and protected keys were left untouched. Restore your shared accounts from a known-good wallet bundle, or ask for help before changing anything."
+
+    private static func damagedStorageMessage(for error: any Error) -> String {
+        error is SealedStoreFile.Failure ? unverifiedStorageMessage : damagedStorageMessage
+    }
+
     static func validate(_ records: [VaultRecord], network: BitcoinNetwork) throws {
         var recordIDs = Set<String>()
         var outpoints = Set<Transaction.Outpoint>()
@@ -491,6 +506,6 @@ actor VaultStore {
     private func persist() throws {
         guard let storageURL else { return }
         let data = try JSONEncoder().encode(records)
-        try writeData(data, storageURL)
+        try seal.write(data, network: network, to: storageURL, using: writeData)
     }
 }

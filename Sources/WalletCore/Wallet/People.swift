@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 // MARK: - Pay-to
@@ -180,6 +181,21 @@ public enum PersonKeys {
     /// the identity used to refuse the same person twice.
     public static func signerIdentity(_ expression: String, network: BitcoinNetwork) throws -> Data {
         try VaultCosignerKey(expression, role: .scriptPath, network: network).publicKey(index: 0, choice: 0)
+    }
+
+    /// A short, human-comparable form of a signer identity: the first four
+    /// bytes of its SHA-256 as two groups of hex, `ab12 cd34`. Two people
+    /// comparing phones read the same eight characters for the same key, and
+    /// a substituted key — valid, foreign, and otherwise invisible in a list
+    /// of names — reads differently.
+    public static func fingerprint(ofIdentity identity: Data) -> String {
+        let hex = Data(CryptoKit.SHA256.hash(data: identity).prefix(4)).hex
+        return "\(hex.prefix(4)) \(hex.suffix(4))"
+    }
+
+    /// `fingerprint(ofIdentity:)` of a signer expression's identity.
+    public static func signerFingerprint(_ expression: String, network: BitcoinNetwork) throws -> String {
+        fingerprint(ofIdentity: try signerIdentity(expression, network: network))
     }
 }
 

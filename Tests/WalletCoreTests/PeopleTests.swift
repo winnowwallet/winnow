@@ -169,6 +169,18 @@ struct PeopleTests {
 
     // MARK: - Shared savings
 
+    @Test("a signer key's fingerprint is eight hex characters, stable, and different per key")
+    func signerFingerprints() throws {
+        let masters = try Self.masters()
+        let alice = try PersonKeys.signerFingerprint(Self.signer(masters[0]), network: .signet)
+        let bob = try PersonKeys.signerFingerprint(Self.signer(masters[1]), network: .signet)
+        #expect(alice != bob)
+        #expect(alice.count == 9 && alice.dropFirst(4).first == " ")
+        #expect(alice.filter(\.isHexDigit).count == 8)
+        #expect(alice == PersonKeys.fingerprint(ofIdentity: try PersonKeys.signerIdentity(Self.signer(masters[0]),
+                                                                                          network: .signet)))
+    }
+
     @Test("a savings vault finds its co-owners by key, whatever the order")
     func savingsSignersMatchPeople() throws {
         let masters = try Self.masters()

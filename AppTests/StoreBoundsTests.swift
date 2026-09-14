@@ -18,9 +18,10 @@ final class StoreBoundsTests: XCTestCase {
     }
 
     func testOversizedPeopleFileFailsClosed() async throws {
+        let keys = InMemoryStoreKeyVault()
         let url = try sparseFile(bytes: PeopleStore.maximumFileBytes + 1)
         defer { try? FileManager.default.removeItem(at: url) }
-        let store = PeopleStore()
+        let store = PeopleStore(keys: keys)
         guard case .damaged = await store.configure(storageURL: url, network: .signet) else {
             return XCTFail("an oversized people file was read")
         }
@@ -29,9 +30,10 @@ final class StoreBoundsTests: XCTestCase {
     }
 
     func testOversizedVaultFileFailsClosed() async throws {
+        let keys = InMemoryStoreKeyVault()
         let url = try sparseFile(bytes: VaultStore.maximumFileBytes + 1)
         defer { try? FileManager.default.removeItem(at: url) }
-        let store = VaultStore()
+        let store = VaultStore(keys: keys)
         guard case .damaged = await store.configure(storageURL: url, network: .signet) else {
             return XCTFail("an oversized vault file was read")
         }
@@ -40,10 +42,11 @@ final class StoreBoundsTests: XCTestCase {
     }
 
     func testPersonNameMustBeShortAndSingleLine() async throws {
+        let keys = InMemoryStoreKeyVault()
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("winnow-people-names-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: url) }
-        let store = PeopleStore()
+        let store = PeopleStore(keys: keys)
         _ = await store.configure(storageURL: url, network: .signet)
         let person = try await store.add(name: "  Ada  ", payTo: nil, signerKey: nil)
         XCTAssertEqual(person.name, "Ada")

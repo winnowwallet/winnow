@@ -5,6 +5,7 @@ import XCTest
 
 final class VaultBackupTests: XCTestCase {
     func testBackupPreservesAccountsAndRejectsChangedOwnership() async throws {
+        let keys = InMemoryStoreKeyVault()
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -15,7 +16,7 @@ final class VaultBackupTests: XCTestCase {
         let record = VaultRecord(id: String(descriptor.split(separator: "#").last!),
                                  name: "Phone and desktop", descriptor: descriptor,
                                  createdAtHeight: 0, nextReceiveIndex: 1, allUtxos: [coin])
-        let store = VaultStore()
+        let store = VaultStore(keys: keys)
         await store.configure(storageURL: url, network: .signet)
         try await store.restore([record])
         var backup = ImportBundle(network: "signet", lastKnownHeight: coin.height)
@@ -23,7 +24,7 @@ final class VaultBackupTests: XCTestCase {
         let decoded = try ImportBundle.decode(json: backup.serialized())
         XCTAssertEqual(decoded.vaults, [record])
         XCTAssertNil(decoded.mnemonic)
-        let restarted = VaultStore()
+        let restarted = VaultStore(keys: keys)
         let opened = await restarted.configure(storageURL: url, network: .signet)
         XCTAssertEqual(opened, .loaded)
         let loaded = await restarted.all
@@ -37,10 +38,11 @@ final class VaultBackupTests: XCTestCase {
         } catch {}
         let unchanged = await restarted.all
         XCTAssertEqual(unchanged, [record])
-        XCTAssertEqual(try JSONDecoder().decode([VaultRecord].self, from: Data(contentsOf: url)), [record])
+        XCTAssertEqual(try JSONDecoder().decode([VaultRecord].self, from: unsealedPayload(of: url)), [record])
     }
 
     func testBackupWaitsForPendingAccountPayments() async throws {
+        let keys = InMemoryStoreKeyVault()
         let (vault, _) = try TestVaults.muSig2Vault()
         let text = vault.descriptor.serialized()
         var coin = try TestVaults.funding(vault: vault, amount: 80_000)
@@ -48,7 +50,7 @@ final class VaultBackupTests: XCTestCase {
         let record = VaultRecord(id: String(text.split(separator: "#").last!), name: "Pending",
                                  descriptor: text, createdAtHeight: 0,
                                  nextReceiveIndex: 1, allUtxos: [coin])
-        let store = VaultStore()
+        let store = VaultStore(keys: keys)
         await store.configure(storageURL: nil, network: .signet)
         try await store.restore([record])
         do {

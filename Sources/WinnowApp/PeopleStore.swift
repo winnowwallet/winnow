@@ -61,9 +61,10 @@ enum PeopleStorageError: Error, Equatable, LocalizedError {
 }
 
 /// Local recipient names, public keys, address counters, and per-payment
-/// sender labels. Mirrors `VaultStore`: one JSON file per network, a
-/// strict validation that fails the whole snapshot closed, and a rollback
-/// on any failed write. Differs in one way: damage is not fatal to the app.
+/// sender labels. Mirrors `VaultStore`: one JSON file per network, sealed
+/// under a Keychain-held key, a strict validation that fails the whole
+/// snapshot closed, and a rollback on any failed write. Differs in one way:
+/// damage is not fatal to the app.
 /// A vault holds money; a person is a public key and a name. So a damaged
 /// file is reported, left untouched, and refused every mutation until it
 /// reads again, while the rest of the wallet carries on.
@@ -82,10 +83,15 @@ actor PeopleStore {
     private var network: BitcoinNetwork = .signet
     private var isDamaged = false
     private let writeData: @Sendable (Data, URL) throws -> Void
+    /// Reads verify and writes seal, under a key the app container cannot
+    /// reach: a signer key substituted in the file would validate perfectly
+    /// and show up as a co-owner, so validation alone is not enough here.
+    private let seal: StoreSeal
 
-    init(writeData: @escaping @Sendable (Data, URL) throws -> Void = { data, url in
+    init(keys: any StoreKeyVault, writeData: @escaping @Sendable (Data, URL) throws -> Void = { data, url in
         try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
     }) {
+        seal = StoreSeal(store: "people", keys: keys)
         self.writeData = writeData
     }
 
@@ -106,17 +112,22 @@ actor PeopleStore {
             return .missing
         }
         do {
-            let data = try Self.boundedRead(storageURL)
-            let payload = try Self.decodePayload(data)
+            let file = try seal.read(try Self.boundedRead(storageURL), network: network)
+            let payload = try Self.decodePayload(file.payload)
             try Self.validate(payload.people, senderByTxid: payload.senderByTxid, network: network)
             records = payload.people
             senderByTxid = payload.senderByTxid
+            // A file from before sealing is adopted as it is and sealed now.
+            // If that write fails the seal discards the key it made, so the
+            // file is adopted again next launch; the records are loaded
+            // either way.
+            if file.predatesSealing { try? persist() }
             return .loaded
         } catch {
             records = []
             senderByTxid = [:]
             isDamaged = true
-            return .damaged(Self.damagedStorageMessage)
+            return .damaged(Self.damagedStorageMessage(for: error))
         }
     }
 
@@ -340,6 +351,15 @@ actor PeopleStore {
     private static let damagedStorageMessage =
         "Winnow could not read the saved-recipient file. It has been left untouched. You can still send to an address; saved recipients cannot be changed until the file is readable again."
 
+    private static let unverifiedStorageMessage =
+        "The saved-recipient file could not be verified: it was not written by Winnow on this device, or its protected key is gone. It has been left untouched. You can still send to an address; saved recipients cannot be changed until the file verifies again."
+
+    /// Damage and a failed seal read differently to the person who has to
+    /// act on the message: one is a broken file, the other a substituted one.
+    private static func damagedStorageMessage(for error: any Error) -> String {
+        error is SealedStoreFile.Failure ? unverifiedStorageMessage : damagedStorageMessage
+    }
+
     /// The existing person who already holds one of `candidate`'s keys, if any.
     /// Keys are compared as derived material, so relabelling an origin cannot
     /// make a second entry for the same account.
@@ -434,6 +454,6 @@ actor PeopleStore {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         let data = try encoder.encode(PersistedPayload(people: records, senderByTxid: senderByTxid))
-        try writeData(data, storageURL)
+        try seal.write(data, network: network, to: storageURL, using: writeData)
     }
 }

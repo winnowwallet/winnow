@@ -1,6 +1,31 @@
 import WalletCore
 import SwiftUI
 
+/// One approving key of shared savings: who it is, and its fingerprint for
+/// comparing with that person's own phone. A key nobody in the address book
+/// holds is named as such, in red, rather than left off the list.
+struct SignerKeyRow: View {
+    let signer: AppModel.SharedSavings.Signer
+
+    private var name: String {
+        if signer.isYou { return "you" }
+        return signer.name ?? "Not one of your people"
+    }
+
+    var body: some View {
+        HStack {
+            Text(name)
+                .foregroundStyle(signer.isYou || signer.name != nil ? Color.primary : Color.red)
+            Spacer()
+            Text(signer.fingerprint)
+                .font(.system(.footnote, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("savingsSigner-\(signer.fingerprint)")
+    }
+}
+
 /// Shared account controls; the descriptor chooses the approval method.
 struct AccountDetailView: View {
     let recordID: String
@@ -75,13 +100,20 @@ struct AccountDetailView: View {
                 }
 
                 if vault.isScriptPath {
-                    Section("Co-owners") {
+                    Section {
                         if let savings {
                             Text(([savings.includesYou ? "you" : nil].compactMap { $0 } + savings.coOwners.map(\.name)).joined(separator: ", "))
                                 .accessibilityIdentifier("savingsCoOwners")
+                            ForEach(savings.signers) { signer in
+                                SignerKeyRow(signer: signer)
+                            }
                         }
                         Button("Share the savings card") { showShare = true }
                             .accessibilityIdentifier("shareSavingsCardButton")
+                    } header: {
+                        Text("Co-owners")
+                    } footer: {
+                        Text("Every key that can approve a payment, with its fingerprint. Compare each with the card its owner shows you; a key that is not one of your people can approve payments all the same.")
                     }
                 }
 
