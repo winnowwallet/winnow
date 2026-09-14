@@ -636,17 +636,20 @@ struct HeaderChainTests {
         defer { Task { await peer.disconnect() } }
         let chain = try HeaderChain(params: synthetic.params)
         let headers = synthetic.blocks.map(\.header)
+        // Verify ordering and retry policy with the normal transport window.
+        // Require every request explicitly so an overloaded fixture cannot
+        // silently stop serving and obscure the expected protocol result.
         let replies = Task {
-            #expect(await node.nextMessage(command: "getheaders") != nil)
+            try #require(await node.nextMessage(command: "getheaders", timeout: .seconds(60)) != nil)
             // BIP130 announcements and getheaders replies share a command.
             // This announcement arrives after request registration, so the
             // transport's pre-request backlog purge cannot distinguish it.
             try await node.send(.headers([headers[6]]))
-            guard await node.nextMessage(command: "getheaders", timeout: .seconds(2)) != nil else { return }
+            try #require(await node.nextMessage(command: "getheaders", timeout: .seconds(60)) != nil)
             try await node.send(.headers(Array(headers.dropFirst())))
         }
         defer { replies.cancel() }
-        let outcome = try await chain.sync(using: peer, timeout: .seconds(3))
+        let outcome = try await chain.sync(using: peer, timeout: .seconds(30))
         try await replies.value
         #expect(outcome.connected == 6)
         #expect(await chain.tipHash == headers[6].hash)
@@ -663,15 +666,18 @@ struct HeaderChainTests {
         defer { Task { await peer.disconnect() } }
         let chain = try HeaderChain(params: synthetic.params)
         let headers = synthetic.blocks.map(\.header)
+        // Verify ordering and retry policy with the normal transport window.
+        // Require every request explicitly so an overloaded fixture cannot
+        // silently stop serving and obscure the expected protocol result.
         let replies = Task {
             for _ in 0 ... HeaderChain.maxReplayedBatches {
-                guard await node.nextMessage(command: "getheaders", timeout: .seconds(2)) != nil else { return }
+                try #require(await node.nextMessage(command: "getheaders", timeout: .seconds(60)) != nil)
                 try await node.send(.headers([headers[6]]))
             }
         }
         defer { replies.cancel() }
         await #expect(throws: HeaderChainError.doesNotConnect) {
-            try await chain.sync(using: peer, timeout: .seconds(3))
+            try await chain.sync(using: peer, timeout: .seconds(30))
         }
         try await replies.value
         #expect(await chain.height == 0)

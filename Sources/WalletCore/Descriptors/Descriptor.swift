@@ -8,6 +8,15 @@ public enum DescriptorError: Error, Equatable {
     case unexpectedCharacter(Character)
     case unknownExpression(String)
     case invalidOrigin
+    /// A key origin naming more steps than a BIP32 key can be deep. `HDKey.depth`
+    /// is a byte and every walk down the path derives one child per step; the
+    /// origin is walked when signing (`Wallet`, `Vault`), not by the descriptor's
+    /// own key resolution, which walks only the suffix. Refused at the parse.
+    case originTooDeep
+    /// A key in the descriptor is already too deep for its own derivation
+    /// suffix: a serialized key names any depth, and `HDKey.child(at:)`
+    /// refuses past 255. Named here so it is not reported as a tweak failure.
+    case keyDepthExhausted
     case invalidKey
     case invalidPath
     case invalidThreshold
@@ -18,13 +27,8 @@ public enum DescriptorError: Error, Equatable {
 }
 
 extension HDKey.Network: Equatable {
-    /// BIP173 human-readable part for this network.
-    public var hrp: String {
-        switch self {
-        case .mainnet: "bc"
-        case .testnet: "tb"
-        }
-    }
+    /// Legacy address prefix for callers using extended-key network versions.
+    public var hrp: String { self == .mainnet ? "bc" : "tb" }
 }
 
 /// Output descriptor parse/serialize/derive engine (BIP380 general operation and
@@ -169,14 +173,22 @@ public struct Descriptor: Sendable, Equatable {
 
     /// Derives the output(s) at `index` (ignored when the descriptor has no
     /// wildcard). Returns one output per BIP389 multipath choice — receive and
-    /// change for the common `<0;1>/*` — in multipath order.
-    public func derived(index: UInt32, network: HDKey.Network = .mainnet) throws -> [DerivedOutput] {
+    /// change for the common `<0;1>/*` — in multipath order. The address
+    /// prefix is the Bitcoin network's, not the key network's: regtest keys
+    /// are testnet keys, but a regtest address is `bcrt1…`, never `tb1…`.
+    public func derived(index: UInt32, bitcoinNetwork: BitcoinNetwork) throws -> [DerivedOutput] {
         try (0 ..< multipathCount()).map { choice in
             let scriptPubKey = try resolve(expression, index: index, choice: choice, topLevel: true)
             let program = scriptPubKey.suffix(32)
-            let address = try SegwitAddress.encode(hrp: network.hrp, version: 1, program: program)
+            let address = try SegwitAddress.encode(hrp: AddressDecoder.hrp(for: bitcoinNetwork), version: 1, program: program)
             return DerivedOutput(scriptPubKey: scriptPubKey, address: address)
         }
+    }
+
+    /// Source-compatible entry point for existing mainnet/testnet-key callers.
+    /// Use `bitcoinNetwork:` when an address must distinguish signet and regtest.
+    public func derived(index: UInt32, network: HDKey.Network = .mainnet) throws -> [DerivedOutput] {
+        try derived(index: index, bitcoinNetwork: network == .mainnet ? .mainnet : .signet)
     }
 
     /// The tr() expression resolved at (`index`, multipath `choice`): the
@@ -354,6 +366,8 @@ public struct Descriptor: Sendable, Equatable {
                 }
             } catch let error as DescriptorError {
                 throw error
+            } catch BIP32Error.depthExhausted {
+                throw DescriptorError.keyDepthExhausted
             } catch {
                 throw DescriptorError.derivationFailed
             }
@@ -471,6 +485,10 @@ struct Parser {
     /// can be stopped.
     static let maximumTreeDepth = 128
 
+    /// The most steps a key origin may name: the largest `HDKey.depth`, since
+    /// a key at depth 255 has no child a byte can count.
+    static let maximumOriginSteps = Int(UInt8.max)
+
     mutating func parseTree(depth: Int = 0) throws -> Descriptor.ScriptTree {
         guard depth <= Self.maximumTreeDepth else { throw DescriptorError.treeTooDeep }
         if consume("{") {
@@ -541,6 +559,9 @@ struct Parser {
         var path: [UInt32] = []
         while consume("/") {
             guard peek() != "*" else { throw DescriptorError.invalidOrigin }
+            // Bounded at the depth a key can have, because the walk that would
+            // otherwise refuse this is `depth + 1` on a `UInt8`, which traps.
+            guard path.count < Self.maximumOriginSteps else { throw DescriptorError.originTooDeep }
             path.append(try parsePathStep())
         }
         try expect("]")

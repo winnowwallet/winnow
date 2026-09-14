@@ -45,10 +45,17 @@ struct FilterSyncAdversaryTests {
         /// Answers every getcfcheckpt with `wrongStopHash` — a peer replying
         /// about a different chain.
         case stopHash
+        case checkpointCount(delta: Int)
         /// Serves only the first `blocks` blocks and hangs up when asked about
         /// a block it does not have, which is what Bitcoin Core does with a
         /// getcfcheckpt for an unknown stop hash.
         case behindAndHangsUp(blocks: Int)
+        /// An honest cfheaders/cfilters chain announced with a fabricated
+        /// cfcheckpt header at this height: the peer's checkpoint answer
+        /// contradicts the commitments it serves. Every filter still
+        /// reproduces the header chain the peer sent, so only the comparison
+        /// against cfcheckpt can catch it.
+        case checkpointHeader(wrongAt: Int)
     }
 
     /// Everything one case needs: the started nodes, the pool seated on them,
@@ -61,6 +68,7 @@ struct FilterSyncAdversaryTests {
         let liarEndpoints: [PeerEndpoint]
         let honestEndpoints: [PeerEndpoint]
         let peersFile: URL
+        let progressFile: URL
         let pool: PeerPool
         let chain: HeaderChain
         let sync: FilterSync
@@ -78,6 +86,9 @@ struct FilterSyncAdversaryTests {
             return LoopbackNode(params: params, chain: blocks,
                                 lieAboutFilterCommitments: true, lieSalt: salt,
                                 versionDelay: versionDelay)
+        case let .checkpointCount(delta):
+            return LoopbackNode(params: params, chain: blocks,
+                                cfcheckptCountDelta: delta, versionDelay: versionDelay)
         case .stopHash:
             return LoopbackNode(params: params, chain: blocks,
                                 cfcheckptStopHashOverride: wrongStopHash,
@@ -85,6 +96,10 @@ struct FilterSyncAdversaryTests {
         case let .behindAndHangsUp(count):
             return LoopbackNode(params: params, chain: Array(blocks.prefix(count)),
                                 disconnectOnUnknownStopHash: true,
+                                versionDelay: versionDelay)
+        case let .checkpointHeader(height):
+            return LoopbackNode(params: params, chain: blocks,
+                                cfcheckptLieAtHeight: height,
                                 versionDelay: versionDelay)
         }
     }
@@ -108,8 +123,9 @@ struct FilterSyncAdversaryTests {
     /// these cases prove the sync really ran rather than exiting early.
     private static func threePeerFixture(liars: [CheckpointLie?],
                                          delays: [Duration] = [],
-                                         chainLength: Int = 1_001) async throws -> CheckpointFixture {
-        let synthetic = makeSyntheticChain(length: chainLength, watchHeight: 3)
+                                         chainLength: Int = 1_001,
+                                         watchHeight: UInt32 = 3) async throws -> CheckpointFixture {
+        let synthetic = makeSyntheticChain(length: chainLength, watchHeight: watchHeight)
         let padded = delays + Array(repeating: Duration.zero,
                                     count: max(0, liars.count - delays.count))
         var nodes: [LoopbackNode] = []
@@ -126,8 +142,9 @@ struct FilterSyncAdversaryTests {
                             manualPeers: endpoints, peersFileURL: peersFile)
         await pool.start()
         let chain = try HeaderChain(params: synthetic.params)
+        let progressFile = tempFileURL("progress.json")
         let sync = try FilterSync(pool: pool, chain: chain, startHeight: 1,
-                                  storageURL: tempFileURL("progress.json"),
+                                  storageURL: progressFile,
                                   requiredCheckpointPeers: liars.count)
         return CheckpointFixture(
             synthetic: synthetic,
@@ -136,15 +153,91 @@ struct FilterSyncAdversaryTests {
             liarEndpoints: zip(liars, endpoints).filter { $0.0 != nil }.map { $0.1 },
             honestEndpoints: zip(liars, endpoints).filter { $0.0 == nil }.map { $0.1 },
             peersFile: peersFile,
+            progressFile: progressFile,
             pool: pool,
             chain: chain,
             sync: sync)
+    }
+
+    /// The progress on disk, which is what survives a crash — read straight
+    /// from the file rather than from the actor, so a test can say the two
+    /// agree instead of asking the same source twice.
+    private static func storedProgress(_ url: URL) throws -> FilterSync.Progress {
+        try JSONDecoder().decode(FilterSync.Progress.self, from: Data(contentsOf: url))
     }
 
     private static func connectedEndpoints(_ pool: PeerPool) async -> Set<String> {
         var result: Set<String> = []
         for peer in await pool.connectedPeers() { result.insert(await peer.endpoint.description) }
         return result
+    }
+
+    @Test("short and extra checkpoint lists fail before callbacks or publication", arguments: [-1, 1])
+    func invalidCheckpointCount(delta: Int) async throws {
+        let fixture = try await Self.threePeerFixture(liars: [.checkpointCount(delta: delta)])
+        let pool = fixture.pool
+        defer { fixture.stopNodes(); Task { await pool.stop() } }
+        let matches = MatchCollector()
+        await #expect(throws: FilterSyncError.self) {
+            try await fixture.sync.sync(watchScripts: [fixture.synthetic.watchScript]) { matches.add($0) }
+        }
+        #expect(matches.matches.isEmpty)
+        #expect(await fixture.sync.nextScanHeight == 1)
+        #expect(!FileManager.default.fileExists(atPath: fixture.progressFile.path))
+        #expect(await fixture.nodes[0].receivedMessages.allSatisfy { $0.command != "getcfilters" })
+    }
+
+    @Test("a malformed checkpoint list cannot block honest peers", arguments: [-1, 1])
+    func invalidCheckpointCountWithHonestPeers(delta: Int) async throws {
+        let fixture = try await Self.threePeerFixture(liars: [.checkpointCount(delta: delta), nil, nil])
+        let pool = fixture.pool
+        defer { fixture.stopNodes(); Task { await pool.stop() } }
+        let matches = MatchCollector()
+        try await fixture.sync.sync(watchScripts: [fixture.synthetic.watchScript]) { matches.add($0) }
+        #expect(matches.matches.count == 1)
+        #expect(await fixture.sync.nextScanHeight == 1_002)
+        #expect(await fixture.pool.rejectionReason(fixture.liarEndpoints[0]) == "cfcheckpt count mismatch")
+    }
+
+    @Test("a deep rollback reconstructs from a surviving pin before scanning", arguments: [false, true])
+    func deepRollbackReconstruction(liar: Bool) async throws {
+        let fixture = try await Self.threePeerFixture(
+            liars: [liar ? .filterCommitments(salt: 0xFF) : nil], watchHeight: 750)
+        let pool = fixture.pool
+        defer { fixture.stopNodes(); Task { await pool.stop() } }
+        // A pruned store whose original anchor is honest, but whose fork
+        // height (500) no longer has a pin. Everything after 500 is orphaned.
+        let genesis = fixture.synthetic.blocks[0]
+        let items = genesis.transactions.flatMap { $0.outputs.map(\.scriptPubKey) }
+        let filter = try GCSFilter(items: items, key: genesis.hash.prefix(16)).serialized
+        let anchor = SHA256d.hash(GCSFilter.filterHash(filter) + Data(repeating: 0, count: 32))
+        try await fixture.sync.recordProgressForTest(nextScanHeight: 1_002,
+            filterHeaders: ["0": anchor.hex, "1000": Data(repeating: 1, count: 32).hex])
+        try await fixture.sync.rollBack(to: 500)
+        // Reopen at the wallet's actual frontier, proving reconstruction
+        // doesn't require lying about or lowering the persisted wallet height.
+        let resumed = try FilterSync(pool: pool, chain: fixture.chain, startHeight: 501,
+                                      storageURL: fixture.progressFile)
+        let before = try Data(contentsOf: fixture.progressFile)
+        let matches = MatchCollector()
+        if liar {
+            await #expect(throws: FilterSyncError.filterHeaderMismatch(height: 1)) {
+                try await resumed.sync(watchScripts: [fixture.synthetic.watchScript]) { matches.add($0) }
+            }
+            #expect(matches.matches.isEmpty)
+            #expect(await resumed.nextScanHeight == 501)
+            #expect(try Data(contentsOf: fixture.progressFile) == before)
+            #expect(await fixture.nodes[0].receivedMessages.allSatisfy { $0.command != "getcfilters" })
+        } else {
+            try await resumed.sync(watchScripts: [fixture.synthetic.watchScript]) { matches.add($0) }
+            #expect(matches.matches.map(\.height) == [750])
+            #expect(await resumed.nextScanHeight == 1_002)
+            let requests = await fixture.nodes[0].receivedMessages.compactMap { message -> UInt32? in
+                if case let .getcfilters(request) = message { return request.startHeight }
+                return nil
+            }
+            #expect(requests.first == 501, "reconstruct headers without replaying old payment callbacks")
+        }
     }
 
     // MARK: - cfcheckpt majority
@@ -391,6 +484,112 @@ struct FilterSyncAdversaryTests {
         // The single checkpoint (height 1000) was pinned and cross-checked.
         #expect(await fixture.sync.filterHeader(at: 1_000) != nil)
         #expect(await fixture.pool.connectedPeers().count == 3)
+
+        await fixture.pool.stop()
+    }
+
+    // MARK: A batch commits only after its own checkpoint comparison
+
+    /// A peer whose cfcheckpt answer contradicts the commitments it serves,
+    /// on a chain long enough for two batches: the boundary at 1,000 is
+    /// announced honestly and the one at 2,000 is not.
+    ///
+    /// The first batch passes its comparison and commits; the second is
+    /// refused. What the refusal leaves behind is the point. The comparison
+    /// used to run once, at the end of the sync, by which time every batch had
+    /// already handed its matches to the caller and persisted its progress —
+    /// so a chain that failed its checkpoint had nonetheless altered the
+    /// wallet. The watched output sits at height 1,500, inside the batch that
+    /// fails, so effects applied ahead of the comparison show up as a match
+    /// the caller should never have seen.
+    @Test("a batch whose checkpoint comparison fails delivers no match and persists nothing")
+    func refusedBatchLeavesEverythingAsItWas() async throws {
+        let fixture = try await Self.threePeerFixture(liars: [.checkpointHeader(wrongAt: 2_000)],
+                                                      chainLength: 2_001,
+                                                      watchHeight: 1_500)
+        defer { fixture.stopNodes() }
+
+        let collector = MatchCollector()
+        var thrown: (any Error)?
+        do {
+            try await fixture.sync.sync(watchScripts: [fixture.synthetic.watchScript]) {
+                collector.add($0)
+            }
+        } catch {
+            thrown = error
+        }
+        // The specific reason, not merely that something threw: the sync ends
+        // in an error either way, and only the reason says which comparison
+        // stopped it.
+        guard case let .checkpointMismatch(reason)? = thrown as? FilterSyncError else {
+            Issue.record("expected checkpointMismatch, got \(String(describing: thrown))")
+            return
+        }
+        #expect(reason.contains("pinned header at 2000"))
+
+        // Nothing from the refused batch was applied, and everything from the
+        // batch that passed still was.
+        #expect(collector.matches.isEmpty, "a refused batch must not deliver its matches")
+        #expect(await fixture.sync.nextScanHeight == 1_001,
+                "the frontier stands where the batch that passed left it")
+        #expect(await fixture.sync.filterHeader(at: 1_000) != nil,
+                "the batch that passed its comparison still committed")
+        #expect(await fixture.sync.filterHeader(at: 1_001) == nil,
+                "no header from the refused batch was pinned")
+
+        // The file says the same thing the actor does. This is the state a
+        // relaunch would resume from, so it is the one that has to be clean.
+        let before = try Self.storedProgress(fixture.progressFile)
+        #expect(before.nextScanHeight == 1_001)
+        #expect(before.filterHeaders == (await fixture.sync.pinnedFilterHeadersForTest))
+
+        // And retrying the same batch is the same refusal: state before the
+        // second attempt equals state after it, with nothing accumulated in
+        // between. The peer keeps its seat through a checkpoint refusal, so
+        // this really is the same batch being attempted again.
+        var again: (any Error)?
+        do {
+            try await fixture.sync.sync(watchScripts: [fixture.synthetic.watchScript]) {
+                collector.add($0)
+            }
+        } catch {
+            again = error
+        }
+        guard case let .checkpointMismatch(secondReason)? = again as? FilterSyncError,
+              secondReason.contains("pinned header at 2000")
+        else {
+            Issue.record("expected the same refusal, got \(String(describing: again))")
+            return
+        }
+        #expect(collector.matches.isEmpty)
+        #expect(await fixture.sync.nextScanHeight == 1_001)
+        #expect(try Self.storedProgress(fixture.progressFile) == before,
+                "a second refusal of the same batch must leave the file untouched too")
+
+        await fixture.pool.stop()
+    }
+
+    /// The other half: a comparison that passes commits exactly what its
+    /// batch staged. Without this, the case above would also be satisfied by
+    /// a guard that refused everything.
+    @Test("a batch whose checkpoint comparison passes commits exactly its own effects")
+    func passingBatchCommitsWhatItStaged() async throws {
+        let fixture = try await Self.threePeerFixture(liars: [nil])
+        defer { fixture.stopNodes() }
+
+        let collector = MatchCollector()
+        try await fixture.sync.sync(watchScripts: [fixture.synthetic.watchScript]) {
+            collector.add($0)
+        }
+
+        #expect(collector.matches.map(\.height) == [3])
+        #expect(await fixture.sync.nextScanHeight == 1_002)
+        let stored = try Self.storedProgress(fixture.progressFile)
+        #expect(stored.nextScanHeight == 1_002)
+        #expect(stored.filterHeaders == (await fixture.sync.pinnedFilterHeadersForTest),
+                "the persisted progress is the frontier the sync reports, not a lagging copy")
+        #expect(stored.filterHeaders["1000"] != nil,
+                "the boundary the comparison covered is pinned")
 
         await fixture.pool.stop()
     }

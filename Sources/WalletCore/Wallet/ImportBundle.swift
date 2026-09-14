@@ -250,18 +250,6 @@ public struct ImportBundle: Codable, Equatable, Sendable {
         return text
     }
 
-    /// Same JSON as `serialized()`, but a present mnemonic is replaced with
-    /// `"<redacted>"` so an on-screen preview cannot screenshot or copy the
-    /// seed. The shared file stays the real bundle.
-    public static func redactedPreview(_ json: String) -> String {
-        guard let data = json.data(using: .utf8),
-              var bundle = try? JSONDecoder().decode(ImportBundle.self, from: data),
-              bundle.mnemonic != nil
-        else { return json }
-        bundle.mnemonic = "<redacted>"
-        return (try? bundle.serialized()) ?? json
-    }
-
     private enum CodingKeys: String, CodingKey {
         case version, network, descriptor, mnemonic, lastKnownHeight, utxos, transactions
         case nextReceiveIndex, nextChangeIndex, vaults
@@ -429,7 +417,9 @@ extension Wallet {
         let wallet = try Wallet(network: network, descriptor: descriptor, accountKey: accountKey,
                                 keyStore: keyStore, storageURL: storageURL, state: state)
         if let storageURL {
-            try JSONEncoder().encode(state).write(to: storageURL, options: .atomic)
+            let data = try JSONEncoder().encode(state)
+            try data.write(to: storageURL,
+                           options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         }
         return wallet
     }
@@ -483,8 +473,7 @@ extension Wallet {
         let utxos = try bundle.claimedUTXOs()
         for utxo in utxos {
             let expected = try descriptor
-                .derived(index: utxo.index,
-                         network: Self.hdNetwork(for: network))[utxo.chain.rawValue]
+                .derived(index: utxo.index, bitcoinNetwork: network)[utxo.chain.rawValue]
                 .scriptPubKey
             guard expected == utxo.scriptPubKey else {
                 throw WalletError.invalidBundle(

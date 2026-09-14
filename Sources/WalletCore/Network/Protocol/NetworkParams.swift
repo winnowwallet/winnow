@@ -1,10 +1,15 @@
 import Foundation
 
-/// Bitcoin network identifier. Regtest is omitted intentionally: this client
-/// targets mainnet and the public default signet (BIP325).
+/// Bitcoin network identifier: mainnet, the public default signet (BIP325),
+/// and regtest for a node on the same machine.
 public enum BitcoinNetwork: String, Sendable, CaseIterable {
     case mainnet
     case signet
+    /// A private chain on one machine, mined by RPC: what an end-to-end
+    /// suite runs against. Never dialled from seeds; peers come from
+    /// `PeerPool(manualPeers:)`. It begins at zero wherever it runs, so it
+    /// ships no checkpoint.
+    case regtest
 }
 
 /// Static per-network parameters, sourced from Bitcoin Core's
@@ -65,6 +70,8 @@ public struct NetworkParams: Sendable, Equatable {
         }
     }
 
+    public let noRetargeting: Bool
+
     public init(network: BitcoinNetwork, magic: Data, defaultPort: UInt16,
                 genesisTime: UInt32, genesisBits: UInt32, genesisNonce: UInt32,
                 genesisMerkleRoot: Data, genesisHash: Data, powLimit: Data,
@@ -72,9 +79,10 @@ public struct NetworkParams: Sendable, Equatable {
                 overlayFallbackPeers: [OverlayNetwork: [PeerEndpoint]] = [:],
                 checkpoint: Checkpoint? = nil,
                 powTargetTimespan: UInt32 = 14 * 24 * 60 * 60,
-                powTargetSpacing: UInt32 = 600) {
+                powTargetSpacing: UInt32 = 600, noRetargeting: Bool = false) {
         precondition(powTargetTimespan >= 4 && powTargetTimespan <= UInt32.max / 4)
         precondition(powTargetSpacing > 0 && powTargetTimespan % powTargetSpacing == 0)
+        self.noRetargeting = noRetargeting
         self.network = network
         self.magic = magic
         self.defaultPort = defaultPort
@@ -113,6 +121,7 @@ public struct NetworkParams: Sendable, Equatable {
         switch network {
         case .mainnet: return .mainnet
         case .signet: return .signet
+        case .regtest: return .regtest
         }
     }
 
@@ -228,6 +237,23 @@ public struct NetworkParams: Sendable, Equatable {
             chainwork: Data(hex:
                 "0000000000000000000000000000000000000000c8bbeae4127a204b0317861c")!
         )
+    )
+
+    /// Regtest, as Core's `chainparams.cpp` defines it: the genesis block
+    /// shares mainnet's merkle root, its own time, bits and nonce, the
+    /// lowest possible difficulty, and no seeds of any kind.
+    public static let regtest = NetworkParams(
+        network: .regtest,
+        magic: Data([0xFA, 0xBF, 0xB5, 0xDA]),
+        defaultPort: 18_444,
+        genesisTime: 1_296_688_602,
+        genesisBits: 0x207F_FFFF,
+        genesisNonce: 2,
+        genesisMerkleRoot: genesisMerkleRoot,
+        genesisHash: Data(displayHex: "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"),
+        powLimit: Data(displayHex: "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+        dnsSeeds: [],
+        noRetargeting: true
     )
 
     public static let signet = NetworkParams(

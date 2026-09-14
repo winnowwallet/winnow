@@ -202,6 +202,9 @@ struct MuSig2Tests {
             let isXOnly = testCase["is_xonly"] as! [Bool]
             let sigs = (testCase["psig_indices"] as! [Int]).map { partials[$0] }
             let aggnonce = Self.hex(testCase["aggnonce"] as! String)
+            // The vector nonces must aggregate to the given aggnonce.
+            let selected = (testCase["nonce_indices"] as! [Int]).map { nonces[$0] }
+            #expect(try MuSig.nonceAggregate(publicNonces: selected) == aggnonce)
             let session = MuSig.Session(aggregateNonce: aggnonce, publicKeys: keys,
                                         tweaks: caseTweaks, isXOnlyTweaks: isXOnly, message: message)
             let signature = try MuSig.partialSigAggregate(partialSignatures: sigs, session: session)

@@ -66,9 +66,17 @@ extension XCTestCase {
     @MainActor
     @discardableResult
     func scrollUntilExists(_ app: XCUIApplication, _ element: XCUIElement,
-                           maxSwipes: Int = 10, up: Bool = false) -> Bool {
+                           maxSwipes: Int = 10, up: Bool = false, fullyVisible: Bool = false) -> Bool {
+        func ready() -> Bool {
+            guard element.exists else { return false }
+            guard fullyVisible else { return true }
+            let top = app.navigationBars.firstMatch.exists ? app.navigationBars.firstMatch.frame.maxY : app.frame.minY
+            let bottom = app.tabBars.firstMatch.exists ? app.tabBars.firstMatch.frame.minY : app.frame.maxY
+            return element.isHittable && element.frame.minY >= top && element.frame.maxY <= bottom
+        }
         for _ in 0 ... maxSwipes {
-            if element.waitForExistence(timeout: 2) { return true }
+            _ = element.waitForExistence(timeout: 2)
+            if ready() { return true }
             // iPad forms are centered sheets. A drag at 30% of the whole
             // display can land on the sheet's navigation bar instead of its
             // content, moving the sheet without scrolling its fields.
@@ -81,7 +89,7 @@ extension XCTestCase {
             let end = surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: up ? 0.62 : 0.30))
             start.press(forDuration: 0.05, thenDragTo: end)
         }
-        return element.exists
+        return ready()
     }
 
     /// The sync-progress section can put confirmation below an iPad sheet's

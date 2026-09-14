@@ -223,6 +223,74 @@ struct WalletTests {
         #expect(await wallet.history.contains { $0.txid == prepared.built.transaction.txid })
     }
 
+    @Test("signing derives the master key once per send, and every input still verifies")
+    func signDerivesMasterOncePerSend() async throws {
+        let keyStore = CountingKeyStore()
+        let (wallet, _) = try await fundedWallet(keyStore: keyStore, coins: [
+            (.receive, 0, 100_000, 100), (.receive, 1, 60_000, 101), (.receive, 2, 40_000, 102),
+        ])
+        let loadsBefore = keyStore.loads
+
+        let prepared = try await wallet.buildSend(
+            payments: [Payment(amount: 180_000, scriptPubKey: TestScripts.p2trDestination)],
+            feeRateSatPerVByte: 2, chainTip: testChainTip, randomness: { 0.5 })
+
+        // Three inputs, one KeyStore read: the master key is derived for the
+        // signing operation, not once for each input it signs.
+        #expect(prepared.built.transaction.inputs.count == 3)
+        #expect(keyStore.loads - loadsBefore == 1)
+
+        // The shared master still yields each input's own key: every witness
+        // verifies against the output key its scriptPubKey commits to.
+        let signed = prepared.built.transaction
+        let spentOutputs = try prepared.built.psbt.spentOutputs()
+        for index in signed.inputs.indices {
+            let sighash = try SighashBIP341.sighash(tx: signed, inputIndex: index,
+                                                    spentOutputs: spentOutputs, hashType: .default)
+            let outputKey = P256K.Schnorr.XonlyKey(
+                dataRepresentation: spentOutputs[index].scriptPubKey.suffix(32))
+            let signature = try P256K.Schnorr.SchnorrSignature(
+                dataRepresentation: signed.inputs[index].witness[0])
+            var message = [UInt8](sighash)
+            #expect(outputKey.isValid(signature, for: &message), "input \(index) must verify")
+        }
+    }
+
+    @Test("a signed transaction past the standard size limit is refused after signing")
+    func standardSizeCeiling() throws {
+        let output = Transaction.Output(value: 100_000, scriptPubKey: TestScripts.p2trDestination)
+        func signed(inputs: Int) -> Transaction {
+            // A P2TR key-path witness: one 64-byte SIGHASH_DEFAULT signature.
+            Transaction(version: 2, inputs: (0 ..< inputs).map {
+                Transaction.Input(
+                    previousOutput: Transaction.Outpoint(txid: Data(repeating: 0x11, count: 32),
+                                                         vout: UInt32($0)),
+                    scriptSig: Data(), sequence: TransactionBuilder.defaultSequence,
+                    witness: [Data(repeating: 0x22, count: 64)])
+            }, outputs: [output], locktime: 0)
+        }
+        var pastCeiling = 1
+        while TransactionBuilder.signedVSize(inputCount: pastCeiling, outputs: [output])
+            <= TransactionBuilder.maximumStandardVSize { pastCeiling += 1 }
+
+        // The guard measures the signed bytes where coin selection estimates
+        // them. For the key-path spends this wallet makes the two agree
+        // exactly, which is why the boundary is built here rather than sent
+        // through buildSend — selection refuses it one step earlier.
+        let fits = signed(inputs: pastCeiling - 1)
+        #expect(TransactionBuilder.vsize(of: fits)
+            == TransactionBuilder.signedVSize(inputCount: pastCeiling - 1, outputs: [output]))
+        #expect(throws: Never.self) { try Wallet.checkStandardSize(fits) }
+
+        let over = signed(inputs: pastCeiling)
+        let vsize = TransactionBuilder.vsize(of: over)
+        #expect(vsize > TransactionBuilder.maximumStandardVSize)
+        #expect(throws: WalletError.transactionTooLarge(
+            vsize: vsize, limit: TransactionBuilder.maximumStandardVSize)) {
+            try Wallet.checkStandardSize(over)
+        }
+    }
+
     @Test("fee bump keeps inputs/payments, satisfies BIP125 fees, signs, and persists")
     func feeBump() async throws {
         let url = tempFileURL("wallet.json")
@@ -511,7 +579,7 @@ struct WalletTests {
         _ = try await wallet.freshReceiveAddress()
         try await fund(wallet, amount: 42_000, height: 100)
 
-        let reopened = try await Wallet.open(storageURL: url, keyStore: keyStore)
+        let reopened = try Wallet.open(storageURL: url, keyStore: keyStore)
         let reopenedID = await reopened.id
         #expect(reopenedID == "73c5da0a")
         #expect(await reopened.balance == 42_000)
@@ -633,6 +701,128 @@ struct WalletTests {
         #expect(await wallet.allUtxos.allSatisfy { !$0.isSpent })
         #expect(await wallet.nextChangeIndex == changeIndexBefore)
         #expect(await wallet.history.contains { $0.txid == prepared.built.transaction.txid } == false)
+    }
+
+    /// The entry is what outlives a send. The `PendingSend` that can rebuild
+    /// a replacement is retired by the block that confirms the transaction,
+    /// so the recorded transaction on the entry is the only thing left that
+    /// can say where a confirmed payment went; it must be written at commit
+    /// and must not be dropped at confirmation.
+    @Test("a committed send records its transaction and keeps it through confirmation")
+    func sendRecordsItsTransaction() async throws {
+        let url = tempFileURL("recorded-send-wallet.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let keyStore = InMemoryKeyStore()
+        let (wallet, _) = try await fundedWallet(storageURL: url, keyStore: keyStore,
+                                                coins: [(.receive, 0, 150_000, 100)])
+        let destination = TestScripts.p2trDestination
+        let prepared = try await wallet.buildSend(
+            payments: [Payment(amount: 100_000, scriptPubKey: destination)], feeRateSatPerVByte: 2,
+            chainTip: testChainTip, randomness: { 0.5 })
+        try await wallet.commit(prepared)
+
+        let signed = prepared.built.transaction
+        let change = try await wallet.scriptPubKey(chain: .change, index: 0)
+        let entry = try #require(await wallet.history.first { $0.txid == signed.txid })
+        let recorded = try #require(try entry.transaction())
+        #expect(recorded.txid == signed.txid)
+        #expect(recorded.outputs == signed.outputs)
+        #expect(recorded.outputs.contains { $0.scriptPubKey == destination && $0.value == 100_000 })
+        #expect(recorded.outputs.contains { $0.scriptPubKey == change })
+        #expect(recorded.inputs.allSatisfy { $0.witness.isEmpty },
+                "witnesses are not needed to show recipients")
+
+        // Confirmation retires the pending send, the other record of the
+        // destination. The entry keeps its own.
+        try await wallet.apply(match: fakeMatch(height: 150, transactions: [signed]))
+        let confirmed = try #require(await wallet.history.first { $0.txid == signed.txid })
+        #expect(confirmed.height == 150)
+        #expect(await wallet.feeBumpableTxids.isEmpty)
+        #expect(confirmed.rawTransaction == entry.rawTransaction)
+
+        // And a relaunch reads it back from the state file.
+        let reopened = try Wallet.open(storageURL: url, keyStore: keyStore)
+        let reread = try #require(await reopened.history.first { $0.txid == signed.txid })
+        #expect(try reread.transaction()?.outputs == signed.outputs)
+    }
+
+    /// A replacement is a different transaction with the same recipients:
+    /// its entry records the replacement, and the entry it supersedes goes
+    /// on describing the transaction it was.
+    @Test("a fee-bumped replacement records its own transaction beside the original's")
+    func feeBumpRecordsItsTransaction() async throws {
+        let (wallet, _) = try await fundedWallet(coins: [(.receive, 0, 150_000, 100)])
+        let destination = TestScripts.p2trDestination
+        let original = try await wallet.buildSend(
+            payments: [Payment(amount: 100_000, scriptPubKey: destination)], feeRateSatPerVByte: 2,
+            chainTip: testChainTip, randomness: { 0.5 })
+        try await wallet.commit(original)
+        let originalTx = original.built.transaction
+        let rate = try await wallet.pendingFeeRate(txid: originalTx.txid)
+        let replacement = try await wallet.buildFeeBump(txid: originalTx.txid,
+                                                        feeRateSatPerVByte: rate + 1)
+        try await wallet.commitFeeBump(replacement)
+
+        let replacementTx = replacement.built.transaction
+        let entry = try #require(await wallet.history.first { $0.txid == replacementTx.txid })
+        let recorded = try #require(try entry.transaction())
+        #expect(recorded.outputs == replacementTx.outputs)
+        #expect(recorded.outputs.contains { $0.scriptPubKey == destination && $0.value == 100_000 })
+
+        let superseded = try #require(await wallet.history.first { $0.txid == originalTx.txid })
+        #expect(superseded.replacedBy == replacementTx.txid)
+        #expect(try superseded.transaction()?.outputs == originalTx.outputs)
+    }
+
+    /// An entry written before transactions were recorded reads back with
+    /// none, which is what lets the app fetch the block on demand, and is
+    /// written back the same way: a save must not turn "not known" into a
+    /// transaction nobody recorded.
+    @Test("wallet state written before transactions were recorded remains readable")
+    func historyWithoutRecordedTransaction() async throws {
+        let url = tempFileURL("legacy-history-wallet.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let keyStore = InMemoryKeyStore()
+        let (wallet, _) = try await fundedWallet(storageURL: url, keyStore: keyStore,
+                                                coins: [(.receive, 0, 150_000, 100)])
+        let prepared = try await wallet.buildSend(
+            payments: [Payment(amount: 100_000, scriptPubKey: TestScripts.p2trDestination)],
+            feeRateSatPerVByte: 2, chainTip: testChainTip, randomness: { 0.5 })
+        try await wallet.commit(prepared)
+        let txid = prepared.built.transaction.txid
+
+        // The shape a previous version wrote: every other field identical,
+        // the key simply absent.
+        let data = try Data(contentsOf: url)
+        var json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let entries = try #require(json["history"] as? [[String: Any]])
+        #expect(entries.contains { $0["rawTransaction"] != nil })
+        json["history"] = entries.map { entry in
+            var older = entry
+            older.removeValue(forKey: "rawTransaction")
+            return older
+        }
+        try JSONSerialization.data(withJSONObject: json).write(to: url, options: .atomic)
+
+        let reopened = try Wallet.open(storageURL: url, keyStore: keyStore)
+        let entry = try #require(await reopened.history.first { $0.txid == txid })
+        #expect(entry.rawTransaction == nil)
+        #expect(try entry.transaction() == nil)
+        // Everything the older shape did carry still loads.
+        #expect(entry.spent == 150_000)
+        #expect(entry.fee == prepared.built.fee)
+        #expect(await reopened.feeBumpableTxids == [txid])
+
+        // Saved again through an ordinary state change, the entry goes back
+        // exactly as it was read.
+        try await reopened.recordScanHeight(400)
+        let saved = try #require(
+            JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let savedEntries = try #require(saved["history"] as? [[String: Any]])
+        #expect(savedEntries.allSatisfy { $0["rawTransaction"] == nil })
+        let again = try #require(await Wallet.open(storageURL: url, keyStore: keyStore)
+            .history.first { $0.txid == txid })
+        #expect(again.rawTransaction == nil)
     }
 
 }

@@ -110,6 +110,66 @@ struct TxBroadcasterTests {
         }
     }
 
+    @Test("a served peer that goes away stays served, and served survives a reload")
+    func servedIsSticky() async throws {
+        let params = NetworkParams.signet
+        let node = LoopbackNode(params: params, autoRequestDelay: .milliseconds(50))
+        try await node.start()
+        defer { Task { await node.stop() } }
+        let store = FileManager.default.temporaryDirectory
+            .appending(path: "broadcaster-served-\(UUID().uuidString)/broadcast.json")
+        try FileManager.default.createDirectory(at: store.deletingLastPathComponent(), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: store.deletingLastPathComponent()) }
+
+        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint])
+        await pool.start()
+        let broadcaster = try TxBroadcaster(pool: pool, storageURL: store, rebroadcastBaseInterval: .seconds(3_600))
+        let seen = EventCollector<TxBroadcaster.Event>()
+        let events = await broadcaster.events()
+        let consumer = Task { for await event in events { seen.add(event) } }
+        defer { consumer.cancel() }
+
+        let tx = makeFakeSegwitTx()
+        let txid = try await broadcaster.broadcast(tx.serialized(includeWitness: true))
+        let endpoint = await node.endpoint
+        #expect(await pollUntil { seen.events.contains { $0 == .served(txid: txid, peer: endpoint) } })
+        #expect(await broadcaster.wasServed(txid))
+
+        // The peer goes away. Its relay entry does not become a failure: it
+        // was handed the bytes; that fact alone does not prove acceptance.
+        await node.stop()
+        _ = await pollUntil { await pool.connectedPeers().isEmpty }
+        #expect(await broadcaster.relayStatus(txid)[endpoint.description] == .served)
+        #expect(!seen.events.contains { if case .failed(let id, let peer, _) = $0 { return id == txid && peer == endpoint }; return false })
+        #expect(await broadcaster.wasServed(txid))
+
+        // A reload remembers.
+        await pool.stop()
+        let reloaded = try TxBroadcaster(pool: pool, storageURL: store, rebroadcastBaseInterval: .seconds(3_600))
+        #expect(await reloaded.wasServed(txid))
+        #expect(await reloaded.pendingTxids == [txid])
+    }
+
+    @Test("a legacy relay record never invents a successful handoff")
+    func legacyServedDefaultsFalse() async throws {
+        let url = tempFileURL("legacy-served.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let pool = PeerPool(params: .signet, peerCount: 0, manualPeers: [])
+        let broadcaster = try TxBroadcaster(pool: pool, storageURL: url)
+        let txid = try await broadcaster.broadcast(makeFakeSegwitTx().serialized(includeWitness: true))
+        #expect(await !broadcaster.wasServed(txid), "no peer was connected")
+        await broadcaster.shutdown()
+        var root = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        var entries = try #require(root["transactions"] as? [String: [String: Any]])
+        for key in entries.keys { entries[key]?.removeValue(forKey: "served") }
+        root["transactions"] = entries
+        try JSONSerialization.data(withJSONObject: root).write(to: url)
+        let reopened = try TxBroadcaster(pool: pool, storageURL: url)
+        #expect(await !reopened.wasServed(txid))
+        #expect(await reopened.pendingTxids == [txid])
+        await reopened.shutdown()
+    }
+
     @Test("serves a delayed getdata and tracks per-peer state")
     func delayedGetdata() async throws {
         let params = NetworkParams.signet

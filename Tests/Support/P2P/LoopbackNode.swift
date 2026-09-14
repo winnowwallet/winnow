@@ -39,6 +39,14 @@ public actor LoopbackNode {
     /// Answers every getcfcheckpt with this stop hash instead of the one the
     /// client asked about — a peer replying about a different chain (#129).
     public let cfcheckptStopHashOverride: Data?
+    /// Announces a fabricated header for the cfcheckpt entry at this height
+    /// while serving an honest cfheaders/cfilters chain: a peer whose
+    /// checkpoint answer contradicts the commitments it goes on to serve.
+    /// Nothing the client computes for itself catches this — every cfilter
+    /// reproduces the cfheaders it was sent — so the comparison against
+    /// cfcheckpt is the only thing that can.
+    public let cfcheckptLieAtHeight: Int?
+    public let cfcheckptCountDelta: Int
     /// Distinguishes one liar's fabricated commitment chain from another's.
     /// The lie is a byte-flip on every filter hash; with a fixed flip, two
     /// lying nodes fabricate *identical* chains and form a majority for the
@@ -76,7 +84,8 @@ public actor LoopbackNode {
          chain: [Block] = [], withholdHeaders: Bool = false,
          corruptFilterAtHeight: Int? = nil,
          lieAboutFilterCommitments: Bool = false, lieSalt: UInt8 = 0xFF,
-         cfcheckptStopHashOverride: Data? = nil,
+         cfcheckptStopHashOverride: Data? = nil, cfcheckptLieAtHeight: Int? = nil,
+         cfcheckptCountDelta: Int = 0,
          disconnectOnUnknownStopHash: Bool = false, claimedStartHeight: Int32? = nil,
          autoRequestDelay: Duration? = nil, transactions: [Transaction] = [],
          startSilent: Bool = false, versionDelay: Duration = .zero) {
@@ -90,6 +99,8 @@ public actor LoopbackNode {
         self.lieAboutFilterCommitments = lieAboutFilterCommitments
         self.lieSalt = lieSalt
         self.cfcheckptStopHashOverride = cfcheckptStopHashOverride
+        self.cfcheckptLieAtHeight = cfcheckptLieAtHeight
+        self.cfcheckptCountDelta = cfcheckptCountDelta
         self.autoRequestDelay = autoRequestDelay
         self.transactions = Dictionary(uniqueKeysWithValues: transactions.map { ($0.txid, $0) })
         self.versionDelay = versionDelay
@@ -174,6 +185,11 @@ public actor LoopbackNode {
             })
         }
     }
+
+    /// Every post-handshake message received, in arrival order and left in
+    /// place. `nextMessage` drains one; this reads them all, for a test that
+    /// asserts on the shape of a whole burst of requests.
+    public var receivedMessages: [PeerMessage] { inbox }
 
     /// Removes and returns the first received message with this command,
     /// waiting up to `timeout` for it to arrive.
@@ -352,8 +368,15 @@ public actor LoopbackNode {
             var headers: [Data] = []
             var height = Int(FilterSync.checkpointInterval)
             while height <= stop, height < filterHeaders.count {
-                headers.append(filterHeaders[height])
+                var header = filterHeaders[height]
+                if height == cfcheckptLieAtHeight { header[header.startIndex] ^= 0xFF }
+                headers.append(header)
                 height += Int(FilterSync.checkpointInterval)
+            }
+            if cfcheckptCountDelta < 0 {
+                headers = Array(headers.dropLast(min(headers.count, -cfcheckptCountDelta)))
+            } else if cfcheckptCountDelta > 0 {
+                headers += Array(repeating: Data(repeating: 0, count: 32), count: cfcheckptCountDelta)
             }
             try await send(.cfcheckpt(CFCheckptMessage(
                 stopHash: cfcheckptStopHashOverride ?? request.stopHash, filterHeaders: headers)))
