@@ -4,6 +4,26 @@ This is an August 2026 audit record. References to Silent Payments and its tweak
 index describe the implementation reviewed then; those features have since been
 removed. Historical findings and their evidence are retained below.
 
+**Decision: GO — recorded 2026-09-14 by the project owner.** Mainnet has been
+the shipped default since v0.6.0 (2026-09-06) and the app has been on the App
+Store since 2026-09-12; on 2026-09-14 the owner recorded the mainnet decision
+as GO on that basis. Everything below this line is the August record that
+recommended NO-GO, retained unchanged as history: it says what was evidenced
+then and what a person still had to decide, and that person has now decided.
+
+What the decision does not change. The independent human audit named
+throughout this register as the strongest remaining confidence artifact is
+still outstanding. The agent-driven
+[independent review of 2026-09-14](independent-review-2026-09-14.md) — one
+High, seven Medium, twenty-two Low, three informational, none Critical — is
+tracked as issues #98–#130 with bounded fix PRs in flight, and its findings
+were made against the tree that shipped. The GO is the owner's acceptance of
+that residual on the record, not a claim that it has been closed.
+
+---
+
+*The August 2026 record, as written:*
+
 **Decision: NO-GO.** This report does not authorize a mainnet release, and it
 is not an approval. It records what is now evidenced, what is not, and what a
 person still has to decide.
