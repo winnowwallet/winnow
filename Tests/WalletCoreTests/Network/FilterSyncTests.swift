@@ -365,6 +365,9 @@ struct FilterSyncTests {
         let filterRequests: [GetCFiltersRequest]
     }
 
+    // These large-chain fixtures run beside synchronous mining/key tests.
+    // Allow their handshake the same window as a filter request; connection
+    // speed is not the assertion, and missing setup must fail before syncing.
     private func scanWholeChain(_ synthetic: SyntheticChain,
                                 filtersPerChunk: UInt32) async throws -> ScanOutcome {
         let node = LoopbackNode(params: synthetic.params, chain: synthetic.blocks)
@@ -372,9 +375,10 @@ struct FilterSyncTests {
         defer { Task { await node.stop() } }
         let pool = PeerPool(params: synthetic.params, peerCount: 1,
                             manualPeers: [await node.endpoint],
-                            peersFileURL: tempFileURL("peers.json"))
+                            peersFileURL: tempFileURL("peers.json"), dialTimeout: .seconds(30))
         await pool.start()
         defer { Task { await pool.stop() } }
+        try #require(await pool.connectedPeers().count == 1, "the filter fixture must complete its handshake")
         let chain = try HeaderChain(params: synthetic.params)
         let progressFile = tempFileURL("chunked-progress.json")
         defer { try? FileManager.default.removeItem(at: progressFile.deletingLastPathComponent()) }
@@ -640,9 +644,10 @@ struct FilterSyncTests {
         defer { Task { await node.stop() } }
         let pool = PeerPool(params: synthetic.params, peerCount: 1,
                             manualPeers: [await node.endpoint],
-                            peersFileURL: tempFileURL("peers.json"))
+                            peersFileURL: tempFileURL("peers.json"), dialTimeout: .seconds(30))
         await pool.start()
         defer { Task { await pool.stop() } }
+        try #require(await pool.connectedPeers().count == 1, "the filter fixture must complete its handshake")
         let chain = try HeaderChain(params: synthetic.params)
         let sync = try FilterSync(pool: pool, chain: chain, startHeight: 999,
                                   storageURL: progressFile, requiredCheckpointPeers: 1)
@@ -728,9 +733,10 @@ struct FilterSyncTests {
         defer { Task { await node.stop() } }
         let pool = PeerPool(params: synthetic.params, peerCount: 1,
                             manualPeers: [await node.endpoint],
-                            peersFileURL: tempFileURL("peers.json"))
+                            peersFileURL: tempFileURL("peers.json"), dialTimeout: .seconds(30))
         await pool.start()
         defer { Task { await pool.stop() } }
+        try #require(await pool.connectedPeers().count == 1, "the filter fixture must complete its handshake")
         let resumed = try FilterSync(pool: pool, chain: try HeaderChain(params: synthetic.params),
                                      startHeight: 999, storageURL: progressFile,
                                      requiredCheckpointPeers: 1)
@@ -764,9 +770,10 @@ struct FilterSyncTests {
         defer { Task { await node.stop() } }
         let pool = PeerPool(params: synthetic.params, peerCount: 1,
                             manualPeers: [await node.endpoint],
-                            peersFileURL: tempFileURL("peers.json"))
+                            peersFileURL: tempFileURL("peers.json"), dialTimeout: .seconds(30))
         await pool.start()
         defer { Task { await pool.stop() } }
+        try #require(await pool.connectedPeers().count == 1, "the filter fixture must complete its handshake")
         let resumed = try FilterSync(pool: pool, chain: try HeaderChain(params: synthetic.params),
                                      startHeight: 999, storageURL: progressFile,
                                      requiredCheckpointPeers: 1)
