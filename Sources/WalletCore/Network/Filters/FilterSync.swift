@@ -272,22 +272,20 @@ public actor FilterSync {
         // How far this run may go. Everything below stops at the ceiling
         // rather than the tip, and a run that asked for no blocks at all stops
         // before any filter request is sent.
-        guard let ceiling = Self.scanCeiling(frontier: progress.nextScanHeight,
-                                             maxBlocks: maxBlocks, tip: tip) else { return }
+        guard let room = Self.scanCeiling(frontier: progress.nextScanHeight,
+                                          maxBlocks: maxBlocks, tip: tip) else { return }
 
         // 2. cfcheckpt cross-peer comparison: collect answers about our tip,
         // adopt the majority, and only peers whose answer matched may go on
-        // to serve filters.
-        let checkpoints = try await collectedCheckpoints(from: peers, tipHash: tipHash, tip: tip)
-        let reference = try await majorityReference(of: checkpoints)
-        // The list was captured before any eviction, and `misbehaving`
-        // triggers `replenish`, so a plain re-read could hand back brand-new
-        // peers that never went through this comparison. Intersect, never
-        // refresh — see `approved(peers:)`.
-        let approvedEndpoints = await Self.endpoints(
-            of: checkpoints.filter { $0.message == reference }.map(\.peer))
+        // to serve filters. A pinned boundary the adopted reference
+        // contradicts is rewound here, before any filter is read, when the
+        // reference has the cross-source agreement to outrank it.
+        let (reference, approvedEndpoints) = try await adoptReference(
+            from: peers, tipHash: tipHash, tip: tip, onReorg: onReorg)
         peers = try await approved(peers: approvedEndpoints)
-        try checkPinnedBoundaries(against: reference, tip: tip)
+        // A rewind may have moved the frontier back; the ceiling follows it.
+        let ceiling = Self.scanCeiling(frontier: progress.nextScanHeight,
+                                       maxBlocks: maxBlocks, tip: tip) ?? room
 
         // 3+4+5. Batches of ≤1000 blocks, to the tip or this run's ceiling.
         // A ceiling below the tip only shortens the last batch, exactly as the
@@ -359,6 +357,48 @@ public actor FilterSync {
         guard let forkHeight = outcome.minForkHeight else { return }
         try await onReorg?(forkHeight)
         try rollBack(to: forkHeight)
+    }
+
+    /// Step 2 of a sync: the cfcheckpt comparison, whose adopted answer
+    /// decides which peers may serve filters and whether anything already
+    /// pinned has to be rewound before a filter is read.
+    private func adoptReference(from peers: [PeerConnection], tipHash: Data, tip: UInt32,
+                                onReorg: (@Sendable (UInt32) async throws -> Void)?) async throws
+        -> (reference: CFCheckptMessage, approved: Set<String>) {
+        let checkpoints = try await collectedCheckpoints(from: peers, tipHash: tipHash, tip: tip)
+        let vote = try await majorityReference(of: checkpoints)
+        // The list was captured before any eviction, and `misbehaving`
+        // triggers `replenish`, so a plain re-read could hand back brand-new
+        // peers that never went through this comparison. Intersect, never
+        // refresh — see `approved(peers:)`.
+        let approved = await Self.endpoints(
+            of: checkpoints.filter { $0.message == vote.message }.map(\.peer))
+        try await reconcilePins(with: vote.message, crossSource: vote.crossSource,
+                                tip: tip, onReorg: onReorg)
+        return (vote.message, approved)
+    }
+
+    /// Pinned checkpoint headers must match the adopted reference. When one
+    /// does not, whose fault it is depends on how the reference was reached.
+    /// A reference agreed across source classes outranks the pin: the pin was
+    /// made under the same rule with no more evidence — in degraded mode, or
+    /// before votes required cross-source agreement — so the wallet rewinds
+    /// to the last boundary both agree on and re-verifies from there, through
+    /// the same rollback a reorg uses. Before this, a wrongly pinned header
+    /// made every later honest answer throw, and the wallet could not sync
+    /// with anyone again until it was re-imported. A reference from a single
+    /// class, or from a lone peer, rewinds nothing: there the pin keeps the
+    /// benefit of the doubt and the sync stops as it always did.
+    private func reconcilePins(with reference: CFCheckptMessage, crossSource: Bool, tip: UInt32,
+                               onReorg: (@Sendable (UInt32) async throws -> Void)?) async throws {
+        guard let disputed = Self.lowestDisputedBoundary(of: progress.filterHeaders,
+                                                         against: reference, tip: tip) else { return }
+        guard crossSource else {
+            throw FilterSyncError.checkpointMismatch("pinned header at \(disputed) disagrees with cfcheckpt")
+        }
+        let target = disputed - Self.checkpointInterval
+        try await onReorg?(target)
+        try rollBack(to: target)
     }
 
     /// The highest block one run may scan: `maxBlocks` blocks from the
@@ -447,8 +487,8 @@ public actor FilterSync {
     /// diversity reduces correlated failures; it does not prove independence.
     private func majorityReference(
         of checkpoints: [(peer: PeerConnection, message: CFCheckptMessage)])
-        async throws -> CFCheckptMessage {
-        guard checkpoints.count > 1 else { return checkpoints[0].message }
+        async throws -> (message: CFCheckptMessage, crossSource: Bool) {
+        guard checkpoints.count > 1 else { return (checkpoints[0].message, false) }
         let answers: [(peer: PeerConnection, value: CFCheckptMessage)] =
             checkpoints.map { (peer: $0.peer, value: $0.message) }
         guard let majority = Self.strictMajority(of: answers) else {
@@ -457,10 +497,46 @@ public actor FilterSync {
             }
             throw FilterSyncError.checkpointMismatch("no cfcheckpt majority across \(checkpoints.count) peers")
         }
+        let agreeing = checkpoints.filter { $0.message == majority.value }.map(\.peer)
+        let vote = await sourceSpan(agreeing: agreeing, dissenting: majority.minority)
+        guard !vote.disputed else {
+            try await refuseDisputedVote(checkpoints.map(\.peer),
+                                         reason: "cfcheckpt: one source class outvotes another")
+        }
         for peer in majority.minority {
             await pool.misbehaving(peer, reason: "cfcheckpt mismatch")
         }
-        return majority.value
+        return (majority.value, vote.crossSource)
+    }
+
+    /// What a vote's source classes say about it. `crossSource`: the agreeing
+    /// peers span more than one class, so the agreement is not one
+    /// acquisition channel agreeing with itself. `disputed`: the agreeing
+    /// peers are a single class and a peer of another class disagrees — the
+    /// pool's diversity rule permits two seats from one class, so a strict
+    /// majority alone can be exactly that channel outvoting the only
+    /// independent witness, and banning the dissenter would strike it from
+    /// the persisted good-peers file on that channel's word.
+    private func sourceSpan(agreeing: [PeerConnection], dissenting: [PeerConnection])
+        async -> (crossSource: Bool, disputed: Bool) {
+        let agreeingClasses = await classes(of: agreeing)
+        let dissentingClasses = await classes(of: dissenting)
+        let crossSource = agreeingClasses.count > 1
+        return (crossSource, !crossSource && !dissentingClasses.isSubset(of: agreeingClasses))
+    }
+
+    private func classes(of peers: [PeerConnection]) async -> Set<PeerSource?> {
+        var result: Set<PeerSource?> = []
+        for peer in peers { result.insert(await pool.source(of: peer.endpoint)) }
+        return result
+    }
+
+    /// Cools off every peer in a disputed vote and throws. Nobody is banned —
+    /// the lie is unattributable — and the cooldown makes the pool seat other
+    /// candidates before the next attempt, which is what can break the tie.
+    private func refuseDisputedVote(_ peers: [PeerConnection], reason: String) async throws -> Never {
+        for peer in peers { await pool.transportFailure(peer, reason: reason) }
+        throw FilterSyncError.checkpointMismatch(reason)
     }
 
     /// The answer more than half of `answers` gave, and the peers that gave
@@ -487,25 +563,27 @@ public actor FilterSync {
 
     /// Core serves checkpoint headers at heights 1000, 2000, …, ascending
     /// (ProcessGetCFCheckPt: entry i is the header at (i+1)*1000; the stop
-    /// block itself is included only when it is a multiple of 1000). Any
-    /// already-pinned header at a checkpoint height must match.
-    private func checkPinnedBoundaries(against reference: CFCheckptMessage,
-                                       tip: UInt32) throws {
-        try Self.checkPinnedBoundaries(of: progress.filterHeaders,
-                                       against: reference, tip: tip)
-    }
-
-    /// The same comparison over headers a batch has proposed but not
-    /// committed, so the batch can be refused before any of it is applied.
-    private static func checkPinnedBoundaries(of headers: [String: String],
-                                              against reference: CFCheckptMessage,
-                                              tip: UInt32) throws {
+    /// block itself is included only when it is a multiple of 1000). The
+    /// lowest checkpoint height at which a pinned header differs from the
+    /// reference, if any.
+    private static func lowestDisputedBoundary(of headers: [String: String],
+                                               against reference: CFCheckptMessage,
+                                               tip: UInt32) -> UInt32? {
         for (index, header) in reference.filterHeaders.enumerated() {
             let height = UInt32(index + 1) * checkpointInterval
             guard height <= tip else { break }
-            if let pinned = filterHeader(at: height, in: headers), pinned != header {
-                throw FilterSyncError.checkpointMismatch("pinned header at \(height) disagrees with cfcheckpt")
-            }
+            if let pinned = filterHeader(at: height, in: headers), pinned != header { return height }
+        }
+        return nil
+    }
+
+    /// The comparison over headers a batch has proposed but not committed,
+    /// so the batch can be refused before any of it is applied.
+    private static func checkPinnedBoundaries(of headers: [String: String],
+                                              against reference: CFCheckptMessage,
+                                              tip: UInt32) throws {
+        if let height = lowestDisputedBoundary(of: headers, against: reference, tip: tip) {
+            throw FilterSyncError.checkpointMismatch("pinned header at \(height) disagrees with cfcheckpt")
         }
     }
 
@@ -653,6 +731,11 @@ public actor FilterSync {
                 await pool.transportFailure(peer, reason: "cfheaders disagree at \(batchStart)")
             }
             throw FilterSyncError.checkpointMismatch("cfheaders disagree at \(batchStart)")
+        }
+        let agreeing = answers.filter { $0.value == majority.value }.map(\.peer)
+        guard await !sourceSpan(agreeing: agreeing, dissenting: majority.minority).disputed else {
+            try await refuseDisputedVote(answers.map(\.peer),
+                                         reason: "cfheaders at \(batchStart): one source class outvotes another")
         }
         for peer in majority.minority {
             await pool.misbehaving(peer, reason: "cfheaders mismatch at \(batchStart)")
