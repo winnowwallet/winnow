@@ -108,10 +108,13 @@ struct ConnectionBoundsTests {
         let node = LoopbackNode(params: params)
         try await node.start()
         defer { Task { await node.stop() } }
-        let peer = try await connected(to: node, pingInterval: .milliseconds(100),
-                                       readIdleTimeout: .seconds(2))
+        // A loaded CI host has stalled a loopback pong for over two seconds;
+        // the deadline here is the test's own, so give it room (the wallet's
+        // is 150 s) and still sleep past it.
+        let peer = try await connected(to: node, pingInterval: .milliseconds(200),
+                                       readIdleTimeout: .seconds(5))
         defer { Task { await peer.disconnect() } }
-        try await Task.sleep(for: .seconds(3))
+        try await Task.sleep(for: .seconds(7))
         #expect(await peer.isConnected)
     }
 }

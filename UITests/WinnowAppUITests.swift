@@ -160,11 +160,18 @@ class WinnowAppJourney: XCTestCase {
         }
     }
 
-    /// The first issue a story's journey records blocks the journeys after
+    /// The first failure a story's journey records blocks the journeys after
     /// it. Recorded here rather than read back from the run in `tearDown`,
-    /// whose counters do not yet include the test that just failed.
+    /// whose counters do not yet include the test that just failed. Only
+    /// failures count: a runtime warning (the QoS inversion the host-process
+    /// bridge triggers) is recorded through the same path and must not.
     override func record(_ issue: XCTIssue) {
-        if Self.blockedStories[story] == nil { Self.blockedStories[story] = name }
+        switch issue.type {
+        case .assertionFailure, .thrownError, .uncaughtException:
+            if Self.blockedStories[story] == nil { Self.blockedStories[story] = name }
+        default:
+            break
+        }
         super.record(issue)
     }
 
