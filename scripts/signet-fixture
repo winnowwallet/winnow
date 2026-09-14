@@ -128,12 +128,21 @@ case "${1:-up}" in
   snapshot)
     TARGET="${2:?usage: $0 snapshot DIR}"
     [ ! -e "$TARGET" ] || { echo "$TARGET already exists" >&2; exit 1; }
-    # Stop the node so the copy is consistent; `up` starts it again.
+    # Stop the node so the copy is consistent, and wait for the process to be
+    # gone, not just its RPC: the indexes are flushed after the RPC server
+    # stops, and a copy taken in between starts with "best block of txindex
+    # not found". `up` starts the node again.
+    PIDFILE="$DATADIR/signet/bitcoind.pid"
+    NODE_PID=$(cat "$PIDFILE" 2>/dev/null || true)
     cli stop >/dev/null 2>&1 || true
-    for _ in $(seq 1 30); do cli getblockcount >/dev/null 2>&1 || break; sleep 1; done
+    for _ in $(seq 1 60); do
+      if [ -n "$NODE_PID" ]; then kill -0 "$NODE_PID" 2>/dev/null || break; else cli getblockcount >/dev/null 2>&1 || break; fi
+      sleep 1
+    done
+    [ -z "$NODE_PID" ] || ! kill -0 "$NODE_PID" 2>/dev/null || { echo "node $NODE_PID did not exit" >&2; exit 1; }
     mkdir -p "$TARGET"
     cp -R "$DATADIR"/. "$TARGET"/
-    rm -f "$TARGET"/signet/*.log "$TARGET"/signet/mempool.dat "$TARGET"/signet/.lock "$TARGET"/signet/.cookie
+    rm -f "$TARGET"/signet/*.log "$TARGET"/signet/mempool.dat "$TARGET"/signet/.lock "$TARGET"/signet/.cookie "$TARGET"/signet/bitcoind.pid
     echo "snapshot written to $TARGET ($(du -sh "$TARGET" | cut -f1)); start the node again with: $0 up"
     ;;
   *)
