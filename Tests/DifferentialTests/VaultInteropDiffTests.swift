@@ -34,9 +34,6 @@ struct VaultInteropDiffTests {
     @Test("Core co-signs a 2-of-3 script-path spend and it confirms")
     func coreCosignsScriptPathSpend() async throws {
         func trace(_ step: String) { FileHandle.standardError.write(Data("interop: \(step)\n".utf8)) }
-        let params = NetworkParams.customSignet(challenge: BitcoinCLI.challenge,
-                                                defaultPort: BitcoinCLI.p2pPort)
-
         // 1. One cosigner is Core's; two are ours.
         let core = try CoreSigner(wallet: "interop")
         var ourMasters: [HDKey] = []

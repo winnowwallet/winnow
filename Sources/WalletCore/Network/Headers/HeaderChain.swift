@@ -227,11 +227,11 @@ public actor HeaderChain {
         return work
     }
 
-    /// Core's CalculateNextWorkRequired for the two supported networks.
+    /// Core's CalculateNextWorkRequired, including regtest's fixed difficulty.
     /// nil means a checkpoint omitted the history needed for this adjustment.
     static func expectedBits(height: UInt32, previous: BlockHeader,
                              periodFirst: BlockHeader?, params: NetworkParams) throws -> UInt32? {
-        guard height % params.difficultyAdjustmentInterval == 0 else { return previous.bits }
+        guard !params.noRetargeting, height % params.difficultyAdjustmentInterval == 0 else { return previous.bits }
         guard let periodFirst else { return nil }
         guard let target = UInt256.target(compact: previous.bits) else {
             throw HeaderChainError.invalidTarget(height: height - 1)
@@ -473,7 +473,8 @@ public actor HeaderChain {
         for header in headers { data.append(header.serialized) }
         // .atomic writes to a temp file then renames — safe mid-write crash.
         do {
-            try data.write(to: storageURL, options: .atomic)
+            try data.write(to: storageURL,
+                           options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         } catch {
             throw HeaderChainError.storageUnavailable(
                 "could not save the header file: \(error.localizedDescription)")

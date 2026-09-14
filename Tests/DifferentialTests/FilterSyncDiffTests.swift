@@ -65,9 +65,9 @@ struct FilterSyncDiffTests {
         // A fresh wallet created a few blocks below the tip: the scan must
         // run forward over those blocks without error and land at the tip.
         let creationHeight = tip - 5
-        let wallet = try await Wallet.create(network: .signet, keyStore: InMemoryKeyStore(),
-                                             storageURL: tempFileURL("wallet.json"),
-                                             creationHeight: creationHeight)
+        let wallet = try Wallet.create(network: .signet, keyStore: InMemoryKeyStore(),
+                                       storageURL: tempFileURL("wallet.json"),
+                                       creationHeight: creationHeight)
         let sync = try FilterSync(pool: pool, chain: synced.chain, startHeight: creationHeight,
                                   storageURL: tempFileURL("filters.json"),
                                   requiredCheckpointPeers: 1)
