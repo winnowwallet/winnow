@@ -804,11 +804,16 @@ public actor TxBroadcaster {
 
     private func serve(_ payload: InventoryPayload, to peer: PeerConnection) async {
         let key = peer.endpoint.description
+        // One transaction per request, and one serving per peer: a getdata
+        // that names a txid 50,000 times, or asks again for what it already
+        // holds, must not multiply the bytes and events it costs us.
+        var seen = Set<Data>()
         for vector in payload.vectors where vector.type.baseType == .tx {
-            guard pending[vector.hash] != nil else { continue }
+            guard pending[vector.hash] != nil, seen.insert(vector.hash).inserted else { continue }
             var relay = pending[vector.hash]?.peers[key] ?? PeerRelay(state: .announced,
                                                                       announcements: 0,
                                                                       lastAnnouncedAt: now())
+            guard relay.state != .served else { continue }
             relay.state = .requested
             pending[vector.hash]?.peers[key] = relay
             emit(.requested(txid: vector.hash, peer: peer.endpoint))
