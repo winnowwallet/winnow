@@ -215,6 +215,7 @@ private struct MnemonicBackupView: View {
     let onFinish: () -> Void
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @State private var capture = ScreenCaptureMonitor()
 
     private var words: [String] { mnemonic.split(separator: " ").map(String.init) }
 
@@ -227,14 +228,18 @@ private struct MnemonicBackupView: View {
                         .foregroundStyle(.secondary)
                 }
                 Section {
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                        ForEach(Array(words.enumerated()), id: \.offset) { index, word in
-                            Text("\(index + 1). \(word)")
-                                .font(.system(.body, design: .monospaced))
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                    if capture.isCaptured {
+                        PhraseHiddenWhileCaptured()
+                    } else {
+                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                            ForEach(Array(words.enumerated()), id: \.offset) { index, word in
+                                Text("\(index + 1). \(word)")
+                                    .font(.system(.body, design: .monospaced))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
                         }
+                        .privacySensitive()
                     }
-                    .privacySensitive()
                 }
                 Section {
                     RecoveryPhraseCopyButton(

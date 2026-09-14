@@ -15,8 +15,9 @@ the interpretation written in the reports.
 [The independent review of 2026-09-14](independent-review-2026-09-14.md) is
 the first pass by a reviewer that wrote none of the code — an agent engaged by
 the owner, not yet the uninvolved human auditor the gate report names as open.
-Its findings are tracked as GitHub issues #98–#130 and fixed in bounded pull
-requests. [The gate report](gate-report.md) records the owner's mainnet
+Its findings are tracked as GitHub issues #98–#130 and fixed on one branch
+(winnow#137, with the census side in census#15); the review's tracker table
+records what was fixed, accepted, or left to the owner. [The gate report](gate-report.md) records the owner's mainnet
 decision of 2026-09-14 above the August record it revises.
 
 These are dated records. Preserve their tested revisions and provenance when
