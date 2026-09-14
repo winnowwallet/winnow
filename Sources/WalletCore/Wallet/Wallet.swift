@@ -29,6 +29,9 @@ public enum WalletError: Error, Equatable, LocalizedError {
     /// Legacy signing metadata must not be silently discarded by JSONDecoder:
     /// the resulting coin would look ordinary but could not be spent here.
     case unsupportedWalletData
+    /// The persisted wallet file is larger than any state this wallet writes,
+    /// so it is refused before it is read rather than after it is held.
+    case storageTooLarge(maxBytes: Int)
 
     public var errorDescription: String? {
         switch self {
@@ -62,6 +65,8 @@ public enum WalletError: Error, Equatable, LocalizedError {
             This wallet contains unsupported signing data and cannot be opened here. \
             Keep the original wallet file and use compatible wallet software to recover these coins.
             """
+        case let .storageTooLarge(maxBytes):
+            "The wallet file is larger than the \(maxBytes / 1_048_576) MB this wallet can hold and was not read."
         }
     }
 }
@@ -667,12 +672,20 @@ public actor Wallet {
         return wallet
     }
 
+    /// The most a persisted wallet file may weigh. A busy wallet's history with
+    /// raw transactions runs to single-digit megabytes; this is measured before
+    /// the file is read so a damaged or planted file cannot be held first.
+    public static let maximumStateBytes = 64 * 1_024 * 1_024
+
     /// Re-opens a wallet from its persisted JSON state.
     public static func open(storageURL: URL, keyStore: any KeyStore) throws -> Wallet {
+        let size = try FileManager.default.attributesOfItem(atPath: storageURL.path)[.size] as? Int ?? Int.max
+        guard size <= maximumStateBytes else { throw WalletError.storageTooLarge(maxBytes: maximumStateBytes) }
         let data = try Data(contentsOf: storageURL)
+        guard data.count <= maximumStateBytes else { throw WalletError.storageTooLarge(maxBytes: maximumStateBytes) }
         let state = try JSONDecoder().decode(WalletState.self, from: data)
         guard let network = BitcoinNetwork(rawValue: state.network) else {
-            throw WalletError.invalidBundle("unknown network \(state.network)")
+            throw WalletError.invalidBundle("unknown network \(ImportBundle.excerpt(state.network))")
         }
         let descriptor = try Descriptor(state.descriptor)
         _ = try Self.origin(of: descriptor) // validates the wallet descriptor shape
