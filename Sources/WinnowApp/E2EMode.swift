@@ -296,6 +296,7 @@ struct E2EMode {
     var networkParams: NetworkParams? { unavailable() }
     var storageDirectoryName: String { unavailable() }
     var censusURL: URL? { unavailable() }
+    var censusTrustedKeys: [Curve25519.Signing.PublicKey]? { unavailable() }
     var torDriver: (any TorDriving)? { unavailable() }
 
     func wipeIfRequested() { unavailable() }
