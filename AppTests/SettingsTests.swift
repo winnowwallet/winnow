@@ -148,6 +148,18 @@ final class NetworkScopedSettingsTests: XCTestCase {
                        "https://blockstream.info")
     }
 
+    /// The sender lookup sends a txid and the device address to the custom
+    /// host; a plaintext entry would leak both and let the path forge the
+    /// answer, so it falls back to the preset exactly like an unparsable one.
+    func testCustomExplorerRequiresHTTPS() {
+        XCTAssertEqual(AppModel.explorerBaseURL(provider: .custom, customURLString: "http://esplora.example",
+                                                network: .mainnet).absoluteString,
+                       "https://blockstream.info")
+        XCTAssertEqual(AppModel.explorerBaseURL(provider: .custom, customURLString: "HTTPS://Esplora.example/api",
+                                                network: .mainnet).absoluteString,
+                       "HTTPS://Esplora.example/api")
+    }
+
     func testExplorerProviderKeyIsPerNetwork() {
         XCTAssertNotEqual(Key.explorerProvider(.signet), Key.explorerProvider(.mainnet))
     }
