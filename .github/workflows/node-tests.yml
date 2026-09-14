@@ -141,19 +141,33 @@ jobs:
           retention-days: 14
 
   ui:
-    name: ui-${{ matrix.device }}
+    name: ui-${{ matrix.device }}-${{ matrix.story }}
     strategy:
       fail-fast: false
-      # Pull requests run the iPhone journey on the self-hosted VMs only. The
-      # iPad journey — the longest job, on hosted Apple silicon — runs for
-      # main pushes, the nightly and confirmed manual runs. The Intel VM's
-      # iPad compositor aborts in CA::OGL::push_surface during lifecycle
-      # tests, which is why iPad never runs there; iPhone and package lanes
-      # retain Intel coverage.
+      # The journeys are four stories (UITests/WinnowAppUITests.swift), one
+      # job each, so they run side by side on the VMs instead of one after
+      # another in a single hour-long job. Pull requests run the iPhone
+      # stories on the self-hosted VMs only. The iPad stories — on hosted
+      # Apple silicon — run for main pushes, the nightly and confirmed manual
+      # runs. The Intel VM's iPad compositor aborts in CA::OGL::push_surface
+      # during lifecycle tests, which is why iPad never runs there; iPhone
+      # and package lanes retain Intel coverage.
       matrix: >-
         ${{ fromJSON(github.event_name == 'pull_request'
-          && '{"include":[{"device":"iPhone","runner":["self-hosted","macOS","btc-swift","node-e2e"]}]}'
-          || '{"include":[{"device":"iPhone","runner":["self-hosted","macOS","btc-swift","node-e2e"]},{"device":"iPad","runner":"macos-latest"}]}') }}
+          && '{"include":[
+                {"device":"iPhone","story":"first-wallet","class":"StoryFirstWallet","runner":["self-hosted","macOS","btc-swift","node-e2e"]},
+                {"device":"iPhone","story":"paying-people","class":"StoryPayingPeople","runner":["self-hosted","macOS","btc-swift","node-e2e"]},
+                {"device":"iPhone","story":"shared-savings","class":"StorySharedSavings","runner":["self-hosted","macOS","btc-swift","node-e2e"]},
+                {"device":"iPhone","story":"devices-network","class":"StoryDevicesAndNetwork","runner":["self-hosted","macOS","btc-swift","node-e2e"]}]}'
+          || '{"include":[
+                {"device":"iPhone","story":"first-wallet","class":"StoryFirstWallet","runner":["self-hosted","macOS","btc-swift","node-e2e"]},
+                {"device":"iPhone","story":"paying-people","class":"StoryPayingPeople","runner":["self-hosted","macOS","btc-swift","node-e2e"]},
+                {"device":"iPhone","story":"shared-savings","class":"StorySharedSavings","runner":["self-hosted","macOS","btc-swift","node-e2e"]},
+                {"device":"iPhone","story":"devices-network","class":"StoryDevicesAndNetwork","runner":["self-hosted","macOS","btc-swift","node-e2e"]},
+                {"device":"iPad","story":"first-wallet","class":"StoryFirstWallet","runner":"macos-latest"},
+                {"device":"iPad","story":"paying-people","class":"StoryPayingPeople","runner":"macos-latest"},
+                {"device":"iPad","story":"shared-savings","class":"StorySharedSavings","runner":"macos-latest"},
+                {"device":"iPad","story":"devices-network","class":"StoryDevicesAndNetwork","runner":"macos-latest"}]}') }}
     needs: changes
     if: >-
       needs.changes.outputs.required == 'true'
@@ -256,14 +270,22 @@ jobs:
             echo "WINNOW_SCREENSHOT_DIR=$RESULTS_DIR/node-screenshots"
           } > "$HOME/.winnow-node.env"
 
-      - name: App UI tests
+      # A self-hosted runner keeps its build products between runs, so the
+      # app and the test runner rebuild incrementally instead of from scratch
+      # (two to three minutes per job). Hosted runners start empty anyway.
+      - name: Reuse the runner's build products
+        if: matrix.device == 'iPhone'
+        run: echo "DERIVED_DATA=$HOME/Library/Caches/winnow-node-app" >> "$GITHUB_ENV"
+
+      - name: App UI tests (${{ matrix.story }})
         run: |
           set -o pipefail
           xcodebuild test -project WinnowApp.xcodeproj -scheme WinnowApp \
             -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
-            -derivedDataPath "$RUNNER_TEMP/winnow-node-app" \
+            -derivedDataPath "${DERIVED_DATA:-$RUNNER_TEMP/winnow-node-app}" \
             -resultBundlePath "$RESULTS_DIR/NodeUI.xcresult" \
-            -only-testing:WinnowAppUITests \
+            -only-testing:WinnowAppUITests/HostProcessProbeTests \
+            -only-testing:WinnowAppUITests/${{ matrix.class }} \
             -skipPackagePluginValidation -skipMacroValidation \
             2>&1 | tee "$RESULTS_DIR/node-ui.log"
 
@@ -285,7 +307,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: node-ui-${{ matrix.device }}-${{ github.run_id }}
+          name: node-ui-${{ matrix.device }}-${{ matrix.story }}-${{ github.run_id }}
           path: |
             ${{ env.RESULTS_DIR }}/node-ui.log
             ${{ env.RESULTS_DIR }}/NodeUI.xcresult

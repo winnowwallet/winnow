@@ -26,7 +26,7 @@ finds the files they name.
 | Minimum package platforms | iOS 17, macOS 14 |
 | Baseline commands | `swift test`; `scripts/ci-app-tests` (`WinnowAppTests` on a simulator); `swiftlint lint` |
 | Baseline result | The package suite and the app suite pass at this revision; the counts are the dated rows of 2026-09-14 in the findings register. Lint clean. |
-| CI at this revision | Recorded on winnow#137: `package`, `package-tests-intel`, `differential`, `complexity`, `app-build`, `ui-iPhone` |
+| CI at this revision | Recorded on winnow#137: `package`, `package-tests-intel`, `differential`, `complexity`, `app-build`, and the four `ui-iPhone-<story>` jobs |
 
 Suites gated by `WINNOW_DIFF` run on the node lane against a local Bitcoin
 Core; the iPad journeys run on `main` and not on the pull-request path (a

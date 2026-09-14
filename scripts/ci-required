@@ -14,7 +14,9 @@ PATTERNS = {
 }
 JOBS = {
     "ci": {"complexity", "package", "app-build", "package-tests-intel"},
-    "node-tests": {"ui-iPhone", "ui-iPad", "differential"},
+    "node-tests": {"differential"}
+        | {f"ui-{device}-{story}" for device in ("iPhone", "iPad")
+           for story in ("first-wallet", "paying-people", "shared-savings", "devices-network")},
 }
 
 

@@ -75,7 +75,10 @@ extension XCTestCase {
             return element.isHittable && element.frame.minY >= top && element.frame.maxY <= bottom
         }
         for _ in 0 ... maxSwipes {
-            _ = element.waitForExistence(timeout: 2)
+            // Long enough for a row to materialise after a swipe animates,
+            // short enough that a row several swipes down does not cost
+            // seconds of waiting per swipe.
+            _ = element.waitForExistence(timeout: 0.75)
             if ready() { return true }
             // iPad forms are centered sheets. A drag at 30% of the whole
             // display can land on the sheet's navigation bar instead of its
