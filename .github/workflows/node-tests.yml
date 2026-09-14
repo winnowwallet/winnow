@@ -201,7 +201,14 @@ jobs:
           echo "RESULTS_DIR=$RESULTS_DIR" >> "$GITHUB_ENV"
           echo "WINNOW_DATADIR=$RESULTS_DIR/winnow-signet-fixture" >> "$GITHUB_ENV"
 
+      # A self-hosted runner keeps a snapshot of the fixture with the UI
+      # stories' "bank" wallet already mined to maturity
+      # (scripts/signet-fixture snapshot); starting from it saves each story
+      # the six minutes of mining 101 blocks through the simulator's
+      # host-process bridge. A hosted runner has none and mines.
       - name: Start this run's isolated fixture
+        env:
+          WINNOW_FIXTURE_TEMPLATE: ${{ matrix.device == 'iPhone' && '/Users/macdev/Library/Caches/winnow-signet-template' || '' }}
         run: |
           test -d /Applications/Xcode.app/Contents/Developer
           command -v bitcoind
@@ -216,7 +223,7 @@ jobs:
           done
           scripts/signet-fixture up
           bitcoin-cli -datadir="$WINNOW_DATADIR" -rpcport="$WINNOW_RPC_PORT" getblockchaininfo \
-            | python3 -c 'import json,sys; info=json.load(sys.stdin); assert info["chain"] == "signet" and info["blocks"] == 0, "expected a fresh signet fixture"'
+            | python3 -c 'import json,sys; info=json.load(sys.stdin); assert info["chain"] == "signet", "expected the signet fixture"; print("fixture at height", info["blocks"])'
 
       - name: Python with standard TOML support
         run: |

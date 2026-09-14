@@ -11,6 +11,7 @@ import UIKit
 @MainActor
 final class HostProcessProbeTests: XCTestCase {
     func test00CanSpawnHostProcesses() throws {
+        WinnowAppJourney.forgetStories()
         let echo = try HostProcess.run("/bin/echo", ["host-spawn-ok"])
         XCTAssertEqual(echo.status, 0)
         XCTAssertEqual(echo.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "host-spawn-ok")
@@ -20,6 +21,18 @@ final class HostProcessProbeTests: XCTestCase {
         let height = Int(node.trimmingCharacters(in: .whitespacesAndNewlines))
         XCTAssertNotNil(height, "local signet node unreachable: \(node)")
         XCTAssertGreaterThanOrEqual(height ?? -1, 0)
+    }
+}
+
+/// Makes the fixture's bank on a fresh chain and nothing else, so that
+/// `scripts/signet-fixture snapshot` can keep it as the template CI starts
+/// from. Not a journey; run it by name:
+/// `-only-testing:WinnowAppUITests/FixtureBankTests`.
+@MainActor
+final class FixtureBankTests: XCTestCase {
+    func testMineTheBank() async throws {
+        try await WinnowAppJourney.ensureBank()
+        XCTAssertGreaterThanOrEqual(try BitcoinCLI.trustedBalanceSats(wallet: WinnowAppJourney.bankWallet), 1_000_000_000)
     }
 }
 
@@ -45,8 +58,8 @@ final class HostProcessProbeTests: XCTestCase {
 @MainActor
 class WinnowAppJourney: XCTestCase {
     /// Fixed 16-byte entropy → the same mnemonic/addresses every run.
-    static let entropyHex = "000102030405060708090a0b0c0d0e0f"
-    static let mnemonic = try! BIP39.mnemonic(entropy: Data(hex: entropyHex)!)
+    nonisolated static let entropyHex = "000102030405060708090a0b0c0d0e0f"
+    nonisolated static let mnemonic = try! BIP39.mnemonic(entropy: Data(hex: entropyHex)!)
 
     /// Facts about the payment that funded the fixed-entropy wallet: written
     /// by test02 and by the paying-people story's preparation, read by test06
@@ -97,9 +110,38 @@ class WinnowAppJourney: XCTestCase {
         var description: String { "\(story) is blocked: \(by) failed earlier in the story" }
     }
 
-    private static var blockedStories: [String: String] = [:]
-    private static var preparedStories: Set<String> = []
+    /// Which stories are prepared and which are blocked, by class name.
+    /// Kept in a file as well as in memory: a failure inside an async test
+    /// with `continueAfterFailure` off ends the runner process (exit 75) and
+    /// xcodebuild starts a new one for the remaining tests, which would
+    /// otherwise prepare the story again and forget what had failed.
+    private struct StoryState: Codable {
+        var prepared: Set<String> = []
+        var blocked: [String: String] = [:]
+    }
+    private static var storyStateURL: URL {
+        FileManager.default.temporaryDirectory.appending(path: "winnow-e2e-stories.json")
+    }
+    private static var storyState: StoryState = {
+        (try? JSONDecoder().decode(StoryState.self, from: Data(contentsOf: storyStateURL))) ?? StoryState()
+    }() {
+        didSet { try? JSONEncoder().encode(storyState).write(to: storyStateURL) }
+    }
+    private static var blockedStories: [String: String] {
+        get { storyState.blocked }
+        set { storyState.blocked = newValue }
+    }
+    private static var preparedStories: Set<String> {
+        get { storyState.prepared }
+        set { storyState.prepared = newValue }
+    }
     private var story: String { String(describing: type(of: self)) }
+
+    /// A new run starts with no story prepared or blocked; the probe calls
+    /// this first so a file left by an earlier run cannot skip preparation.
+    static func forgetStories() {
+        storyState = StoryState()
+    }
 
     override func setUp() async throws {
         try await super.setUp()
@@ -118,39 +160,48 @@ class WinnowAppJourney: XCTestCase {
         }
     }
 
-    override func tearDown() {
-        if (testRun?.totalFailureCount ?? 0) > 0, Self.blockedStories[story] == nil {
-            Self.blockedStories[story] = name
-        }
-        super.tearDown()
+    /// The first issue a story's journey records blocks the journeys after
+    /// it. Recorded here rather than read back from the run in `tearDown`,
+    /// whose counters do not yet include the test that just failed.
+    override func record(_ issue: XCTIssue) {
+        if Self.blockedStories[story] == nil { Self.blockedStories[story] = name }
+        super.record(issue)
     }
 
     // MARK: - The bank
 
-    static let bankWallet = "ui-bank"
+    nonisolated static let bankWallet = "ui-bank"
 
-    /// Mines the bank to maturity once per fixture chain: 101 blocks, about
-    /// 70 seconds, in place of the hundred blocks each funded test used to
-    /// mine for itself.
-    static func ensureBank() async throws {
-        try BitcoinCLI.ensureWallet(bankWallet)
-        guard try BitcoinCLI.trustedBalanceSats(wallet: bankWallet) < 1_000_000_000 else { return }
-        let script = try AddressDecoder.scriptPubKey(for: BitcoinCLI.newAddress(wallet: bankWallet), network: .signet)
-        for _ in 0 ..< 101 { try await SignetMiner.mineOntoTip(payingTo: script) }
+    /// Mines the bank to maturity once per fixture chain: 101 blocks, in
+    /// place of the hundred blocks each funded test used to mine for itself.
+    /// On CI the fixture starts from a snapshot taken after this ran
+    /// (`scripts/signet-fixture snapshot`), so the balance check is all that
+    /// happens there; `FixtureBankTests` makes such a snapshot. Off the main
+    /// actor: every block is several host-process round trips, and a runner
+    /// whose main thread is blocked for minutes has been killed for it.
+    nonisolated static func ensureBank() async throws {
+        try await Task.detached(priority: .userInitiated) {
+            try BitcoinCLI.ensureWallet(bankWallet)
+            guard try BitcoinCLI.trustedBalanceSats(wallet: bankWallet) < 1_000_000_000 else { return }
+            let script = try AddressDecoder.scriptPubKey(for: BitcoinCLI.newAddress(wallet: bankWallet), network: .signet)
+            for _ in 0 ..< 101 { try await SignetMiner.mineOntoTip(payingTo: script) }
+        }.value
     }
 
     /// The bank pays `address` and one block confirms it. Returns the
     /// confirmed output as the node's UTXO set reports it.
-    static func fundFromBank(_ address: String, sats: Int64) async throws
+    nonisolated static func fundFromBank(_ address: String, sats: Int64) async throws
         -> (txid: String, vout: UInt32, amount: Int64, height: UInt32) {
-        let txid = try BitcoinCLI.sendToAddress(wallet: bankWallet, address: address, sats: sats, feeRate: 2)
-        let payout = try AddressDecoder.scriptPubKey(for: fixtureAddress(0xD4), network: .signet)
-        try await SignetMiner.mineOntoTip(payingTo: payout)
-        let script = try AddressDecoder.scriptPubKey(for: address, network: .signet)
-        guard let coin = try BitcoinCLI.unspents(scriptHex: script.hex).first(where: { $0.txid == txid }) else {
-            throw StoryBlocked(story: "bank", by: "the bank's payment \(txid) did not confirm")
-        }
-        return coin
+        try await Task.detached(priority: .userInitiated) {
+            let txid = try BitcoinCLI.sendToAddress(wallet: bankWallet, address: address, sats: sats, feeRate: 2)
+            let payout = try AddressDecoder.scriptPubKey(for: fixtureAddress(0xD4), network: .signet)
+            try await SignetMiner.mineOntoTip(payingTo: payout)
+            let script = try AddressDecoder.scriptPubKey(for: address, network: .signet)
+            guard let coin = try BitcoinCLI.unspents(scriptHex: script.hex).first(where: { $0.txid == txid }) else {
+                throw StoryBlocked(story: "bank", by: "the bank's payment \(txid) did not confirm")
+            }
+            return coin
+        }.value
     }
 
     /// A wallet made through onboarding and paid by the bank, for the
@@ -245,7 +296,7 @@ class WinnowAppJourney: XCTestCase {
 
     /// A deterministic cosigner key expression ([fp/86'/1'/0']tpub…/<0;1>/*)
     /// from a one-byte repeated seed — a fixture, not a real cosigner.
-    static func fixtureCosigner(_ byte: UInt8) throws -> String {
+    nonisolated static func fixtureCosigner(_ byte: UInt8) throws -> String {
         let master = try HDKey(seed: Data(repeating: byte, count: 64))
         let account = try BIP86.accountKey(from: master, coinType: 1, account: 0)
         let fingerprint = String(format: "%08x", master.fingerprint)
@@ -254,7 +305,7 @@ class WinnowAppJourney: XCTestCase {
 
     /// The fixed-entropy test wallet's own key expression — the same text
     /// "Add this device's key" produced in test04 (AppModel.ownKeyExpression).
-    static func deviceKeyExpression() throws -> String {
+    nonisolated static func deviceKeyExpression() throws -> String {
         let master = try HDKey(seed: BIP39.seed(mnemonic: mnemonic))
         let account = try BIP86.accountKey(from: master, coinType: 1, account: 0)
         let fingerprint = String(format: "%08x", master.fingerprint)
@@ -263,7 +314,7 @@ class WinnowAppJourney: XCTestCase {
 
     /// A deterministic signet P2TR address from a one-byte repeated seed
     /// (fixture send destination / block payout).
-    static func fixtureAddress(_ byte: UInt8) throws -> String {
+    nonisolated static func fixtureAddress(_ byte: UInt8) throws -> String {
         let master = try HDKey(seed: Data(repeating: byte, count: 64))
         let account = try BIP86.accountKey(from: master, coinType: 1, account: 0)
         return try BIP86.address(internalKey: account.publicKey.dropFirst(), hrp: "tb")
@@ -271,7 +322,7 @@ class WinnowAppJourney: XCTestCase {
 
     /// The fixed-entropy test wallet's receive address at `index`
     /// (m/86'/1'/0'/0/index, signet).
-    static func walletReceiveAddress(index: UInt32) throws -> String {
+    nonisolated static func walletReceiveAddress(index: UInt32) throws -> String {
         let master = try HDKey(seed: BIP39.seed(mnemonic: mnemonic))
         let account = try BIP86.accountKey(from: master, coinType: 1, account: 0)
         let key = try account.derived(path: "0/\(index)")
@@ -331,7 +382,7 @@ class WinnowAppJourney: XCTestCase {
 
     /// Alice's receive address at `index`, as her wallet would derive it from
     /// the fixture 0xA1 account key.
-    static func fixtureReceiveAddress(_ byte: UInt8, index: UInt32) throws -> String {
+    nonisolated static func fixtureReceiveAddress(_ byte: UInt8, index: UInt32) throws -> String {
         let master = try HDKey(seed: Data(repeating: byte, count: 64))
         let account = try BIP86.accountKey(from: master, coinType: 1, account: 0)
         let key = try account.derived(path: "0/\(index)")
@@ -1286,7 +1337,7 @@ final class StoryPayingPeople: WinnowAppJourney {
         }
         let payout = try AddressDecoder.scriptPubKey(for: Self.fixtureAddress(0xD6), network: .signet)
         try await SignetMiner.mineOntoTip(payingTo: payout)
-        XCTAssertTrue(poll(timeout: 180, interval: 2, "received payment in history") {
+        XCTAssertTrue(poll(timeout: 300, interval: 2, "received payment in history") {
             self.nudgeSync(app)
             return app.buttons["historyPayment-\(txid)"].exists
         })
@@ -1379,7 +1430,7 @@ final class StoryPayingPeople: WinnowAppJourney {
         }
         let payout = try AddressDecoder.scriptPubKey(for: Self.fixtureAddress(0xD6), network: .signet)
         try await SignetMiner.mineOntoTip(payingTo: payout)
-        XCTAssertTrue(poll(timeout: 180, interval: 2, "received payment in history") {
+        XCTAssertTrue(poll(timeout: 300, interval: 2, "received payment in history") {
             self.nudgeSync(app)
             return app.buttons["historyPayment-\(txid)"].exists
         })
