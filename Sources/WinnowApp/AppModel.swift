@@ -2528,6 +2528,14 @@ final class AppModel {
                              customURLString: esploraURLString, network: network)
     }
 
+    /// Whether a URL host names this device: the one place a plaintext
+    /// explorer cannot be observed or forged in transit.
+    static func isLoopback(_ host: String) -> Bool {
+        let lowered = host.lowercased()
+        return lowered == "localhost" || lowered == "::1" || lowered == "[::1]"
+            || lowered.hasPrefix("127.")
+    }
+
     /// Pure resolution, so the per-network preset table is testable without
     /// an app model. blockstream.info serves no signet explorer, so the
     /// blockstream preset resolves to mempool.space's signet site there —
@@ -2537,11 +2545,13 @@ final class AppModel {
                                 customURLString: String,
                                 network: BitcoinNetwork) -> URL {
         if provider == .custom {
-            // HTTPS only: the sender lookup sends a txid and the device IP to
-            // this host, and a plaintext answer could be forged on the path.
-            if let url = URL(string: customURLString),
-               url.scheme?.lowercased() == "https",
-               url.host != nil {
+            // HTTPS for any host off this device: the sender lookup sends a
+            // txid and the device IP to this host, and a plaintext answer
+            // could be forged on the path. Loopback has no path, so a local
+            // explorer — or the UI journeys' stub — may stay plain.
+            if let url = URL(string: customURLString), let host = url.host,
+               url.scheme?.lowercased() == "https"
+                || (url.scheme?.lowercased() == "http" && Self.isLoopback(host)) {
                 return url
             }
             return explorerBaseURL(provider: .blockstream, customURLString: "", network: network)
