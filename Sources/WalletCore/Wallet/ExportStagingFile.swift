@@ -44,6 +44,17 @@ public final class ExportStagingFile: @unchecked Sendable {
         self.url = nil
     }
 
+    /// Removes every staging directory a previous process left behind. A
+    /// crash with the export sheet open skips `deinit`, and a seed-bearing
+    /// file must not wait for the system to purge `tmp` on its own schedule.
+    public static func sweep(root: URL? = nil, fileManager: FileManager = .default) {
+        let root = root ?? fileManager.temporaryDirectory
+        guard let names = try? fileManager.contentsOfDirectory(atPath: root.path) else { return }
+        for name in names where name.hasPrefix("winnow-export-") {
+            try? fileManager.removeItem(at: root.appendingPathComponent(name))
+        }
+    }
+
     static func safeFileName(_ suggested: String) -> String {
         let trimmed = suggested.split(separator: "/").last.map(String.init) ?? ""
         return trimmed.isEmpty ? "wallet.json" : trimmed
@@ -54,9 +65,12 @@ public final class ExportStagingFile: @unchecked Sendable {
         values.isExcludedFromBackup = true
         var mutable = url
         try mutable.setResourceValues(values)
+        // `.complete`: the file may carry the recovery phrase, and the
+        // Keychain item it copies is readable only while unlocked. The share
+        // sheet runs in the foreground, so the stricter class costs nothing.
         #if os(iOS)
         try fileManager.setAttributes(
-            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+            [.protectionKey: FileProtectionType.complete],
             ofItemAtPath: url.path
         )
         #endif
