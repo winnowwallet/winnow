@@ -94,10 +94,12 @@ struct ConnectionBoundsTests {
         let node = LoopbackNode(params: params, answersPings: false)
         try await node.start()
         defer { Task { await node.stop() } }
+        // A deadline several pings wide, as in production: a loaded test
+        // host must not turn one late pong into a false disconnect.
         let peer = try await connected(to: node, pingInterval: .milliseconds(100),
-                                       readIdleTimeout: .milliseconds(250))
+                                       readIdleTimeout: .seconds(2))
         #expect(await peer.isConnected)
-        try await Task.sleep(for: .seconds(1))
+        try await Task.sleep(for: .seconds(3.5))
         #expect(await peer.isConnected == false)
     }
 
@@ -107,9 +109,9 @@ struct ConnectionBoundsTests {
         try await node.start()
         defer { Task { await node.stop() } }
         let peer = try await connected(to: node, pingInterval: .milliseconds(100),
-                                       readIdleTimeout: .milliseconds(250))
+                                       readIdleTimeout: .seconds(2))
         defer { Task { await peer.disconnect() } }
-        try await Task.sleep(for: .seconds(1))
+        try await Task.sleep(for: .seconds(3))
         #expect(await peer.isConnected)
     }
 }
