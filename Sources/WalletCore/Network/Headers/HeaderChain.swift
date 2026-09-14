@@ -7,6 +7,10 @@ public enum HeaderChainError: LocalizedError, Equatable {
     case insufficientProofOfWork(height: UInt32)
     /// The header's target differs from the network's required difficulty.
     case unexpectedDifficulty(height: UInt32)
+    /// The header claims a time more than two hours ahead of this device's
+    /// clock — Core's rule, and the one that stops a fabricated chain from
+    /// easing its own difficulty by pretending weeks have passed.
+    case timestampTooFarInFuture(height: UInt32)
     case reorgWithoutMoreWork
     case storageCorrupt(String)
     case storageUnavailable(String)
@@ -31,6 +35,8 @@ public enum HeaderChainError: LocalizedError, Equatable {
             "A peer sent a header without enough proof of work at block \(height)."
         case let .unexpectedDifficulty(height):
             "A peer sent the wrong proof-of-work difficulty at block \(height)."
+        case let .timestampTooFarInFuture(height):
+            "A peer sent a block header dated too far in the future at block \(height)."
         case .reorgWithoutMoreWork:
             "A peer offered an older or weaker Bitcoin chain."
         case let .storageCorrupt(reason):
@@ -53,18 +59,31 @@ public enum HeaderChainError: LocalizedError, Equatable {
 ///   2,016 blocks on mainnet and signet. The same rule applies during sync,
 ///   a reorg, and loading saved headers.
 ///
+/// - a timestamp no more than two hours ahead of the device clock (Core's
+///   future-drift rule), so a chain cannot ease its own difficulty by
+///   claiming that weeks have passed.
+///
 /// What is NOT validated (documented deviation from full validation):
 /// - the first adjustment after a mid-period checkpoint, when the preceding
-///   period's first header is unavailable. From the 900,000 checkpoint this
-///   skips 901,152; adjustments from 903,168 onward are verified,
-/// - timestamps (no median-time-past / future-drift rules),
+///   period's first header is unavailable, is verified only as a bound:
+///   Core clamps every retarget to at most four times easier, so a target
+///   past 4× the previous one is refused, but the exact value is not known.
+///   From the 900,000 checkpoint this applies to 901,152; adjustments from
+///   903,168 onward are verified exactly. A checkpoint on a period boundary
+///   removes the gap entirely,
+/// - median-time-past (no rule against a timestamp earlier than recent ones),
 /// - anything below the header (merkle root, signet block signatures).
 /// Fork choice is cumulative-work; competing branches replace ours only with
 /// strictly more work.
 public actor HeaderChain {
     public static let maxHeadersPerRequest = 2_000
+    /// How far ahead of the device clock a header's time may be (Core's
+    /// MAX_FUTURE_BLOCK_TIME).
+    public static let maximumFutureDrift: UInt32 = 2 * 60 * 60
     public let params: NetworkParams
     private let storageURL: URL?
+    /// The device clock in seconds, injectable so a test can move it.
+    private let now: @Sendable () -> UInt32
 
     /// Main chain. Element 0 is at `baseHeight`; index + baseHeight = height.
     private var headers: [BlockHeader]
@@ -117,9 +136,11 @@ public actor HeaderChain {
         }
     }
 
-    public init(params: NetworkParams, storageURL: URL? = nil, start: Start = .genesis) throws {
+    public init(params: NetworkParams, storageURL: URL? = nil, start: Start = .genesis,
+                now: @escaping @Sendable () -> UInt32 = { UInt32(clamping: Int(Date().timeIntervalSince1970)) }) throws {
         self.params = params
         self.storageURL = storageURL
+        self.now = now
         // A network without a checkpoint (signet, whose whole chain is small)
         // starts at genesis whatever the setting says.
         let checkpoint = start == .checkpoint ? params.checkpoint : nil
@@ -251,9 +272,38 @@ public actor HeaderChain {
         let interval = params.difficultyAdjustmentInterval
         let firstIndex = Int(height) - Int(interval) - Int(baseHeight)
         let first = height % interval == 0 && firstIndex >= 0 ? preceding(firstIndex) : nil
-        let expected = try expectedBits(height: height, previous: preceding(Int(height - baseHeight) - 1),
-                                        periodFirst: first, params: params)
-        if let expected, header.bits != expected { throw HeaderChainError.unexpectedDifficulty(height: height) }
+        let previous = preceding(Int(height - baseHeight) - 1)
+        let expected = try expectedBits(height: height, previous: previous, periodFirst: first, params: params)
+        if let expected {
+            guard header.bits == expected else { throw HeaderChainError.unexpectedDifficulty(height: height) }
+        } else {
+            try requireBoundedAdjustment(header, previous: previous, params: params, height: height)
+        }
+    }
+
+    /// The one adjustment a mid-period checkpoint cannot verify exactly is
+    /// still bounded. Core clamps every retarget to at most four times
+    /// easier, so a target beyond 4× the previous one is wrong whatever the
+    /// period's timestamps were. Before this bound the first boundary after
+    /// the checkpoint accepted any target up to powLimit — difficulty 1 —
+    /// which under eclipse made a fabricated chain cost 2^32 hashes a block.
+    static func requireBoundedAdjustment(_ header: BlockHeader, previous: BlockHeader,
+                                         params: NetworkParams, height: UInt32) throws {
+        guard let target = UInt256.target(compact: header.bits),
+              let previousTarget = UInt256.target(compact: previous.bits)
+        else { throw HeaderChainError.invalidTarget(height: height) }
+        let ceiling = min(previousTarget.multiplied(by: 4), UInt256(littleEndian: params.powLimit))
+        guard target <= ceiling else { throw HeaderChainError.unexpectedDifficulty(height: height) }
+    }
+
+    /// Core's future-drift rule. Every retarget reads the period's first and
+    /// last timestamps, and the clamp allows 4× easier per period only when
+    /// four target timespans appear to have elapsed — so a header dated far
+    /// enough ahead would let a chain lower its own difficulty. Two hours of
+    /// drift is what Core tolerates.
+    private func requireTimestamp(_ header: BlockHeader, height: UInt32) throws {
+        let limit = now() &+ Self.maximumFutureDrift
+        guard header.time <= limit else { throw HeaderChainError.timestampTooFarInFuture(height: height) }
     }
 
     /// Target decoding and block-work division depend only on `bits`. Header
@@ -326,6 +376,7 @@ public actor HeaderChain {
                 throw HeaderChainError.doesNotConnect
             }
             work = work + (try Self.checkedWork(for: header, params: params, height: height))
+            try requireTimestamp(header, height: height)
             try Self.requireDifficulty(header, height: height, baseHeight: baseHeight, params: params) { index in
                 index < headers.count ? headers[index] : appended[index - headers.count]
             }
@@ -353,6 +404,7 @@ public actor HeaderChain {
                 throw HeaderChainError.doesNotConnect
             }
             let work = try Self.checkedWork(for: header, params: params, height: height)
+            try requireTimestamp(header, height: height)
             try Self.requireDifficulty(header, height: height, baseHeight: baseHeight, params: params) {
                 stagedHeaders[$0]
             }
