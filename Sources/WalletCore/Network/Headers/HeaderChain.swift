@@ -68,9 +68,9 @@ public enum HeaderChainError: LocalizedError, Equatable {
 ///   period's first header is unavailable, is verified only as a bound:
 ///   Core clamps every retarget to at most four times easier, so a target
 ///   past 4× the previous one is refused, but the exact value is not known.
-///   From the 900,000 checkpoint this applies to 901,152; adjustments from
-///   903,168 onward are verified exactly. A checkpoint on a period boundary
-///   removes the gap entirely,
+///   The shipped mainnet checkpoint sits on a period boundary (959,616 =
+///   476 × 2016), so no such adjustment exists today; the bound stays as the
+///   guard for any future mid-period constant,
 /// - median-time-past (no rule against a timestamp earlier than recent ones),
 /// - anything below the header (merkle root, signet block signatures).
 /// Fork choice is cumulative-work; competing branches replace ours only with

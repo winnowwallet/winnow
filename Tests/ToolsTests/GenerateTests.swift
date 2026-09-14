@@ -31,12 +31,12 @@ struct WinnowGenerateTests {
         return raw
     }
 
-    /// Block 900,001, the one after the shipped checkpoint — the same 80 bytes
+    /// Block 959,617, the one after the shipped checkpoint — the same 80 bytes
     /// `HeaderChainTests` connects.
-    private static let block900_001 = Data(hex:
-        "00e000208a96960d6d1ca4ee4a283fd83da309b8d5d2bfed380501000000000000000000"
-        + "371c9ffd63d75fb36c57d58eb842d23c0e7ec049daf16d94cc38805c346e9d52"
-        + "e880426874370217973dc83b")!
+    private static let blockAfterCheckpoint = Data(hex:
+        "0000ff3f134d4218c42a45c3a2a1963b2267af5df0bf1443c7ee00000000000000000000"
+        + "c1b77de7e764257238825b9aacf8e9cef6d068d82b036cfa516c909077ba1871"
+        + "9d4c656ad43a0217203dd36f")!
 
     @Test("help never touches the network and an unknown command is refused")
     func dispatch() async throws {
@@ -429,7 +429,7 @@ struct WinnowGenerateTests {
 
     @Test("vector lines are 160 lowercase hex characters that decode back to the header")
     func vector() throws {
-        let real = try BlockHeader.decode(Self.block900_001)
+        let real = try BlockHeader.decode(Self.blockAfterCheckpoint)
         let headers = syntheticHeaders(3) + [real]
         let text = CheckpointGenerator.vectorText(headers)
         let lines = text.split(separator: "\n")
@@ -479,7 +479,7 @@ struct WinnowGenerateTests {
         let other = try HeaderChain(params: params, storageURL: nil, start: .checkpoint)
         try await CheckpointGenerator.requireAgreement(one, other, at: [shipped.height])
 
-        let next = try BlockHeader.decode(Self.block900_001)
+        let next = try BlockHeader.decode(Self.blockAfterCheckpoint)
         #expect(try await one.connect([next]).appended == 1)
         await #expect(throws: GenerateError.self) {
             try await CheckpointGenerator.requireAgreement(one, other, at: [shipped.height])

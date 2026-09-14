@@ -205,13 +205,18 @@ public struct NetworkParams: Sendable, Equatable {
         fallbackPeers: generatedMainnetFallbackPeers,
         overlayFallbackPeers: [.tor: generatedMainnetTorFallbackPeers],
         // Derived, not asserted. Winnow synced mainnet from genesis on
-        // 2026-08-19, proof-of-work-checking every one of the 900,001 headers
-        // up to this height, and emitted the three values below. The block hash
-        // was then confirmed against three independent mainnet peers, which all
-        // returned the same header for height 900,000.
+        // 2026-08-19, proof-of-work-checking every header, and on 2026-09-14
+        // `winnow-debug generate checkpoint` re-derived the three values below
+        // from that same file at height 959,616 — a difficulty-period boundary
+        // (476 × 2016), so the first retarget after the checkpoint, at
+        // 961,632, is verified exactly rather than only bounded; the previous
+        // constant at 900,000 sat mid-period and left 901,152 unverifiable.
         //
         // Taken from a chain of 963,233 headers whose tip was height 963,232,
         // 000000000000000000016813353d83651497417cc705d1e2caf46a541e81deef.
+        // The generator proved the genesis-rooted and checkpoint-rooted chains
+        // agree through 961,616, work
+        // 00000000000000000000000000000000000000013df5cdb426e62d5b7ec17987.
         //
         // To reproduce, point `scripts/refresh-checkpoint` at a genesis-validated
         // header file: `winnow-debug generate checkpoint` recomputes all three through
@@ -226,16 +231,16 @@ public struct NetworkParams: Sendable, Equatable {
         // `hex:`; using `displayHex:` for the work would store it backwards and
         // every fork-choice comparison against it would be meaningless.
         //
-        // Block 900,000 hash, display order:
-        //   000000000000000000010538edbfd2d5b809a33dd83f284aeea41c6d0d96968a
+        // Block 959,616 hash, display order:
+        //   00000000000000000000eec74314bff05daf67223b96a1a2c3452ac418424d13
         checkpoint: Checkpoint(
-            height: 900_000,
+            height: 959_616,
             header: Data(hex:
-                "00a0ab20247d4d9f582f9750344cdf62c46d81d046be9603409601000000000000000000"
-                + "70f96945530651135839d8adc3f40e595118ec74c7ad81a3d17bb022e554fb0c"
-                + "937f4268743702177ad05f92")!,
+                "0000a03d32cf5172fa1b0614ac95b2bd9e965e644866cfc3f71701000000000000000000"
+                + "723f3173aa33f0644ab1294973f345eb428455c7d0fd7f50bc4252c1c7300d3f"
+                + "da3d656ad43a02170a17b1ae")!,
             chainwork: Data(hex:
-                "0000000000000000000000000000000000000000c8bbeae4127a204b0317861c")!
+                "00000000000000000000000000000000000000013a74dc6d1ab305ff3e4295d7")!
         )
     )
 
