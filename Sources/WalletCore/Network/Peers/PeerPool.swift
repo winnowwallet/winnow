@@ -471,6 +471,7 @@ public actor PeerPool {
     private func settledSync(_ chain: HeaderChain, primary peer: PeerConnection,
                              timeoutPerPeer: Duration) async throws -> HeaderChain.SyncOutcome {
         var outcome = try await chain.sync(using: peer, timeout: timeoutPerPeer)
+        try await Self.requireDelivery(outcome, from: peer, tip: chain.height)
         transportSucceeded(peer.endpoint)
         // The first peer answered, but it may be the one that is behind: a
         // stale peer seated first would otherwise freeze the tip here every
@@ -488,6 +489,22 @@ public actor PeerPool {
             Task { await self.pruneAndReplenish() }
         }
         return outcome
+    }
+
+    /// A primary that claimed a tip well above ours at handshake and then
+    /// delivered nothing has withheld what it advertised: an honest peer
+    /// with a taller chain answers getheaders with headers. Left alone, such
+    /// a peer froze the chain — and every scan behind it — silently, for as
+    /// long as it kept its seat, and was persisted as known-good besides.
+    /// Thrown as a data fault, so the pool condemns it and moves on.
+    private static func requireDelivery(_ outcome: HeaderChain.SyncOutcome, from peer: PeerConnection,
+                                        tip: UInt32) async throws {
+        guard outcome.connected == 0 else { return }
+        let claimed = Int64(await peer.peerStartHeight)
+        guard claimed - Int64(tip) <= staleTipTolerance else {
+            throw HeaderChainError.badPeerResponse(
+                "claimed height \(claimed) at handshake but delivered no headers past \(tip)")
+        }
     }
 
     /// Syncs headers from every other connected peer whose reported height
