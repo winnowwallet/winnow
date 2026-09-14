@@ -19,33 +19,48 @@ scripts/generate-fallback-peers
 scripts/refresh-checkpoint ~/…/mainnet/headers.bin [height]
 ```
 
-`fallback-peers` re-verifies the winnow-census CI's `peers.json` offline.
-That crawler descends from the btcnodes snapshot and re-crawls mainnet
-continuously; the artifact records a schema version, the day the census was
-taken, its recorded tip, and clearnet/tor/i2p candidate lists. With no
-`--from-census URL-OR-PATH` the published artifact is fetched; a local path
-reads a file. An artifact that is not schema v1 or is more than seven days
-old is refused outright. Every clearnet entry is then checked against the
-invariants the committed list is held to — public IP literal, port 8333, one
-per /16 by the pool's own `netblock` rule, and a reported height within
-`PeerPool.staleTipTolerance` of the artifact's tip in *either* direction (a
-peer ahead of the tip is on another chain, not a fresher one) — before
-`Sources/WalletCore/Network/Protocol/FallbackPeersGenerated.swift` is
-rewritten. The tor and i2p lists are parsed into the same model but rendered
-nowhere: no transport can dial them yet. The run fails rather than shipping
-fewer than `--floor` peers, and the log stays the release artifact.
+`fallback-peers` defaults to the published [Winnow census catalog](https://census.winnowwallet.com/census/peers.json).
+Use `--from-census URL-OR-PATH` to select another artifact. Winnow's census uses
+BTCNodes as input and records its observation date, reference tip, and separate
+clearnet, Tor, and I2P candidate lists. The generator downloads or reads the
+artifact, then validates it offline with the same `CensusCatalog` policy used
+by the app's **Refresh peer list** action.
 
-`--from-crawl` keeps the pre-census input as a fallback: it crawls mainnet
-starting from the DNS seeds. Seed results seed the dial queue, and every peer
-that verifies is sent one `getaddr`; the `addr` reply queues more candidates.
-Gossiped candidates are dialled only when they advertise NODE_COMPACT_FILTERS,
-sit on the default port and are public IP literals, so most dials reach a peer
-that could actually be listed — the handshake (the same `PeerConnection` the
-app uses, which refuses any peer not advertising NODE_COMPACT_FILTERS) remains
-the authoritative check. The crawl keeps one peer per /16, drops peers more
-than `PeerPool.staleTipTolerance` behind the median reported tip, is bounded
-by `--max-dials` (default 4000) so it terminates, and honours `--target`.
-Generation is deliberately not reproducible in either mode; keep the log.
+Validation rejects unknown schemas, malformed or future observation dates,
+observations older than seven UTC days, and input larger than 4 MiB. It
+canonicalizes endpoints, rejects duplicates and invalid overlay addresses,
+and requires reported heights within 100 blocks of the reference tip in
+either direction. Clearnet entries must be public IP literals on port 8333,
+with at most one endpoint per IPv4 /16 or IPv6 /32. A height within the window
+does not prove that a peer serves correct filters or remains reachable.
+
+An accepted catalog generates both clearnet and Tor constants in
+`Sources/WalletCore/Network/Protocol/FallbackPeersGenerated.swift`. Tor peers
+are available only through the wallet's enabled Tor route. I2P entries are
+validated but are neither bundled nor dialed. Census input retains all
+validated clearnet and Tor candidates; the crawl's default 96-peer target
+does not truncate it. The generator requires at least `--floor` clearnet
+peers (default 24) before writing the output.
+
+Selection from a fixed accepted artifact is deterministic. Generated
+provenance includes the source, its SHA-256, the observation date and reference
+tip, and generation time. Keep the input artifact and run log to reproduce the
+selection; generation time means a later invocation need not be byte-identical.
+
+`--from-crawl` selects bounded live discovery instead. It seeds a queue from
+DNS answers and sends one `getaddr` to each peer that completes its handshake.
+A missing or slow gossip reply leaves that peer verified. Candidates from
+`addr` are deduplicated and queued only if they advertise
+`NODE_COMPACT_FILTERS`, use the default port, and are public IP literals.
+Every dial still performs the wallet's normal handshake; a service
+advertisement alone is not a filter-response check.
+
+The crawl keeps one peer per netblock, drops peers more than
+`PeerPool.staleTipTolerance` behind the median reported tip, and stops after reaching
+`--target` (default 96 verified candidates), spending `--max-dials` (default
+4,000), or exhausting the queue. Live discovery and dial completion order can change its
+result, so retain its log as well. This crawl belongs to release tooling;
+the wallet's live peer pool does not crawl address gossip.
 
 `checkpoint` truncates a genesis-rooted `headers.bin` to the wanted height
 and loads the copy through `HeaderChain` itself, so every header is
