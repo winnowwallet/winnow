@@ -147,7 +147,7 @@ public actor PeerPool {
         self.seedResolver = seedResolver ?? .routed(client: RoutedHTTPClient(route: route))
         self.now = now
         if let peersFileURL,
-           let data = try? Data(contentsOf: peersFileURL),
+           let data = Self.boundedRead(peersFileURL),
            let stored = PersistedPeers.decode(data) {
             knownGood = Set(stored.map(\.endpoint))
             knownSource = Dictionary(stored.map { ($0.endpoint, $0.source) },
@@ -752,6 +752,22 @@ public actor PeerPool {
         var seen = connected
         return seeds.filter { route.permits($0) && seen.insert($0).inserted }
             .map { PeerCandidate(endpoint: $0, source: .dnsSeed) }
+    }
+
+    /// The most a peers file may weigh: the writer keeps 100 entries, so a
+    /// larger file was not written by this code and is not read.
+    static let maximumPeersFileBytes = 256 * 1_024
+
+    /// Reads the peers file only after measuring it, so a planted file is
+    /// refused before it is held rather than after.
+    static func boundedRead(_ url: URL) -> Data? {
+        // `attributesOfItem`, not `resourceValues`: the latter caches on the
+        // URL value, so a file rewritten under the same URL keeps its old size.
+        guard let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int,
+              size <= maximumPeersFileBytes,
+              let data = try? Data(contentsOf: url), data.count <= maximumPeersFileBytes
+        else { return nil }
+        return data
     }
 
     private func persistKnownGood() {

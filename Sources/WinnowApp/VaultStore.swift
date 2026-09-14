@@ -60,7 +60,7 @@ actor VaultStore {
             return .missing
         }
         do {
-            let data = try Data(contentsOf: storageURL)
+            let data = try Self.boundedRead(storageURL)
             let decoded = try JSONDecoder().decode([VaultRecord].self, from: data)
             try Self.validate(decoded, network: network)
             records = decoded
@@ -99,8 +99,24 @@ actor VaultStore {
         records.first { $0.id == id }
     }
 
+    /// The most a vault file may weigh: a hundred vaults with ten thousand
+    /// coins each is far under this, so a larger file was not written here.
+    static let maximumFileBytes = 16 * 1_024 * 1_024
+
+    /// Measures before reading, so a planted file is refused rather than held.
+    static func boundedRead(_ url: URL) throws -> Data {
+        let size = try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int ?? Int.max
+        guard size <= maximumFileBytes else { throw VaultStorageError.invalidState("vault file too large") }
+        let data = try Data(contentsOf: url)
+        guard data.count <= maximumFileBytes else { throw VaultStorageError.invalidState("vault file too large") }
+        return data
+    }
+
     @discardableResult
     func add(name: String, descriptor: Descriptor, createdAtHeight: UInt32) throws -> VaultRecord {
+        guard DisplayName.normalized(name) == name else {
+            throw VaultStorageError.invalidState("an account needs a short, single-line name")
+        }
         let serialized = descriptor.serialized()
         let id = String(serialized.split(separator: "#").last ?? Substring(serialized))
         guard !records.contains(where: { $0.id == id }) else {
@@ -385,6 +401,9 @@ actor VaultStore {
     /// record's identity, derivable at both chains, with indices in range.
     private static func validatedRecordShape(_ record: VaultRecord,
                                              network: BitcoinNetwork) throws -> Vault {
+        guard DisplayName.normalized(record.name) == record.name else {
+            throw VaultStorageError.invalidState("a vault has no usable name")
+        }
         let descriptor = try Descriptor(record.descriptor)
         let canonical = descriptor.serialized()
         guard canonical == record.descriptor,
