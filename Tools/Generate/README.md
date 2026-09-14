@@ -70,7 +70,7 @@ claim in-process: a chain started from the derived checkpoint connects the
 next 2,000 real headers and must reach the same tip, height and cumulative
 work as the genesis-rooted chain; disagreement exits non-zero. `--vector-out`
 writes those 2,000 headers, one per line as hex, which is how
-`Tests/WalletCoreTests/Vectors/mainnet-headers-900001-902000.txt` is made and
+`Tests/WalletCoreTests/Vectors/mainnet-headers-959617-961616.txt` is made and
 how `HeaderChainTests` replays real headers past the checkpoint on every
 CI run. Deriving the chainwork itself still needs the full file, so that part
 remains release-time only.

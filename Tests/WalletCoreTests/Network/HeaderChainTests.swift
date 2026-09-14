@@ -295,7 +295,7 @@ struct HeaderChainTests {
     //
     // A shipped checkpoint is a constant someone has to trust, so it should be
     // impossible to get wrong quietly. These are the checks that can run
-    // without the 900,000 headers it was derived from (#89).
+    // without the 959,616 headers it was derived from (#89).
 
     private var checkpoint: NetworkParams.Checkpoint {
         get throws {
@@ -314,7 +314,7 @@ struct HeaderChainTests {
         #expect(cp.chainwork.count == 32)
 
         // The hash must clear the target the header itself claims. A typo in
-        // the bytes fails here rather than 900,000 blocks later.
+        // the bytes fails here rather than 959,616 blocks later.
         let target = try #require(UInt256.target(compact: header.bits))
         #expect(UInt256(littleEndian: header.hash) <= target)
         #expect(target <= UInt256(littleEndian: NetworkParams.params(for: .mainnet).powLimit))
@@ -325,7 +325,7 @@ struct HeaderChainTests {
         let header = try BlockHeader.decode(try checkpoint.header)
         // Display order is the reverse of internal order.
         let display = Data(header.hash.reversed()).map { String(format: "%02x", $0) }.joined()
-        #expect(display == "000000000000000000010538edbfd2d5b809a33dd83f284aeea41c6d0d96968a")
+        #expect(display == "00000000000000000000eec74314bff05daf67223b96a1a2c3452ac418424d13")
     }
 
     @Test("cumulative work is plausible for the height and below the total supply of work")
@@ -336,10 +336,10 @@ struct HeaderChainTests {
         // still enormous and still non-zero — so every plausibility check below
         // passes just as happily on garbage. Pin the actual bytes: leading
         // zeros at the front, the low-order byte at the end.
-        #expect(cp.chainwork.prefix(20).allSatisfy { $0 == 0 })
-        #expect(cp.chainwork.last == 0x1c)
+        #expect(cp.chainwork.prefix(19).allSatisfy { $0 == 0 })
+        #expect(cp.chainwork.last == 0xd7)
         #expect(cp.chainwork.map { String(format: "%02x", $0) }.joined()
-            == "0000000000000000000000000000000000000000c8bbeae4127a204b0317861c")
+            == "00000000000000000000000000000000000000013a74dc6d1ab305ff3e4295d7")
 
         let work = UInt256(bigEndian: cp.chainwork)
         // Non-zero, and far above the work of any single block: a checkpoint
@@ -350,7 +350,9 @@ struct HeaderChainTests {
         let target = try #require(UInt256.target(compact: header.bits))
         let single = try #require(UInt256.blockWork(target: target))
         #expect(work > single)
-        #expect(cp.height == 900_000)
+        #expect(cp.height == 959_616)
+        // A period boundary, so every retarget after it is verified exactly.
+        #expect(cp.height % NetworkParams.mainnet.difficultyAdjustmentInterval == 0)
     }
 
     // MARK: - Checkpoint start
@@ -361,26 +363,28 @@ struct HeaderChainTests {
     // These run everywhere. The fixtures are block 900,001's header and the
     // 2,000 real mainnet headers after the checkpoint, 160 KB of hex, which is
     // enough to make a checkpoint-rooted chain do real proof-of-work checks at
-    // mainnet difficulty — across the retarget at 901,152 — and write and
+    // mainnet difficulty, right up to the retarget at 961,632 — and write and
     // reread a real file. What they cannot prove is the checkpoint's
-    // chainwork: that number summarises the 900,000 headers below it, and only
+    // chainwork: that number summarises the 959,616 headers below it, and only
     // `winnow-generate checkpoint`, run against a genesis-validated header file
     // at release time, recomputes it and proves the genesis-rooted and
     // checkpoint-rooted chains agree (Tools/Generate/README.md).
 
-    /// The block right after the shipped mainnet checkpoint.
-    /// 00000000000000000001a8ff030609a6248e0f6e77f9f141aeb21e4eac4f83fc
-    static let block900_001 = Data(hex:
-        "00e000208a96960d6d1ca4ee4a283fd83da309b8d5d2bfed380501000000000000000000"
-        + "371c9ffd63d75fb36c57d58eb842d23c0e7ec049daf16d94cc38805c346e9d52"
-        + "e880426874370217973dc83b")!
+    /// The block right after the shipped mainnet checkpoint (959,617).
+    /// 000000000000000000004986163635e11ada0f6466655a980f5ab37c1b1066df
+    static let blockAfterCheckpoint = Data(hex:
+        "0000ff3f134d4218c42a45c3a2a1963b2267af5df0bf1443c7ee00000000000000000000"
+        + "c1b77de7e764257238825b9aacf8e9cef6d068d82b036cfa516c909077ba1871"
+        + "9d4c656ad43a0217203dd36f")!
 
-    /// Heights 900,001 through 902,000, one 80-byte header per line as hex —
-    /// what `winnow-generate checkpoint --vector-out` writes from a
+    /// Heights 959,617 through 961,616, one 80-byte header per line as hex —
+    /// what `winnow-debug generate checkpoint --vector-out` writes from a
     /// genesis-validated header file, and what the shipped constant was
-    /// checked against.
+    /// checked against. The range ends 16 blocks short of the retarget at
+    /// 961,632, so that first adjustment after the checkpoint is covered by
+    /// the retarget rule's own tests rather than by this vector.
     static func headersPastCheckpoint() throws -> [BlockHeader] {
-        let text = try String(decoding: Vectors.data("mainnet-headers-900001-902000.txt", in: .module), as: UTF8.self)
+        let text = try String(decoding: Vectors.data("mainnet-headers-959617-961616.txt", in: .module), as: UTF8.self)
         return try text.split(separator: "\n").map { line in
             guard let bytes = Data(hex: String(line)), bytes.count == BlockHeader.serializedSize else {
                 throw VectorError.malformed(String(line))
@@ -431,7 +435,7 @@ struct HeaderChainTests {
         defer { try? FileManager.default.removeItem(at: url) }
 
         let chain = try HeaderChain(params: params, storageURL: url, start: .checkpoint)
-        let next = try BlockHeader.decode(Self.block900_001)
+        let next = try BlockHeader.decode(Self.blockAfterCheckpoint)
         #expect(try await chain.connect([next]).appended == 1)
         #expect(await chain.height == cp.height + 1)
         // The checkpoint's predecessor is outside this retained chain.
@@ -480,10 +484,10 @@ struct HeaderChainTests {
         defer { try? FileManager.default.removeItem(at: url) }
 
         let chain = try HeaderChain(params: params, storageURL: url, start: .checkpoint)
-        #expect(try await chain.connect([try BlockHeader.decode(Self.block900_001)]).appended == 1)
+        #expect(try await chain.connect([try BlockHeader.decode(Self.blockAfterCheckpoint)]).appended == 1)
 
         // The file is not damaged; it just answers a different question. Saying
-        // so lets the app rebuild rather than treat block 900,000 as block 0.
+        // so lets the app rebuild rather than treat block 959,616 as block 0.
         #expect(throws: HeaderChainError.startMismatch(stored: cp.height, wanted: 0)) {
             _ = try HeaderChain(params: params, storageURL: url, start: .genesis)
         }
