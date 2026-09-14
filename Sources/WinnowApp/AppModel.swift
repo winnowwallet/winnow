@@ -259,6 +259,10 @@ final class AppModel {
     /// received payment can name its sender without an actor hop.
     private(set) var senderByTxid: [String: String] = [:]
     private(set) var sharedSavings: [SharedSavings] = []
+    /// Notes about this wallet's own addresses, kept apart from people.
+    private(set) var receiveAddressLabels: [Data: String] = [:]
+    private(set) var receiveLabelStorageNotice: String?
+    private var receiveLabelStore: ReceiveAddressLabelStore?
     /// Set when `people.json` could not be read. Shown in the recipient picker;
     /// the store refuses mutations meanwhile. Never blocks boot.
     private(set) var peopleStorageNotice: String?
@@ -269,7 +273,15 @@ final class AppModel {
     private(set) var stack: SyncStack?
     /// Copies of the wallet's id/descriptor for synchronous access (the Wallet
     /// actor's members need an await across the module boundary).
-    private(set) var walletID: String?
+    private(set) var walletID: String? {
+        didSet {
+            if walletID != oldValue {
+                receiveLabelStore = nil
+                receiveAddressLabels = [:]
+                receiveLabelStorageNotice = nil
+            }
+        }
+    }
     private var walletDescriptor: Descriptor? {
         didSet { recomputeSharedSavings() }
     }
@@ -962,6 +974,7 @@ final class AppModel {
         vaults = await vaultStore.all
         people = await peopleStore.all
         senderByTxid = await peopleStore.senderLabels
+        configureReceiveAddressLabels()
         journalSnapshotIfChanged()
     }
 
@@ -1150,7 +1163,7 @@ final class AppModel {
         // the user's, not one wallet's view of the chain, and holds only
         // public keys.
         if let dir = storageDirectory() {
-            for name in ["filters.json", "broadcast.json", "vaults.json"] {
+            for name in ["filters.json", "broadcast.json", "vaults.json", "receive-labels.json"] {
                 try? FileManager.default.removeItem(at: dir.appending(path: name))
             }
         }
@@ -1160,6 +1173,7 @@ final class AppModel {
             throw AppError.storageDamaged(message)
         }
         await configurePeople()
+        receiveLabelStore = nil
         self.wallet = wallet
         walletID = await wallet.id
         walletDescriptor = await wallet.descriptor
@@ -1305,7 +1319,7 @@ final class AppModel {
         // that is one wallet's view must not survive into the next one.
         // people.json stays, on purpose: see `adopt(wallet:)`.
         if let dir = storageDirectory() {
-            for name in ["wallet.json", "filters.json", "broadcast.json", "vaults.json"] {
+            for name in ["wallet.json", "filters.json", "broadcast.json", "vaults.json", "receive-labels.json"] {
                 try? FileManager.default.removeItem(at: dir.appending(path: name))
             }
         }
@@ -1351,6 +1365,7 @@ final class AppModel {
     func currentReceiveAddress() async throws -> String {
         guard let wallet else { throw AppError.noWallet }
         let address = try await wallet.address(chain: .receive, index: wallet.nextReceiveIndex)
+        configureReceiveAddressLabels()
         e2e?.journal("address.receive", fields: ["address": address])
         return address
     }
@@ -1358,9 +1373,69 @@ final class AppModel {
     /// Marks the current receive address used and returns the next one.
     func freshReceiveAddress() async throws -> String {
         guard let wallet else { throw AppError.noWallet }
-        let address = try await wallet.freshReceiveAddress()
+        // Core returns the address it just reserved. Receive has already
+        // shown that address; the button must show the next unused one.
+        _ = try await wallet.freshReceiveAddress()
+        let address = try await wallet.address(chain: .receive, index: wallet.nextReceiveIndex)
         await refresh()
         return address
+    }
+
+    private func configureReceiveAddressLabels() {
+        guard let walletID else {
+            receiveLabelStore = nil
+            receiveAddressLabels = [:]
+            receiveLabelStorageNotice = nil
+            return
+        }
+        let url = storageDirectory()?.appending(path: "receive-labels.json")
+        if receiveLabelStore?.walletID != walletID || receiveLabelStore?.network != network
+            || receiveLabelStore?.storageURL != url {
+            receiveLabelStore = ReceiveAddressLabelStore(storageURL: url, walletID: walletID, network: network)
+        }
+        receiveAddressLabels = receiveLabelStore?.labels ?? [:]
+        receiveLabelStorageNotice = receiveLabelStore?.notice
+    }
+
+    func receiveAddressLabel(for address: String) -> String? {
+        guard let script = try? AddressDecoder.scriptPubKey(for: address, network: network) else { return nil }
+        return receiveAddressLabels[script]
+    }
+
+    func setReceiveAddressLabel(_ label: String, address: String) async throws {
+        guard let wallet else { throw AppError.noWallet }
+        let script = try AddressDecoder.scriptPubKey(for: address, network: network)
+        let watched = try await wallet.watchScripts()
+        try Task.checkCancellation()
+        guard self.wallet === wallet, watched.contains(script) else { throw AppError.noWallet }
+        configureReceiveAddressLabels()
+        guard let receiveLabelStore else { throw AppError.noWallet }
+        try receiveLabelStore.setLabel(label, address: address)
+        receiveAddressLabels = receiveLabelStore.labels
+    }
+
+    struct LabeledReceiveOutput: Identifiable {
+        let id: Int
+        let address: String
+        let label: String
+        let amount: Int64
+    }
+
+    func labeledReceiveOutputs(_ entry: HistoryEntry) -> [LabeledReceiveOutput] {
+        Self.labeledReceiveOutputs(entry, labels: receiveAddressLabels,
+                                   owned: ownWatchScripts, network: network)
+    }
+
+    static func labeledReceiveOutputs(_ entry: HistoryEntry, labels: [Data: String],
+                                      owned: Set<Data>, network: BitcoinNetwork) -> [LabeledReceiveOutput] {
+        guard entry.received > 0, let transaction = try? entry.transaction() else { return [] }
+        return transaction.outputs.enumerated().compactMap { index, output in
+            guard output.value > 0, owned.contains(output.scriptPubKey),
+                  let label = labels[output.scriptPubKey],
+                  let address = AddressDecoder.address(for: output.scriptPubKey, network: network)
+            else { return nil }
+            return LabeledReceiveOutput(id: index, address: address, label: label, amount: output.value)
+        }
     }
 
     /// The resolved feerate (sat/vB): user override, then the wallet's own

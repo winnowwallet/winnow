@@ -787,8 +787,13 @@ public actor Wallet {
     /// The next unused receive address; marks it used (advances the index).
     public func freshReceiveAddress() throws -> String {
         let address = try address(chain: .receive, index: state.nextReceiveIndex)
+        let previousIndex = state.nextReceiveIndex
         state.nextReceiveIndex += 1
-        try persist()
+        do { try persist() }
+        catch {
+            state.nextReceiveIndex = previousIndex
+            throw error
+        }
         return address
     }
 

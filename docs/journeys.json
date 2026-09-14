@@ -19,8 +19,9 @@
     "id": "receive",
     "section": "everyday",
     "title": "Receive bitcoin",
-    "description": "Share your address or QR code. Keep Receive open to watch for a payment, then check its confirmation in your wallet.",
+    "description": "Label who an address is for, or what the payment is for, before sharing it. You can skip. Matching payments carry the local note in your wallet.",
     "journey": [
+      "Save a receive address label, request a new address and skip its label. Reopen the app and confirm that a payment to the old address still carries its note.",
       "Confirm a payment on the test network and check that it appears in the wallet.",
       "Watch a new payment arrive on Receive before it is confirmed, then check that its status updates after confirmation."
     ],
@@ -28,7 +29,8 @@
       "test02ReceiveAndFunding",
       "test14IncomingPaymentBeforeConfirmation"
     ],
-    "image": "03-receive"
+    "image": "03-receive",
+    "limitations": "An address label does not verify the sender or create a payment destination. Labels stay on this device and are not included in wallet backups."
   },
   {
     "id": "send",

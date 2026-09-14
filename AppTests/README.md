@@ -16,3 +16,7 @@ Run `scripts/ci-app-tests /tmp/winnow-app-tests` from the repository root with
 Xcode and a simulator installed. [CI](../.github/workflows/ci.yml) retains the
 result bundle and logs. Keychain attributes and authentication policy are tested;
 actual locked-device behavior still needs [device evidence](../docs/security/README.md).
+
+[Receive address labels](ReceiveAddressLabelTests.swift) check wallet/network
+isolation, atomic persistence, address rotation and relaunch, bounded metadata,
+and exact output matching without creating a sender contact.

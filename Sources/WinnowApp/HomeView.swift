@@ -189,7 +189,16 @@ private struct HistoryRow: View {
 
     var body: some View {
         HStack {
-            Text(title).font(.headline)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.headline)
+                let labels = Array(Set(model.labeledReceiveOutputs(entry).map(\.label))).sorted()
+                if !labels.isEmpty {
+                    Text(labels.joined(separator: " · "))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("paymentReceiveLabels-\(entry.txid.displayHex)")
+                }
+            }
             Spacer()
             VStack(alignment: .trailing, spacing: 2) {
                 Text("\(net >= 0 ? "+" : "−")\(abs(net).formatted()) sats")
@@ -235,6 +244,7 @@ private struct PaymentDetailView: View {
     @Environment(AppModel.self) private var model
     @State private var editing: AppModel.PaymentRecipient?
     @State private var labelingSender = false
+    @State private var editingReceiveLabel: AppModel.LabeledReceiveOutput?
     @State private var attachingDestination: PersonRecord?
     @State private var showFeeBump = false
     @State private var loading = false
@@ -267,6 +277,25 @@ private struct PaymentDetailView: View {
                         }
                     }
                 }
+                let labeledOutputs = model.labeledReceiveOutputs(entry)
+                if !labeledOutputs.isEmpty {
+                    Section("Receive address labels") {
+                        ForEach(labeledOutputs) { output in
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(output.label).font(.headline)
+                                CopyableTextBlock(text: output.address)
+                                Text(satsText(output.amount))
+                                Button("Edit address label") { editingReceiveLabel = output }
+                                    .accessibilityIdentifier("editPaymentReceiveLabel-\(output.id)")
+                            }
+                        }
+                        Text("These are your local notes about the addresses paid. They do not verify who sent the payment.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                if let notice = model.receiveLabelStorageNotice {
+                    Text(notice).foregroundStyle(.orange)
+                }
                 if entry.received > 0 { senderSection(entry) }
                 if entry.rawTransaction == nil, entry.spent > 0 {
                     Section {
@@ -286,6 +315,16 @@ private struct PaymentDetailView: View {
             } else { Text("This payment is no longer in the wallet’s history.") }
         }
         .navigationTitle("Payment")
+        .sheet(item: $editingReceiveLabel) { output in
+            NavigationStack {
+                ScrollView {
+                    ReceiveAddressLabelEditor(address: output.address) { editingReceiveLabel = nil }
+                        .padding()
+                }
+                .navigationTitle("Address label")
+                .navigationBarTitleDisplayMode(.inline)
+            }
+        }
         .sheet(item: $editing) { AddPersonView(person: $0.person, address: $0.address) }
         .sheet(item: $attachingDestination) { person in
             AddPersonView(person: person, txid: txid,

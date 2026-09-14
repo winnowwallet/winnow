@@ -200,10 +200,16 @@ final class WinnowAppUITests: XCTestCase {
     // MARK: - 02 Receive + funding
 
     func test02ReceiveAndFunding() async throws {
-        let app = launchApp()
+        var app = launchApp()
 
         let receiveStart = Date()
         app.buttons["receiveButton"].tap()
+        XCTAssertTrue(app.textFields["receiveAddressLabelField"].waitForExistence(timeout: 30))
+        XCTAssertFalse(app.staticTexts["receiveAddress"].exists, "sharing waits for a label or explicit skip")
+        XCTAssertFalse(app.buttons["saveReceiveAddressLabelButton"].isEnabled)
+        app.typeInto("receiveAddressLabelField", "Alice / invoice 12")
+        Screenshots.capture(app, "54-receive-label-prompt", testCase: self)
+        app.buttons["saveReceiveAddressLabelButton"].tap()
         let addressElement = app.staticTexts["receiveAddress"]
         XCTAssertTrue(addressElement.waitForExistence(timeout: 30), "no receive address")
         Timings.record("receive", step: "address-shown", from: receiveStart)
@@ -212,7 +218,19 @@ final class WinnowAppUITests: XCTestCase {
             XCTFail("could not read the receive address from the UI")
             return
         }
+        XCTAssertEqual(app.staticTexts["receiveAddressLabel"].label, "Alice / invoice 12")
+        app.buttons["newReceiveAddressButton"].tap()
+        XCTAssertTrue(app.textFields["receiveAddressLabelField"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.textFields["receiveAddressLabelField"].value as? String, "Alice · invoice 12",
+                       "the new address must not inherit the previous label")
+        app.buttons["skipReceiveAddressLabelButton"].tap()
+        XCTAssertTrue(addressElement.waitForExistence(timeout: 10))
+        let freshAddress = try XCTUnwrap(addressElement.value as? String)
+        XCTAssertNotEqual(freshAddress, address)
+        XCTAssertFalse(app.staticTexts["receiveAddressLabel"].exists)
         app.buttons["Done"].tap()
+        app.terminate()
+        app = launchApp()
 
         // Which receive-chain index did the app show? (It advances once an
         // address is used, so resolve it rather than assuming 0.)
@@ -254,7 +272,13 @@ final class WinnowAppUITests: XCTestCase {
         // A history entry must be there too.
         XCTAssertTrue(app.staticTexts["Received"].waitForExistence(timeout: 60),
                       "no history entry after funding")
+        let labelRow = app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@", "paymentReceiveLabels-")).firstMatch
+        XCTAssertTrue(labelRow.waitForExistence(timeout: 30))
+        XCTAssertEqual(labelRow.label, "Alice / invoice 12", "payment to the old address keeps its label after rotation and relaunch")
         Screenshots.capture(app, "04-home-funded", testCase: self)
+        labelRow.tap()
+        XCTAssertTrue(app.staticTexts["Receive address labels"].waitForExistence(timeout: 10))
+        Screenshots.capture(app, "55-payment-receive-label", testCase: self)
     }
 
     // MARK: - 03 Send
@@ -1559,6 +1583,9 @@ final class WinnowAppUITests: XCTestCase {
 
         let app = launchApp()
         app.buttons["receiveButton"].tap()
+        if app.buttons["skipReceiveAddressLabelButton"].waitForExistence(timeout: 5) {
+            app.buttons["skipReceiveAddressLabelButton"].tap()
+        }
         let field = app.staticTexts["receiveAddress"]
         XCTAssertTrue(field.waitForExistence(timeout: 30))
         let address = try XCTUnwrap(field.value as? String)
@@ -1577,6 +1604,9 @@ final class WinnowAppUITests: XCTestCase {
             return app.staticTexts["transactionConfirmation-\(txid)"].exists
         })
         app.buttons["receiveButton"].tap()
+        if app.buttons["skipReceiveAddressLabelButton"].waitForExistence(timeout: 5) {
+            app.buttons["skipReceiveAddressLabelButton"].tap()
+        }
         XCTAssertTrue(field.waitForExistence(timeout: 30))
         XCTAssertFalse(pending.exists, "confirmed payment still shown as unconfirmed")
         app.buttons["Done"].tap()
@@ -1870,6 +1900,9 @@ final class WinnowAppUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["balanceText"].waitForExistence(timeout: 60), "home did not appear")
 
         app.buttons["receiveButton"].tap()
+        if app.buttons["skipReceiveAddressLabelButton"].waitForExistence(timeout: 5) {
+            app.buttons["skipReceiveAddressLabelButton"].tap()
+        }
         let receiveField = app.staticTexts["receiveAddress"]
         XCTAssertTrue(receiveField.waitForExistence(timeout: 30))
         let address = try XCTUnwrap(receiveField.value as? String)
@@ -2062,6 +2095,9 @@ final class WinnowAppUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["balanceText"].waitForExistence(timeout: 60), "home did not appear")
 
         app.buttons["receiveButton"].tap()
+        if app.buttons["skipReceiveAddressLabelButton"].waitForExistence(timeout: 5) {
+            app.buttons["skipReceiveAddressLabelButton"].tap()
+        }
         let receiveField = app.staticTexts["receiveAddress"]
         XCTAssertTrue(receiveField.waitForExistence(timeout: 30))
         let address = try XCTUnwrap(receiveField.value as? String)

@@ -17,7 +17,7 @@ Reviewed 2026-09-14 for [PR #87](https://github.com/winnowwallet/winnow/pull/87)
 
 ## Integration decisions
 
-Current organization main was merged into #87 before porting the remaining fixes. The merge retains Tor routing, census controls, people flows, iPad navigation and sheet scrolling, and real background/foreground helpers. Backup screens keep #87’s file-ready summary and never display exported JSON or recovery words. UI assertions inspect the actual staged file and verify its removal after replacement, dismissal, and backgrounding.
+Current organization main was merged into #87 before porting the remaining fixes. The receive-address label branch (#96) is also included so the combined changes are tested together. The merge retains Tor routing, census controls, people flows, iPad navigation and sheet scrolling, and real background/foreground helpers. Backup screens keep #87’s file-ready summary and never display exported JSON or recovery words. UI assertions inspect the actual staged file and verify its removal after replacement, dismissal, and backgrounding.
 
 A rejected checkpoint comparison has no payment callbacks or saved progress from that batch. A later filter, network, or callback error can happen after an earlier chunk delivered matches; the batch frontier is saved only after all chunks finish. Self-consistent filters are not authenticated by proof-of-work headers: agreement across peers and retained pins is the available check, and a sole surviving peer is a degraded mode.
 
@@ -25,7 +25,7 @@ The descriptor API compatibility repair and regtest retargeting control were add
 
 ## Verification
 
-Local integrated package run: 643 reported tests across 69 suites passed. The added legacy-broadcast regression and the broadcaster suite passed separately (13 tests). App-hosted tests passed; the simulator explicitly skipped file-protection attribute checks because it does not record those attributes. The iPhone onboarding, receive/funding, and backup journey passed with real staged files and screenshots. A fresh isolated Bitcoin Core fixture passed all 26 differential tests across 10 suites. Website links/LFS, release policy, warning checks, lint, and all 24 script tests passed. Physical-device protection checks, the iPad backup journey, and hosted integration checks are still in progress at this revision.
+Local integrated package run: 643 reported tests across 69 suites passed. The added legacy-broadcast regression and the broadcaster suite passed separately (13 tests). App-hosted tests passed; the simulator explicitly skipped file-protection attribute checks because it does not record those attributes. The iPhone onboarding, receive/funding, and backup journey passed with real staged files and screenshots. A fresh isolated Bitcoin Core fixture passed all 26 differential tests across 10 suites. Website links/LFS, release policy, warning checks, lint, and all 24 script tests passed. The iPad backup check also passed after correcting share-popover dismissal; its onboarding/funding prerequisites passed in the preceding run. Physical-device protection and hosted integration checks remain pending.
 
 The full ordered iPhone/iPad CI journeys, package checks on both architectures, app build/tests, warning checks, and website checks must finish before merging. CI logs and screenshot bundles are preserved by the [Node integration workflow](https://github.com/winnowwallet/winnow/actions/workflows/node-tests.yml). Screenshots in `docs/screenshots` are actual test captures stored with Git LFS.
 

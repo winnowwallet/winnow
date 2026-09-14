@@ -29,3 +29,7 @@ all assertions pass. That VM reports no Metal device; Reduce Transparency did
 not restore the missing tabs. Use a Mac with working simulator graphics for
 publication captures, and keep the original result bundle and source revision.
 The runner graphics problem is tracked in [#84](https://github.com/winnowwallet/winnow/issues/84).
+The receive journey asks for a local address label, rotates to a blank address,
+relaunches, then mines a payment to the older address and checks its note in
+history and payment details. The prompt and labeled payment have asserted
+screenshots; the mempool journey also exercises explicitly skipping a label.

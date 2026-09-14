@@ -72,6 +72,24 @@ struct WalletTests {
         #expect(try await wallet.watchScripts().count == 21 + 20)
     }
 
+    @Test("failed receive-address reservation preserves the live index")
+    func receiveAddressPersistenceRollback() async throws {
+        let url = tempFileURL("wallet.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let wallet = try makeTestWallet(storageURL: url)
+        let original = try Data(contentsOf: url)
+        try FileManager.default.removeItem(at: url)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+        await #expect(throws: (any Error).self) { try await wallet.freshReceiveAddress() }
+        #expect(await wallet.nextReceiveIndex == 0)
+        try FileManager.default.removeItem(at: url)
+        try original.write(to: url)
+        _ = try await wallet.freshReceiveAddress()
+        #expect(await wallet.nextReceiveIndex == 1)
+        let reopened = try Wallet.open(storageURL: url, keyStore: InMemoryKeyStore())
+        #expect(await reopened.nextReceiveIndex == 1)
+    }
+
     @Test("apply: a matched payment becomes a UTXO + history; a spend shrinks the set")
     func applyMatches() async throws {
         let wallet = try makeTestWallet()

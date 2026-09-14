@@ -25,56 +25,79 @@ struct ReceiveView: View {
     @State private var showCard = false
     @State private var address: String?
     @State private var error: String?
+    @State private var editingLabel = false
+    @State private var changingAddress = false
     @State private var unconfirmed: [UnconfirmedPayment] = []
     @State private var window: MempoolWindow?
     @State private var windowTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
-                if let address {
-                    QRCodeView(content: address)
-                        .frame(width: 240, height: 240)
-                        .padding(.top)
-                    Text(address)
-                        .font(.system(.footnote, design: .monospaced))
-                        .multilineTextAlignment(.center)
-                        .textSelection(.enabled)
-                        .padding(.horizontal)
-                        .accessibilityIdentifier("receiveAddress")
-                        .accessibilityValue(address)
-                    HStack(spacing: 16) {
-                        Button("Copy") { ClipboardPolicy.interchange.apply(address) }
-                        ShareLink(item: address)
-                        Button("New address") { newAddress() }
-                    }
-                    .buttonStyle(.bordered)
-                    WarnedExplorerLink(
-                        title: "View address",
-                        url: model.esploraAddressURL(address),
-                        exposedItem: "address",
-                        accessibilityID: "explorerAddressButton")
-                    ForEach(unconfirmed) { payment in
-                        Label("Unconfirmed: +\(satsText(payment.amount)) — awaiting confirmation",
-                              systemImage: "clock")
-                            .font(.subheadline)
-                            .foregroundStyle(.orange)
+            ScrollView {
+                VStack(spacing: 20) {
+                    if let address, editingLabel {
+                        ReceiveAddressLabelEditor(address: address) { editingLabel = false }
+                            .id(address)
+                            .padding()
+                    } else if let address {
+                        if let label = model.receiveAddressLabel(for: address) {
+                            Label(label, systemImage: "tag")
+                                .font(.headline)
+                                .accessibilityIdentifier("receiveAddressLabel")
+                                .padding(.horizontal)
+                        }
+                        Button(model.receiveAddressLabel(for: address) == nil ? "Label this address" : "Edit label") {
+                            editingLabel = true
+                        }
+                        .accessibilityIdentifier("editReceiveAddressLabelButton")
+                        QRCodeView(content: address)
+                            .frame(width: 240, height: 240)
+                            .padding(.top)
+                        Text(address)
+                            .font(.system(.footnote, design: .monospaced))
+                            .multilineTextAlignment(.center)
+                            .textSelection(.enabled)
                             .padding(.horizontal)
-                            .accessibilityIdentifier("unconfirmedPayment")
+                            .accessibilityIdentifier("receiveAddress")
+                            .accessibilityValue(address)
+                        HStack(spacing: 16) {
+                            Button("Copy") { ClipboardPolicy.interchange.apply(address) }
+                            ShareLink(item: address)
+                            Button("New address") { newAddress() }
+                                .accessibilityIdentifier("newReceiveAddressButton")
+                                .disabled(changingAddress)
+                        }
+                        .buttonStyle(.bordered)
+                        WarnedExplorerLink(
+                            title: "View address",
+                            url: model.esploraAddressURL(address),
+                            exposedItem: "address",
+                            accessibilityID: "explorerAddressButton")
+                        ForEach(unconfirmed) { payment in
+                            Label("Unconfirmed: +\(satsText(payment.amount)) — awaiting confirmation",
+                                  systemImage: "clock")
+                                .font(.subheadline)
+                                .foregroundStyle(.orange)
+                                .padding(.horizontal)
+                                .accessibilityIdentifier("unconfirmedPayment")
+                        }
+                        Text("While this screen is open, incoming payments appear as unconfirmed within seconds. Everything else appears once it confirms in a block.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
+                    } else if error == nil {
+                        ProgressView()
                     }
-                    Text("While this screen is open, incoming payments appear as unconfirmed within seconds. Everything else appears once it confirms in a block.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                } else if let error {
-                    ContentUnavailableView("No address", systemImage: "exclamationmark.triangle",
-                                           description: Text(error))
-                } else {
-                    ProgressView()
+                    if let error {
+                        Text(error).foregroundStyle(.red)
+                            .accessibilityIdentifier("receiveError")
+                            .padding(.horizontal)
+                    }
                 }
-                Spacer()
+                .padding(.vertical)
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Receive")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -89,9 +112,11 @@ struct ReceiveView: View {
                 }
             }
             .task {
-                address = try? await model.currentReceiveAddress()
-                if address == nil { error = "The wallet is not available." }
-                await openWindow()
+                do {
+                    address = try await model.currentReceiveAddress()
+                    editingLabel = address.map { model.receiveAddressLabel(for: $0) == nil } ?? false
+                    await openWindow()
+                } catch { self.error = error.localizedDescription }
             }
             .onDisappear { closeWindow() }
             .onChange(of: scenePhase) { _, phase in
@@ -115,14 +140,20 @@ struct ReceiveView: View {
     }
 
     private func newAddress() {
+        guard !changingAddress else { return }
+        changingAddress = true
+        error = nil
         Task {
+            defer { changingAddress = false }
             do {
                 closeWindow()
                 unconfirmed = []
                 address = try await model.freshReceiveAddress()
+                editingLabel = true
                 await openWindow()
             } catch {
                 self.error = error.localizedDescription
+                await openWindow()
             }
         }
     }
