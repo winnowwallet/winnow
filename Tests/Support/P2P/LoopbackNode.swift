@@ -62,6 +62,9 @@ public actor LoopbackNode {
     /// Whether the node answers ping with pong. False models a peer that
     /// holds the socket open and sends nothing, for the idle deadline.
     public let answersPings: Bool
+    /// Answer every getheaders with an empty list, whatever the chain holds:
+    /// a peer that claims a tall tip and then withholds it.
+    public let emptyHeaders: Bool
     /// The node's mempool: transactions it serves over getdata (MSG_TX /
     /// MSG_WITNESS_TX) — unknown tx hashes get a notfound.
     public let transactions: [Data: Transaction] // keyed by txid (internal order)
@@ -92,8 +95,9 @@ public actor LoopbackNode {
          disconnectOnUnknownStopHash: Bool = false, claimedStartHeight: Int32? = nil,
          autoRequestDelay: Duration? = nil, transactions: [Transaction] = [],
          startSilent: Bool = false, versionDelay: Duration = .zero,
-         answersPings: Bool = true) {
+         answersPings: Bool = true, emptyHeaders: Bool = false) {
         self.answersPings = answersPings
+        self.emptyHeaders = emptyHeaders
         self.disconnectOnUnknownStopHash = disconnectOnUnknownStopHash
         self.claimedStartHeight = claimedStartHeight
         self.params = params
@@ -352,6 +356,7 @@ public actor LoopbackNode {
 
         case let .getheaders(request):
             if withholdHeaders { return } // reachable, but never answers
+            if emptyHeaders { try await send(.headers([])); return }
             // First matching locator wins; no match → from height 1.
             var start = 1
             for hash in request.locatorHashes {
