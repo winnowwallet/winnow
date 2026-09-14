@@ -55,6 +55,9 @@ final class AppModel {
         case deviceAuthUnavailable
         case deviceAuthFailed
         case spendAlreadyInFlight
+        /// The transaction was broadcast but the vault's coins could not be
+        /// updated; carries the txid so the user has the receipt.
+        case vaultSpendNotRecorded(txid: Data, reason: String)
         /// No storage directory, so a rollback target cannot be recorded.
         case noStorage
         case paymentDetailsUnavailable
@@ -78,6 +81,9 @@ final class AppModel {
             case .deviceAuthUnavailable: "Set a device passcode first — sensitive wallet actions require device authentication."
             case .deviceAuthFailed: "Device authentication failed."
             case .spendAlreadyInFlight: "Another payment is already being signed and broadcast. Wait for it to finish."
+            case let .vaultSpendNotRecorded(txid, reason):
+                "The payment was sent (\(txid.displayHex)) but this account's coins could not be updated (\(reason)). "
+                    + "Reopen the account before spending from it again."
             case .noStorage: "Winnow could not reach its storage, so a chain reorganisation could not be recorded. Syncing has stopped rather than continue on stale data."
             }
         }
@@ -2173,18 +2179,23 @@ final class AppModel {
 
     /// Adds this device's script-path signature to every input, after the
     /// review that decides what the signature authorizes.
+    /// Under the same `spending` gate as a wallet send: the review binds the
+    /// signature, but two spends from one vault racing each other could
+    /// still commit conflicting bookkeeping.
     func partialSignVaultSpend(_ psbt: PSBT, record: VaultRecord, reason: String) async throws -> PSBT {
-        let vault = try vault(for: record)
-        let coordinates = vaultAuthorizationCoordinates(for: record)
-        let tip = status.tipHeight
-        let signed = try await withMasterKey(reason: reason) { master in
-            var candidate = psbt
-            try vault.partialSign(&candidate, master: master, knownUTXOs: record.utxos,
-                                  ownedOutputCoordinates: coordinates, chainTip: tip)
-            return candidate
+        try await exclusively(.spending) {
+            let vault = try vault(for: record)
+            let coordinates = vaultAuthorizationCoordinates(for: record)
+            let tip = status.tipHeight
+            let signed = try await withMasterKey(reason: reason) { master in
+                var candidate = psbt
+                try vault.partialSign(&candidate, master: master, knownUTXOs: record.utxos,
+                                      ownedOutputCoordinates: coordinates, chainTip: tip)
+                return candidate
+            }
+            journalPSBT(stage: "multi-a-partial-signed", psbt: signed)
+            return signed
         }
-        journalPSBT(stage: "multi-a-partial-signed", psbt: signed)
-        return signed
     }
 
     /// Finalizes a fully-signed spend, broadcasts it, and commits it to the
@@ -2195,12 +2206,27 @@ final class AppModel {
         let transaction = try vault.finalizeSpend(&working, knownUTXOs: record.utxos,
                                                   ownedOutputCoordinates: vaultAuthorizationCoordinates(for: record),
                                                   chainTip: status.tipHeight)
-        let txid = try await broadcast(transaction)
-        let changeIndex = record.nextChangeIndex
-        let changeScript = try? vault.scriptPubKey(index: changeIndex, choice: AddressChain.change.rawValue)
-        _ = await recordVaultSpend(id: record.id, transaction: transaction,
-                                   changeScriptPubKey: changeScript, changeIndex: changeIndex)
-        return txid
+        return try await broadcastVaultSpend(transaction, vault: vault, record: record)
+    }
+
+    /// Broadcasts a finalized vault spend and commits it, under the
+    /// `spending` gate. A commit that fails after the broadcast is reported,
+    /// not swallowed: the transaction is out, and a spent coin left in the
+    /// record could be selected again by the next spend.
+    func broadcastVaultSpend(_ transaction: BitcoinTransaction, vault: Vault,
+                             record: VaultRecord) async throws -> Data {
+        try await exclusively(.spending) {
+            let txid = try await broadcast(transaction)
+            let changeIndex = record.nextChangeIndex
+            let changeScript = try? vault.scriptPubKey(index: changeIndex, choice: AddressChain.change.rawValue)
+            do {
+                _ = try await recordVaultSpend(id: record.id, transaction: transaction,
+                                               changeScriptPubKey: changeScript, changeIndex: changeIndex)
+            } catch {
+                throw AppError.vaultSpendNotRecorded(txid: txid, reason: error.localizedDescription)
+            }
+            return txid
+        }
     }
 
     func advanceVaultReceiveIndex(id: String) async {
@@ -2208,13 +2234,21 @@ final class AppModel {
         vaults = await vaultStore.all
     }
 
-    /// Commits a broadcast vault spend to the vault's local UTXO set.
+    /// Commits a broadcast vault spend to the vault's local UTXO set. `false`
+    /// means there was nothing to record (already recorded, or no known
+    /// input); a store failure throws rather than reading as `false`.
     @discardableResult
     func recordVaultSpend(id: String, transaction: BitcoinTransaction, changeScriptPubKey: Data?,
-                          changeIndex: UInt32) async -> Bool {
-        let recorded = (try? await vaultStore.recordSpend(
-            id: id, transaction: transaction,
-            changeScriptPubKey: changeScriptPubKey, changeIndex: changeIndex)) ?? false
+                          changeIndex: UInt32) async throws -> Bool {
+        let recorded: Bool
+        do {
+            recorded = try await vaultStore.recordSpend(
+                id: id, transaction: transaction,
+                changeScriptPubKey: changeScriptPubKey, changeIndex: changeIndex)
+        } catch {
+            vaults = await vaultStore.all
+            throw error
+        }
         vaults = await vaultStore.all
         guard recorded else { return false }
         e2e?.journal("vault.spendRecorded", fields: [

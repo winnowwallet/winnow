@@ -96,7 +96,7 @@ public struct Vault: Sendable {
         }
         self.descriptor = descriptor
         self.network = network
-        try Self.requireSupportedShape(policy: policy, descriptor: descriptor)
+        try Self.requireSupportedShape(policy: policy, descriptor: descriptor, network: network)
         try Self.requireDistinctSigners(policy: policy, descriptor: descriptor)
     }
 
@@ -124,14 +124,8 @@ public struct Vault: Sendable {
     /// The shape required here is `VaultCosignerRole.requiredDerivation`, the
     /// same value `VaultCosignerKey` pins on the builder path — one definition,
     /// so the boundary cannot come to accept what the builder refuses.
-    private static func requireSupportedShape(policy: Policy, descriptor: Descriptor) throws {
-        func requireSuffix(_ derivation: Descriptor.Derivation, _ role: VaultCosignerRole) throws {
-            guard derivation.elements == role.requiredDerivation else {
-                throw VaultError.invalidDescriptor(
-                    "this vault's signer derivation paths are not the supported form, so its signers cannot be shown to be independent of one another")
-            }
-        }
-
+    private static func requireSupportedShape(policy: Policy, descriptor: Descriptor,
+                                              network: BitcoinNetwork) throws {
         switch policy {
         case let .multiA(_, _, cosigners, internalKey):
             let key = try descriptor.publicKey(of: internalKey, index: 0, choice: 0)
@@ -144,24 +138,42 @@ public struct Vault: Sendable {
                     throw VaultError.invalidDescriptor(
                         "this vault nests an aggregated key where a single cosigner is required")
                 }
-                guard case let .extended(key, _) = single.base,
-                      key.privateKey == nil, single.origin != nil else {
-                    throw VaultError.invalidDescriptor(
-                        "every cosigner must be an extended public key carrying its origin")
-                }
-                try requireSuffix(single.derivation, .scriptPath)
+                try requireAccountKey(single, role: .scriptPath, network: network, what: "cosigner")
             }
         case let .muSig2(participants, derivation):
             try requireSuffix(derivation, .scriptPath)
             for participant in participants {
-                guard case let .extended(key, _) = participant.base,
-                      key.privateKey == nil, participant.origin != nil else {
-                    throw VaultError.invalidDescriptor(
-                        "every participant must be an extended public key carrying its origin")
-                }
-                try requireSuffix(participant.derivation, .muSig2)
+                try requireAccountKey(participant, role: .muSig2, network: network, what: "participant")
             }
         }
+    }
+
+    private static func requireSuffix(_ derivation: Descriptor.Derivation, _ role: VaultCosignerRole) throws {
+        guard derivation.elements == role.requiredDerivation else {
+            throw VaultError.invalidDescriptor(
+                "this vault's signer derivation paths are not the supported form, so its signers cannot be shown to be independent of one another")
+        }
+    }
+
+    /// One signer as the boundary accepts it: an extended *public* key with
+    /// its origin, on this network, under the role's fixed suffix. The
+    /// network check is the one the builder path already made
+    /// (`VaultCosignerKey`) and this path did not: a card carrying `tpub`
+    /// keys under `"network": "mainnet"` was filed as a mainnet vault whose
+    /// keys sit at `86'/1'`, where no co-owner's mainnet wallet would ever
+    /// look for them.
+    private static func requireAccountKey(_ single: Descriptor.SingleKey, role: VaultCosignerRole,
+                                          network: BitcoinNetwork, what: String) throws {
+        guard case let .extended(key, keyNetwork) = single.base,
+              key.privateKey == nil, single.origin != nil else {
+            throw VaultError.invalidDescriptor(
+                "every \(what) must be an extended public key carrying its origin")
+        }
+        guard keyNetwork == hdNetwork(for: network) else {
+            throw VaultError.invalidDescriptor(
+                "a \(what)'s extended key belongs to a different network than this vault")
+        }
+        try requireSuffix(single.derivation, role)
     }
 
     /// A k-of-n vault is only k-of-n if its signers are n *distinct* keys.
@@ -297,6 +309,12 @@ public struct Vault: Sendable {
     /// each key was derived at is certain.
     public func signers(of psbt: PSBT, knownUTXOs: [WalletUTXO]) throws -> Set<Int> {
         guard case let .multiA(_, _, cosigners, _) = policy else { return [] }
+        // Counted by verified signature, not by presence: a forged reply
+        // that names a cosigner's key must not read as that cosigner's
+        // approval — the finalizer would refuse it, but only after the
+        // screen had said "approved".
+        let tx = try psbt.unsignedTransaction()
+        let spentOutputs = try psbt.spentOutputs()
         var approved: Set<Int>?
         for (inputIndex, input) in psbt.inputs.enumerated() {
             guard let txid = input.previousTxid, let vout = input.outputIndex,
@@ -304,7 +322,7 @@ public struct Vault: Sendable {
             else {
                 throw VaultError.invalidSpend("input \(inputIndex + 1) is not an available vault coin")
             }
-            let signed = Set(input.tapScriptSignatures.keys.map(\.publicKey))
+            let signed = try psbt.verifiedScriptPathSigners(input: inputIndex, tx: tx, spentOutputs: spentOutputs)
             var here: Set<Int> = []
             for (position, cosigner) in cosigners.enumerated() {
                 let key = try descriptor.publicKey(of: cosigner, index: known.index, choice: known.chain.rawValue)

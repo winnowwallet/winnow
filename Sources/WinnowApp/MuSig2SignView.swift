@@ -535,12 +535,7 @@ struct MuSig2SignView: View {
     /// UTXO set (inputs out, change in pending — the `Wallet.send` rule).
     private func commitAndBroadcast(_ transaction: BitcoinTransaction, vault: Vault,
                                     record: VaultRecord) async throws -> Data {
-        let txid = try await model.broadcast(transaction)
-        let changeIndex = record.nextChangeIndex
-        let changeScript = try? vault.scriptPubKey(index: changeIndex, choice: AddressChain.change.rawValue)
-        _ = await model.recordVaultSpend(id: record.id, transaction: transaction,
-                                         changeScriptPubKey: changeScript, changeIndex: changeIndex)
-        return txid
+        try await model.broadcastVaultSpend(transaction, vault: vault, record: record)
     }
 
     private func accepts(_ token: SensitivePresentationEpoch.Token) -> Bool {

@@ -536,6 +536,17 @@ extension PSBT {
         return valid
     }
 
+    /// The leaf keys whose script-path signatures on `input` verify against
+    /// the recomputed sighash — the finalizer's own test, exposed so a
+    /// progress display can count approvals the way the finalizer will,
+    /// rather than by the presence of a signature entry.
+    func verifiedScriptPathSigners(input index: Int, tx: Transaction,
+                                   spentOutputs: [SighashBIP341.SpentOutput]) throws -> Set<Data> {
+        let (leaf, leafKeys, _) = try leafSigningContext(input: index)
+        return Set(validScriptPathSignatures(input: index, leaf: leaf, tx: tx,
+                                             spentOutputs: spentOutputs, leafKeys: leafKeys).keys)
+    }
+
     /// The signable leaf and its contract for one input: a leaf script that
     /// parses as multisig, and an output-committing sighash type — a vault
     /// cosigner signs only those, so a PSBT creator cannot collect
