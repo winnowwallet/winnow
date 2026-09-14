@@ -5,8 +5,15 @@ name: Node integration
 # cover the resulting main push. Nightly, release and confirmed manual runs
 # always execute fresh checks. Forks never reach the runner. Mining suites
 # stay serial within each VM: one listener and one job at a time.
+#
+# Pull requests reach the node lane only when they target main: a stacked
+# PR re-runs the same tree its base is already running. `edited` is listened
+# to solely so that retargeting a stacked PR to main, once its base merges,
+# triggers the run it now needs; every job ignores an edit that changed
+# only the title or body.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
   schedule:
@@ -72,6 +79,8 @@ jobs:
     if: >-
       needs.changes.outputs.required == 'true'
       && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      && (github.event_name != 'pull_request' || github.event.pull_request.base.ref == 'main')
+      && (github.event.action != 'edited' || github.event.changes.base != null)
       && (contains('pull_request push schedule', github.event_name) || inputs.confirm_dedicated_fixture)
     runs-on: [self-hosted, macOS, btc-swift, node-e2e]
     # First measured run under this lane: 5 m 20 s (run 34056640602).
@@ -135,19 +144,22 @@ jobs:
     name: ui-${{ matrix.device }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - device: iPhone
-            runner: [self-hosted, macOS, btc-swift, node-e2e]
-          # The Intel VM's iPad compositor aborts in CA::OGL::push_surface
-          # during lifecycle tests. Keep the full journey on native arm64;
-          # iPhone and package lanes retain Intel coverage.
-          - device: iPad
-            runner: macos-latest
+      # Pull requests run the iPhone journey on the self-hosted VMs only. The
+      # iPad journey — the longest job, on hosted Apple silicon — runs for
+      # main pushes, the nightly and confirmed manual runs. The Intel VM's
+      # iPad compositor aborts in CA::OGL::push_surface during lifecycle
+      # tests, which is why iPad never runs there; iPhone and package lanes
+      # retain Intel coverage.
+      matrix: >-
+        ${{ fromJSON(github.event_name == 'pull_request'
+          && '{"include":[{"device":"iPhone","runner":["self-hosted","macOS","btc-swift","node-e2e"]}]}'
+          || '{"include":[{"device":"iPhone","runner":["self-hosted","macOS","btc-swift","node-e2e"]},{"device":"iPad","runner":"macos-latest"}]}') }}
     needs: changes
     if: >-
       needs.changes.outputs.required == 'true'
       && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      && (github.event_name != 'pull_request' || github.event.pull_request.base.ref == 'main')
+      && (github.event.action != 'edited' || github.event.changes.base != null)
       && (contains('pull_request push schedule', github.event_name) || inputs.confirm_dedicated_fixture)
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
@@ -201,11 +213,32 @@ jobs:
           "$python_prefix/bin/python3.12" -c 'import tomllib'
           echo "$python_prefix/libexec/bin" >> "$GITHUB_PATH"
 
+      # The framework changes only when the bridge's locked source or its
+      # build script does, and building it from Rust source costs 9–12
+      # minutes per job. The key names every input, so a stale framework
+      # cannot be restored against changed source; a hit still re-checks the
+      # license evidence and the lockfile hash the build recorded.
+      - name: Restore the pinned app Tor framework
+        id: tor-cache
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: TorBridge/build
+          key: tor-bridge-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('TorBridge/Cargo.lock', 'TorBridge/Cargo.toml', 'TorBridge/rust-toolchain.toml', 'TorBridge/src/**', 'TorBridge/include/**', 'scripts/build-tor-bridge', 'scripts/install-rust') }}
+
       - name: Build pinned app Tor framework
+        if: steps.tor-cache.outputs.cache-hit != 'true'
         run: |
           scripts/install-rust
           export PATH="$HOME/.cargo/bin:$PATH"
           scripts/build-tor-bridge
+
+      - name: Check the restored Tor framework against its locked source
+        if: steps.tor-cache.outputs.cache-hit == 'true'
+        run: |
+          scripts/render-tor-notices --check
+          cd TorBridge
+          grep ' Cargo.lock$' build/source-and-binary-sha256.txt | shasum -a 256 -c -
+          test -d build/WinnowTor.xcframework
 
       - name: Install pinned XcodeGen
         run: scripts/install-xcodegen
