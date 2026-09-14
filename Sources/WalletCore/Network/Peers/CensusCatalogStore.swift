@@ -21,7 +21,7 @@ public struct CensusCatalogStore: Sendable {
     public func replace(with data: Data, now: Date = Date()) throws -> Download {
         let catalog = try CensusCatalog.decode(data, now: now)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: url, options: .atomic)
+        try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         return Download(catalog: catalog, sha256: Self.hash(data))
     }
     private static func hash(_ data: Data) -> String {

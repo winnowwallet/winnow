@@ -106,7 +106,7 @@ actor PeopleStore {
             return .missing
         }
         do {
-            let data = try Data(contentsOf: storageURL)
+            let data = try Self.boundedRead(storageURL)
             let payload = try Self.decodePayload(data)
             try Self.validate(payload.people, senderByTxid: payload.senderByTxid, network: network)
             records = payload.people
@@ -197,10 +197,8 @@ actor PeopleStore {
     func add(name: String, payTo: PersonPayTo?, signerKey: String?,
              provenance: PersonRecord.DestinationProvenance? = nil, source: String? = nil) throws -> PersonRecord {
         guard !isDamaged else { throw PeopleStorageError.damaged }
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedName.isEmpty else {
-            throw PeopleStorageError.invalidState("a person needs a name")
-        }
+        let trimmedName = try Self.normalizedName(name)
+        try Self.requireSource(source)
         // payTo and signerKey may both be absent: a name alone labels a
         // received payment, and keys can only ever be added by re-saving.
         let candidate = PersonRecord(id: UUID().uuidString, name: trimmedName,
@@ -223,10 +221,44 @@ actor PeopleStore {
         guard let position = records.firstIndex(where: { $0.id == id }) else {
             throw PeopleStorageError.unknownPerson
         }
+        let normalized = try name.map(Self.normalizedName)
         return try mutate {
-            if let name { $0[position].name = name.trimmingCharacters(in: .whitespacesAndNewlines) }
+            if let normalized { $0[position].name = normalized }
             $0[position].savedRecipient = saved
         }[position]
+    }
+
+    /// The most a people file may weigh: a thousand people and a thousand
+    /// sender labels fit in well under a megabyte.
+    static let maximumFileBytes = 4 * 1_024 * 1_024
+
+    /// Measures before reading, so a planted file is refused rather than held.
+    static func boundedRead(_ url: URL) throws -> Data {
+        let size = try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int ?? Int.max
+        guard size <= maximumFileBytes else { throw PeopleStorageError.invalidState("people file too large") }
+        let data = try Data(contentsOf: url)
+        guard data.count <= maximumFileBytes else { throw PeopleStorageError.invalidState("people file too large") }
+        return data
+    }
+
+    /// A name is stored only in the form `DisplayName` allows: short, single
+    /// line, no control characters.
+    private static func normalizedName(_ name: String) throws -> String {
+        guard let normalized = DisplayName.normalized(name) else {
+            throw PeopleStorageError.invalidState("a person needs a short, single-line name")
+        }
+        return normalized
+    }
+
+    /// Where a destination came from is free text shown next to it; bounded
+    /// like a name so a card cannot plant a page of it.
+    static let maximumSourceLength = 256
+
+    private static func requireSource(_ source: String?) throws {
+        guard let source else { return }
+        guard source.count <= maximumSourceLength, DisplayName.normalized(source) != nil else {
+            throw PeopleStorageError.invalidState("a destination source must be short and single-line")
+        }
     }
 
     /// A name-only record acquires a destination only through explicit selection.
@@ -237,6 +269,7 @@ actor PeopleStore {
         guard let index = records.firstIndex(where: { $0.id == id }), records[index].payTo == nil else {
             throw PeopleStorageError.invalidState("only a name-only contact can attach a destination")
         }
+        try Self.requireSource(source)
         var candidate = records[index]
         candidate.payTo = payTo
         if let duplicate = try Self.firstSharingAKey(with: candidate, among: records.filter { $0.id != id }, network: network) {
@@ -356,9 +389,10 @@ actor PeopleStore {
     /// What every person needs, whatever keys they carry — or do not: a
     /// label-only person holds a name and no keys at all.
     private static func validateShape(_ record: PersonRecord) throws {
-        guard !record.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw PeopleStorageError.invalidState("a person has no name")
+        guard DisplayName.normalized(record.name) == record.name else {
+            throw PeopleStorageError.invalidState("a person has no usable name")
         }
+        try requireSource(record.destinationSource)
         guard record.nextPaymentIndex <= maximumNextIndex else {
             throw PeopleStorageError.invalidState("payment index is out of range")
         }

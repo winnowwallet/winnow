@@ -412,6 +412,9 @@ final class AppModel {
 
     /// Opens the persisted wallet for the current network, if any.
     func boot() async {
+        // A crash with the export sheet open skips its cleanup; the staging
+        // file may carry the recovery phrase, so it does not wait for tmp.
+        ExportStagingFile.sweep()
         guard stage == .loading else { return }
         if let clipboard = e2e?.clipboard {
             UIPasteboard.general.string = clipboard
@@ -765,7 +768,8 @@ final class AppModel {
         guard let marker = storageDirectory()?.appending(path: Self.rollbackMarkerName) else {
             throw AppError.noStorage
         }
-        try Data(String(forkHeight).utf8).write(to: marker, options: .atomic)
+        try Data(String(forkHeight).utf8).write(
+            to: marker, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         try await wallet?.rollBack(to: forkHeight)
         try await vaultStore.rollBack(to: forkHeight)
         // Reactivates any own send whose confirming block fell (#157): the
@@ -2533,8 +2537,10 @@ final class AppModel {
                                 customURLString: String,
                                 network: BitcoinNetwork) -> URL {
         if provider == .custom {
+            // HTTPS only: the sender lookup sends a txid and the device IP to
+            // this host, and a plaintext answer could be forged on the path.
             if let url = URL(string: customURLString),
-               ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+               url.scheme?.lowercased() == "https",
                url.host != nil {
                 return url
             }
