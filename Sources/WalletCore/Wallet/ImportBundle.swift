@@ -473,7 +473,7 @@ extension Wallet {
         let utxos = try bundle.claimedUTXOs()
         for utxo in utxos {
             let expected = try descriptor
-                .derived(index: utxo.index, network: network)[utxo.chain.rawValue]
+                .derived(index: utxo.index, bitcoinNetwork: network)[utxo.chain.rawValue]
                 .scriptPubKey
             guard expected == utxo.scriptPubKey else {
                 throw WalletError.invalidBundle(

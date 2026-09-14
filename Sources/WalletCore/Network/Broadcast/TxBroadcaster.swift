@@ -107,9 +107,9 @@ public actor TxBroadcaster {
         var nextAttemptAt: Date
         var feeFloorExceededEmitted = false
         /// Some peer was handed the bytes at least once. Sticky for the
-        /// entry's life and persisted: a peer that took the transaction
-        /// keeps it, so its later disconnection is not a relay failure, and
-        /// a relaunch must not forget that the network has it.
+        /// entry's life and persisted across relaunch. A later disconnect
+        /// cannot undo that handoff. It does not prove the peer accepted,
+        /// retained, or relayed the transaction.
         var served = false
         /// Confirmation tombstone (#157), mirroring `WalletUTXO.SpentMarker`:
         /// a confirmed entry is kept, silent, rather than deleted. Deleting it
@@ -344,8 +344,8 @@ public actor TxBroadcaster {
     }
 
     /// Whether some peer was ever handed this transaction's bytes, across
-    /// disconnections and relaunches. What "seen by the network" may
-    /// honestly rest on.
+    /// disconnections and relaunches. A transport handoff alone does not
+    /// establish acceptance, propagation, or confirmation.
     public func wasServed(_ txid: Data) -> Bool {
         pending[txid]?.served ?? false
     }
@@ -665,13 +665,12 @@ public actor TxBroadcaster {
         return PeerEndpoint(host: String(key[key.startIndex ..< separator]), port: port)
     }
 
-    /// Marks everything relayed to this peer `failed` (disconnect/serve
-    /// failure); deprioritized entries stay untouched.
+    /// Marks unfinished handoffs to this peer failed. Completed handoffs
+    /// and deprioritized entries stay untouched.
     private func markPeerFailed(_ peer: PeerConnection, reason: String) {
         let key = peer.endpoint.description
         for (txid, entry) in pending {
-            // A peer that was handed the bytes keeps them; its going away
-            // afterwards is not a failure to relay.
+            // A disconnect cannot undo the recorded transport handoff.
             guard entry.confirmedAtHeight == nil, let relay = entry.peers[key],
                   relay.state != .failed, relay.state != .deprioritized,
                   relay.state != .served else { continue }
@@ -819,8 +818,8 @@ public actor TxBroadcaster {
                 relay.state = .served
                 if pending[vector.hash]?.served != true {
                     pending[vector.hash]?.served = true
-                    // Best effort: a write that fails forgets only that the
-                    // network has it, which the next announcement re-learns.
+                    // Best effort for this historical hint. If saving fails,
+                    // a later successful handoff can record it again.
                     try? persist(pending)
                 }
                 pending[vector.hash]?.peers[key] = relay

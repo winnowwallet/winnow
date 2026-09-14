@@ -509,7 +509,12 @@ public actor PeerConnection {
         let id = UUID()
         // Bounded buffer: a peer that floods unsolicited messages faster than a
         // subscriber drains must drop old gossip, not grow memory without limit.
-        return AsyncThrowingStream(bufferingPolicy: .bufferingNewest(256)) { continuation in
+        // The stream has a count-based API. Budget each slot at the largest
+        // accepted payload so a stalled subscriber cannot bypass the backlog's
+        // byte ceiling. This bounds wire payload retention, not decoded RSS.
+        let largestPayload = min(backlogByteLimit, MessageFramer.maxPayloadSize)
+        let slots = min(Self.backlogLimit, max(1, backlogByteLimit / largestPayload))
+        return AsyncThrowingStream(bufferingPolicy: .bufferingNewest(slots)) { continuation in
             subscribers[id] = continuation
             continuation.onTermination = { _ in
                 Task { await self.removeSubscriber(id) }
@@ -793,6 +798,8 @@ public actor PeerConnection {
         pending.removeAll()
         for (_, collector) in collectors { collector.continuation.resume(throwing: failure) }
         collectors.removeAll()
+        backlog.removeAll()
+        backlogBytes = 0
         timeoutTasks.values.forEach { $0.cancel() }
         timeoutTasks.removeAll()
         for (_, subscriber) in subscribers {

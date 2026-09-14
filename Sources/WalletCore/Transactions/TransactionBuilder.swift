@@ -144,8 +144,8 @@ public enum TransactionBuilder {
     /// Bitcoin Core's standardness ceiling on transaction size:
     /// `MAX_STANDARD_TX_WEIGHT` is 400,000 weight units, and vsize is weight
     /// divided by four. Policy, not consensus — a larger transaction is valid
-    /// in a block, but no default node relays or mines one, so a wallet that
-    /// builds one has produced bytes that cannot reach a miner.
+    /// in a block, but exceeds Bitcoin Core's default relay/mining policy.
+    /// Winnow uses that policy to avoid committing a send unlikely to relay.
     public static let maximumStandardVSize = 100_000
 
     /// Exact vsize of the *signed* transaction assuming every input is a P2TR

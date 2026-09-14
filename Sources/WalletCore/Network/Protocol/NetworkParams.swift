@@ -70,6 +70,8 @@ public struct NetworkParams: Sendable, Equatable {
         }
     }
 
+    public let noRetargeting: Bool
+
     public init(network: BitcoinNetwork, magic: Data, defaultPort: UInt16,
                 genesisTime: UInt32, genesisBits: UInt32, genesisNonce: UInt32,
                 genesisMerkleRoot: Data, genesisHash: Data, powLimit: Data,
@@ -77,9 +79,10 @@ public struct NetworkParams: Sendable, Equatable {
                 overlayFallbackPeers: [OverlayNetwork: [PeerEndpoint]] = [:],
                 checkpoint: Checkpoint? = nil,
                 powTargetTimespan: UInt32 = 14 * 24 * 60 * 60,
-                powTargetSpacing: UInt32 = 600) {
+                powTargetSpacing: UInt32 = 600, noRetargeting: Bool = false) {
         precondition(powTargetTimespan >= 4 && powTargetTimespan <= UInt32.max / 4)
         precondition(powTargetSpacing > 0 && powTargetTimespan % powTargetSpacing == 0)
+        self.noRetargeting = noRetargeting
         self.network = network
         self.magic = magic
         self.defaultPort = defaultPort
@@ -249,7 +252,8 @@ public struct NetworkParams: Sendable, Equatable {
         genesisMerkleRoot: genesisMerkleRoot,
         genesisHash: Data(displayHex: "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"),
         powLimit: Data(displayHex: "7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
-        dnsSeeds: []
+        dnsSeeds: [],
+        noRetargeting: true
     )
 
     public static let signet = NetworkParams(

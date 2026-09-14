@@ -136,7 +136,7 @@ struct TxBroadcasterTests {
         #expect(await broadcaster.wasServed(txid))
 
         // The peer goes away. Its relay entry does not become a failure: it
-        // took the bytes, and the network has them.
+        // was handed the bytes; that fact alone does not prove acceptance.
         await node.stop()
         _ = await pollUntil { await pool.connectedPeers().isEmpty }
         #expect(await broadcaster.relayStatus(txid)[endpoint.description] == .served)
@@ -148,6 +148,26 @@ struct TxBroadcasterTests {
         let reloaded = try TxBroadcaster(pool: pool, storageURL: store, rebroadcastBaseInterval: .seconds(3_600))
         #expect(await reloaded.wasServed(txid))
         #expect(await reloaded.pendingTxids == [txid])
+    }
+
+    @Test("a legacy relay record never invents a successful handoff")
+    func legacyServedDefaultsFalse() async throws {
+        let url = tempFileURL("legacy-served.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let pool = PeerPool(params: .signet, peerCount: 0, manualPeers: [])
+        let broadcaster = try TxBroadcaster(pool: pool, storageURL: url)
+        let txid = try await broadcaster.broadcast(makeFakeSegwitTx().serialized(includeWitness: true))
+        #expect(await !broadcaster.wasServed(txid), "no peer was connected")
+        await broadcaster.shutdown()
+        var root = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        var entries = try #require(root["transactions"] as? [String: [String: Any]])
+        for key in entries.keys { entries[key]?.removeValue(forKey: "served") }
+        root["transactions"] = entries
+        try JSONSerialization.data(withJSONObject: root).write(to: url)
+        let reopened = try TxBroadcaster(pool: pool, storageURL: url)
+        #expect(await !reopened.wasServed(txid))
+        #expect(await reopened.pendingTxids == [txid])
+        await reopened.shutdown()
     }
 
     @Test("serves a delayed getdata and tracks per-peer state")

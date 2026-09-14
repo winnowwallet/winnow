@@ -33,7 +33,7 @@ enum InspectionCommand {
         case "descriptor" where arguments.count <= 3:
             let network = arguments.count == 3 ? arguments[2] : "signet"
             guard let chain = BitcoinNetwork(rawValue: network) else { throw DebugError.usage(usage) }
-            let outputs = try Descriptor(arguments[1]).derived(index: 0, network: chain)
+            let outputs = try Descriptor(arguments[1]).derived(index: 0, bitcoinNetwork: chain)
             value = ["network": network, "index": 0, "outputs": outputs.enumerated().map { choice, output in
                 ["choice": choice, "scriptPubKey": output.scriptPubKey.hex, "address": output.address] as [String: Any]
             }]

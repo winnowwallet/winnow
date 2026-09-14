@@ -278,7 +278,7 @@ public actor FilterSync {
         // 2. cfcheckpt cross-peer comparison: collect answers about our tip,
         // adopt the majority, and only peers whose answer matched may go on
         // to serve filters.
-        let checkpoints = try await collectedCheckpoints(from: peers, tipHash: tipHash)
+        let checkpoints = try await collectedCheckpoints(from: peers, tipHash: tipHash, tip: tip)
         let reference = try await majorityReference(of: checkpoints)
         // The list was captured before any eviction, and `misbehaving`
         // triggers `replenish`, so a plain re-read could hand back brand-new
@@ -295,7 +295,7 @@ public actor FilterSync {
         // per batch.
         while progress.nextScanHeight <= ceiling {
             let batchStart = progress.nextScanHeight
-            let batchStop = min(batchStart + Self.maxRangePerRequest - 1, ceiling)
+            let batchStop = UInt32(min(UInt64(batchStart) + UInt64(Self.maxRangePerRequest) - 1, UInt64(ceiling)))
             guard let stopHash = await chain.blockHash(at: batchStop) else {
                 throw FilterSyncError.badPeerResponse("missing header at \(batchStop)")
             }
@@ -341,10 +341,6 @@ public actor FilterSync {
         // that stopped below that height has not pinned it yet, so there is
         // nothing to compare and the run that reaches it does the comparing.
         //
-        // The per-batch comparison walks the reference by index, so it cannot
-        // notice a reference list that stops short of the boundaries we
-        // scanned. This one ties the last announced entry to the last
-        // boundary, which is the case that survives it.
         let lastCheckpoint = (tip / Self.checkpointInterval) * Self.checkpointInterval
         if lastCheckpoint > 0, let pinned = filterHeader(at: lastCheckpoint),
            let announced = reference.filterHeaders.last, pinned != announced {
@@ -374,9 +370,13 @@ public actor FilterSync {
     /// `UInt32.max` to mean "as far as you can get", and a 32-bit add would
     /// trap on it.
     static func scanCeiling(frontier: UInt32, maxBlocks: UInt32?, tip: UInt32) -> UInt32? {
-        guard let maxBlocks else { return tip }
+        // Progress stores the next height in UInt32. Do not scan a block
+        // whose successor cannot be represented; a hostile height cannot wrap.
+        let representableTip = min(tip, UInt32.max - 1)
+        guard frontier <= representableTip else { return nil }
+        guard let maxBlocks else { return representableTip }
         guard maxBlocks > 0 else { return nil }
-        return UInt32(min(UInt64(frontier) + UInt64(maxBlocks) - 1, UInt64(tip)))
+        return UInt32(min(UInt64(frontier) + UInt64(maxBlocks) - 1, UInt64(representableTip)))
     }
 
     /// One cfcheckpt answer per peer that answered about our chain tip.
@@ -394,7 +394,7 @@ public actor FilterSync {
     /// cannot trip this: it echoes the stop hash we sent, so a tip that
     /// advances mid-loop simply means we scan to the tip we asked about and
     /// catch the rest on the next run.
-    private func collectedCheckpoints(from peers: [PeerConnection], tipHash: Data)
+    private func collectedCheckpoints(from peers: [PeerConnection], tipHash: Data, tip: UInt32)
         async throws -> [(peer: PeerConnection, message: CFCheckptMessage)] {
         let checkpointPeers = Array(peers.prefix(max(1, min(3, requiredCheckpointPeers))))
         var checkpoints: [(peer: PeerConnection, message: CFCheckptMessage)] = []
@@ -422,6 +422,10 @@ public actor FilterSync {
                 await pool.misbehaving(peer, reason: "cfcheckpt stop hash mismatch")
                 continue
             }
+            guard message.filterHeaders.count == Int(tip / Self.checkpointInterval) else {
+                await pool.misbehaving(peer, reason: "cfcheckpt count mismatch")
+                continue
+            }
             checkpoints.append((peer, message))
         }
         guard !checkpoints.isEmpty else {
@@ -437,18 +441,10 @@ public actor FilterSync {
     /// majority (e.g. two peers that disagree) the lie is unattributable, so
     /// every checkpoint peer is dropped and the pool replenishes and retries.
     ///
-    /// A lone survivor is accepted even when more peers were asked for, and
-    /// that is deliberate — refusing would be strictly worse. A peer only
-    /// leaves this set by being evicted, and the stop-hash guard evicts the
-    /// peer that *replied*; an honest peer never sends a stop hash we did not
-    /// ask about, so an attacker spraying garbage only evicts his own peers
-    /// and hands the sync to one he does not control. Reaching the bad case —
-    /// his peer as sole survivor — already requires him to hold a majority;
-    /// the downgrade adds nothing. Refusing, by contrast, would hand him a
-    /// repeatable abort: one bad reply per attempt would stall every sync
-    /// indefinitely. Corroboration here is defence in depth — a sole survivor
-    /// still cannot fabricate filter commitments past the checkpoint-boundary
-    /// comparison and the final guard at the end of `sync`.
+    /// A lone survivor is accepted in degraded mode. Its commitments are
+    /// checked against retained pins, but self-consistency does not establish
+    /// correctness: filters are not committed by Bitcoin consensus. Source
+    /// diversity reduces correlated failures; it does not prove independence.
     private func majorityReference(
         of checkpoints: [(peer: PeerConnection, message: CFCheckptMessage)])
         async throws -> CFCheckptMessage {
@@ -585,19 +581,38 @@ public actor FilterSync {
         for peer in peers {
             sourced.append((peer, await pool.source(of: peer.endpoint)))
         }
-        let message = try await crossCheckedCFHeaders(
-            batchStart: batchStart, batchStop: batchStop, stopHash: stopHash,
-            queryPeers: Self.crossSourceSet(sourced))
-
+        // A deep rollback may land in pruned history. Reconstruct from the
+        // closest surviving pin before scanning, keeping the wallet's logical
+        // frontier unchanged so a crash/reopen cannot skip or double-apply it.
+        var requestStart = batchStart
+        if batchStart > 0, storedHeaders[String(batchStart - 1)] == nil,
+           let anchor = storedHeaders.keys.compactMap(UInt32.init).filter({ $0 < batchStart }).max() {
+            requestStart = anchor + 1
+        }
         var headers = storedHeaders
-        try anchorPreviousHeader(of: message, batchStart: batchStart, in: &headers)
-
-        // Walk the BIP158 header chain: header[h] = SHA256d(filterHash[h] || header[h-1]).
-        var previous = message.previousFilterHeader
-        for (index, filterHash) in message.filterHashes.enumerated() {
-            let header = SHA256d.hash(filterHash + previous)
-            headers[String(batchStart + UInt32(index))] = header.hex
-            previous = header
+        let queryPeers = Self.crossSourceSet(sourced)
+        while requestStart <= batchStop {
+            let requestStop = UInt32(min(UInt64(requestStart) + UInt64(Self.maxRangePerRequest) - 1,
+                                         UInt64(batchStop)))
+            guard let requestHash = requestStop == batchStop ? stopHash : await chain.blockHash(at: requestStop) else {
+                throw FilterSyncError.badPeerResponse("missing reconstruction header")
+            }
+            let message = try await crossCheckedCFHeaders(
+                batchStart: requestStart, batchStop: requestStop, stopHash: requestHash,
+                queryPeers: queryPeers)
+            try anchorPreviousHeader(of: message, batchStart: requestStart, in: &headers)
+            var previous = message.previousFilterHeader
+            for (index, filterHash) in message.filterHashes.enumerated() {
+                let height = requestStart + UInt32(index)
+                let header = SHA256d.hash(filterHash + previous)
+                if let pinned = Self.filterHeader(at: height, in: storedHeaders), pinned != header {
+                    throw FilterSyncError.filterHeaderMismatch(height: height)
+                }
+                headers[String(height)] = header.hex
+                previous = header
+            }
+            if requestStop == batchStop { break }
+            requestStart = requestStop + 1
         }
         return headers
     }
@@ -726,6 +741,7 @@ public actor FilterSync {
             seen.formUnion(try await scanChunk(chunkStart: chunkStart, chunkStop: chunkStop,
                                                peer: peer, watchScripts: watchScripts,
                                                filterHeaders: filterHeaders, onMatch: onMatch))
+            if chunkStop == batchStop { break }
             chunkStart = chunkStop + 1
         }
         guard seen.count == count else {
@@ -977,10 +993,10 @@ public actor FilterSync {
     ///   rolled back into that range still finds a pinned anchor at the fork
     ///   instead of taking a peer's word for it. That run is one to two whole
     ///   checkpoint intervals — a thousand blocks at its shallowest, far past
-    ///   the depth of any reorg Bitcoin has recorded. Below it the store
-    ///   re-anchors the way a fresh install does, and the boundaries are what
-    ///   keep that bounded: a fabricated chain is compared against a pinned
-    ///   boundary within the next thousand blocks.
+    ///   the depth of normal reorganizations. Below it, cfheaders are rebuilt
+    ///   from the closest surviving pin before any filters are scanned.
+    /// - The earliest anchor, so a rollback before the first checkpoint still
+    ///   retains the original trust boundary.
     ///
     /// Fails closed on the anchor: if `frontier - 1` is not pinned, nothing is
     /// pruned at all. A store already missing its anchor is not one to prune
@@ -995,9 +1011,10 @@ public actor FilterSync {
         guard headers[String(anchor)] != nil else { return headers }
         let lastBoundary = (anchor / checkpointInterval) * checkpointInterval
         let keepFrom = lastBoundary < checkpointInterval ? 0 : lastBoundary - checkpointInterval
+        let firstAnchor = headers.keys.compactMap(UInt32.init).min()
         return headers.filter { key, _ in
             guard let height = UInt32(key) else { return false }
-            return height >= keepFrom || (height > 0 && height % checkpointInterval == 0)
+            return height == firstAnchor || height >= keepFrom || (height > 0 && height % checkpointInterval == 0)
         }
     }
 

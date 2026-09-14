@@ -196,8 +196,8 @@ public enum CoinSelection {
     }
 
     /// Refuses a selection whose transaction would exceed Bitcoin Core's
-    /// standard size limit — no peer relays one, so signing it only strands
-    /// the coins it spends. Sized for the shape the caller will build, which
+    /// default standardness size limit, so an unlikely-to-relay send does not
+    /// commit its coins as spent locally. Sized for the shape the caller will build, which
     /// is why it runs after the change decision rather than inside the loop.
     ///
     /// It runs after the insufficient-funds guard too: a wallet that cannot

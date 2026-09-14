@@ -30,11 +30,12 @@ public enum BIP39 {
     }
 
     /// Validates a mnemonic sentence against the wordlist and its checksum.
-    /// Separators are exactly one space: `seed` hashes the sentence as
+    /// Separators after NFKD are exactly one space: `seed` hashes the normalized sentence as
     /// written, so a doubled or leading space that validation forgave would
     /// derive a seed no other wallet agrees with.
     public static func validate(mnemonic: String) throws {
-        let words = mnemonic.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
+        let words = mnemonic.decomposedStringWithCompatibilityMapping
+            .split(separator: " ", omittingEmptySubsequences: false).map(String.init)
         guard [12, 15, 18, 21, 24].contains(words.count) else {
             throw BIP39Error.invalidWordCount
         }

@@ -69,6 +69,17 @@ struct BIP39Tests {
         #expect(ligature == Data(hex: "a82f3f4d9297559940ae10ce91e52f9be22afd06444fd7c1d40fdd1204cab43068fefca566d9f9fa714807a55e02dbc13ab4d7b7481305be8d280bf237139c96"))
     }
 
+    @Test("validation and seed derivation agree on compatibility spaces")
+    func compatibilitySpaces() throws {
+        let vector = try Self.vectors(language: "english")[0]
+        let spaced = vector.mnemonic.replacingOccurrences(of: " ", with: "\u{3000}")
+        try BIP39.validate(mnemonic: spaced)
+        #expect(try BIP39.seed(mnemonic: spaced, passphrase: "TREZOR") == vector.seed)
+        #expect(throws: BIP39Error.invalidWordCount) {
+            try BIP39.validate(mnemonic: "\u{3000}" + spaced)
+        }
+    }
+
     @Test("seed -> BIP32 master xprv")
     func masterXprv() throws {
         for vector in try Self.vectors(language: "english") {

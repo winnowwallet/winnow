@@ -130,4 +130,35 @@ struct PeerConnectionTests {
         let size = await peer.backlogSize
         #expect(size.bytes == 0)
     }
+    @Test("a stalled event subscriber is bounded and teardown releases the backlog")
+    func stalledSubscriber() async throws {
+        let node = LoopbackNode(params: .signet)
+        try await node.start()
+        defer { Task { await node.stop() } }
+        let peer = PeerConnection(endpoint: await node.endpoint, params: .signet, backlogByteLimit: 1_024)
+        try await peer.connect()
+        let events = await peer.events()
+        // Do not consume until the whole burst has arrived.
+        for value in 0 ..< 12 {
+            try await node.send(.unknown(command: "gossip", payload: Data(repeating: UInt8(value), count: 1_024)))
+        }
+        #expect(await drain(node))
+        var iterator = events.makeAsyncIterator()
+        guard case let .message(.unknown(_, payload))? = try await iterator.next() else {
+            Issue.record("expected the newest gossip")
+            await peer.disconnect()
+            return
+        }
+        #expect(payload == Data(repeating: 11, count: 1_024))
+        await peer.disconnect()
+        let retained = await peer.backlogSize
+        #expect(retained.messages == 0)
+        #expect(retained.bytes == 0)
+        guard case .disconnected? = try await iterator.next() else {
+            Issue.record("older gossip survived in the subscriber queue")
+            return
+        }
+        if try await iterator.next() != nil { Issue.record("stream did not finish") }
+    }
+
 }

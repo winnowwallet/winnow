@@ -27,10 +27,10 @@ let fileProtectionRecorded: Bool = {
 ///
 /// Each write names `completeUntilFirstUserAuthentication` instead of taking
 /// whatever class its directory hands out. The class is the one this wallet
-/// already asks for wherever it protects a file: header, filter and relay work
-/// continues while the screen is off, so `complete` would stop background sync
-/// dead, and a class that comes from the directory is a guarantee only until
-/// someone moves the storage.
+/// already asks for wherever it protects a file. It remains accessible after
+/// the first device unlock, including cleanup while the app is suspended.
+/// Winnow suspends networking in the background; this class is not a promise
+/// of background sync. Naming it avoids relying on an inherited default.
 ///
 /// Every case below writes into a directory marked `complete` — a class the
 /// library asks for nowhere. A new file takes its directory's class unless the

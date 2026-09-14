@@ -3,6 +3,7 @@ import P256K
 import TestSupport
 import WalletCore
 import XCTest
+import UIKit
 
 /// Smoke probe: the whole suite hinges on the iOS-simulator test runner
 /// being able to spawn host processes (bitcoin-cli mining, pasteboard
@@ -1473,15 +1474,21 @@ final class WinnowAppUITests: XCTestCase {
         XCTAssertTrue(shareSheet, "share sheet did not appear")
         Screenshots.capture(app, "17-export-share-sheet", testCase: self)
         let closeShare = app.buttons["Close"].firstMatch
-        if closeShare.waitForExistence(timeout: 5), closeShare.isHittable {
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            // ShareLink presents a popover on iPad. A tap on its backdrop
+            // dismisses only that popover; the backup form remains open.
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.08)).tap()
+        } else if closeShare.waitForExistence(timeout: 5), closeShare.isHittable {
             closeShare.tap()
         } else {
-            // Fallback: drag the sheet down to dismiss.
+            // Fallback: drag the iPhone sheet down to dismiss.
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55))
                 .press(forDuration: 0.05, thenDragTo:
                     app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98)))
         }
-        // Back on the export form (the next step's scroll asserts the toggle).
+        XCTAssertTrue(poll(timeout: 10, interval: 0.5, "share sheet dismissed") {
+            !app.otherElements["ActivityListView"].exists && !sheetTitle.exists
+        }, "share UI still covers the backup form")
 
         // Including the key replaces the staged file only after confirmation.
         XCTAssertTrue(scrollUntilExists(app, toggle, up: true), "no seed toggle")

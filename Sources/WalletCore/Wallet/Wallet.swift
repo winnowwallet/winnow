@@ -11,7 +11,7 @@ public enum WalletError: Error, Equatable, LocalizedError {
     /// The built transaction lost its change output (should not happen).
     case changeOutputMissing
     /// The signed transaction is past Bitcoin Core's standard size limit, so
-    /// no peer would relay it. Coin selection refuses this earlier, on its
+    /// default relay policy rejects it. Coin selection refuses this earlier, on its
     /// estimate; this measures the bytes that were actually signed.
     case transactionTooLarge(vsize: Int, limit: Int)
     /// A seed-bearing export was requested, but the secret is an xprv (or
@@ -777,11 +777,11 @@ public actor Wallet {
 
     /// scriptPubKey at (chain, index), derived from the multipath descriptor.
     public func scriptPubKey(chain: AddressChain, index: UInt32) throws -> Data {
-        try descriptor.derived(index: index, network: network)[chain.rawValue].scriptPubKey
+        try descriptor.derived(index: index, bitcoinNetwork: network)[chain.rawValue].scriptPubKey
     }
 
     public func address(chain: AddressChain, index: UInt32) throws -> String {
-        try descriptor.derived(index: index, network: network)[chain.rawValue].address
+        try descriptor.derived(index: index, bitcoinNetwork: network)[chain.rawValue].address
     }
 
     /// The next unused receive address; marks it used (advances the index).
@@ -1340,6 +1340,7 @@ public actor Wallet {
             transaction: candidate.transaction, selected: candidate.pending.selected,
             changeIndex: candidate.change.map { _ in candidate.changeIndex },
             changeOutputIndex: candidate.changeOutputIndex.map(Int.init))
+        try Self.checkStandardSize(signed)
         let built = BuiltTransaction(psbt: psbt, transaction: signed, fee: candidate.fee,
                                      changeAmount: candidate.change?.amount)
         return PreparedFeeBump(originalTxid: txid, built: built,

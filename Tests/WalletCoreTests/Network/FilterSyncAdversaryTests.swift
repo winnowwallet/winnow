@@ -45,6 +45,7 @@ struct FilterSyncAdversaryTests {
         /// Answers every getcfcheckpt with `wrongStopHash` — a peer replying
         /// about a different chain.
         case stopHash
+        case checkpointCount(delta: Int)
         /// Serves only the first `blocks` blocks and hangs up when asked about
         /// a block it does not have, which is what Bitcoin Core does with a
         /// getcfcheckpt for an unknown stop hash.
@@ -85,6 +86,9 @@ struct FilterSyncAdversaryTests {
             return LoopbackNode(params: params, chain: blocks,
                                 lieAboutFilterCommitments: true, lieSalt: salt,
                                 versionDelay: versionDelay)
+        case let .checkpointCount(delta):
+            return LoopbackNode(params: params, chain: blocks,
+                                cfcheckptCountDelta: delta, versionDelay: versionDelay)
         case .stopHash:
             return LoopbackNode(params: params, chain: blocks,
                                 cfcheckptStopHashOverride: wrongStopHash,
@@ -166,6 +170,74 @@ struct FilterSyncAdversaryTests {
         var result: Set<String> = []
         for peer in await pool.connectedPeers() { result.insert(await peer.endpoint.description) }
         return result
+    }
+
+    @Test("short and extra checkpoint lists fail before callbacks or publication", arguments: [-1, 1])
+    func invalidCheckpointCount(delta: Int) async throws {
+        let fixture = try await Self.threePeerFixture(liars: [.checkpointCount(delta: delta)])
+        let pool = fixture.pool
+        defer { fixture.stopNodes(); Task { await pool.stop() } }
+        let matches = MatchCollector()
+        await #expect(throws: FilterSyncError.self) {
+            try await fixture.sync.sync(watchScripts: [fixture.synthetic.watchScript]) { matches.add($0) }
+        }
+        #expect(matches.matches.isEmpty)
+        #expect(await fixture.sync.nextScanHeight == 1)
+        #expect(!FileManager.default.fileExists(atPath: fixture.progressFile.path))
+        #expect(await fixture.nodes[0].receivedMessages.allSatisfy { $0.command != "getcfilters" })
+    }
+
+    @Test("a malformed checkpoint list cannot block honest peers", arguments: [-1, 1])
+    func invalidCheckpointCountWithHonestPeers(delta: Int) async throws {
+        let fixture = try await Self.threePeerFixture(liars: [.checkpointCount(delta: delta), nil, nil])
+        let pool = fixture.pool
+        defer { fixture.stopNodes(); Task { await pool.stop() } }
+        let matches = MatchCollector()
+        try await fixture.sync.sync(watchScripts: [fixture.synthetic.watchScript]) { matches.add($0) }
+        #expect(matches.matches.count == 1)
+        #expect(await fixture.sync.nextScanHeight == 1_002)
+        #expect(await fixture.pool.rejectionReason(fixture.liarEndpoints[0]) == "cfcheckpt count mismatch")
+    }
+
+    @Test("a deep rollback reconstructs from a surviving pin before scanning", arguments: [false, true])
+    func deepRollbackReconstruction(liar: Bool) async throws {
+        let fixture = try await Self.threePeerFixture(
+            liars: [liar ? .filterCommitments(salt: 0xFF) : nil], watchHeight: 750)
+        let pool = fixture.pool
+        defer { fixture.stopNodes(); Task { await pool.stop() } }
+        // A pruned store whose original anchor is honest, but whose fork
+        // height (500) no longer has a pin. Everything after 500 is orphaned.
+        let genesis = fixture.synthetic.blocks[0]
+        let items = genesis.transactions.flatMap { $0.outputs.map(\.scriptPubKey) }
+        let filter = try GCSFilter(items: items, key: genesis.hash.prefix(16)).serialized
+        let anchor = SHA256d.hash(GCSFilter.filterHash(filter) + Data(repeating: 0, count: 32))
+        try await fixture.sync.recordProgressForTest(nextScanHeight: 1_002,
+            filterHeaders: ["0": anchor.hex, "1000": Data(repeating: 1, count: 32).hex])
+        try await fixture.sync.rollBack(to: 500)
+        // Reopen at the wallet's actual frontier, proving reconstruction
+        // doesn't require lying about or lowering the persisted wallet height.
+        let resumed = try FilterSync(pool: pool, chain: fixture.chain, startHeight: 501,
+                                      storageURL: fixture.progressFile)
+        let before = try Data(contentsOf: fixture.progressFile)
+        let matches = MatchCollector()
+        if liar {
+            await #expect(throws: FilterSyncError.filterHeaderMismatch(height: 1)) {
+                try await resumed.sync(watchScripts: [fixture.synthetic.watchScript]) { matches.add($0) }
+            }
+            #expect(matches.matches.isEmpty)
+            #expect(await resumed.nextScanHeight == 501)
+            #expect(try Data(contentsOf: fixture.progressFile) == before)
+            #expect(await fixture.nodes[0].receivedMessages.allSatisfy { $0.command != "getcfilters" })
+        } else {
+            try await resumed.sync(watchScripts: [fixture.synthetic.watchScript]) { matches.add($0) }
+            #expect(matches.matches.map(\.height) == [750])
+            #expect(await resumed.nextScanHeight == 1_002)
+            let requests = await fixture.nodes[0].receivedMessages.compactMap { message -> UInt32? in
+                if case let .getcfilters(request) = message { return request.startHeight }
+                return nil
+            }
+            #expect(requests.first == 501, "reconstruct headers without replaying old payment callbacks")
+        }
     }
 
     // MARK: - cfcheckpt majority

@@ -354,7 +354,7 @@ struct CoinSelectionTests {
 
     /// A fee rate is bounded on both sides. Zero, negative, NaN and infinity
     /// would each underflow the fee and inflate change past the inputs;
-    /// anything above Core's relay ceiling silently burns the balance. The
+    /// anything above Winnow's fee safety ceiling silently burns the balance. The
     /// first representable rate past the ceiling is in the list, so the bound
     /// is checked at its edge rather than near it.
     @Test("fee rates outside (0, 10000] are refused",

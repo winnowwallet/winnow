@@ -323,18 +323,18 @@ public struct Vault: Sendable {
 
     /// scriptPubKey at (multipath choice, index) — choice 0 receive, 1 change.
     public func scriptPubKey(index: UInt32, choice: Int = 0) throws -> Data {
-        try descriptor.derived(index: index, network: network)[choice].scriptPubKey
+        try descriptor.derived(index: index, bitcoinNetwork: network)[choice].scriptPubKey
     }
 
     public func address(index: UInt32, choice: Int = 0) throws -> String {
-        try descriptor.derived(index: index, network: network)[choice].address
+        try descriptor.derived(index: index, bitcoinNetwork: network)[choice].address
     }
 
     /// The scriptPubKeys to watch: both multipath choices for indices 0..<count.
     public func watchScripts(upTo count: UInt32) throws -> [Data] {
         var scripts: [Data] = []
         for index in 0 ..< count {
-            for output in try descriptor.derived(index: index, network: network) {
+            for output in try descriptor.derived(index: index, bitcoinNetwork: network) {
                 scripts.append(output.scriptPubKey)
             }
         }
@@ -950,7 +950,9 @@ public struct Vault: Sendable {
                             ownedOutputCoordinates: ownedOutputCoordinates,
                             chainTip: chainTip)
         try psbt.finalize()
-        return try psbt.extractedTransaction()
+        let transaction = try psbt.extractedTransaction()
+        try Wallet.checkStandardSize(transaction)
+        return transaction
     }
 
     // MARK: - Cosigner secrets

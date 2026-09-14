@@ -111,7 +111,7 @@ extension PersonPayTo {
                 : PersonPayToError.singleAddressKey
         }
         do {
-            _ = try descriptor.derived(index: 0, network: network)
+            _ = try descriptor.derived(index: 0, bitcoinNetwork: network)
         } catch {
             throw PersonPayToError.malformed
         }
@@ -142,7 +142,7 @@ extension PersonPayTo {
         case let .address(address):
             return address
         case let .descriptor(text):
-            return try Descriptor(text).derived(index: index, network: network)[0].address
+            return try Descriptor(text).derived(index: index, bitcoinNetwork: network)[0].address
         }
     }
 
@@ -151,7 +151,7 @@ extension PersonPayTo {
         case let .address(address):
             return try AddressDecoder.scriptPubKey(for: address, network: network)
         case let .descriptor(text):
-            return try Descriptor(text).derived(index: index, network: network)[0].scriptPubKey
+            return try Descriptor(text).derived(index: index, bitcoinNetwork: network)[0].scriptPubKey
         }
     }
 

@@ -350,8 +350,9 @@ struct FilterSyncTests {
         #expect(FilterSync.scanCeiling(frontier: 100, maxBlocks: nil, tip: 1_000) == 1_000)
         // No room means no blocks, which is not the same as no ceiling.
         #expect(FilterSync.scanCeiling(frontier: 100, maxBlocks: 0, tip: 1_000) == nil)
+        #expect(FilterSync.scanCeiling(frontier: .max, maxBlocks: nil, tip: .max) == nil)
         // "As far as you can get" must not overflow the addition.
-        #expect(FilterSync.scanCeiling(frontier: .max - 1, maxBlocks: .max, tip: .max) == .max)
+        #expect(FilterSync.scanCeiling(frontier: .max - 1, maxBlocks: .max, tip: .max) == UInt32.max - 1)
     }
 
     /// What one scan of the whole synthetic chain did, over its own loopback
@@ -576,7 +577,8 @@ struct FilterSyncTests {
         #expect(pruned["1500"] == nil)
         // 4,000 through 5,432 is 1,433 headers; the boundaries at 1,000, 2,000
         // and 3,000 are the only older ones kept.
-        #expect(pruned.count == 1_436)
+        #expect(pruned.count == 1_437)
+        #expect(pruned["1"] == dense["1"], "the earliest trust anchor survives")
     }
 
     @Test("a prune refuses when the frontier anchor is not pinned")
@@ -618,7 +620,7 @@ struct FilterSyncTests {
         for boundary in stride(from: 1_000, through: 7_000, by: 1_000) {
             #expect(kept[String(boundary)] != nil, "boundary \(boundary)")
         }
-        #expect(kept.count == 1_001 + 7)
+        #expect(kept.count == 1_001 + 7 + 1)
     }
 
     /// A wallet starting at 999, synced over `progressFile` against a node
@@ -676,9 +678,9 @@ struct FilterSyncTests {
         #expect(await reloaded.filterHeader(at: 2_000) != nil, "a boundary")
         #expect(await reloaded.filterHeader(at: 1_000) != nil, "the oldest boundary")
         #expect(await reloaded.filterHeader(at: 999) == nil)
-        #expect(await reloaded.filterHeader(at: 998) == nil, "the bootstrap anchor is spent")
+        #expect(await reloaded.filterHeader(at: 998) != nil, "the bootstrap anchor survives deep rollbacks")
         // 1,000 through 2,001, and nothing else.
-        #expect(await reloaded.pinnedFilterHeadersForTest.count == 1_002)
+        #expect(await reloaded.pinnedFilterHeadersForTest.count == 1_003)
     }
 
     /// The upgrade case: a file written by a build that kept one header per
@@ -704,8 +706,8 @@ struct FilterSyncTests {
         // One more batch over that file, and it comes back pruned.
         try await syncFrom999(synthetic, nodeTip: 2_001, progressFile: progressFile)
         let pruned = try reload(progressFile, params: synthetic.params)
-        #expect(await pruned.pinnedFilterHeadersForTest.count == 1_002)
-        #expect(await pruned.filterHeader(at: 998) == nil)
+        #expect(await pruned.pinnedFilterHeadersForTest.count == 1_003)
+        #expect(await pruned.filterHeader(at: 998) != nil)
         #expect(await pruned.filterHeader(at: 1_000) != nil, "the boundary survives the upgrade")
         #expect(await pruned.filterHeader(at: 2_001) != nil, "so does the anchor")
     }
@@ -866,13 +868,9 @@ struct FilterSyncTests {
         #expect(await filters.filterHeader(at: 1_000) != nil)
     }
 
-    /// The honest residual, stated as a test rather than left to be found. A
-    /// reorg deeper than the kept run lands on a height whose header was
-    /// pruned, so the next sync re-anchors on the peer's announced header
-    /// exactly as a fresh install does. The boundaries are why that is bounded
-    /// rather than open: the fabricated chain is compared against a pinned
-    /// boundary within the next thousand blocks.
-    @Test("a reorg below the kept run re-anchors like a fresh install, boundaries intact")
+    /// The logical frontier stays after the fork. Before filters are scanned,
+    /// the next run reconstructs cfheaders from the retained lower anchor.
+    @Test("a reorg below the kept run preserves the logical frontier and lower anchors")
     func rollBackBelowKeptRun() async throws {
         let filters = try offlineSync(startHeight: 1)
         let kept = FilterSync.prunedFilterHeaders(pinsForEveryHeight(in: 1 ... 5_432),
