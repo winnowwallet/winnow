@@ -202,6 +202,24 @@ public enum PersonCardError: Error, Equatable, LocalizedError {
     }
 }
 
+/// A person's or account's display name as it may be stored: trimmed, at most
+/// `maximumLength` characters, and free of control characters and line
+/// breaks — so a pasted card cannot plant megabytes into a file re-read at
+/// every launch, or a second line above the address on the review screen.
+public enum DisplayName {
+    public static let maximumLength = 120
+
+    public static func normalized(_ text: String) -> String? {
+        let name = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.count <= maximumLength,
+              !name.unicodeScalars.contains(where: {
+                  CharacterSet.controlCharacters.contains($0) || CharacterSet.newlines.contains($0)
+              })
+        else { return nil }
+        return name
+    }
+}
+
 /// What one person shares so others can pay them and save with them. Public
 /// keys only; nothing here can spend.
 public struct PersonCard: Codable, Equatable, Sendable {
@@ -340,8 +358,13 @@ enum WinnowCardCoding {
         return String(decoding: try encoder.encode(value), as: UTF8.self)
     }
 
+    /// A card is a name and one or two keys; anything larger is not a card
+    /// and must not be decoded, let alone persisted and re-read at every launch.
+    public static let maximumBytes = 64 * 1_024
+
     static func decode<T: Decodable>(_ text: String, kind: String) throws -> T {
         let data = Data(text.trimmingCharacters(in: .whitespacesAndNewlines).utf8)
+        guard data.count <= maximumBytes else { throw PersonCardError.notACard }
         let decoder = JSONDecoder()
         guard let envelope = try? decoder.decode(Envelope.self, from: data), envelope.winnow == kind else {
             throw PersonCardError.notACard
@@ -439,8 +462,7 @@ public enum PersonPaste {
         if let raw = card.signerKey?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
             signerKey = try VaultCosignerKey(raw, role: .scriptPath, network: network).expression
         }
-        let name = card.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return PersonImport(name: name.isEmpty ? nil : name, payTo: payTo, signerKey: signerKey, source: .card)
+        return PersonImport(name: DisplayName.normalized(card.name), payTo: payTo, signerKey: signerKey, source: .card)
     }
 
     private static func parseDescriptor(_ text: String, network: BitcoinNetwork) throws -> PersonImport {
