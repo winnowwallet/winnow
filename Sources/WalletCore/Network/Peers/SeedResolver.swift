@@ -52,12 +52,16 @@ public struct SeedResolver: Sendable {
         .live(fetchJSON: { name, type in
             var parts = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)!
             parts.queryItems = [URLQueryItem(name: "name", value: name), URLQueryItem(name: "type", value: type)]
-            return try await client.get(parts.url!, maximumBytes: 128 * 1024, accept: "application/dns-json")
+            return try await client.get(parts.url!, maximumBytes: maximumDoHBytes, accept: "application/dns-json")
         }, systemResolve: { host, port in
             guard client.route == .direct, !Task.isCancelled else { return [] }
             return systemResolve(host, port)
         })
     }
+
+    /// The most a DNS-over-HTTPS answer may weigh, on either fetch path. A
+    /// seed answer is a few hundred bytes; this is headroom, not a budget.
+    public static let maximumDoHBytes = 128 * 1024
 
     public func resolve(host: String, port: UInt16, allowPrivate: Bool) async -> [PeerEndpoint] {
         await lookup(host, port, allowPrivate)
@@ -128,10 +132,18 @@ public struct SeedResolver: Sendable {
         var request = URLRequest(url: url)
         request.setValue("application/dns-json", forHTTPHeaderField: "Accept")
         request.timeoutInterval = 5
-        let (data, response) = try await session.data(for: request)
+        // Streamed and capped, like the routed client: a resolver that
+        // answers with megabytes is refused before they are held.
+        let (bytes, response) = try await session.bytes(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-        guard (200 ..< 300).contains(status) else {
+        guard (200 ..< 300).contains(status),
+              response.expectedContentLength <= Int64(maximumDoHBytes) else {
             throw URLError(.badServerResponse)
+        }
+        var data = Data()
+        for try await byte in bytes {
+            data.append(byte)
+            guard data.count <= maximumDoHBytes else { throw URLError(.dataLengthExceedsMaximum) }
         }
         return data
     }
