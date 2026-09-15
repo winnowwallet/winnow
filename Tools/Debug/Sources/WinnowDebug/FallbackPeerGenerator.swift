@@ -165,8 +165,11 @@ enum FallbackPeerGenerator {
         let raw = URL(string: "https://raw.githubusercontent.com/\(censusRepository)/\(commit)/\(censusPath)")!
         let data = try await client.get(raw, maximumBytes: CensusCatalog.maximumBytes)
         let tree = URL(string: "https://api.github.com/repos/\(censusRepository)/contents/\(censusPath)?ref=\(commit)")!
+        // The contents API answers with the file's base64 content inline,
+        // so the reply is bigger than the list itself; only `sha` is read.
         let entry = try JSONDecoder().decode(
-            TreeEntry.self, from: try await client.get(tree, maximumBytes: 64 * 1_024, accept: "application/vnd.github+json"))
+            TreeEntry.self, from: try await client.get(tree, maximumBytes: CensusCatalog.maximumBytes * 2,
+                                                       accept: "application/vnd.github+json"))
         guard entry.sha == gitBlobID(data) else {
             throw GenerateError.usage("peers.json fetched at \(commit) is not the blob the census tree names there")
         }
