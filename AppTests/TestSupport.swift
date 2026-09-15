@@ -24,13 +24,16 @@ extension XCTestCase {
         return UserDefaults(suiteName: name)!
     }
 
+    /// The model keeps its secrets in memory: none of these tests puts a
+    /// wallet in the host app's real Keychain service, whose items now
+    /// carry a user-presence check nobody is present to pass.
     @MainActor
     func makeModel(network: BitcoinNetwork? = nil, defaults: UserDefaults? = nil,
                    deviceAuthenticator: any DeviceAuthenticating = SilentAuthenticator()) -> AppModel {
         let defaults = defaults ?? makeDefaults()
         if let network { defaults.set(network.rawValue, forKey: AppModel.DefaultsKey.network) }
         return AppModel(deviceAuthenticator: deviceAuthenticator, e2e: nil, defaults: defaults,
-                        storeKeys: InMemoryStoreKeyVault())
+                        storeKeys: InMemoryStoreKeyVault(), keyStore: InMemoryKeyStore())
     }
 }
 

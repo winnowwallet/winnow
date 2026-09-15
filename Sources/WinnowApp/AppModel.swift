@@ -10,7 +10,12 @@ protocol DeviceAuthenticating {
     func authenticate(reason: String) async throws
 }
 
+/// Device-owner authentication through LocalAuthentication. The check that
+/// passes is handed to `keychain`, so the Keychain read the operation goes
+/// on to make reuses it instead of asking a second time (`KeychainStore`).
 struct LocalDeviceAuthenticator: DeviceAuthenticating {
+    let keychain: KeychainAuthentication
+
     func authenticate(reason: String) async throws {
         let context = LAContext()
         var unavailable: NSError?
@@ -20,6 +25,7 @@ struct LocalDeviceAuthenticator: DeviceAuthenticating {
         let passed = try await context.evaluatePolicy(
             .deviceOwnerAuthentication, localizedReason: reason)
         guard passed else { throw AppModel.AppError.deviceAuthFailed }
+        keychain.grant(context)
     }
 }
 
@@ -293,10 +299,15 @@ final class AppModel {
         didSet { recomputeSharedSavings() }
     }
 
-    /// Secrets (the BIP39 mnemonic) live in the Keychain, this device only.
-    /// E2E test mode (E2EMode) uses a separate Keychain service so test runs
-    /// never touch a real wallet's secrets.
+    /// Secrets (the BIP39 mnemonic) live in the Keychain, this device only,
+    /// behind the Keychain's own user-presence check. E2E test mode (E2EMode)
+    /// uses a separate Keychain service so test runs never touch a real
+    /// wallet's secrets, and no user-presence check, since nobody is there.
     let keyStore: any KeyStore
+    /// The device-owner check the sensitive action in progress passed, held
+    /// for the Keychain read that follows it; dropped when that action ends
+    /// and when the app leaves the screen.
+    let keychainAuthentication = KeychainAuthentication()
     let vaultStore: VaultStore
     let peopleStore: PeopleStore
     private let defaults: UserDefaults
@@ -386,14 +397,18 @@ final class AppModel {
         static func backupPending(_ walletID: String) -> String { "backupPending.\(walletID)" }
     }
 
-    init(deviceAuthenticator: any DeviceAuthenticating = LocalDeviceAuthenticator(),
+    init(deviceAuthenticator: (any DeviceAuthenticating)? = nil,
          e2e: E2EMode? = E2EMode.current, defaults: UserDefaults = .standard,
-         storeKeys: (any StoreKeyVault)? = nil) {
+         storeKeys: (any StoreKeyVault)? = nil, keyStore: (any KeyStore)? = nil) {
         self.deviceAuthenticator = deviceAuthenticator
+            ?? LocalDeviceAuthenticator(keychain: keychainAuthentication)
         self.e2e = e2e
         e2e?.wipeIfRequested()
         let keychainService = e2e?.keychainService ?? KeychainStore.defaultService
-        keyStore = KeychainStore(service: keychainService)
+        self.keyStore = keyStore ?? KeychainStore(
+            service: keychainService,
+            protection: e2e == nil ? .userPresence : .deviceOnly,
+            authentication: keychainAuthentication)
         // The people and vault files' seal keys sit under the same service,
         // so the E2E wipe covers them along with the wallet secret.
         let storeKeys = storeKeys ?? KeychainStoreKeyVault(service: keychainService)
@@ -469,6 +484,7 @@ final class AppModel {
             self.wallet = wallet
             walletID = await wallet.id
             walletDescriptor = await wallet.descriptor
+            upgradeKeyProtection()
             // A wallet whose backup was never confirmed re-enters onboarding:
             // the backup sheet resumes from the Keychain (#5).
             let backupPending = hasPendingBackup
@@ -488,6 +504,24 @@ final class AppModel {
         ])
         await refresh()
         if isActive { await activate() }
+    }
+
+    /// A wallet stored by 0.7.1 or earlier has its secret behind the
+    /// protection class alone; this puts the Keychain's user-presence check
+    /// on it in place (`KeychainStore.upgradeProtection`). Attributes only,
+    /// no prompt. Best effort: a failure leaves the secret as it was and the
+    /// next launch tries again, and the app-layer check still gates every
+    /// read meanwhile.
+    private func upgradeKeyProtection() {
+        guard let walletID else { return }
+        do {
+            if try keyStore.upgradeProtection(walletID: walletID) {
+                e2e?.journal("keychain.protectionUpgraded", fields: ["walletID": walletID])
+            }
+        } catch {
+            e2e?.journal("keychain.protectionUpgradeFailed",
+                         fields: ["walletID": walletID, "error": String(describing: error)])
+        }
     }
 
     static func openPersistedWallet(at url: URL,
@@ -516,6 +550,7 @@ final class AppModel {
             await activate()
         case .background:
             isActive = false
+            keychainAuthentication.revoke()
             suspendNetworking()
             await stopNetworking()
         default:
@@ -1070,6 +1105,7 @@ final class AppModel {
     /// user backs up the phrase.
     func createWallet() async throws -> String {
         try await authenticateSensitiveAction(reason: "Create and reveal a new wallet recovery phrase")
+        defer { keychainAuthentication.revoke() }
         try Task.checkCancellation()
         await buildStackIfNeeded()
         guard stack != nil else { throw AppError.noStack }
@@ -1108,6 +1144,7 @@ final class AppModel {
             try await authenticateSensitiveAction(
                 reason: "Import this wallet's recovery phrase")
         }
+        defer { keychainAuthentication.revoke() }
         // Do not cross the Keychain/storage commit boundary after the view
         // that requested a seed-bearing import has been invalidated.
         try Task.checkCancellation()
@@ -1172,6 +1209,7 @@ final class AppModel {
             try await authenticateSensitiveAction(
                 reason: "Export this wallet with its recovery phrase")
         }
+        defer { keychainAuthentication.revoke() }
         try Task.checkCancellation()
         // The UI snapshot already prefers filters.nextScanHeight; export
         // must too, in case the last persist was skipped (failed pass).
@@ -1303,6 +1341,7 @@ final class AppModel {
         guard let walletID, hasPendingBackup else { return nil }
         try await authenticateSensitiveAction(
             reason: "Resume this wallet's recovery-phrase backup")
+        defer { keychainAuthentication.revoke() }
         try Task.checkCancellation()
         guard case let .mnemonic(words) = try keyStore.load(walletID: walletID) else {
             throw AppError.mnemonicUnavailable
@@ -1318,6 +1357,7 @@ final class AppModel {
     func revealMnemonic() async throws -> String {
         guard let walletID else { throw AppError.noWallet }
         try await authenticateSensitiveAction(reason: "Reveal this wallet's recovery phrase")
+        defer { keychainAuthentication.revoke() }
         try Task.checkCancellation()
         guard case let .mnemonic(words) = try keyStore.load(walletID: walletID) else {
             throw WalletError.mnemonicUnavailable
@@ -1344,6 +1384,7 @@ final class AppModel {
     func destroyWallet() async throws {
         guard let walletID else { throw AppError.noWallet }
         try await authenticateSensitiveAction(reason: "Delete this wallet from this device")
+        defer { keychainAuthentication.revoke() }
 
         syncTask?.cancel()
         syncTask = nil
@@ -1754,6 +1795,7 @@ final class AppModel {
         guard case .wallet = preview.source else { throw AppError.sendReviewChanged }
         guard let wallet else { throw AppError.noWallet }
         try await authenticateSensitiveAction(reason: "Sign and send this Bitcoin transaction")
+        defer { keychainAuthentication.revoke() }
         // Build and sign WITHOUT touching wallet state, hand the tx to the
         // broadcaster, and only then commit the selection. If broadcast throws
         // (no stack, disk error), nothing was spent locally — no stranded UTXOs.
@@ -1803,6 +1845,7 @@ final class AppModel {
         guard let wallet else { throw AppError.noWallet }
         guard let broadcaster = stack?.broadcaster else { throw AppError.noStack }
         try await authenticateSensitiveAction(reason: "Sign a replacement Bitcoin transaction")
+        defer { keychainAuthentication.revoke() }
         let prepared = try await wallet.buildFeeBump(
             txid: preview.originalTxid, feeRateSatPerVByte: preview.feeRateSatPerVByte)
         guard preview.authorizes(prepared.built) else { throw AppError.sendReviewChanged }
@@ -2385,6 +2428,7 @@ final class AppModel {
     func withMasterKey<T>(reason: String, _ body: (HDKey) throws -> T) async throws -> T {
         guard let walletID else { throw AppError.noWallet }
         try await authenticateSensitiveAction(reason: reason)
+        defer { keychainAuthentication.revoke() }
         try Task.checkCancellation()
         let master: HDKey
         switch try keyStore.load(walletID: walletID) {
@@ -2397,6 +2441,12 @@ final class AppModel {
     /// One fail-closed authorization boundary for every secret-revealing or
     /// signing operation. Automated Debug runs may bypass it explicitly;
     /// PR #106 removes that bypass and its environment parser from Release.
+    ///
+    /// The check that passes is left in `keychainAuthentication` for the
+    /// Keychain read the operation goes on to make. Every caller revokes it
+    /// when the operation ends, whichever way — `defer` right after this
+    /// call — so an operation that throws before its read, or never reads
+    /// (deleting the wallet), leaves nothing behind for other code to use.
     func authenticateSensitiveAction(reason: String) async throws {
         if e2e != nil, e2e?.requireDeviceAuthentication != true { return }
         try await deviceAuthenticator.authenticate(reason: reason)
@@ -2481,6 +2531,7 @@ final class AppModel {
             self.wallet = wallet
             walletID = await wallet.id
             walletDescriptor = await wallet.descriptor
+            upgradeKeyProtection()
             // A wallet whose backup was never confirmed re-enters onboarding:
             // the backup sheet resumes from the Keychain (#5).
             stage = hasPendingBackup ? .onboarding : .ready

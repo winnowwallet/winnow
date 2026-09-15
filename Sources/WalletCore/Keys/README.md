@@ -4,7 +4,10 @@
 
 BIP39 recovery words, BIP32 derivation, BIP86 addresses, and the Apple Keychain
 implementation live together. Receiving, recovery, and signing use the same
-keys; durable secrets retain access rules distinct from ordinary wallet metadata.
+keys; durable secrets retain access rules distinct from ordinary wallet metadata:
+this device only, never synchronized, and behind the Keychain's own
+user-presence check, which reuses the device-owner check the app just ran so
+the user is asked once.
 Seed derivation normalizes the recovery words and the passphrase NFKD, as BIP39
 requires. For English words with no passphrase NFD gives the same bytes; a
 sentence separated by U+3000 IDEOGRAPHIC SPACE, or a passphrase carrying a

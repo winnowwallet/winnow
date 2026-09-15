@@ -46,7 +46,12 @@ struct E2EMode {
     /// This changes navigation only and is ignored outside E2E mode.
     let initialTab: String?
     /// Manual debug runs exercise Local Authentication on the simulator.
-    /// Ordinary XCUITests leave this false so they can run unattended.
+    /// Ordinary XCUITests leave this false so they can run unattended. It
+    /// covers the app's own check only: an E2E run's Keychain items never
+    /// carry the user-presence access control a real wallet's do
+    /// (`KeychainStore.Protection.deviceOnly`), because the simulator has
+    /// nobody to answer the Keychain's prompt and no data protection to
+    /// enforce it with.
     let requireDeviceAuthentication: Bool
     /// `WINNOW_E2E_ADVANCED=1`: launch with advanced mode on, so a UI test can
     /// reach the advanced controls without tapping through Settings first.

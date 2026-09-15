@@ -133,6 +133,8 @@ Filed 2026-09-14 as one public issue per finding, label `security`, at the owner
 
 **Status, 2026-09-14** — one branch, winnow#137, carries the fixes; census#15 the census side. Fixed there: IR-001, IR-002, IR-003, IR-004, IR-005, IR-007, IR-010 through IR-020, IR-022, IR-024 through IR-033. Closed without a change: IR-006 and IR-019 (fixed upstream before the review's branch landed), IR-008 (the owner recorded GO). Recorded as accepted: IR-021 (`SEC-029`). Owner-gated and still open: IR-009 (`SECURITY.md` now points at private vulnerability reporting, which the repository must enable) and IR-023 (an access-control class on the Keychain item is a device-behaviour decision). The census signing mechanism of IR-003 ships with an empty trusted-key list; the owner's three steps are in `docs/census-signing.md`.
 
+**Status, 2026-09-15** — IR-023 fixed (winnow#120): the wallet's Keychain item now carries `SecAccessControlCreateWithFlags(.userPresence)` over `WhenUnlockedThisDeviceOnly`; the `LAContext` the app's own check evaluates is handed to the read that follows, so the user is asked once; an item stored by 0.7.1 or earlier gets the access control in place on its next open. `AppTests/KeychainAttributeTests` reads the recorded constraint back and exercises the in-place upgrade; the simulator records the constraint but does not enforce it, so enforcement stays with the device-evidence item. Owner-gated and still open: IR-009.
+
 | ID | Issue | ID | Issue | ID | Issue |
 |---|---|---|---|---|---|
 | IR-001 | winnow#98 | IR-012 | winnow#109 | IR-023 | winnow#120 |

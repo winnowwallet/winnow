@@ -15,8 +15,14 @@ public enum KeyStoreError: LocalizedError, Equatable {
             "This device already contains a protected key for wallet \(walletID)."
         case .malformedSecret:
             "The protected wallet key is damaged or has an unsupported format."
+        case .keychain(errSecUserCanceled):
+            "Unlocking the wallet key was cancelled."
+        case .keychain(errSecAuthFailed):
+            "The device did not confirm it was you, so the wallet key stays locked."
+        case .keychain(errSecInteractionNotAllowed):
+            "The wallet key can only be unlocked while Winnow is on screen and the device is unlocked."
         case let .keychain(status):
-            "The device could not store the protected wallet key (\(SecCopyErrorMessageString(status, nil) as String? ?? "keychain status \(status)"))."
+            "The device could not reach the protected wallet key (\(SecCopyErrorMessageString(status, nil) as String? ?? "keychain status \(status)"))."
         }
     }
 }
@@ -59,4 +65,14 @@ public protocol KeyStore: Sendable {
     func load(walletID: String) throws -> WalletSecret
     /// Deletes the secret for `walletID`; deleting an absent ID is a no-op.
     func delete(walletID: String) throws
+    /// Brings a secret stored by an earlier version up to the store's
+    /// current protection, without reading it. Returns whether anything
+    /// changed. Stores with one notion of protection have nothing to do.
+    @discardableResult
+    func upgradeProtection(walletID: String) throws -> Bool
+}
+
+public extension KeyStore {
+    @discardableResult
+    func upgradeProtection(walletID: String) throws -> Bool { false }
 }

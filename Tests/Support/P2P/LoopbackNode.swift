@@ -306,8 +306,11 @@ public actor LoopbackNode {
                             }
                         }
                     }
-                    try await respond(to: message)
+                    // Recorded before it is answered: a test that reads the
+                    // inbox once the client's sync returns must find the
+                    // request that sync's last reply answered.
                     inbox.append(message)
+                    try await respond(to: message)
                 }
             }
         } catch {
