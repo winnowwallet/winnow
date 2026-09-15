@@ -1,6 +1,10 @@
-Tor is gone; everything else should be unchanged
+Tor is gone, and the wallet key now asks for you itself
 
-0.7.1 removes the opt-in Tor client that 0.6 through 0.7.0 embedded. The app now always connects directly, the way it did with Tor off. Nothing else in the interface has moved.
+0.7.2 removes the opt-in Tor client that 0.6 through 0.7.0 embedded, and puts the wallet's key behind the phone's own passcode or Face ID check inside the Keychain, not only the app's. The app now always connects directly, the way it did with Tor off. Nothing else in the interface has moved.
+
+The wallet key check
+
+Reveal the recovery phrase, send a payment, or export a backup with the phrase: you should see one passcode or Face ID prompt, not two. An existing wallet opens with no prompt and nothing changes; the stronger protection is put on quietly the first time this version opens the wallet. A prompt worded "Unlock this wallet's protected key" means the app's own check and the Keychain's did not join up: report it, with what you were doing and whether Face ID or the passcode was used.
 
 If you had Tor on
 
