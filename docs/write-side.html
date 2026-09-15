@@ -75,7 +75,7 @@
   <p>Secrets:</p>
   <ul>
   <li>The seed is a BIP39 mnemonic (12 words, 16 bytes of entropy) or a master xprv, stored by <code>KeychainStore</code> under the wallet id (master fingerprint, 8 hex chars).</li>
-  <li>Accessibility is <code>WhenUnlockedThisDeviceOnly</code>; <code>kSecAttrSynchronizable</code> is false. The JSON wallet file on disk holds the descriptor, UTXOs, and history — public material.</li>
+  <li>Accessibility is <code>WhenUnlockedThisDeviceOnly</code> behind a <code>.userPresence</code> access control, so the Keychain itself asks for the passcode or biometrics before releasing the secret; <code>kSecAttrSynchronizable</code> is false. The JSON wallet file on disk holds the descriptor, UTXOs, and history — public material.</li>
   <li><code>Wallet.tweakedPrivateKey</code> loads the secret, derives <code>m/86'/coin'/account'/chain/index</code>, applies the BIP86 tweak (no merkle root), signs, and drops the key. The actor never holds the seed in <code>WalletState</code>.</li>
   </ul>
   <p>All secret-key operations go through libsecp256k1 (P256K). The sighash is BIP341 <code>SIGHASH_DEFAULT</code>. Auxiliary nonce randomness is 32 fresh bytes per signature.</p>

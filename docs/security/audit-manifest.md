@@ -216,16 +216,21 @@ README and lockfile; the census publisher (winnowwallet/census) consumes
   rules with a generator-proven checkpoint; sealed-store and census-signature
   tests; story redaction/idempotency checks; Bitcoin Core differential tests
   and the iPhone journeys on every pull request; Keychain attribute read-back
-  and the privacy cover in the app suite.
+  (protection class, synchronizable flag, the user-presence access control
+  and its in-place upgrade of an earlier version's item) and the privacy
+  cover in the app suite.
 - Not executed on the pull-request path: the iPad journeys (on `main`), the
   sustained fuzz matrix (weekly), soak runs, device authentication on real
   hardware, and release provenance (release workflow).
 - Structural gap: the simulator has no data protection and no Secure Enclave,
-  so a protection class is observed to be requested and recorded, never to be
-  honoured; that is Apple's contract and needs real hardware.
+  so a protection class and the user-presence access control (IR-023) are
+  observed to be requested and recorded, never to be honoured — the
+  simulator releases the secret to a read that forbids interaction; that is
+  Apple's contract and needs real hardware.
 - Owner-gated after the 2026-09-14 review: private vulnerability reporting
-  (IR-009), an access-control class on the Keychain item (IR-023), and the
-  census signing key (IR-003, `docs/census-signing.md`).
+  (IR-009) and the census signing key (IR-003, `docs/census-signing.md`).
+  IR-023 (an access-control class on the Keychain item) was fixed on
+  2026-09-15.
 
 ## Change control
 

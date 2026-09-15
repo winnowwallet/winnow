@@ -2398,8 +2398,11 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
             return localPeer.exists
         }
 
+        // The reset row sits under Refresh at the foot of the form. On iPad
+        // Refresh is already on screen without a scroll, so the row below it
+        // is not materialised yet and only a scroll down brings it in.
         let reset = app.buttons["resetPeersButton"]
-        XCTAssertTrue(scrollUntilExists(app, reset, up: true), "no peer reset button")
+        XCTAssertTrue(scrollUntilExists(app, reset), "no peer reset button")
         reset.tap()
         let confirm = app.buttons["confirmResetPeersButton"].firstMatch
         XCTAssertTrue(confirm.waitForExistence(timeout: 10), "no reset confirmation")

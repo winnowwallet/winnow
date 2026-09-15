@@ -306,19 +306,36 @@ extension XCTestCase {
 extension XCUIApplication {
     /// Types into a field (TextField or TextEditor) and dismisses the
     /// software keyboard afterwards.
+    ///
+    /// A tap that lands while the previous field's keyboard is still on its
+    /// way out can leave nothing focused, and typing then fails with
+    /// "neither element nor any descendant has keyboard focus" (seen on the
+    /// hosted runners, #84). So the tap is repeated until the field has
+    /// the keyboard, and dismissal waits for the keyboard to be gone.
     @MainActor
     func typeInto(_ identifier: String, _ text: String) {
         var field = textFields[identifier]
         if !field.exists { field = textViews[identifier] }
         XCTAssertTrue(field.waitForExistence(timeout: 20), "no text field \(identifier)")
-        field.tap()
+        var focused = false
+        for _ in 1...3 where !focused {
+            field.tap()
+            focused = field.waitForKeyboardFocus(timeout: 3)
+        }
+        XCTAssertTrue(focused, "\(identifier) never took keyboard focus")
         field.typeText(text)
         dismissKeyboard()
     }
 
     @MainActor
     func dismissKeyboard() {
-        guard keyboards.firstMatch.exists else { return }
+        let keyboard = keyboards.firstMatch
+        guard keyboard.exists else { return }
+        defer {
+            // The dismissal animates independently of app idleness; the next
+            // tap must not race it.
+            _ = keyboard.waitForNonExistence(timeout: 5)
+        }
         let returnKey = keyboards.buttons["return"]
         if returnKey.exists, returnKey.isHittable {
             returnKey.tap()
@@ -339,7 +356,7 @@ extension XCUIApplication {
         // Last resort: tapping the navigation bar dismisses the keyboard
         // without triggering any control.
         navigationBars.firstMatch.tap()
-        if keyboards.firstMatch.exists {
+        if keyboard.exists {
             collectionViews.firstMatch.swipeDown()
         }
     }
@@ -454,5 +471,16 @@ extension XCUIApplication {
             let end = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
             start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0.25)
         }
+    }
+}
+
+extension XCUIElement {
+    /// Whether this element holds the keyboard within `timeout`: the
+    /// condition `typeText` checks before it synthesizes a keystroke.
+    @MainActor
+    func waitForKeyboardFocus(timeout: TimeInterval) -> Bool {
+        let focused = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hasKeyboardFocus == true"), object: self)
+        return XCTWaiter().wait(for: [focused], timeout: timeout) == .completed
     }
 }
