@@ -1469,12 +1469,21 @@ final class StoryPayingPeople: WinnowAppJourney {
         Screenshots.capture(app, "45-explorer-consent", testCase: self)
         confirm.tap()
         let inferred = app.buttons["inferredSender-\(trUtxo.address)"]
-        XCTAssertTrue(inferred.waitForExistence(timeout: 60), "stub explorer answer did not arrive (\(stub.requestCount) request(s) reached the stub)")
+        // The answer lands in a section that an iPad sheet lays out below
+        // its fold, and a Form row below the fold does not exist until it
+        // is scrolled to; the fields it is checked against sit at the top.
+        XCTAssertTrue(poll(timeout: 60, interval: 2, "the stub explorer's answer on screen") {
+            self.scrollUntilExists(app, inferred, maxSwipes: 2)
+        }, "stub explorer answer did not arrive (\(stub.requestCount) request(s) reached the stub)")
         XCTAssertEqual(stub.requestCount, 1)
         // The sole returned address is still unselected until tapped.
-        XCTAssertNotEqual(app.textFields["personPasteField"].value as? String, trUtxo.address)
+        let pasteField = app.textFields["personPasteField"]
+        XCTAssertTrue(scrollUntilExists(app, pasteField, up: true))
+        XCTAssertNotEqual(pasteField.value as? String, trUtxo.address)
+        XCTAssertTrue(scrollUntilExists(app, inferred))
         inferred.tap()
-        XCTAssertEqual(app.textFields["personPasteField"].value as? String, trUtxo.address)
+        XCTAssertTrue(scrollUntilExists(app, pasteField, up: true))
+        XCTAssertEqual(pasteField.value as? String, trUtxo.address)
         app.typeInto("personNameField", "Miner")
         Screenshots.capture(app, "43-infer-sender", testCase: self)
         savePerson(in: app)
