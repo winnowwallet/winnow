@@ -388,6 +388,10 @@ final class AppModel {
         let defaults = e2e?.defaults ?? defaults
         self.defaults = defaults
         tor = TorController(enabled: defaults.bool(forKey: "torEnabled"),
+                            gateways: defaults.object(forKey: "peerGateways") == nil ? nil :
+                                (defaults.data(forKey: "peerGateways").flatMap {
+                                    try? JSONDecoder().decode(PeerGatewayConfiguration.self, from: $0)
+                                } ?? PeerGatewayConfiguration(networks: [])),
                             driver: e2e?.torDriver ?? NativeTorDriver.shared)
         // Mainnet is the default (#9). The E2E harness is a custom-signet
         // fixture, so a test launch that names no network still gets signet.
@@ -641,7 +645,7 @@ final class AppModel {
         PeerPool(params: params, manualPeers: parsedManualPeers(),
                                 peersFileURL: dir.appending(path: "peers.json"),
                                 relayPreference: true,
-                                dialTimeout: tor.enabled ? .seconds(90) : .seconds(5),
+                                dialTimeout: (tor.enabled || tor.gateways != nil) ? .seconds(90) : .seconds(5),
                                 seedResolver: .routed(client: tor.client), route: tor.route,
                                 censusCatalog: network == .mainnet
                                     ? catalogStore?.load(trusting: censusTrustedKeys)?.catalog : nil,
@@ -2499,6 +2503,28 @@ final class AppModel {
         await previous?.broadcaster.shutdown()
     }
 
+    func setPeerGateways(_ config: PeerGatewayConfiguration?) async throws {
+        guard !changingNetwork else { return }
+        if let config, !config.isValid { throw AppError.invalidPeer("Choose at least one peer type and provide each enabled gateway as host:port.") }
+        let encoded = try config.map { try JSONEncoder().encode($0) }
+        changingNetwork = true
+        await tor.suspend()
+        await stopNetworking()
+        await tor.setGateways(config)
+        if let encoded { defaults.set(encoded, forKey: "peerGateways") }
+        else { defaults.removeObject(forKey: "peerGateways") }
+        changingNetwork = false
+        // Saving a preference must not wait for overlay circuits or chain sync.
+        // Existing generation checks keep a superseded restart from installing peers.
+        let generation = tor.generation
+        Task { [weak self] in
+            guard let self, self.tor.generation == generation else { return }
+            await self.activate()
+            guard self.tor.generation == generation else { return }
+            await self.refresh()
+        }
+    }
+
     func setTorEnabled(_ enabled: Bool) async {
         guard !changingNetwork, enabled != tor.enabled else { return }
         changingNetwork = true
@@ -2565,7 +2591,8 @@ final class AppModel {
             if network == .mainnet { try await stack?.pool.updateCensusCatalog(download.catalog) }
             let clearnet = download.catalog.networks["clearnet"]?.count ?? 0
             let onion = download.catalog.networks["tor"]?.count ?? 0
-            catalogNotice = "Observed \(download.catalog.date): \(clearnet) clearnet, \(onion) Tor candidates. Active peers unchanged."
+            let i2p = download.catalog.networks["i2p"]?.count ?? 0
+            catalogNotice = "Observed \(download.catalog.date): \(clearnet) clearnet, \(onion) Tor, \(i2p) I2P candidates. Active peers unchanged."
             e2e?.journal("peers.catalogRefreshed", fields: ["date": download.catalog.date, "sha256": download.sha256])
         } catch {
             catalogError = error is CancellationError ? "Refresh cancelled; previous peer list retained." : error.localizedDescription
@@ -2693,13 +2720,14 @@ final class AppModel {
             case .direct: "The explorer receives this transaction ID and your IP address over a direct connection."
             case .tor: "The explorer receives this transaction ID through Tor. A clearnet explorer sees a Tor exit IP, rather than your device IP."
             case .offline: "Winnow is offline. No lookup can be sent."
+            case .gateways: "Explorer requests follow the configured gateway HTTP route."
             }
         }
     }
 
     func senderLookupConsent(txid: Data) -> ExplorerLookupConsent {
         ExplorerLookupConsent(txid: txid, baseURL: esploraBaseURL, network: network,
-                              route: tor.route, generation: tor.generation)
+                              route: tor.client.route, generation: tor.generation)
     }
 
     func lookupSenderOnline(consent: ExplorerLookupConsent) async throws -> [String] {

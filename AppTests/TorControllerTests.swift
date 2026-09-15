@@ -15,6 +15,28 @@ private actor TestTorDriver: TorDriving {
 
 @MainActor
 final class TorControllerTests: XCTestCase {
+    func testExternalGatewaysBypassEmbeddedTorAndSurviveSuspension() async {
+        let driver = TestTorDriver((3, 0))
+        let config = PeerGatewayConfiguration(networks: [.i2p],
+                                              i2pProxy: .init(host: "tdx2", port: 4447))
+        let controller = TorController(enabled: true, gateways: config, driver: driver)
+        let route = await controller.resume(directory: .temporaryDirectory)
+        XCTAssertEqual(route, .gateways(config))
+        XCTAssertEqual(controller.client.route, .offline)
+        let starts = await driver.starts
+        XCTAssertEqual(starts, 0)
+        await controller.suspend()
+        XCTAssertEqual(controller.route, .offline)
+        let resumed = await controller.resume(directory: .temporaryDirectory)
+        XCTAssertEqual(resumed, .gateways(config))
+        await controller.setGateways(nil)
+        let embedded = await controller.resume(directory: .temporaryDirectory)
+        XCTAssertEqual(embedded, .offline)
+        let embeddedStarts = await driver.starts
+        XCTAssertEqual(embeddedStarts, 1)
+        await controller.suspend()
+    }
+
     func testRuntimeFailureInvalidatesReadyRoute() async throws {
         let driver = TestTorDriver((2, 9050))
         let controller = TorController(enabled: true, driver: driver)

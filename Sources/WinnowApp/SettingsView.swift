@@ -54,6 +54,8 @@ struct SettingsView: View {
                 BackupSection()
 
                 if model.advancedMode {
+                    PeerGatewaysSection()
+                    if model.tor.gateways == nil {
                     Section {
                         Toggle("Use Tor for wallet traffic", isOn: Binding(
                             get: { model.tor.enabled },
@@ -70,19 +72,20 @@ struct SettingsView: View {
                     } header: { Text("Tor") } footer: {
                         Text("Off by default. When enabled, Bitcoin peers, discovery, peer-list downloads and explorer lookups use Tor. There is no direct fallback. Networking stops in the background. External browser links are outside Winnow's protection. I2P transport is unavailable.")
                     }
+                    }
                     Section {
                         Button(model.refreshingCatalog ? "Refreshing… \(model.catalogBytes) bytes" : "Refresh peer list") {
                             Task { await model.refreshPeerCatalog() }
                         }
-                        .disabled(model.refreshingCatalog || model.tor.route == .offline)
+                        .disabled(model.refreshingCatalog || model.tor.client.route == .offline)
                         .accessibilityIdentifier("refreshPeerCatalogButton")
                         if let notice = model.catalogNotice { Text(notice).accessibilityIdentifier("peerCatalogNotice") }
                         else if let downloaded = model.catalogStore?.load() {
-                            Text("Observed \(downloaded.catalog.date): \(downloaded.catalog.networks["clearnet", default: []].count) clearnet, \(downloaded.catalog.networks["tor", default: []].count) Tor candidates.").accessibilityIdentifier("peerCatalogNotice")
+                            Text("Observed \(downloaded.catalog.date): \(downloaded.catalog.networks["clearnet", default: []].count) clearnet, \(downloaded.catalog.networks["tor", default: []].count) Tor, \(downloaded.catalog.networks["i2p", default: []].count) I2P candidates.").accessibilityIdentifier("peerCatalogNotice")
                         } else { Text("Using bundled candidates. Downloaded catalogs expire after seven days.") }
                         if let error = model.catalogError { Text(error).foregroundStyle(.red).accessibilityIdentifier("peerCatalogError") }
                     } header: { Text("Mainnet peer list") } footer: {
-                        Text("Downloads candidates from census.winnowwallet.com. Refresh keeps active connections. Every selected peer still undergoes Winnow's normal checks. Tor candidates are used only with Tor enabled.")
+                        Text("Downloads candidates from census.winnowwallet.com. Refresh keeps active connections. Every selected peer still undergoes Winnow's normal checks. Candidates are used only when their peer type is enabled and its route is configured.")
                     }
                 }
 

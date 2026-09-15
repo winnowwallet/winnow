@@ -24,6 +24,7 @@ actor NativeTorDriver: TorDriving {
 @MainActor @Observable
 final class TorController {
     enum State: String { case stopped, bootstrapping, ready, failed }
+    private(set) var gateways: PeerGatewayConfiguration?
     private(set) var enabled: Bool
     private(set) var state: State = .stopped
     private(set) var route: NetworkRoute = .offline
@@ -33,7 +34,8 @@ final class TorController {
     private var bootstrap: Task<(UInt8, UInt16), Never>?
     private var healthMonitor: Task<Void, Never>?
 
-    init(enabled: Bool, driver: any TorDriving = NativeTorDriver.shared) {
+    init(enabled: Bool, gateways: PeerGatewayConfiguration? = nil, driver: any TorDriving = NativeTorDriver.shared) {
+        self.gateways = gateways
         self.enabled = enabled
         self.driver = driver
     }
@@ -41,6 +43,11 @@ final class TorController {
     func setEnabled(_ value: Bool) async {
         await suspend()
         enabled = value
+    }
+
+    func setGateways(_ value: PeerGatewayConfiguration?) async {
+        await suspend()
+        gateways = value
     }
 
     func suspend() async {
@@ -57,6 +64,12 @@ final class TorController {
 
     func resume(directory: URL) async -> NetworkRoute {
         if route != .offline { return route }
+        if let gateways {
+            guard gateways.isValid else { state = .failed; return .offline }
+            install(.gateways(gateways))
+            state = .ready
+            return route
+        }
         guard enabled else { install(.direct); return route }
         guard state != .failed else { return .offline }
         let epoch = generation

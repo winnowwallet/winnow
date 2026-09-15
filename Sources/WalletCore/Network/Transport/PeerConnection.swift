@@ -83,7 +83,7 @@ public enum OverlayNetwork: String, Sendable, Codable, CaseIterable {
     /// else is clearnet. Hostnames are case-insensitive, so the suffix test
     /// is too.
     public init(ofHost host: String) {
-        let lowered = host.lowercased()
+        let lowered = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
         if lowered.hasSuffix(".onion") {
             self = .tor
         } else if lowered.hasSuffix(".i2p") {

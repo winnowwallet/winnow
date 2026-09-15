@@ -2,12 +2,66 @@ import Foundation
 import Network
 import os
 
+/// External SOCKS gateways. Peer types are an allowlist, never fallback modes.
+public struct PeerGatewayConfiguration: Equatable, Sendable, Codable {
+    public var networks: Set<OverlayNetwork>
+    public var torProxy: PeerEndpoint?
+    public var i2pProxy: PeerEndpoint?
+
+    public init(networks: Set<OverlayNetwork> = [.clearnet],
+                torProxy: PeerEndpoint? = nil, i2pProxy: PeerEndpoint? = nil) {
+        self.networks = networks
+        self.torProxy = torProxy
+        self.i2pProxy = i2pProxy
+    }
+
+    public static func validProxy(_ proxy: PeerEndpoint?) -> Bool {
+        guard let proxy, proxy.port > 0, !proxy.host.isEmpty,
+              proxy.host == proxy.host.trimmingCharacters(in: .whitespacesAndNewlines),
+              !proxy.host.contains(where: { $0.isWhitespace || "/@?#".contains($0) }),
+              OverlayNetwork(ofHost: proxy.host.trimmingCharacters(in: CharacterSet(charactersIn: "."))) == .clearnet
+        else { return false }
+        return true
+    }
+
+    public var isValid: Bool {
+        !networks.isEmpty && (!networks.contains(.tor) || Self.validProxy(torProxy))
+            && (!networks.contains(.i2p) || Self.validProxy(i2pProxy))
+    }
+
+    /// Public HTTP services use direct networking only when clearnet is selected.
+    /// I2P-only stays offline for census downloads and explorer lookups.
+    public var httpRoute: NetworkRoute {
+        guard isValid else { return .offline }
+        if networks.contains(.clearnet) { return .direct }
+        if networks.contains(.tor), let torProxy { return .tor(proxy: torProxy) }
+        return .offline
+    }
+}
+
 /// Captured per networking generation. An unavailable Tor client is offline,
 /// never a request to use direct networking instead.
 public enum NetworkRoute: Equatable, Sendable {
     case direct
     case tor(proxy: PeerEndpoint)
     case offline
+    case gateways(PeerGatewayConfiguration)
+
+    public var httpRoute: NetworkRoute {
+        if case let .gateways(config) = self { return config.httpRoute }
+        return self
+    }
+
+    public func proxy(for endpoint: PeerEndpoint) -> PeerEndpoint? {
+        if case let .gateways(config) = self {
+            switch endpoint.overlay {
+            case .clearnet: return nil
+            case .tor: return config.torProxy
+            case .i2p: return config.i2pProxy
+            }
+        }
+        return socksProxy
+    }
 
     public var socksProxy: PeerEndpoint? {
         if case let .tor(proxy) = self { return proxy }
@@ -15,12 +69,19 @@ public enum NetworkRoute: Equatable, Sendable {
     }
     public func permits(_ endpoint: PeerEndpoint) -> Bool {
         let host = endpoint.host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
-        guard endpoint.port > 0, !host.hasSuffix(".i2p") else { return false }
+        guard endpoint.port > 0 else { return false }
         switch self {
         case .offline: return false
-        case .direct: return !host.hasSuffix(".onion")
+        case .direct: return !host.hasSuffix(".onion") && !host.hasSuffix(".i2p")
+        case let .gateways(config):
+            guard config.isValid, config.networks.contains(OverlayNetwork(ofHost: host)) else { return false }
+            switch OverlayNetwork(ofHost: host) {
+            case .clearnet: return NetworkRoute.direct.permits(endpoint)
+            case .tor: return CensusCatalog.canonicalHost(host, overlay: .tor) != nil
+            case .i2p: return CensusCatalog.canonicalHost(host, overlay: .i2p) != nil
+            }
         case let .tor(proxy):
-            guard proxy.host == "127.0.0.1", proxy.port > 0 else { return false }
+            guard PeerGatewayConfiguration.validProxy(proxy), !host.hasSuffix(".i2p") else { return false }
             if host.hasSuffix(".onion") { return CensusCatalog.canonicalHost(host, overlay: .tor) != nil }
             if host == "localhost" || host.hasSuffix(".localhost") || host.hasSuffix(".local") || !host.contains(".") && !host.contains(":") { return false }
             // Numeric addresses must be public. DNS names are resolved only by
@@ -77,6 +138,7 @@ public final class RoutedHTTPClient: Sendable {
     }
     private let requests = OSAllocatedUnfairLock(initialState: Requests())
     public init(route: NetworkRoute) {
+        let route = route.httpRoute
         self.route = route
         let config = URLSessionConfiguration.ephemeral
         config.httpShouldSetCookies = false

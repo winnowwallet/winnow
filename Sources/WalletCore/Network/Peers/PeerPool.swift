@@ -561,7 +561,7 @@ public actor PeerPool {
             running += 1
             attemptsThisRound += 1
             let peer = PeerConnection(endpoint: endpoint, params: params,
-                                      relayPreference: relayPreference, socksProxy: route.socksProxy)
+                                      relayPreference: relayPreference, socksProxy: route.proxy(for: candidate.endpoint))
             inFlight[endpoint] = peer
             group.addTask { [dialTimeout] in
                 do {
@@ -732,7 +732,8 @@ public actor PeerPool {
         }
         let clearnet = freshCatalog?.networks["clearnet"]?.map(\.endpoint) ?? params.fallbackPeers
         let tor = freshCatalog?.networks["tor"]?.map(\.endpoint) ?? params.fallbackPeers(for: .tor)
-        let automatic = (route.socksProxy == nil ? clearnet : tor.shuffled() + clearnet.shuffled())
+        let i2p = freshCatalog?.networks["i2p"]?.map(\.endpoint) ?? params.fallbackPeers(for: .i2p)
+        let automatic = (clearnet + tor + i2p)
             .filter { route.permits($0) }
         let shuffled = automatic.shuffled()
         let preferred = shuffled.filter { !avoidOnReset.contains($0) }
@@ -762,6 +763,7 @@ public actor PeerPool {
     /// DNS-seed results (DoH, then getaddrinfo). Called only when local
     /// candidates did not fill the pool.
     private func seedCandidates(excluding connected: Set<PeerEndpoint>) async -> [PeerCandidate] {
+        if case let .gateways(config) = route, !config.networks.contains(.clearnet) { return [] }
         let seeds = await seedResolver.resolveSeeds(
             params.dnsSeeds, port: params.defaultPort,
             allowPrivate: params.allowsPrivateSeedAddresses
