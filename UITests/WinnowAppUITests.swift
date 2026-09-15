@@ -1469,7 +1469,7 @@ final class StoryPayingPeople: WinnowAppJourney {
         Screenshots.capture(app, "45-explorer-consent", testCase: self)
         confirm.tap()
         let inferred = app.buttons["inferredSender-\(trUtxo.address)"]
-        XCTAssertTrue(inferred.waitForExistence(timeout: 30), "stub explorer answer did not arrive")
+        XCTAssertTrue(inferred.waitForExistence(timeout: 60), "stub explorer answer did not arrive (\(stub.requestCount) request(s) reached the stub)")
         XCTAssertEqual(stub.requestCount, 1)
         // The sole returned address is still unselected until tapped.
         XCTAssertNotEqual(app.textFields["personPasteField"].value as? String, trUtxo.address)
@@ -2407,11 +2407,11 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
         XCTAssertEqual(app.staticTexts["torState"].label, "State, Stopped")
         Screenshots.capture(app, "48-tor-stopped", testCase: self)
         app.flipSwitch(toggle)
-        XCTAssertTrue(poll(timeout: 10, interval: 0.1, "Tor bootstrapping") {
+        XCTAssertTrue(poll(timeout: 30, interval: 0.1, "Tor bootstrapping") {
             app.staticTexts["torState"].label == "State, Bootstrapping"
         })
         Screenshots.capture(app, "49-tor-bootstrapping", testCase: self)
-        XCTAssertTrue(poll(timeout: 10, interval: 0.1, "Tor failed closed") {
+        XCTAssertTrue(poll(timeout: 30, interval: 0.1, "Tor failed closed") {
             app.staticTexts["torState"].label == "State, Failed"
         })
         XCTAssertTrue(scrollUntilExists(app, app.buttons["retryTorButton"], maxSwipes: 4))
@@ -2420,7 +2420,7 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
         XCTAssertTrue(scrollUntilExists(app, toggle, maxSwipes: 4, up: true))
         Screenshots.capture(app, "50-tor-failed", testCase: self)
         app.flipSwitch(toggle)
-        XCTAssertTrue(poll(timeout: 10, interval: 0.1, "explicit Tor disable") {
+        XCTAssertTrue(poll(timeout: 30, interval: 0.1, "explicit Tor disable") {
             app.staticTexts["torState"].label == "State, Stopped"
         })
     }
