@@ -59,7 +59,7 @@ dialog a{overflow-wrap:anywhere}
 <li>Restore the earlier backup with the recovery words and check that it finds the payment and the remaining balance.</li>
 <li>In a separate flow, approve on the phone and share the raw request with a MuSig2 group acting as one signer. Import the group’s reply through Approve a request, then send.</li>
 </ol><p>Test code:
-<a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift#L2184">test16MuSig2RequiresSecondDevice</a>, <a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift#L1860">test13GroupCosignerVault</a>
+<a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift#L2224">test16MuSig2RequiresSecondDevice</a>, <a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift#L1900">test13GroupCosignerVault</a>
 . <a href="https://github.com/winnowwallet/winnow/actions/workflows/node-tests.yml">View test results</a>.</p>
 <p>The ordered tests use the app on a private Bitcoin test network. Screenshots show test funds. Open a test run to see which version was checked, what passed, and what failed.</p>
 <p><a href="/testing#artifacts">Read the logs and screenshots</a> · <a href="/testing#limits">What still needs testing</a></p></dialog></section>
@@ -73,7 +73,7 @@ dialog a{overflow-wrap:anywhere}
 <li>Create a vault through the advanced form.</li>
 <li>Import an approval request, review it, and contribute the device’s signature.</li>
 </ol><p>Test code:
-<a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift#L1512">test04VaultCreate</a>, <a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift#L1575">test07ApproveRequest</a>
+<a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift#L1545">test04VaultCreate</a>, <a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift#L1608">test07ApproveRequest</a>
 . <a href="https://github.com/winnowwallet/winnow/actions/workflows/node-tests.yml">View test results</a>.</p>
 <p>The ordered tests use the app on a private Bitcoin test network. Screenshots show test funds. Open a test run to see which version was checked, what passed, and what failed.</p>
 <p><a href="/testing#artifacts">Read the logs and screenshots</a> · <a href="/testing#limits">What still needs testing</a></p></dialog></section>
@@ -85,7 +85,7 @@ dialog a{overflow-wrap:anywhere}
 <li>Disconnect the test node before sending. Reopen the app, find the pending payment, then reconnect and check that the same payment reaches the node.</li>
 <li>Use Bump fee, review and sign the replacement, then confirm it and inspect the app’s history.</li>
 </ol><p>Test code:
-<a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift#L1255">test15ReviewAndReplacePendingPayment</a>
+<a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift#L1291">test15ReviewAndReplacePendingPayment</a>
 . <a href="https://github.com/winnowwallet/winnow/actions/workflows/node-tests.yml">View test results</a>.</p>
 <p>The ordered tests use the app on a private Bitcoin test network. Screenshots show test funds. Open a test run to see which version was checked, what passed, and what failed.</p>
 <p><a href="/testing#artifacts">Read the logs and screenshots</a> · <a href="/testing#limits">What still needs testing</a></p></dialog></section>
@@ -100,7 +100,7 @@ dialog a{overflow-wrap:anywhere}
 <li>Open an explorer warning and cancel before leaving the app.</li>
 <li>Reset and shuffle the remembered peers, and watch fresh connections arrive.</li>
 </ol><p>Test code:
-<a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift#L2019">test05SettingsPeersAndExplorerWarning</a>, <a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift#L2346">test19ResetAndShufflePeers</a>
+<a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift#L2059">test05SettingsPeersAndExplorerWarning</a>, <a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift#L2386">test19ResetAndShufflePeers</a>
 . <a href="https://github.com/winnowwallet/winnow/actions/workflows/node-tests.yml">View test results</a>.</p>
 <p>The ordered tests use the app on a private Bitcoin test network. Screenshots show test funds. Open a test run to see which version was checked, what passed, and what failed.</p>
 <p><a href="/testing#artifacts">Read the logs and screenshots</a> · <a href="/testing#limits">What still needs testing</a></p></dialog></section>
@@ -115,7 +115,7 @@ dialog a{overflow-wrap:anywhere}
 <li>Keep your active connections while the new list becomes available for future connections.</li>
 <li>If a refresh fails, keep using the previous valid list. Reset and shuffle remains a separate choice.</li>
 </ol><p>Test code:
-<a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift#L2378">test20PeerCatalogRefreshAndFailureRecovery</a>
+<a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift#L2418">test20PeerCatalogRefreshAndFailureRecovery</a>
 . <a href="https://github.com/winnowwallet/winnow/actions/workflows/node-tests.yml">View test results</a>.</p>
 <p>This screenshot comes from the separate <a href="https://github.com/winnowwallet/winnow/blob/main/UITests/LiveTorDeviceTests.swift">live Tor journey</a> on an iPhone: real mainnet peers and the public census, with no funds. That journey also checks foreground recovery.</p>
 <p>The ordered tests use the app on a private Bitcoin test network. Screenshots show test funds. Open a test run to see which version was checked, what passed, and what failed.</p>
@@ -131,7 +131,7 @@ dialog a{overflow-wrap:anywhere}
 <li>Return to the app after it has been in the background and let Tor reconnect.</li>
 <li>If Tor fails, retry or explicitly turn it off. Winnow never silently switches to a direct connection.</li>
 </ol><p>Test code:
-<a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift#L2415">test21TorStatesFailClosed</a>
+<a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift#L2460">test21TorStatesFailClosed</a>
 . <a href="https://github.com/winnowwallet/winnow/actions/workflows/node-tests.yml">View test results</a>.</p>
 <p>This screenshot comes from the separate <a href="https://github.com/winnowwallet/winnow/blob/main/UITests/LiveTorDeviceTests.swift">live Tor journey</a> on an iPhone: real mainnet peers and the public census, with no funds. That journey also checks foreground recovery.</p>
 <p>The ordered tests use the app on a private Bitcoin test network. Screenshots show test funds. Open a test run to see which version was checked, what passed, and what failed.</p>

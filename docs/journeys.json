@@ -100,7 +100,7 @@
     "title": "Save with other people",
     "description": "Choose who shares the wallet and how many approvals a payment needs. With two approvals out of three, one person can be away and the other two can still pay.",
     "journey": [
-      "Create shared savings from Wallet and choose who can approve payments.",
+      "Create shared savings from the wallet screen and choose who can approve payments.",
       "Back up the funded account from its detail screen, then open Send, choose a saved recipient, and check the account, amount, and fee.",
       "Continue straight to approvals without copying the request into another screen. Complete two approvals without the third person."
     ],
@@ -152,16 +152,16 @@
   {
     "id": "controls",
     "section": "everyday",
-    "title": "More options when you need them",
-    "description": "Start with the basics. Turn on Advanced mode in Settings to adjust fees and manage network connections.",
+    "title": "One screen, or the full set of controls",
+    "description": "Beginner mode is one screen with no settings. Advanced mode, one tap from its corner, is the three-tab interface: fee controls, network connections, signing tools and every setting.",
     "journey": [
-      "Check which tabs and controls appear in normal mode.",
-      "Turn Advanced mode on and off, checking that fee and network settings appear and disappear."
+      "Check that beginner mode is one screen: balance and status, Receive and Send, activity, one way into shared savings and the backup, with no tabs and nothing technical.",
+      "Turn Advanced mode on and off, checking that the tabs, fee controls, vault tools and Settings appear and disappear, and that the switch is not a setting."
     ],
     "tests": [
-      "test11BeginnerShellHidesAdvancedControls"
+      "test11OneScreenHidesAdvancedControls"
     ],
-    "image": "23-settings-beginner"
+    "image": "56-home-beginner"
   },
   {
     "id": "vaults",

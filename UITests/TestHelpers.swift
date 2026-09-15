@@ -51,11 +51,80 @@ extension XCTestCase {
         (app.staticTexts["balanceText"].value as? String) ?? ""
     }
 
-    /// Taps "Sync now" when idle to nudge a scan pass.
+    /// Nudges a scan pass: "Sync now" in Advanced mode, a pull to refresh
+    /// on the one screen. The pull happens only while that screen is the
+    /// frontmost one — over a sheet it would scroll, or on an iPhone
+    /// dismiss, the sheet — so a journey waiting inside a sheet waits for
+    /// the app's own periodic pass instead.
     @MainActor
     func nudgeSync(_ app: XCUIApplication) {
         let button = app.buttons["syncNowButton"]
-        if button.exists, button.isEnabled { button.tap() }
+        if button.exists {
+            if button.isEnabled { button.tap() }
+            return
+        }
+        let sheetMarkers = ["closeSendButton", "newReceiveAddressButton", "saveReceiveAddressLabelButton",
+                            "skipReceiveAddressLabelButton", "addSavingsCoOwnerButton", "savingsCardPasteButton",
+                            "exportConfirmButton", "walletSharedSavingsButton"]
+        guard !sheetMarkers.contains(where: { app.buttons[$0].exists }) else { return }
+        let home = app.buttons["openSendButton"]
+        guard home.exists, home.isHittable else { return }
+        let list = app.collectionViews.firstMatch
+        guard list.exists else { return }
+        let start = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2))
+        let end = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0.3)
+    }
+
+    /// Switches the interface. Turning Advanced on asks first; Simple on
+    /// the Advanced Wallet tab brings the one screen back.
+    @MainActor
+    func setAdvancedMode(_ app: XCUIApplication, _ on: Bool) {
+        if on {
+            XCTAssertFalse(app.hasTabs, "already in Advanced mode")
+            app.goToWallet()
+            let advanced = app.buttons["advancedModeButton"]
+            XCTAssertTrue(advanced.waitForExistence(timeout: 10), "no Advanced button on the one screen")
+            advanced.tap()
+            let confirm = app.alerts.buttons["Turn on"]
+            XCTAssertTrue(confirm.waitForExistence(timeout: 10), "Advanced mode did not ask first")
+            confirm.tap()
+            XCTAssertTrue(poll(timeout: 15, interval: 0.5, "the three tabs") { app.hasTabs },
+                          "Advanced mode did not show its tabs")
+        } else {
+            XCTAssertTrue(app.hasTabs, "already in beginner mode")
+            app.navigationTab("Wallet").tap()
+            let simple = app.buttons["advancedModeButton"]
+            XCTAssertTrue(simple.waitForExistence(timeout: 10), "no Simple button on the Wallet tab")
+            simple.tap()
+            XCTAssertTrue(app.buttons["openSendButton"].waitForExistence(timeout: 15),
+                          "Simple did not bring the one screen back")
+        }
+    }
+
+    /// Scrolls the one screen from its top down to `element`: the savings
+    /// rows sit below Activity, so on a wallet with a few payments they are
+    /// below the fold, and a List row below the fold does not exist yet.
+    @MainActor
+    @discardableResult
+    func revealOnOneScreen(_ app: XCUIApplication, _ element: XCUIElement) -> Bool {
+        _ = scrollUntilExists(app, app.buttons["receiveButton"], maxSwipes: 6, up: true)
+        return scrollUntilExists(app, element, maxSwipes: 8)
+    }
+
+    /// Where the backup file and the recovery words are: Settings in
+    /// Advanced mode, the Back up row on the one screen otherwise.
+    @MainActor
+    func openBackup(_ app: XCUIApplication) {
+        if app.hasTabs {
+            app.navigationTab("Settings").tap()
+            return
+        }
+        app.goToWallet()
+        let row = app.buttons["backupButton"]
+        XCTAssertTrue(scrollUntilExists(app, row), "no Back up row on the one screen")
+        row.tap()
+        XCTAssertTrue(app.buttons["exportBundleButton"].waitForExistence(timeout: 20), "Back up did not open")
     }
 
     /// Scrolls the topmost scroll view until `element` exists (SwiftUI
@@ -311,11 +380,79 @@ extension XCUIApplication {
 extension XCUIApplication {
     /// iPadOS exposes its floating tabs as cells instead of an iPhone TabBar.
     /// Keep the same asserted journeys on each platform's native tab layout.
+    /// Advanced mode only: the one screen has no tabs, and this would fall
+    /// through to its Send button — use `openSend` and `goToWallet` there.
     func navigationTab(_ title: String) -> XCUIElement {
         let phone = tabBars.buttons[title]
         if phone.exists { return phone }
         let floating = cells[title].firstMatch
         if floating.exists { return floating }
         return buttons[title].firstMatch
+    }
+
+    /// Advanced mode has tabs (a bar on iPhone; on iPad floating cells, or
+    /// toolbar buttons identified by their symbols); beginner mode is one
+    /// screen.
+    var hasTabs: Bool {
+        if tabBars.firstMatch.exists || cells["Wallet"].firstMatch.exists { return true }
+        return buttons["bitcoinsign.circle"].firstMatch.exists && buttons["gear"].firstMatch.exists
+    }
+
+    /// Whether the Send form, its review or its receipt is on screen: the
+    /// selected tab, or the sheet over the one screen.
+    var sendIsOpen: Bool {
+        if hasTabs { return navigationTab("Send").isSelected }
+        return buttons["closeSendButton"].exists
+    }
+
+    /// Opens Send: the tab, or the one screen's button. Already open is
+    /// fine. A screen pushed over the one screen (a payment, an account)
+    /// is popped first, since the button is only on the screen itself.
+    func openSend() {
+        if hasTabs {
+            navigationTab("Send").tap()
+            return
+        }
+        if buttons["closeSendButton"].exists { return }
+        popToOneScreen()
+        let open = buttons["openSendButton"]
+        XCTAssertTrue(open.waitForExistence(timeout: 20), "no Send button on the one screen")
+        open.tap()
+        XCTAssertTrue(buttons["closeSendButton"].waitForExistence(timeout: 20), "the Send sheet did not open")
+    }
+
+    /// Back to the wallet: the tab, or closing the Send sheet and popping
+    /// any screen pushed over the one screen. A sheet's form state does
+    /// not survive this; a receipt still open is read before it is closed.
+    func goToWallet() {
+        if hasTabs {
+            navigationTab("Wallet").tap()
+            return
+        }
+        let close = buttons["closeSendButton"]
+        if close.exists {
+            close.tap()
+            _ = close.waitForNonExistence(timeout: 10)
+        }
+        popToOneScreen()
+    }
+
+    /// Pops pushed screens and scrolls the one screen back to its top, so
+    /// its own controls exist again: a List row scrolled out of view is not
+    /// in the tree, and the screen stays scrolled while a detail is pushed.
+    private func popToOneScreen() {
+        for _ in 0 ..< 3 {
+            let back = navigationBars.buttons["Winnow"]
+            guard back.exists, back.isHittable else { break }
+            back.tap()
+            _ = navigationBars["Winnow"].waitForExistence(timeout: 5)
+        }
+        let list = collectionViews.firstMatch
+        for _ in 0 ..< 6 where !buttons["openSendButton"].exists {
+            guard list.exists else { break }
+            let start = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25))
+            let end = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0.25)
+        }
     }
 }

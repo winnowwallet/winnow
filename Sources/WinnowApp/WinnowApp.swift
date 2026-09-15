@@ -16,7 +16,13 @@ struct WinnowApp: App {
                 case .onboarding:
                     OnboardingView()
                 case .ready:
-                    MainTabView()
+                    // Beginner mode is one screen; Advanced mode is the
+                    // three tabs. The switch lives in each one's toolbar.
+                    if model.advancedMode {
+                        MainTabView()
+                    } else {
+                        BeginnerHomeView()
+                    }
                 case let .storageDamaged(message):
                     StorageDamagedView(message: message)
                 }
@@ -154,7 +160,7 @@ final class PrivacyShield {
     }
 }
 
-/// Wallet, Send, and Settings.
+/// Advanced mode: Wallet, Send, and Settings.
 struct MainTabView: View {
     private enum Tab: String, Hashable {
         case wallet, send, settings

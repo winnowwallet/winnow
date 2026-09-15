@@ -5,6 +5,10 @@
 XCUITest drives real screens for wallet creation, recovery, receiving, sending,
 saved recipients, shared savings, and Advanced signing. These tests check the combined app,
 wallet, and node behavior that isolated unit tests cannot establish.
+Beginner journeys run on the one-screen interface (Send is a sheet, backup is
+a row, the mode switch is a toolbar button); Advanced journeys launch with
+`WINNOW_E2E_ADVANCED=1` and use the three tabs. `openSend`, `goToWallet`,
+`openBackup` and `setAdvancedMode` in TestHelpers.swift work in either mode.
 The ordinary, shared, and extra-device journeys all start payments in Send.
 Form editing is checked once; each signing journey then checks its own approval
 rules and the result accepted by the Bitcoin node. Ordinary co-owner requests

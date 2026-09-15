@@ -58,7 +58,7 @@ struct OnboardingView: View {
                         .accessibilityIdentifier("importWalletButton")
                     }
                 } footer: {
-                    Text("First, write down your recovery words. Then save a backup file from Settings.")
+                    Text("First, write down your recovery words. Then save a backup file from Back up wallet on the main screen.")
                 }
                 // Settings is not reachable from here, so the network has to
                 // be. Without this, switching to a network with no wallet
@@ -223,7 +223,7 @@ private struct MnemonicBackupView: View {
         NavigationStack {
             List {
                 Section {
-                    Text("Write these \(words.count) words down, in order, and keep them offline. These words protect your signing keys. Keep an exported wallet bundle too: Winnow needs both to restore your wallet.")
+                    Text("Write these \(words.count) words down, in order, and keep them offline. These words protect your signing keys. Keep a backup file too: Winnow needs both to restore your wallet.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -314,7 +314,7 @@ private struct ImportBundleView: View {
                     } header: {
                         Text("Paste your backup file (JSON)")
                     } footer: {
-                        Text("Use the file saved from Settings → Back up wallet. Keep your recovery words too. Backups from other wallets may not include every coin type.")
+                        Text("Use the file saved from Back up wallet. Keep your recovery words too. Backups from other wallets may not include every coin type.")
                     }
                 }
                 if busy {

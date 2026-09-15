@@ -1,5 +1,4 @@
-• Every key that can approve a shared-savings payment is now listed with a fingerprint — the person it belongs to, you, or a key that is not one of your people — and your own card shows the same fingerprint for co-owners to compare.
-• Your saved recipients and shared accounts are now sealed under a key held in the device's protected storage, so a file that Winnow did not write on this phone is refused rather than trusted.
-• The recovery phrase hides itself while the screen is being recorded or mirrored.
-• Peer discovery is harder to steer: automatic peers of one kind can no longer outvote the others on which filters are genuine, headers dated far in the future are refused, and a peer that promises headers and delivers none is dropped.
-• A custom block explorer must use https. Peer connections use less memory over long sessions and drop peers that stop answering.
+• Beginner mode is one screen: your balance and whether it is up to date, Receive and Send, your activity in plain words, shared savings once you have any, and the backup. No tabs, no settings, nothing technical.
+• Advanced mode is the full three-tab interface, one tap from the corner of that screen, with fee controls, network settings, signing tools and every setting. Simple brings the one screen back and keeps what you set.
+• Shared savings start from one place: "Save with someone…", to start savings with people you have added or join savings someone shared with you.
+• Backing up the wallet is a row on the screen, not a setting.
