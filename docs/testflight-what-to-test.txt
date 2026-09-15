@@ -1,25 +1,27 @@
-Security review fixes
+One screen for beginners
 
-This build carries the fixes from the September security review. Most of them are below the surface; these are the places where you can see them.
+Beginner mode is now a single screen, and Advanced mode is the three-tab interface you had before. Nothing is removed; it is moved. Update in place over 0.6.4: your saved recipients, shared accounts and settings should all still be there.
 
-Update in place first: install this build over 0.6.3 with saved recipients and at least one shared account. Everything should still be there after the first launch. (The files are sealed on that launch; a missing person or account would be a defect, not the design.)
+The one screen
 
-Key fingerprints
+With Advanced mode off you should see: your balance with one line under it (Up to date, Syncing…, or a connection problem with Retry), a Signet tag if this is a signet wallet, Receive and Send buttons, Activity, shared savings only if you have some, one row "Save with someone…", and "Back up wallet". There is no tab bar and no Settings. Pull down to refresh. Activity rows say Confirmed, Pending or Replaced, with no block numbers or fees; open a payment and the address and transaction ID are folded under "Address" and "Transaction ID".
 
-Open a shared account. The Co-owners section now lists every approving key with a fingerprint like "ab12 cd34": the person it belongs to, "you", or, in red, a key that is not one of your people. Open Receive → Share my card on each co-owner's phone: the "Your key" fingerprint there must match the one shown next to their name on yours. Create a new shared account: each candidate co-owner in the picker shows the fingerprint under their name.
+Send and Receive
 
-Recovery phrase while recording
+Send opens as a sheet: address or saved recipient, amount, Review, Send. After sending, the receipt stays open until you tap Done, and the payment appears in Activity as Pending, then Confirmed. Receive is unchanged, including the unconfirmed-payment notice. "Send to" on a received payment and Send from a shared account both open the same sheet.
 
-Start a screen recording from Control Center, then open Settings → Recovery phrase, and also the phrase screen during onboarding of a new wallet. The words must be replaced by "Hidden while the screen is being recorded or mirrored." Stop the recording: the words come back. The same should hold while mirroring to an external display.
+Shared savings
 
-Peers and the network
+"Save with someone…" offers two choices: start savings with people you have added, or join savings someone shared with you. Each opens the same flow as before. Custom rules and the second signing device are in Advanced mode.
 
-In Advanced settings, Refresh peer list should still succeed and show the observation date and counts. Set a custom block explorer with a plain http:// address: it must be refused; https:// is accepted. Turn Tor on and wait for Ready: sync, refresh and explorer lookups should behave as before. Leave the app syncing for a longer session (an hour or more) and check that it stays responsive and memory does not climb without bound.
+Backup
 
-Shared payments
+"Back up wallet" opens the backup file and recovery-words controls that used to be in Settings. The words must still hide while the screen is being recorded, and must clear when you leave the app.
 
-Prepare and approve a shared-savings payment as before, with a saved recipient and with a pasted address. After Finish, if a payment was sent but could not be recorded, the app now says so with the transaction id instead of staying silent; report the exact message if you see it.
+The switch
+
+Tap Advanced in the corner: the app asks first, then changes to the three tabs. Settings no longer has an Advanced mode row; Simple, on the Wallet tab, brings the one screen back. Anything you set in Advanced mode — Tor, manual peers, a custom explorer, chain verification — stays in effect in beginner mode. If you had Advanced mode on in 0.6.4, you start in Advanced mode.
 
 Everything else
 
-iPhone, iPad and the Mac build; sending, receiving, labels, backups and import should behave as in 0.6.3.
+iPhone, iPad and the Mac build; the Advanced tabs, signing journeys, peers, Tor and the explorer should behave as in 0.6.4.

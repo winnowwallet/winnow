@@ -36,6 +36,10 @@ struct SendView: View {
     /// Set from outside ("Send to <person>" on a received payment) to open
     /// the form pre-addressed; consumed once, like `accountID`.
     @Binding var personID: String?
+    /// Beginner mode presents this form as a sheet over its one screen, so
+    /// it needs its own way to close; the Advanced Send tab does not.
+    var presentedAsSheet = false
+    @Environment(\.dismiss) private var dismiss
 
     private struct Approval: Identifiable {
         let record: VaultRecord
@@ -119,6 +123,12 @@ struct SendView: View {
                     Spacer()
                     Button("Done") { focusedField = nil }
                         .accessibilityIdentifier("sendKeyboardDone")
+                }
+                if presentedAsSheet {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(sentTxid == nil ? "Cancel" : "Done") { dismiss() }
+                            .accessibilityIdentifier("closeSendButton")
+                    }
                 }
             }
             .sheet(isPresented: $showRecipients) {
@@ -362,7 +372,9 @@ struct SendView: View {
                 } else {
                     Label("Waiting for confirmation", systemImage: "clock")
                         .accessibilityIdentifier("broadcastPending")
-                    Text("You can leave this screen. Follow this payment in Wallet.")
+                    Text(presentedAsSheet
+                         ? "You can close this screen. The payment stays in Activity until it confirms."
+                         : "You can leave this screen. Follow this payment in Wallet.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

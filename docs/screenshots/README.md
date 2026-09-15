@@ -12,8 +12,9 @@ and [build-site](../../scripts/build-site) checks their named capture ownership.
 Select replacements from a successful run of the intended revision and retain its
 provenance in the change; follow the [screenshot guidance](../../.github/internal/app-store-screenshots.md).
 
-Existing store-*.png files are historical candidates. Neither an image nor the
-timing file proves that the current app passes its tests.
+Neither an image nor the timing file proves that the current app passes its
+tests. The historical `store-*.png` candidates were retired with the 0.7.0
+one-screen interface; they showed the four-tab layout with a People tab.
 [check-site](../../scripts/check-site) checks referenced assets and unresolved LFS
 pointers; reviewing the actual rendered image remains necessary.
 
@@ -25,8 +26,7 @@ payment diagnostics, and following Bitcoin Core confirmation.
 The [run artifact](https://github.com/winnowwallet/winnow/actions/runs/34171647009/artifacts/10036468223)
 contains the original captures, log, and result bundle.
 
-The retained Receive, ordinary review, account, Settings, and saved-recipient
-captures (`03`, `06`, `10`, `11`, `23-settings-beginner`, and `24-saved-recipient`) come from
+The retained Receive and account captures (`03`, `10`, and `11`) come from
 [app revision 4559ecd](https://github.com/winnowwallet/winnow/commit/4559ecd150b2f3399f0b4613cce9db689bcb2d51).
 They are unchanged originals captured locally on 2026-09-08 with an iPhone 17 Pro
 simulator running iOS 26.5 against a disposable signet node.
@@ -38,7 +38,7 @@ then paying through Send. The extra-device journey uses Bitcoin Core as the othe
 signer and covers setup, review, interruption and restart, both approvals, the
 sent receipt, and restoring the pre-payment backup to find the remaining balance.
 
-The current saved-recipient review (`25`), shared-payment review (`27`), and
+The current saved-recipient review (`25`) and
 extra-device captures (`35` through `39`) use
 [app source c5dd3c1](https://github.com/winnowwallet/winnow/commit/c5dd3c1ce7b5f14eb12326f1ce5afae77bb37f81).
 They are unchanged originals captured locally on 2026-09-08 with an iPhone 17 Pro
@@ -65,3 +65,21 @@ locally on 2026-09-13 with an iPhone 17 Pro simulator against the disposable
 custom signet fixture, from the `feature/peer-reset` working tree. The `network`
 journey's reset scenario passed in the same run (`winnow-kimi-t19.xcresult`):
 the remembered good peers are forgotten and the manual fixture peer dials back.
+
+The 0.7.0 captures (`01-onboarding`, `06-send-review`, `24-saved-recipient`,
+`27-shared-payment-review` and the new `56-home-beginner`, which replaces
+`23-settings-beginner` now that beginner mode has no Settings) are unchanged
+originals captured locally on 2026-09-15 with an iPhone 17 Pro simulator
+running iOS 26.5, from the `ui/one-screen` working tree that this change
+commits. The signet fixture was recreated from the CI template
+(`scripts/signet-fixture up` with `WINNOW_FIXTURE_TEMPLATE`) before the
+first-wallet captures. The iPhone and iPad first-wallet stories share the
+fixed-entropy wallet, so `56-home-beginner`, taken after both, shows two of
+each payment. All
+four stories passed on that tree: the first-wallet, paying-people and
+shared-savings stories in full, and the devices-and-network journeys that
+touch Settings or backup (05, 09, 19, 20, 21); the first-wallet and
+paying-people stories also passed on an iPad Pro 11-inch simulator. The
+local evidence is `final2-fw.xcresult` and `final2-fw-b.xcresult`
+(first-wallet), `one-pp3.xcresult` (paying-people) and `one-ss4.xcresult`
+(shared-savings) with their logs.

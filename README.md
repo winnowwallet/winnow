@@ -97,16 +97,18 @@ subject to organization limits. Its summary separates app/library/CLI source,
 tests, webpages, tooling and other text; generated peers, binaries and LFS
 pointers are excluded. See [the counting policy](scripts/report-loc.py).
 
-Mainnet is the default network, and the app starts in beginner mode: Wallet,
-Send, Settings. Open a payment in Wallet to save or rename its recipient,
-then pick them from Saved recipients in Send. The same Send screen handles every
-account: choose the account, recipient, and amount, then review the fee. Shared
-accounts continue to their required approvals before anything is sent.
-Turn on Advanced mode in Settings
-for the test network, your own peers, chain verification, the block explorer, custom fees,
-fee bumping, build details and the raw vault tools; a peer or setting you already have
-stays visible until you remove it. Switch to signet there for development. Point the app at your own
-filter-serving node (Settings → Manual peers); the node needs
+Mainnet is the default network, and the app starts in beginner mode: one
+screen with the balance, Receive, Send, your activity, shared savings once you
+have any, and the backup — no settings. Open a payment to save or rename its
+recipient, then pick them from Saved recipients in Send. The same Send form
+handles every account: choose the account, recipient, and amount, then review
+the fee. Shared accounts continue to their required approvals before anything
+is sent. Advanced, in the corner of that screen, switches to the three-tab
+interface — Wallet, Send, Settings — with the test network, your own peers,
+chain verification, the block explorer, custom fees, fee bumping, build
+details and the raw vault tools; Simple, on the Wallet tab, switches back and
+keeps every setting. Switch to signet there for development. Point the app at
+your own filter-serving node (Settings → Manual peers); the node needs
 `blockfilterindex=1` and `peerblockfilters=1`.
 
 ## Screenshots

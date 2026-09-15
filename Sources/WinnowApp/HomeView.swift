@@ -13,9 +13,12 @@ struct FeeBumpReviewInputs: Equatable {
     }
 }
 
-/// Balance (confirmed sats), sync status, and the local transaction history.
-/// History speaks in confirmed blocks only — a pending send we broadcast is
-/// labeled "awaiting confirmation", never "incoming" (docs/read-side.md §3.3).
+/// Advanced mode's Wallet tab: balance (confirmed sats), the vault tools,
+/// sync detail, and the local transaction history. History speaks in
+/// confirmed blocks only — a pending send we broadcast is labeled "awaiting
+/// confirmation", never "incoming" (docs/read-side.md §3.3). Beginner mode
+/// shows the same wallet on one screen (BeginnerHomeView) and reuses the
+/// rows and the payment detail below.
 struct HomeView: View {
     var sendFrom: (String) -> Void
     /// Opens Send pre-addressed to a saved person, from a payment's detail.
@@ -66,66 +69,41 @@ struct HomeView: View {
                         .accessibilityIdentifier("walletSharedSavingsButton")
                     Button("Add a shared account") { showAddSavings = true }
                         .accessibilityIdentifier("addSharedSavingsButton")
-                    if model.advancedMode {
-                        Button("New account with custom rules") { showAdvancedAccount = true }
-                            .accessibilityIdentifier("newVaultButton")
-                        Button("Require another signing device") { showExtraDevice = true }
-                            .accessibilityIdentifier("walletExtraDeviceButton")
-                    }
+                    Button("New account with custom rules") { showAdvancedAccount = true }
+                        .accessibilityIdentifier("newVaultButton")
+                    Button("Require another signing device") { showExtraDevice = true }
+                        .accessibilityIdentifier("walletExtraDeviceButton")
                 }
 
                 Section("Sync") {
-                    if model.advancedMode {
-                        if let statusText = model.syncStatusText {
-                            if case .peerDiscoveryFailed = model.syncPhase {
-                                Text(statusText)
-                                    .font(.footnote)
-                                    .foregroundStyle(.red)
-                                Button("Retry") {
-                                    Task { await model.retryPeerDiscovery() }
-                                }
-                                .accessibilityIdentifier("retryPeersButton")
-                            } else {
-                                ProgressView(statusText)
-                                    .accessibilityIdentifier("syncProgressText")
-                            }
-                        }
-                        // nextScanHeight is the NEXT block to scan, so a fully
-                        // scanned tip reads "tip+1 of tip" — clamp the display.
-                        // Absent when no scan has produced a position yet: the
-                        // status line above is already saying what is happening,
-                        // and a zeroed row said "block 0 of 0" (#99).
-                        if let filterScan = model.syncPhase.filterScanText(
-                            fallbackScanned: model.status.nextScanHeight,
-                            fallbackTip: model.status.tipHeight
-                        ) {
-                            LabeledContent("Filter scan", value: filterScan)
-                        }
-                        LabeledContent("Peers", value: "\(model.status.peerCount)")
-                        if model.status.syncing, model.syncStatusText == nil {
-                            ProgressView("Scanning filters…")
-                        }
-                    } else {
-                        // One line for a beginner. The detail above is the
-                        // same state, shown to those who asked for it.
-                        switch model.syncSummary {
-                        case .peersUnavailable:
-                            Text("Couldn't reach the Bitcoin network — check your connection.")
+                    if let statusText = model.syncStatusText {
+                        if case .peerDiscoveryFailed = model.syncPhase {
+                            Text(statusText)
                                 .font(.footnote)
                                 .foregroundStyle(.red)
-                                .accessibilityIdentifier("syncSummaryText")
                             Button("Retry") {
                                 Task { await model.retryPeerDiscovery() }
                             }
                             .accessibilityIdentifier("retryPeersButton")
-                        case .syncing:
-                            ProgressView("Syncing…")
-                                .accessibilityIdentifier("syncSummaryText")
-                        case .synced:
-                            Label("Synced", systemImage: "checkmark.circle")
-                                .foregroundStyle(.secondary)
-                                .accessibilityIdentifier("syncSummaryText")
+                        } else {
+                            ProgressView(statusText)
+                                .accessibilityIdentifier("syncProgressText")
                         }
+                    }
+                    // nextScanHeight is the NEXT block to scan, so a fully
+                    // scanned tip reads "tip+1 of tip" — clamp the display.
+                    // Absent when no scan has produced a position yet: the
+                    // status line above is already saying what is happening,
+                    // and a zeroed row said "block 0 of 0" (#99).
+                    if let filterScan = model.syncPhase.filterScanText(
+                        fallbackScanned: model.status.nextScanHeight,
+                        fallbackTip: model.status.tipHeight
+                    ) {
+                        LabeledContent("Filter scan", value: filterScan)
+                    }
+                    LabeledContent("Peers", value: "\(model.status.peerCount)")
+                    if model.status.syncing, model.syncStatusText == nil {
+                        ProgressView("Scanning filters…")
                     }
                     if let error = model.status.lastSyncError {
                         Text(error)
@@ -161,6 +139,12 @@ struct HomeView: View {
             .navigationTitle("Winnow")
             .navigationDestination(for: Data.self) { PaymentDetailView(txid: $0, sendToPerson: sendToPerson) }
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    // The way back to the one-screen interface. Every
+                    // setting made here stays in effect there.
+                    Button("Simple") { model.setAdvancedMode(false) }
+                        .accessibilityIdentifier("advancedModeButton")
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Button("Receive") { showReceive = true }
                         .accessibilityIdentifier("receiveButton")
@@ -180,7 +164,9 @@ struct HomeView: View {
     }
 }
 
-private struct HistoryRow: View {
+/// One payment in the list. Advanced mode shows the block, the fee and the
+/// replacement's id; beginner mode says Confirmed, Pending or Replaced.
+struct HistoryRow: View {
     @Environment(AppModel.self) private var model
     let entry: HistoryEntry
 
@@ -203,27 +189,53 @@ private struct HistoryRow: View {
             VStack(alignment: .trailing, spacing: 2) {
                 Text("\(net >= 0 ? "+" : "−")\(abs(net).formatted()) sats")
                     .foregroundStyle(net >= 0 ? .green : .primary)
-                if let replacement = entry.replacedBy {
-                    Text("replaced by \(replacement.displayHex.prefix(8))…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .accessibilityIdentifier("transactionReplaced-\(entry.txid.displayHex)")
-                } else if entry.height > 0 {
-                    Text("block \(entry.height)")
-                        .accessibilityIdentifier("transactionConfirmation-\(entry.txid.displayHex)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("awaiting confirmation")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-                if let fee = entry.fee {
-                    Text("fee \(fee.formatted()) sats")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+                if model.advancedMode { detailedStatus } else { plainStatus }
             }
+        }
+    }
+
+    /// Confirmed, Pending or Replaced, under the same identifiers the
+    /// detailed wording carries, so a journey reads either.
+    @ViewBuilder
+    private var plainStatus: some View {
+        if entry.replacedBy != nil {
+            Text("Replaced")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("transactionReplaced-\(entry.txid.displayHex)")
+        } else if entry.height > 0 {
+            Text("Confirmed")
+                .accessibilityIdentifier("transactionConfirmation-\(entry.txid.displayHex)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else {
+            Text("Pending")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
+    }
+
+    @ViewBuilder
+    private var detailedStatus: some View {
+        if let replacement = entry.replacedBy {
+            Text("replaced by \(replacement.displayHex.prefix(8))…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("transactionReplaced-\(entry.txid.displayHex)")
+        } else if entry.height > 0 {
+            Text("block \(entry.height)")
+                .accessibilityIdentifier("transactionConfirmation-\(entry.txid.displayHex)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else {
+            Text("awaiting confirmation")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
+        if let fee = entry.fee {
+            Text("fee \(fee.formatted()) sats")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -238,7 +250,10 @@ private struct HistoryRow: View {
     }
 }
 
-private struct PaymentDetailView: View {
+/// One payment: who, how much, the local labels, and the sender. The raw
+/// addresses and the transaction id are folded away in beginner mode; the
+/// explorer link and fee bumping are Advanced.
+struct PaymentDetailView: View {
     let txid: Data
     let sendToPerson: (String) -> Void
     @Environment(AppModel.self) private var model
@@ -259,7 +274,7 @@ private struct PaymentDetailView: View {
                 ForEach(model.paymentRecipients(entry)) { recipient in
                     Section {
                         if let person = recipient.person { Text(person.name).font(.headline) }
-                        CopyableTextBlock(text: recipient.address)
+                        technical("Address") { CopyableTextBlock(text: recipient.address) }
                         Text(satsText(recipient.amount))
                         Button(recipient.person?.isSavedRecipient == true ? "Rename recipient" : "Save recipient") {
                             editing = recipient
@@ -283,7 +298,7 @@ private struct PaymentDetailView: View {
                         ForEach(labeledOutputs) { output in
                             VStack(alignment: .leading, spacing: 8) {
                                 Text(output.label).font(.headline)
-                                CopyableTextBlock(text: output.address)
+                                technical("Address") { CopyableTextBlock(text: output.address) }
                                 Text(satsText(output.amount))
                                 Button("Edit address label") { editingReceiveLabel = output }
                                     .accessibilityIdentifier("editPaymentReceiveLabel-\(output.id)")
@@ -304,12 +319,20 @@ private struct PaymentDetailView: View {
                     }
                 }
                 if let error { Text(error).foregroundStyle(.red).accessibilityIdentifier("paymentDetailsError") }
-                Section("Transaction") {
-                    CopyableIdentifier(value: txid.displayHex, accessibilityID: "copyTransactionIDButton")
-                    WarnedExplorerLink(title: "View transaction", url: model.esploraTransactionURL(txid),
-                                       exposedItem: "transaction ID", accessibilityID: "explorerTransactionButton")
-                    if model.advancedMode, model.status.feeBumpableTxids.contains(txid) {
-                        Button("Bump fee") { showFeeBump = true }.accessibilityIdentifier("bumpFeeButton")
+                if model.advancedMode {
+                    Section("Transaction") {
+                        CopyableIdentifier(value: txid.displayHex, accessibilityID: "copyTransactionIDButton")
+                        WarnedExplorerLink(title: "View transaction", url: model.esploraTransactionURL(txid),
+                                           exposedItem: "transaction ID", accessibilityID: "explorerTransactionButton")
+                        if model.status.feeBumpableTxids.contains(txid) {
+                            Button("Bump fee") { showFeeBump = true }.accessibilityIdentifier("bumpFeeButton")
+                        }
+                    }
+                } else {
+                    Section {
+                        technical("Transaction ID") {
+                            CopyableIdentifier(value: txid.displayHex, accessibilityID: "copyTransactionIDButton")
+                        }
                     }
                 }
             } else { Text("This payment is no longer in the wallet’s history.") }
@@ -337,6 +360,17 @@ private struct PaymentDetailView: View {
         .sheet(isPresented: $showFeeBump) { FeeBumpView(txid: txid) }
         .task(id: model.status.syncing) {
             if !model.status.syncing { await load() }
+        }
+    }
+
+    /// A raw address or id: in full for Advanced mode, folded behind a
+    /// title for a beginner, who can still open and copy it.
+    @ViewBuilder
+    private func technical<Content: View>(_ title: String, @ViewBuilder content: @escaping () -> Content) -> some View {
+        if model.advancedMode {
+            content()
+        } else {
+            DisclosureGroup(title) { content() }
         }
     }
 
