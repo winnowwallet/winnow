@@ -181,13 +181,13 @@ dialog a{overflow-wrap:anywhere}
 <p>The ordered tests use the app on a private Bitcoin test network. Screenshots show test funds. Open a test run to see which version was checked, what passed, and what failed.</p>
 <p><a href="/testing#artifacts">Read the logs and screenshots</a> · <a href="/testing#limits">What still needs testing</a></p></dialog></div></details>
 <details class="journey" id="sender-lookup" open>
-<summary><h2>Choose a funding destination</h2></summary><div class="journey-body"><p>If you choose to consult an explorer, review what is disclosed and whether the request goes directly or through Tor. Then explicitly select any returned destination.</p>
+<summary><h2>Choose a funding destination</h2></summary><div class="journey-body"><p>If you choose to consult an explorer, review what is disclosed before asking. Then explicitly select any returned destination.</p>
 <img class="app-shot" src="screenshots/43-infer-sender.png" width="1320" height="2868" loading="lazy" alt="Winnow: Choose a funding destination.">
-<p class="limit">The explorer receives the transaction ID. Direct mode reveals your connection IP; a clearnet explorer reached through Tor sees an exit IP. Returned addresses do not identify people.</p>
+<p class="limit">The explorer receives the transaction ID and your connection&#x27;s IP address. Returned addresses do not identify people.</p>
 <button class="test-link" type="button" data-dialog="sender-lookup-tests" aria-controls="sender-lookup-tests" aria-haspopup="dialog">How this is tested</button>
 <dialog id="sender-lookup-tests" aria-labelledby="sender-lookup-tests-title">
 <div class="dialog-heading"><h2 id="sender-lookup-tests-title">How we test: Choose a funding destination</h2><form method="dialog"><button class="dialog-close" autofocus>Close</button></form></div><ol>
-<li>Open the funding-address lookup and review the transaction ID and network route before giving consent.</li>
+<li>Open the funding-address lookup and review the transaction ID and what the explorer learns before giving consent.</li>
 <li>Choose a returned address explicitly, even if the explorer returns only one.</li>
 <li>Save the destination with its unverified origin visible.</li>
 </ol><p>Test code:

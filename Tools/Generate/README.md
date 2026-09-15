@@ -22,24 +22,23 @@ scripts/refresh-checkpoint ~/…/mainnet/headers.bin [height]
 `fallback-peers` defaults to the published [Winnow census catalog](https://census.winnowwallet.com/census/peers.json).
 Use `--from-census URL-OR-PATH` to select another artifact. Winnow's census uses
 BTCNodes as input and records its observation date, reference tip, and separate
-clearnet, Tor, and I2P candidate lists. The generator downloads or reads the
+clearnet, Tor, and I2P candidate lists; the wallet dials clearnet only. The generator downloads or reads the
 artifact, then validates it offline with the same `CensusCatalog` policy used
 by the app's **Refresh peer list** action.
 
 Validation rejects unknown schemas, malformed or future observation dates,
 observations older than seven UTC days, and input larger than 4 MiB. It
-canonicalizes endpoints, rejects duplicates and invalid overlay addresses,
+canonicalizes endpoints, rejects duplicates and non-public addresses,
 and requires reported heights within 100 blocks of the reference tip in
 either direction. Clearnet entries must be public IP literals on port 8333,
 with at most one endpoint per IPv4 /16 or IPv6 /32. A height within the window
 does not prove that a peer serves correct filters or remains reachable.
 
-An accepted catalog generates both clearnet and Tor constants in
-`Sources/WalletCore/Network/Protocol/FallbackPeersGenerated.swift`. Tor peers
-are available only through the wallet's enabled Tor route. I2P entries are
-validated but are neither bundled nor dialed. Census input retains all
-validated clearnet and Tor candidates; the crawl's default 96-peer target
-does not truncate it. The generator requires at least `--floor` clearnet
+An accepted catalog generates the clearnet constant in
+`Sources/WalletCore/Network/Protocol/FallbackPeersGenerated.swift`. The Tor
+and I2P lists are carried through parsing and neither bundled nor dialed.
+Census input retains every validated clearnet candidate; the crawl's default
+96-peer target does not truncate it. The generator requires at least `--floor` clearnet
 peers (default 24) before writing the output.
 
 Selection from a fixed accepted artifact is deterministic. Generated

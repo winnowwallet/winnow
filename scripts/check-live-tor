@@ -1,7 +1,0 @@
-#!/bin/bash
-# Public-network release evidence. Ordinary CI uses isolated SOCKS/driver fixtures.
-# The port belongs to the pinned TorBridge/examples/proxy process started by you.
-set -euo pipefail
-cd "$(dirname "$0")/.."
-export WINNOW_LIVE_TOR_PORT="${1:?usage: check-live-tor <owned-Arti-loopback-port>}"
-swift test --filter RoutingTests.liveFoundationHTTPSViaArti

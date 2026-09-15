@@ -54,7 +54,7 @@ public struct SeedResolver: Sendable {
             parts.queryItems = [URLQueryItem(name: "name", value: name), URLQueryItem(name: "type", value: type)]
             return try await client.get(parts.url!, maximumBytes: maximumDoHBytes, accept: "application/dns-json")
         }, systemResolve: { host, port in
-            guard client.route == .direct, !Task.isCancelled else { return [] }
+            guard !Task.isCancelled else { return [] }
             return systemResolve(host, port)
         })
     }

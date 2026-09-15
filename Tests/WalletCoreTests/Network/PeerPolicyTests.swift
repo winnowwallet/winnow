@@ -357,55 +357,6 @@ struct PeerPolicyTests {
         await pool.stop()
     }
 
-    // MARK: - Overlay networks
-
-    /// Where an endpoint can be reached at all: a `.onion` or `.i2p` name
-    /// resolves only inside its own overlay. Until a transport that speaks
-    /// one exists, the classification's job is to keep those endpoints out
-    /// of the clearnet dial queue.
-    @Test("overlay is classified by host suffix; literals stay clearnet")
-    func overlayClassification() {
-        #expect(PeerEndpoint(host: "exampleonionaddress.onion", port: 8333).overlay == .tor)
-        #expect(PeerEndpoint(host: "UPPERCASE.ONION", port: 8333).overlay == .tor,
-                "names are case-insensitive")
-        #expect(PeerEndpoint(host: "abcdef.b32.i2p", port: 8333).overlay == .i2p)
-        #expect(PeerEndpoint(host: "router.i2p", port: 8333).overlay == .i2p)
-        #expect(PeerEndpoint(host: "47.206.253.100", port: 8333).overlay == .clearnet)
-        #expect(PeerEndpoint(host: "2001:478:1:2::1", port: 8333).overlay == .clearnet)
-        #expect(PeerEndpoint(host: "node.example.com", port: 8333).overlay == .clearnet)
-        #expect(PeerEndpoint(host: "notonion.com", port: 8333).overlay == .clearnet,
-                "the suffix is the whole last label, not a substring")
-        #expect(PeerEndpoint(host: "x.onion.evil.com", port: 8333).overlay == .clearnet)
-    }
-
-    /// Overlays without a transport are modelled — `overlayFallbackPeers`,
-    /// `fallbackPeers(for:)` — but never dialled: a tor or i2p endpoint
-    /// could only fail to answer, and a dial that must fail must not spend
-    /// a slot in the race. The pool filters even a tor/i2p entry that leaks
-    /// into the clearnet list itself.
-    @Test("the pool's candidates carry no tor or i2p endpoints, even if the params do")
-    func poolExcludesOverlayOnlyPeers() async throws {
-        let clearnet = PeerEndpoint(host: "47.206.253.100", port: 8333)
-        let onion = PeerEndpoint(host: "exampleonionaddress.onion", port: 8333)
-        let i2p = PeerEndpoint(host: "abcdef.b32.i2p", port: 8333)
-        let base = NetworkParams.customSignet(challenge: Data([0x51]))
-        let params = NetworkParams(
-            network: base.network, magic: base.magic, defaultPort: base.defaultPort,
-            genesisTime: base.genesisTime, genesisBits: base.genesisBits,
-            genesisNonce: base.genesisNonce, genesisMerkleRoot: base.genesisMerkleRoot,
-            genesisHash: base.genesisHash, powLimit: base.powLimit, dnsSeeds: [],
-            fallbackPeers: [clearnet, onion, i2p],
-            overlayFallbackPeers: [.tor: [onion], .i2p: [i2p]]
-        )
-        // The model is per-overlay: clearnet is `fallbackPeers` itself, and
-        // the tor/i2p lists exist — present, and unread until a transport.
-        #expect(params.fallbackPeers(for: .clearnet) == [clearnet, onion, i2p])
-        #expect(params.fallbackPeers(for: .tor) == [onion])
-        #expect(params.fallbackPeers(for: .i2p) == [i2p])
-        let pool = PeerPool(params: params, peerCount: 3)
-        #expect(await pool.candidateSourcesForTest() == [clearnet: .fallback])
-    }
-
     // MARK: - Fallback peer list
 
     /// Always-on validation of the committed fallback list (#161).

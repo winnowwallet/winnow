@@ -89,19 +89,6 @@ jobs:
           swift test
           scripts/ci-debug
 
-      - name: Observe proxy routing with packet capture
-        timeout-minutes: 5
-        run: scripts/check-route-packets "$RUNNER_TEMP/route-packets"
-
-      - name: Preserve routing packet evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: route-packets-${{ github.run_id }}
-          path: ${{ runner.temp }}/route-packets/
-          if-no-files-found: error
-          retention-days: 14
-
       - name: Release-build production package and reject first-party warnings
         run: >-
           scripts/ci-production-warnings
@@ -180,32 +167,6 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
-
-      # Same cache as the node lane's UI job: the framework changes only when
-      # the bridge's locked source or build script does, and the key names
-      # every input. A hit still re-checks the license evidence and the
-      # lockfile hash the build recorded.
-      - name: Restore the pinned app Tor framework
-        id: tor-cache
-        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-        with:
-          path: TorBridge/build
-          key: tor-bridge-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('TorBridge/Cargo.lock', 'TorBridge/Cargo.toml', 'TorBridge/rust-toolchain.toml', 'TorBridge/src/**', 'TorBridge/include/**', 'scripts/build-tor-bridge', 'scripts/install-rust') }}
-
-      - name: Build pinned app Tor framework
-        if: steps.tor-cache.outputs.cache-hit != 'true'
-        run: |
-          scripts/install-rust
-          export PATH="$HOME/.cargo/bin:$PATH"
-          scripts/build-tor-bridge
-
-      - name: Check the restored Tor framework against its locked source
-        if: steps.tor-cache.outputs.cache-hit == 'true'
-        run: |
-          scripts/render-tor-notices --check
-          cd TorBridge
-          grep ' Cargo.lock$' build/source-and-binary-sha256.txt | shasum -a 256 -c -
-          test -d build/WinnowTor.xcframework
 
       - name: Install pinned XcodeGen
         run: scripts/install-xcodegen

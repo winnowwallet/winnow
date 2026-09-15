@@ -24,12 +24,9 @@ unchanged. Runner, Xcode and Bitcoin versions are recorded in the job log.
 Three rules keep the node lane's queue for real work. Pull requests reach it
 only when they target `main` — a stacked pull request re-runs the tree its
 base is already running, and it is picked up when retargeted after its base
-merges. Pull requests run the iPhone journey only; the iPad journey, the
-longest job, runs for main pushes, the nightly and confirmed manual runs. And
-the app's Tor framework is restored from the Actions cache, keyed on every
-input to its build, instead of being compiled from Rust source in every job;
-a restored framework still has its license evidence and recorded lockfile
-hash re-checked.
+merges. Pull requests run the iPhone journeys on the self-hosted VMs only; the
+hosted lanes — iPad, and the iPhone captures with system UI — run for main
+pushes, the nightly and confirmed manual runs.
 [node-tests.yml](node-tests.yml) owns only the disposable
 test node through [signet-fixture](../../scripts/signet-fixture).
 Inspect the exact run and job conclusions; skipped jobs are not fresh evidence.

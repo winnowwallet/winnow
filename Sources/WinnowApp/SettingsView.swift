@@ -55,34 +55,18 @@ struct SettingsView: View {
 
                 if model.advancedMode {
                     Section {
-                        Toggle("Use Tor for wallet traffic", isOn: Binding(
-                            get: { model.tor.enabled },
-                            set: { value in Task { await model.setTorEnabled(value) } }
-                        ))
-                        .accessibilityIdentifier("torEnabledToggle")
-                        LabeledContent("State", value: model.tor.state.rawValue.capitalized)
-                            .accessibilityIdentifier("torState")
-                        if model.tor.state == .failed {
-                            Text("Tor failed. Winnow remains offline until Tor recovers or you disable it.")
-                            Button("Retry Tor") { Task { await model.retryTor() } }
-                                .accessibilityIdentifier("retryTorButton")
-                        }
-                    } header: { Text("Tor") } footer: {
-                        Text("Off by default. When enabled, Bitcoin peers, discovery, peer-list downloads and explorer lookups use Tor. There is no direct fallback. Networking stops in the background. External browser links are outside Winnow's protection. I2P transport is unavailable.")
-                    }
-                    Section {
                         Button(model.refreshingCatalog ? "Refreshing… \(model.catalogBytes) bytes" : "Refresh peer list") {
                             Task { await model.refreshPeerCatalog() }
                         }
-                        .disabled(model.refreshingCatalog || model.tor.route == .offline)
+                        .disabled(model.refreshingCatalog)
                         .accessibilityIdentifier("refreshPeerCatalogButton")
                         if let notice = model.catalogNotice { Text(notice).accessibilityIdentifier("peerCatalogNotice") }
                         else if let downloaded = model.catalogStore?.load() {
-                            Text("Observed \(downloaded.catalog.date): \(downloaded.catalog.networks["clearnet", default: []].count) clearnet, \(downloaded.catalog.networks["tor", default: []].count) Tor candidates.").accessibilityIdentifier("peerCatalogNotice")
+                            Text("Observed \(downloaded.catalog.date): \(AppModel.candidateCount(downloaded.catalog)).").accessibilityIdentifier("peerCatalogNotice")
                         } else { Text("Using bundled candidates. Downloaded catalogs expire after seven days.") }
                         if let error = model.catalogError { Text(error).foregroundStyle(.red).accessibilityIdentifier("peerCatalogError") }
                     } header: { Text("Mainnet peer list") } footer: {
-                        Text("Downloads candidates from census.winnowwallet.com. Refresh keeps active connections. Every selected peer still undergoes Winnow's normal checks. Tor candidates are used only with Tor enabled.")
+                        Text("Downloads candidates from census.winnowwallet.com. Refresh keeps active connections. Every selected peer still undergoes Winnow's normal checks.")
                     }
                 }
 
@@ -109,7 +93,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Manual peers")
                 } footer: {
-                    Text("Manual peers are tried first. Seeds resolve over HTTPS (Cloudflare 1.1.1.1). Direct mode can fall back to system DNS; Tor mode cannot. The default port is 8333 (mainnet) / 38333 (signet). Peers must advertise compact filters and pass Winnow's checks.")
+                    Text("Manual peers are tried first. Seeds resolve over HTTPS (Cloudflare 1.1.1.1), with system DNS as the fallback. The default port is 8333 (mainnet) / 38333 (signet). Peers must advertise compact filters and pass Winnow's checks.")
                 }
                 }
 
@@ -142,7 +126,7 @@ struct SettingsView: View {
                 } header: {
                     Text("External block explorer")
                 } footer: {
-                    Text("Winnow does not use the explorer for balances, synchronization, fees or broadcasting. Every funding-address lookup asks for consent and explains the transaction-ID disclosure and current route; you must explicitly select any result. External browser links have their own warning because the browser is outside Winnow’s Tor protection. On signet, the blockstream.info preset uses mempool.space.")
+                    Text("Winnow does not use the explorer for balances, synchronization, fees or broadcasting. Every funding-address lookup asks for consent and explains the transaction-ID disclosure; you must explicitly select any result. External browser links have their own warning: the browser shares its IP address with the site. On signet, the blockstream.info preset uses mempool.space.")
                 }
                 }
 
@@ -212,9 +196,6 @@ struct SettingsView: View {
                         LabeledContent("Wallet ID", value: model.walletID ?? "—")
                     }
                     Button("Design papers") { showPapers = true }
-                    NavigationLink("Tor open-source licenses") {
-                        DesignPaperView(resource: "tor-licenses", title: "Tor licenses")
-                    }
                 }
 
                 if model.walletID != nil {

@@ -46,16 +46,6 @@ class JourneyOwnershipTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not captured by its app tests"):
             site.load_journeys(self.root)
 
-    def test_live_capture_requires_existing_evidence(self):
-        self.journeys[0]["liveCapture"] = "device-tor-census-response"
-        self.save()
-        live = self.root / site.LIVE_TEST_PATH
-        live.write_text('capture(app, "device-tor-census-response")')
-        site.load_journeys(self.root)
-        live.write_text('capture(app, "device-tor-ready")')
-        with self.assertRaisesRegex(ValueError, "missing live capture"):
-            site.load_journeys(self.root)
-
     def test_duplicate_journey_and_missing_image_are_rejected(self):
         self.journeys.append(dict(self.journeys[0]))
         self.save()

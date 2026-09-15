@@ -131,9 +131,6 @@ struct E2EMode {
                 .compactMap { try? Curve25519.Signing.PublicKey(rawRepresentation: $0) }
         }
     }
-    var torDriver: (any TorDriving)? {
-        ProcessInfo.processInfo.environment["WINNOW_E2E_TOR_FAILURE"] == "1" ? E2EFailingTorDriver() : nil
-    }
 
     private var safeRunID: String {
         runID.map { $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" ? $0 : "_" }
@@ -297,7 +294,6 @@ struct E2EMode {
     var storageDirectoryName: String { unavailable() }
     var censusURL: URL? { unavailable() }
     var censusTrustedKeys: [Curve25519.Signing.PublicKey]? { unavailable() }
-    var torDriver: (any TorDriving)? { unavailable() }
 
     func wipeIfRequested() { unavailable() }
     func journal(_: String, fields _: [String: String] = [:]) { unavailable() }
@@ -305,15 +301,5 @@ struct E2EMode {
     private func unavailable() -> Never {
         fatalError("Test mode is not present in release builds")
     }
-}
-#endif
-
-#if DEBUG
-/// A deterministic UI failure journey. It never opens a listener or network.
-private actor E2EFailingTorDriver: TorDriving {
-    private var started = Date.distantPast
-    func start(directory: String) -> Int32 { started = Date(); return 0 }
-    func status() -> (UInt8, UInt16) { (Date().timeIntervalSince(started) < 6 ? 1 : 3, 0) }
-    func stop() {}
 }
 #endif

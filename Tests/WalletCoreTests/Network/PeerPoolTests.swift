@@ -5,19 +5,15 @@ import TestSupport
 @testable import WalletCore
 
 /// The peer pool, by subject: which candidates it dials and how many it keeps,
-/// what a failing peer costs it, which seated peers it unseats, and the SOCKS
-/// circuit a dial can run over.
+/// what a failing peer costs it, and which seated peers it unseats.
 ///
-/// Merged from `PeerPoolTests`, `PeerCooldownTests`, `StaleTipEvictionTests`
-/// and `SocksProxyTests`; each `// MARK:` below is one of those suites, in
+/// Merged from `PeerPoolTests`, `PeerCooldownTests` and
+/// `StaleTipEvictionTests`; each `// MARK:` below is one of those suites, in
 /// that order. All of it is socket-backed — real 127.0.0.1 listeners, no
 /// external network.
 ///
-/// Of the four, two carried a time limit: two minutes for the stale-tip cases
-/// and one minute for the SOCKS ones. The merged suite takes two. A time limit
-/// here is a hang guard rather than a performance claim (see `pollUntil`), and
-/// the strictest of the two would have halved the budget the stale-tip cases
-/// were deliberately given — a scheduling change smuggled in with a file move.
+/// The two-minute limit is the stale-tip cases' budget. A time limit here is
+/// a hang guard rather than a performance claim (see `pollUntil`).
 @Suite("PeerPool", .timeLimit(.minutes(2)))
 struct PeerPoolTests {
     /// No DNS seeds, no fallback peers: the pool dials exactly the manual
@@ -677,64 +673,6 @@ struct PeerPoolTests {
     @Test("the tolerance is the wallet's reorg horizon")
     func toleranceMatchesHorizon() {
         #expect(PeerPool.staleTipTolerance == 100)
-    }
-
-    // MARK: - SOCKS5 proxying
-
-    // `params` above is a custom signet; these three want plain signet, so
-    // they keep the local the source suite had, renamed to say which is which.
-
-    @Test("a peer is dialled by name through the proxy and the handshake runs over the circuit")
-    func connectsByName() async throws {
-        let signetParams = NetworkParams.signet
-        let node = LoopbackNode(params: signetParams)
-        try await node.start()
-        defer { Task { await node.stop() } }
-        let proxy = FakeSocksProxy(upstreamPort: await node.endpoint.port)
-        try await proxy.start()
-        defer { Task { await proxy.stop() } }
-
-        // A name no resolver could answer: only the proxy can take it.
-        let peer = PeerConnection(endpoint: PeerEndpoint(host: "winnowtestpeer.onion", port: 8333),
-                                  params: signetParams, socksProxy: await proxy.endpoint)
-        try await peer.connect(timeout: .seconds(10))
-        #expect(await peer.isConnected)
-        #expect(await peer.peerUserAgent.isEmpty == false, "the version exchange ran over the circuit")
-        #expect(await proxy.requestedHost == "winnowtestpeer.onion", "the name went to the proxy unresolved")
-        #expect(await proxy.requestedPort == 8333)
-        #expect(await node.nextMessage(command: "verack", timeout: .seconds(5)) != nil)
-        await peer.disconnect()
-    }
-
-    @Test("a proxy that cannot reach the peer reports a transport failure, not a protocol fault")
-    func proxyRefusal() async throws {
-        let signetParams = NetworkParams.signet
-        let proxy = FakeSocksProxy(upstreamPort: nil, refuseWith: 0x04) // host unreachable
-        try await proxy.start()
-        defer { Task { await proxy.stop() } }
-        let peer = PeerConnection(endpoint: PeerEndpoint(host: "nowhere.onion", port: 8333),
-                                  params: signetParams, socksProxy: await proxy.endpoint)
-        do {
-            try await peer.connect(timeout: .seconds(10))
-            Issue.record("the connection should have failed")
-        } catch let error as PeerError {
-            #expect(error.isTransport, "\(error)")
-            #expect(error.localizedDescription.contains("host unreachable"))
-        }
-        #expect(await peer.isConnected == false)
-    }
-
-    @Test("without a proxy the dial is direct and unchanged")
-    func directDialUnchanged() async throws {
-        let signetParams = NetworkParams.signet
-        let node = LoopbackNode(params: signetParams)
-        try await node.start()
-        defer { Task { await node.stop() } }
-        let peer = PeerConnection(endpoint: await node.endpoint, params: signetParams)
-        try await peer.connect(timeout: .seconds(10))
-        #expect(await peer.socksProxy == nil)
-        #expect(await peer.isConnected)
-        await peer.disconnect()
     }
 
     /// "Reset and shuffle peers" (the Advanced settings control): everything

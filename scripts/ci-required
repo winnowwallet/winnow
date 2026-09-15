@@ -9,13 +9,13 @@ import sys
 
 
 PATTERNS = {
-    "ci": r"^(TorBridge/|Sources/|Tools/|Tests/|AppTests/|UITests/|Package\.(swift|resolved)$|project\.yml$|\.swiftlint\.yml$|scripts/|\.github/workflows/(ci|node-tests)\.yml$|docs/(site\.css|mobile\.html|read-side\.html|write-side\.html|vaults\.html|import\.html)$)",
-    "node-tests": r"^(TorBridge/|Sources/|Tests/|AppTests/|UITests/|Package\.(swift|resolved)$|project\.yml$|scripts/(signet-fixture|ios-simulator|install-xcodegen|ci-required|tests/test_ci_required\.py)$|\.github/workflows/node-tests\.yml$)",
+    "ci": r"^(Sources/|Tools/|Tests/|AppTests/|UITests/|Package\.(swift|resolved)$|project\.yml$|\.swiftlint\.yml$|scripts/|\.github/workflows/(ci|node-tests)\.yml$|docs/(site\.css|mobile\.html|read-side\.html|write-side\.html|vaults\.html|import\.html)$)",
+    "node-tests": r"^(Sources/|Tests/|AppTests/|UITests/|Package\.(swift|resolved)$|project\.yml$|scripts/(signet-fixture|ios-simulator|install-xcodegen|ci-required|tests/test_ci_required\.py)$|\.github/workflows/node-tests\.yml$)",
 }
 JOBS = {
     "ci": {"complexity", "package", "app-build", "package-tests-intel"},
     "node-tests": {"differential"}
-        | {f"ui-{device}-{story}" for device in ("iPhone", "iPad")
+        | {f"ui-{lane}-{story}" for lane in ("iPhone", "iPhone-hosted", "iPad")
            for story in ("first-wallet", "paying-people", "shared-savings", "devices-network")},
 }
 

@@ -1,4 +1,3 @@
-• Beginner mode is one screen: your balance and whether it is up to date, Receive and Send, your activity in plain words, shared savings once you have any, and the backup. No tabs, no settings, nothing technical.
-• Advanced mode is the full three-tab interface, one tap from the corner of that screen, with fee controls, network settings, signing tools and every setting. Simple brings the one screen back and keeps what you set.
-• Shared savings start from one place: "Save with someone…", to start savings with people you have added or join savings someone shared with you.
-• Backing up the wallet is a row on the screen, not a setting.
+• The opt-in Tor connection is removed. Winnow now always connects to the Bitcoin network directly; if you had Tor on, the app tells you once at launch.
+• Fewer moving parts: the embedded Tor client and its several hundred third-party components are gone, leaving one pinned cryptography library.
+• Peer-list and explorer messages say plainly what each service learns.

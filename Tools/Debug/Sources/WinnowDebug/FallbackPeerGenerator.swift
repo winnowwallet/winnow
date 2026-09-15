@@ -4,8 +4,8 @@ import CryptoKit
 
 /// Generates release candidates from the canonical census artifact by default.
 /// The shared validator checks schema, observation age, addresses, diversity,
-/// height distance and size. Clearnet and Tor entries retain their source hash
-/// and observation date. This offline validation does not probe live peers or
+/// height distance and size. Clearnet entries retain their source hash and
+/// observation date. This offline validation does not probe live peers or
 /// prove filter correctness; every selected wallet peer is checked again.
 /// Explicit --from-crawl retains the bounded live discovery path.
 enum FallbackPeerGenerator {
@@ -129,15 +129,14 @@ enum FallbackPeerGenerator {
             print("generator: no census publisher key is compiled in; the list is taken "
                   + (input.signature == nil ? "unsigned" : "unsigned although a signature was published"))
         }
-        let catalog = try CensusCatalog.decode(input.data, minimumEntries: CensusCatalog.minimumOverlayEntries)
+        let catalog = try CensusCatalog.decode(input.data, minimumEntries: CensusCatalog.minimumClearnetEntries)
         let peers = (catalog.networks["clearnet"] ?? []).map {
             VerifiedPeer(endpoint: $0.endpoint, userAgent: $0.userAgent, startHeight: $0.startHeight)
         }
         guard peers.count >= options.floor else { throw GenerateError.thinList("too few validated census peers") }
         let hash = SHA256.hash(data: input.data).map { String(format: "%02x", $0) }.joined()
         var text = render(peers, tip: catalog.tip, date: catalog.date + "T00:00:00Z",
-                          provenance: .census(artifactDate: catalog.date),
-                          torPeers: catalog.networks["tor", default: []].map(\.endpoint))
+                          provenance: .census(artifactDate: catalog.date))
         text += """
         // Source: \(commentSafe(input.source))
         // Source SHA256: \(hash)
@@ -148,7 +147,7 @@ enum FallbackPeerGenerator {
         }
         text += "// Observation date: \(catalog.date); generated: \(ISO8601DateFormatter().string(from: Date()))\n"
         try Data(text.utf8).write(to: options.out, options: .atomic)
-        print("generator: wrote \(peers.count) clearnet and \(catalog.networks["tor"]?.count ?? 0) Tor candidates; observed \(catalog.date); SHA256 \(hash)")
+        print("generator: wrote \(peers.count) clearnet candidates; observed \(catalog.date); SHA256 \(hash)")
     }
 
     static let censusRepository = "winnowwallet/census"
@@ -160,7 +159,7 @@ enum FallbackPeerGenerator {
     /// to it — so the bundled list is tied to a reviewable commit rather than
     /// to whatever the live site served on the day.
     static func pinnedCensus(commit: String) async throws -> CensusInput {
-        let client = RoutedHTTPClient(route: .direct)
+        let client = RoutedHTTPClient()
         defer { client.cancel() }
         let raw = URL(string: "https://raw.githubusercontent.com/\(censusRepository)/\(commit)/\(censusPath)")!
         let data = try await client.get(raw, maximumBytes: CensusCatalog.maximumBytes)
@@ -191,7 +190,7 @@ enum FallbackPeerGenerator {
 
     static func censusData(from source: String) async throws -> Data {
         if let url = URL(string: source), let scheme = url.scheme, ["http", "https"].contains(scheme) {
-            let client = RoutedHTTPClient(route: .direct)
+            let client = RoutedHTTPClient()
             defer { client.cancel() }
             return try await client.get(url, maximumBytes: CensusCatalog.maximumBytes)
         }
@@ -324,8 +323,8 @@ enum FallbackPeerGenerator {
     ///   any other port could never be listed;
     /// - a host that is not a public IP literal — `netblock` is nil, and the
     ///   list is literals only, exactly the drop `spread` applies after a
-    ///   verify. Onioncat-encoded Tor destinations (fd87:d87e:eb43::/32 in
-    ///   the 16-byte field) land in fc00::/7 and are filtered here too.
+    ///   verify. Onioncat-encoded destinations (fd87:d87e:eb43::/32 in the
+    ///   16-byte field) land in fc00::/7 and are filtered here too.
     ///
     /// What survives is deduplicated, inside the reply and against everything
     /// already queued or dialled: addr gossip repeats the popular peers
@@ -391,9 +390,8 @@ enum FallbackPeerGenerator {
     // MARK: - Census input
 
     /// A winnow-census `peers.json` artifact, schema v1 — the generator's
-    /// default input. The tor and i2p arrays parse into the same model so
-    /// the parser is ready for a transport; nothing renders them into the
-    /// committed file until one exists.
+    /// default input. The census also publishes `tor` and `i2p` arrays; the
+    /// wallet dials clearnet only, so they are carried, never rendered.
     struct CensusArtifact: Equatable, Sendable, Decodable {
         struct Entry: Equatable, Sendable, Codable {
             let host: String
@@ -408,9 +406,9 @@ enum FallbackPeerGenerator {
         /// The tip the census recorded; clearnet entries are judged against
         /// it in both directions.
         let tip: Int32
-        let networks: [OverlayNetwork: [Entry]]
+        let networks: [String: [Entry]]
 
-        init(schemaVersion: Int, date: String, tip: Int32, networks: [OverlayNetwork: [Entry]]) {
+        init(schemaVersion: Int, date: String, tip: Int32, networks: [String: [Entry]]) {
             self.schemaVersion = schemaVersion
             self.date = date
             self.tip = tip
@@ -421,19 +419,16 @@ enum FallbackPeerGenerator {
             case schemaVersion, date, tip, networks
         }
 
-        /// The network keys are the overlay raw values exactly; an unknown
-        /// key is a malformed artifact, not a network to skip — the schema
-        /// is fixed, and input this rigid fails loud, never half-read.
+        /// The network keys are the census's own — `clearnet`, `tor`,
+        /// `i2p` — and `clearnet` must be there; an artifact without it is
+        /// malformed, not empty. Input this rigid fails loud, never half-read.
         init(from decoder: any Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            let raw = try container.decode([String: [Entry]].self, forKey: .networks)
-            var networks: [OverlayNetwork: [Entry]] = [:]
-            for (name, entries) in raw {
-                guard let overlay = OverlayNetwork(rawValue: name) else {
-                    throw DecodingError.dataCorruptedError(forKey: .networks, in: container,
-                                                           debugDescription: "unknown network \(name)")
-                }
-                networks[overlay] = entries
+            let networks = try container.decode([String: [Entry]].self, forKey: .networks)
+            let known: Set<String> = ["clearnet", "tor", "i2p"]
+            guard networks["clearnet"] != nil, Set(networks.keys).isSubset(of: known) else {
+                throw DecodingError.dataCorruptedError(forKey: .networks, in: container,
+                                                       debugDescription: "networks must be clearnet, tor and i2p")
             }
             self.init(schemaVersion: try container.decode(Int.self, forKey: .schemaVersion),
                       date: try container.decode(String.self, forKey: .date),
@@ -458,11 +453,9 @@ enum FallbackPeerGenerator {
     /// is not fresher, it is on another chain.
     static func verifiedClearnetPeers(from artifact: CensusArtifact, defaultPort: UInt16,
                                       today: Date) throws -> [VerifiedPeer] {
-        let networks = Dictionary(uniqueKeysWithValues: OverlayNetwork.allCases.map { overlay in
-            (overlay.rawValue, (artifact.networks[overlay] ?? []).map {
-                CensusCatalog.Entry(host: $0.host, port: $0.port, userAgent: $0.userAgent, startHeight: $0.startHeight)
-            })
-        })
+        let networks = artifact.networks.mapValues { entries in
+            entries.map { CensusCatalog.Entry(host: $0.host, port: $0.port, userAgent: $0.userAgent, startHeight: $0.startHeight) }
+        }
         let catalog = try CensusCatalog(schemaVersion: artifact.schemaVersion, date: artifact.date,
                                         tip: artifact.tip, networks: networks).validated(now: today)
         return (catalog.networks["clearnet"] ?? []).map {
@@ -497,7 +490,7 @@ enum FallbackPeerGenerator {
     /// reads: `scripts/check-release-policy` parses the `// Generation:` line
     /// for the date, and `PeerPolicyTests` validates the entries.
     static func render(_ peers: [VerifiedPeer], tip: Int32, date: String,
-                       provenance: Provenance = .crawl, torPeers: [PeerEndpoint] = []) -> String {
+                       provenance: Provenance = .crawl) -> String {
         let entries = peers
             .sorted { $0.endpoint.host < $1.endpoint.host }
             .map { peer in
@@ -505,9 +498,6 @@ enum FallbackPeerGenerator {
                 + "port: \(peer.endpoint.port)),  // \(commentSafe(peer.userAgent))"
             }
             .joined(separator: "\n")
-        let torEntries = torPeers.sorted { $0.host < $1.host }.map {
-            "        PeerEndpoint(host: \"\($0.host)\", port: \($0.port)),"
-        }.joined(separator: "\n")
         let generation: String
         switch provenance {
         case let .census(artifactDate):
@@ -536,9 +526,6 @@ enum FallbackPeerGenerator {
         extension NetworkParams {
             static let generatedMainnetFallbackPeers: [PeerEndpoint] = [
         \(entries)
-            ]
-            static let generatedMainnetTorFallbackPeers: [PeerEndpoint] = [
-        \(torEntries)
             ]
         }
 

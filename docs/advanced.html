@@ -42,7 +42,7 @@ dialog a{overflow-wrap:anywhere}
 
 <p>Your wallet connects directly to the Bitcoin network. Your private keys stay on your phone unless you choose to export them.</p>
 
-<nav class="jump-links" aria-label="On this page"><a href="#second-device">Combine your phone with another signer</a> <a href="#vaults">Inspect and import signing policies</a> <a href="#fees">Replace a pending payment with a higher fee</a> <a href="#network">Inspect peers and control external disclosure</a> <a href="#peer-refresh">Refresh the peer list</a> <a href="#tor">Use Tor for wallet connections</a></nav>
+<nav class="jump-links" aria-label="On this page"><a href="#second-device">Combine your phone with another signer</a> <a href="#vaults">Inspect and import signing policies</a> <a href="#fees">Replace a pending payment with a higher fee</a> <a href="#network">Inspect peers and control external disclosure</a> <a href="#peer-refresh">Refresh the peer list</a></nav>
 <section class="journey" id="second-device">
 <h2>Combine your phone with another signer</h2><p>Use 2-of-2 MuSig2 so your phone and a separate key must both approve every payment. You can also use a MuSig2 group as one cosigner in a larger threshold vault.</p>
 <img class="app-shot" src="screenshots/35-extra-device-policy.png" width="1320" height="2868" loading="lazy" alt="Winnow: Combine your phone with another signer.">
@@ -106,7 +106,7 @@ dialog a{overflow-wrap:anywhere}
 <p><a href="/testing#artifacts">Read the logs and screenshots</a> · <a href="/testing#limits">What still needs testing</a></p></dialog></section>
 <section class="journey" id="peer-refresh">
 <h2>Refresh the peer list</h2><p>Download dated candidates from Winnow’s census without interrupting active peers. Reset and shuffle peers is a separate action.</p>
-<img class="app-shot" src="screenshots/51-tor-census.png" width="1320" height="2868" loading="lazy" alt="Winnow: Refresh the peer list.">
+<img class="app-shot" src="screenshots/46-peer-refresh.png" width="1320" height="2868" loading="lazy" alt="Winnow: Refresh the peer list.">
 <p class="limit">Downloads expire after seven days, then automatic selection falls back to bundled candidates. Bundled and downloaded census entries count as the same trust source. Every selected peer still undergoes normal wallet checks.</p>
 <button class="test-link" type="button" data-dialog="peer-refresh-tests" aria-controls="peer-refresh-tests" aria-haspopup="dialog">How this is tested</button>
 <dialog id="peer-refresh-tests" aria-labelledby="peer-refresh-tests-title">
@@ -117,23 +117,6 @@ dialog a{overflow-wrap:anywhere}
 </ol><p>Test code:
 <a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift#L2418">test20PeerCatalogRefreshAndFailureRecovery</a>
 . <a href="https://github.com/winnowwallet/winnow/actions/workflows/node-tests.yml">View test results</a>.</p>
-<p>This screenshot comes from the separate <a href="https://github.com/winnowwallet/winnow/blob/main/UITests/LiveTorDeviceTests.swift">live Tor journey</a> on an iPhone: real mainnet peers and the public census, with no funds. That journey also checks foreground recovery.</p>
-<p>The ordered tests use the app on a private Bitcoin test network. Screenshots show test funds. Open a test run to see which version was checked, what passed, and what failed.</p>
-<p><a href="/testing#artifacts">Read the logs and screenshots</a> · <a href="/testing#limits">What still needs testing</a></p></dialog></section>
-<section class="journey" id="tor">
-<h2>Use Tor for wallet connections</h2><p>Turn on Tor to route peers, discovery, census refresh and explorer lookups through the embedded client. Networking stops in the background.</p>
-<img class="app-shot" src="screenshots/52-tor-onion-peer.png" width="1320" height="2868" loading="lazy" alt="Winnow: Use Tor for wallet connections.">
-<p class="limit">Tor failure leaves Winnow offline. External browsers use their own routing; Winnow warns before opening them. I2P transport is deferred.</p>
-<button class="test-link" type="button" data-dialog="tor-tests" aria-controls="tor-tests" aria-haspopup="dialog">How this is tested</button>
-<dialog id="tor-tests" aria-labelledby="tor-tests-title">
-<div class="dialog-heading"><h2 id="tor-tests-title">How we test: Use Tor for wallet connections</h2><form method="dialog"><button class="dialog-close" autofocus>Close</button></form></div><ol>
-<li>Turn on Tor in Advanced settings and wait for Ready.</li>
-<li>Return to the app after it has been in the background and let Tor reconnect.</li>
-<li>If Tor fails, retry or explicitly turn it off. Winnow never silently switches to a direct connection.</li>
-</ol><p>Test code:
-<a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift#L2460">test21TorStatesFailClosed</a>
-. <a href="https://github.com/winnowwallet/winnow/actions/workflows/node-tests.yml">View test results</a>.</p>
-<p>This screenshot comes from the separate <a href="https://github.com/winnowwallet/winnow/blob/main/UITests/LiveTorDeviceTests.swift">live Tor journey</a> on an iPhone: real mainnet peers and the public census, with no funds. That journey also checks foreground recovery.</p>
 <p>The ordered tests use the app on a private Bitcoin test network. Screenshots show test funds. Open a test run to see which version was checked, what passed, and what failed.</p>
 <p><a href="/testing#artifacts">Read the logs and screenshots</a> · <a href="/testing#limits">What still needs testing</a></p></dialog></section>
 <p id="evidence"><a href="/testing">How we test Winnow</a></p>

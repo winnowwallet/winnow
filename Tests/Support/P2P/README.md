@@ -2,8 +2,8 @@
 
 # Controlled peers for network tests
 
-LoopbackNode, FakeSocksProxy, and SyntheticChain construct local peers and
-predictable blocks. They let wallet tests reproduce disconnects, malicious
+LoopbackNode, LoopbackHTTPServer, and SyntheticChain construct local peers,
+canned HTTP answers and predictable blocks. They let wallet tests reproduce disconnects, malicious
 responses, forks, and relay behavior without depending on public-network timing.
 
 [Network tests](../../WalletCoreTests/Network/README.md) consume these helpers

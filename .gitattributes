@@ -1,4 +1,1 @@
 docs/screenshots/*.png filter=lfs diff=lfs merge=lfs -text
-
-# Preserve immutable upstream license bytes, including original line endings.
-TorBridge/license-sources/*.txt -text -whitespace

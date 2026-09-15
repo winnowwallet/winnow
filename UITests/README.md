@@ -35,12 +35,14 @@ uploads the result bundle, screenshots, and timing observations.
 Screenshots do not turn a failed assertion into a pass; simulator evidence does
 not establish physical-device behavior.
 
-Review the images themselves before publishing them. On the TDX macOS VM,
+Review the images themselves before publishing them. On the TDX macOS VMs,
 iOS 26.5 captures have omitted tab bars and system-sheet backgrounds even when
-all assertions pass. That VM reports no Metal device; Reduce Transparency did
-not restore the missing tabs. Use a Mac with working simulator graphics for
-publication captures, and keep the original result bundle and source revision.
-The runner graphics problem is tracked in [#84](https://github.com/winnowwallet/winnow/issues/84).
+all assertions pass: the VMs report no Metal device, and Reduce Transparency
+did not restore the missing tabs ([#84](https://github.com/winnowwallet/winnow/issues/84)).
+The VM lane therefore gates pull requests, and publishable iPhone captures
+come from the hosted `ui-iPhone-hosted-*` jobs that main pushes, the nightly
+and confirmed manual runs add on `macos-latest`, or from a Mac with working
+simulator graphics. Keep the original result bundle and source revision.
 The receive journey asks for a local address label, rotates to a blank address,
 relaunches, then mines a payment to the older address and checks its note in
 history and payment details. The prompt and labeled payment have asserted

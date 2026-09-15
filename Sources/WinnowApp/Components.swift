@@ -80,7 +80,7 @@ struct WarnedExplorerLink: View {
             Button("Open \(url.host ?? "explorer")") { openURL(url) }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Opening \(url.host ?? "this explorer") opens an external browser outside Winnow’s Tor routing protection and shares the browser’s IP address and this exact \(exposedItem) with that service. Winnow does not use its response for wallet balance, history, fees, synchronization, or broadcasting.")
+            Text("Opening \(url.host ?? "this explorer") opens an external browser, which shares its IP address and this exact \(exposedItem) with that service. Winnow does not use its response for wallet balance, history, fees, synchronization, or broadcasting.")
         }
     }
 }

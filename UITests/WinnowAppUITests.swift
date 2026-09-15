@@ -2047,7 +2047,7 @@ final class StorySharedSavings: WinnowAppJourney {
     }
 }
 
-/// Story D — A second device and the network: settings, backup resume, MuSig2 with Core, peers, the census, Tor.
+/// Story D — A second device and the network: settings, backup resume, MuSig2 with Core, peers, the census.
 @MainActor
 final class StoryDevicesAndNetwork: WinnowAppJourney {
     override class func prepare(_ journey: WinnowAppJourney) async throws {
@@ -2435,7 +2435,7 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
         let notice = app.staticTexts["peerCatalogNotice"]
         XCTAssertTrue(notice.waitForExistence(timeout: 15))
         XCTAssertTrue(notice.label.contains(today))
-        XCTAssertTrue(notice.label.contains("1 clearnet, 0 Tor"))
+        XCTAssertTrue(notice.label.contains("1 candidate"))
         Screenshots.capture(app, "46-peer-refresh", testCase: self)
         try stub.catalog(Data("{\"schemaVersion\":99}".utf8))
         XCTAssertTrue(scrollUntilExists(app, refresh, maxSwipes: 4, fullyVisible: true))
@@ -2457,40 +2457,4 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
         XCTAssertTrue(reopened.staticTexts["peerCatalogNotice"].label.contains(today))
     }
 
-    func test21TorStatesFailClosed() throws {
-        let app = launchApp(advanced: true, environment: ["WINNOW_E2E_TOR_FAILURE": "1"])
-        app.navigationTab("Settings").tap()
-        let toggle = app.switches["torEnabledToggle"]
-        XCTAssertTrue(scrollUntilExists(app, toggle, maxSwipes: 8))
-        // A fixed extra swipe put this row underneath the iPad's floating
-        // tabs. Center the actual row, away from either platform's tab bar.
-        for _ in 0..<3 {
-            let position = (toggle.frame.midY - app.frame.minY) / app.frame.height
-            if (0.3...0.6).contains(position) { break }
-            let delta = max(-0.3, min(0.3, 0.45 - position))
-            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5 + delta))
-            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0.25)
-        }
-        XCTAssertTrue(toggle.isHittable)
-        XCTAssertEqual(app.staticTexts["torState"].label, "State, Stopped")
-        Screenshots.capture(app, "48-tor-stopped", testCase: self)
-        app.flipSwitch(toggle)
-        XCTAssertTrue(poll(timeout: 30, interval: 0.1, "Tor bootstrapping") {
-            app.staticTexts["torState"].label == "State, Bootstrapping"
-        })
-        Screenshots.capture(app, "49-tor-bootstrapping", testCase: self)
-        XCTAssertTrue(poll(timeout: 30, interval: 0.1, "Tor failed closed") {
-            app.staticTexts["torState"].label == "State, Failed"
-        })
-        XCTAssertTrue(scrollUntilExists(app, app.buttons["retryTorButton"], maxSwipes: 4))
-        XCTAssertTrue(scrollUntilExists(app, app.buttons["refreshPeerCatalogButton"], maxSwipes: 4))
-        XCTAssertFalse(app.buttons["refreshPeerCatalogButton"].isEnabled)
-        XCTAssertTrue(scrollUntilExists(app, toggle, maxSwipes: 4, up: true))
-        Screenshots.capture(app, "50-tor-failed", testCase: self)
-        app.flipSwitch(toggle)
-        XCTAssertTrue(poll(timeout: 30, interval: 0.1, "explicit Tor disable") {
-            app.staticTexts["torState"].label == "State, Stopped"
-        })
-    }
 }

@@ -83,3 +83,13 @@ paying-people stories also passed on an iPad Pro 11-inch simulator. The
 local evidence is `final2-fw.xcresult` and `final2-fw-b.xcresult`
 (first-wallet), `one-pp3.xcresult` (paying-people) and `one-ss4.xcresult`
 (shared-savings) with their logs.
+
+The Tor captures (`48-tor-stopped` through `52-tor-onion-peer`) were removed
+with the embedded Tor client in 0.7.1, and the peer-refresh journey now shows
+`46-peer-refresh`, recaptured by `test20PeerCatalogRefreshAndFailureRecovery`
+on the `remove/tor` working tree that this change commits: an unchanged
+original taken locally on 2026-09-15 with an iPhone 17 Pro simulator running
+iOS 26.5, against the signet fixture recreated from the CI template. The
+first-wallet story and the devices-and-network journeys 05, 09, 19 and 20
+passed in that run (`tor2-fw.xcresult`, `tor2-dn.xcresult` and their logs).
+The removed images remain in history and on the `archive/tor-0.7.0` branch.
