@@ -38,7 +38,9 @@ capture() {
       [[ "$capture_pid" =~ ^[0-9]+$ ]]
       return
     fi
-    kill -0 "$capture_job"
+    # The job is sudo, root once it has switched user: a signal check from
+    # the runner's user is refused then, so ask ps whether it still runs.
+    ps -p "$capture_job" > /dev/null
     sleep 0.1
   done
   echo 'Packet capture did not become ready' >&2

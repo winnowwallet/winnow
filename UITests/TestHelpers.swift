@@ -59,40 +59,101 @@ extension XCTestCase {
     }
 
     /// Scrolls the topmost scroll view until `element` exists (SwiftUI
-    /// Forms materialize rows lazily — `exists` is false below the fold).
-    /// Uses screen-coordinate drags: a TabView keeps every tab's list in the
-    /// accessibility tree, so element-based swipes can hit a hidden tab's
-    /// list instead of the visible form.
+    /// Forms materialize rows lazily — `exists` is false below the fold),
+    /// then moves it clear of the bars, so a tap that follows lands on the
+    /// row and not on a bar drawn over it.
+    ///
+    /// Drags use screen coordinates: a TabView keeps every tab's list in
+    /// the accessibility tree, so element-based swipes can hit a hidden
+    /// tab's list instead of the visible form. The finger rests before it
+    /// lifts, so the form stops where the drag ends. A flung form stops
+    /// wherever its momentum ran out — a stepper left half under the
+    /// navigation bar took its tap on the bar — or is still moving when
+    /// the next tap arrives, which only stops the scroll.
+    ///
+    /// Each drag moves half the surface, so `maxSwipes` reaches some 16
+    /// screens; a row found without dragging is where the form laid it out
+    /// and is returned at once, unless the caller asked for it fully in view.
     @MainActor
     @discardableResult
     func scrollUntilExists(_ app: XCUIApplication, _ element: XCUIElement,
-                           maxSwipes: Int = 10, up: Bool = false, fullyVisible: Bool = false) -> Bool {
-        func ready() -> Bool {
-            guard element.exists else { return false }
-            guard fullyVisible else { return true }
-            let top = app.navigationBars.firstMatch.exists ? app.navigationBars.firstMatch.frame.maxY : app.frame.minY
-            let bottom = app.tabBars.firstMatch.exists ? app.tabBars.firstMatch.frame.minY : app.frame.maxY
-            return element.isHittable && element.frame.minY >= top && element.frame.maxY <= bottom
-        }
-        for _ in 0 ... maxSwipes {
-            // Long enough for a row to materialise after a swipe animates on
-            // a slow CI VM, short enough that a row several swipes down does
-            // not cost many seconds of waiting per swipe.
-            _ = element.waitForExistence(timeout: 1.5)
-            if ready() { return true }
-            // iPad forms are centered sheets. A drag at 30% of the whole
-            // display can land on the sheet's navigation bar instead of its
-            // content, moving the sheet without scrolling its fields.
-            let modal = app.collectionViews.allElementsBoundByIndex.last { view in
-                view.exists && view.frame.width > 0 && view.frame.width < app.frame.width * 0.9
-                    && view.frame.height > 100 && app.frame.intersects(view.frame)
+                           maxSwipes: Int = 16, up: Bool = false, fullyVisible: Bool = false) -> Bool {
+        var surface: XCUIElement?
+        for _ in 0 ..< maxSwipes {
+            // Long enough for a row to materialise after a drag animates on
+            // a slow CI VM, short enough that a row several drags down does
+            // not cost many seconds of waiting per drag.
+            if element.waitForExistence(timeout: 1.5) {
+                guard fullyVisible || surface != nil else { return true }
+                return reveal(app, element, on: surface ?? scrollSurface(app), fullyVisible: fullyVisible)
             }
-            let surface: XCUIElement = modal ?? app
-            let start = surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: up ? 0.30 : 0.62))
-            let end = surface.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: up ? 0.62 : 0.30))
-            start.press(forDuration: 0.05, thenDragTo: end)
+            let scrolled = surface ?? scrollSurface(app)
+            surface = scrolled
+            let start = scrolled.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: up ? 0.25 : 0.75))
+            let end = scrolled.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: up ? 0.75 : 0.25))
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0.25)
         }
-        return ready()
+        guard element.waitForExistence(timeout: 1.5) else { return false }
+        return reveal(app, element, on: surface ?? scrollSurface(app), fullyVisible: fullyVisible)
+    }
+
+    /// What the drags scroll: the screen, or on iPad the centered sheet a
+    /// form is presented in — a drag at 30% of the whole display can land
+    /// on the sheet's navigation bar instead of its content, moving the
+    /// sheet without scrolling its fields.
+    @MainActor
+    private func scrollSurface(_ app: XCUIApplication) -> XCUIElement {
+        let modal = app.collectionViews.allElementsBoundByIndex.last { view in
+            view.exists && view.frame.width > 0 && view.frame.width < app.frame.width * 0.9
+                && view.frame.height > 100 && app.frame.intersects(view.frame)
+        }
+        return modal ?? app
+    }
+
+    /// The vertical band a row is tappable in: below the lowest navigation
+    /// bar (a sheet's sits below the screen's), above the tab bar and the
+    /// keyboard.
+    @MainActor
+    private func clearBand(_ app: XCUIApplication, on surface: XCUIElement) -> ClosedRange<CGFloat> {
+        let frame = surface.frame
+        let barBottoms = app.navigationBars.allElementsBoundByIndex.map { $0.frame.maxY }
+        let top = max(frame.minY, barBottoms.max() ?? frame.minY)
+        var bottom = frame.maxY
+        for cover in [app.tabBars.firstMatch, app.keyboards.firstMatch] where cover.exists {
+            bottom = min(bottom, cover.frame.minY)
+        }
+        return top ... max(top, bottom)
+    }
+
+    /// Drags `element` clear of the bars. A row taller than the band shows
+    /// its top; `fullyVisible` also asks for it to be hittable.
+    @MainActor
+    private func reveal(_ app: XCUIApplication, _ element: XCUIElement, on surface: XCUIElement,
+                        fullyVisible: Bool) -> Bool {
+        let margin: CGFloat = 8
+        let band = clearBand(app, on: surface)
+        let reach = band.upperBound - band.lowerBound - 2 * margin
+        for _ in 0 ..< 3 {
+            // A nudge can carry a lazily built row out of the form's window.
+            guard element.exists else { return false }
+            let frame = element.frame
+            var shift: CGFloat = 0
+            if frame.minY < band.lowerBound + margin {
+                shift = band.lowerBound + margin - frame.minY
+            } else if frame.maxY > band.upperBound - margin, frame.height + 2 * margin < reach {
+                shift = band.upperBound - margin - frame.maxY
+            }
+            guard shift != 0, reach > 0 else { return fullyVisible ? element.isHittable : true }
+            // Content moves with the finger; both ends of the drag stay in
+            // the band.
+            shift = max(-reach, min(reach, shift))
+            let midY = (band.lowerBound + band.upperBound) / 2
+            let start = surface.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: surface.frame.width / 2, dy: midY - shift / 2 - surface.frame.minY))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: shift)),
+                        withVelocity: .default, thenHoldForDuration: 0.25)
+        }
+        return fullyVisible ? element.isHittable : element.exists
     }
 
     /// The sync-progress section can put confirmation below an iPad sheet's
@@ -209,15 +270,33 @@ extension XCUIApplication {
 
     /// iOS 26 SwiftUI quirk: a Toggle in a Form/List surfaces as a container
     /// switch element wrapping the real UISwitch child; tapping the container
-    /// does nothing. Taps the child switch (or the row's right edge).
+    /// does nothing. Taps the child switch (or the row's right edge), and
+    /// taps again while the value stays put: a synthesized tap now and then
+    /// vanishes on a busy simulator, the switch drawn untouched.
     @MainActor
     func flipSwitch(_ container: XCUIElement) {
-        let thumb = container.children(matching: .switch).firstMatch
-        if thumb.exists {
-            thumb.tap()
-        } else {
-            container.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        let before = switchValue(container)
+        for _ in 1 ... 3 {
+            let thumb = container.children(matching: .switch).firstMatch
+            if thumb.exists {
+                thumb.tap()
+            } else {
+                container.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+            }
+            guard let before else { return }
+            let deadline = Date().addingTimeInterval(3)
+            while Date() < deadline {
+                if switchValue(container) != before { return }
+                Thread.sleep(forTimeInterval: 0.25)
+            }
         }
+        XCTFail("switch \(container.identifier) stayed at \(before ?? "?") through three taps")
+    }
+
+    @MainActor
+    private func switchValue(_ container: XCUIElement) -> String? {
+        let thumb = container.children(matching: .switch).firstMatch
+        return (thumb.exists ? thumb.value : container.value) as? String
     }
 }
 
