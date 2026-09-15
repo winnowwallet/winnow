@@ -85,7 +85,11 @@ extension XCTestCase {
             // not cost many seconds of waiting per drag.
             if element.waitForExistence(timeout: 1.5) {
                 guard fullyVisible || surface != nil else { return true }
-                return reveal(app, element, on: surface ?? scrollSurface(app), fullyVisible: fullyVisible)
+                if let revealed = reveal(app, element, on: surface ?? scrollSurface(app), fullyVisible: fullyVisible) {
+                    return revealed
+                }
+                // The nudge carried the row out of the form's window (an
+                // iPad sheet drops a row just above its top); keep going.
             }
             let scrolled = surface ?? scrollSurface(app)
             surface = scrolled
@@ -94,7 +98,7 @@ extension XCTestCase {
             start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0.25)
         }
         guard element.waitForExistence(timeout: 1.5) else { return false }
-        return reveal(app, element, on: surface ?? scrollSurface(app), fullyVisible: fullyVisible)
+        return reveal(app, element, on: surface ?? scrollSurface(app), fullyVisible: fullyVisible) ?? false
     }
 
     /// What the drags scroll: the screen, or on iPad the centered sheet a
@@ -126,16 +130,17 @@ extension XCTestCase {
     }
 
     /// Drags `element` clear of the bars. A row taller than the band shows
-    /// its top; `fullyVisible` also asks for it to be hittable.
+    /// its top; `fullyVisible` also asks for it to be hittable. Nil when a
+    /// nudge carried the lazily built row out of the form's window, so the
+    /// caller scrolls on toward it.
     @MainActor
     private func reveal(_ app: XCUIApplication, _ element: XCUIElement, on surface: XCUIElement,
-                        fullyVisible: Bool) -> Bool {
+                        fullyVisible: Bool) -> Bool? {
         let margin: CGFloat = 8
         let band = clearBand(app, on: surface)
         let reach = band.upperBound - band.lowerBound - 2 * margin
         for _ in 0 ..< 3 {
-            // A nudge can carry a lazily built row out of the form's window.
-            guard element.exists else { return false }
+            guard element.exists else { return nil }
             let frame = element.frame
             var shift: CGFloat = 0
             if frame.minY < band.lowerBound + margin {
@@ -145,8 +150,10 @@ extension XCTestCase {
             }
             guard shift != 0, reach > 0 else { return fullyVisible ? element.isHittable : true }
             // Content moves with the finger; both ends of the drag stay in
-            // the band.
+            // the band, and a drag too short to start a scroll is made long
+            // enough to (a 17-point nudge moved nothing three times over).
             shift = max(-reach, min(reach, shift))
+            if abs(shift) < 48 { shift = shift < 0 ? -48 : 48 }
             let midY = (band.lowerBound + band.upperBound) / 2
             let start = surface.coordinate(withNormalizedOffset: .zero)
                 .withOffset(CGVector(dx: surface.frame.width / 2, dy: midY - shift / 2 - surface.frame.minY))
