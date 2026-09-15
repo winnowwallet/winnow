@@ -5,7 +5,6 @@ import json
 import pathlib
 import re
 import subprocess
-import tomllib
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--xcode', type=pathlib.Path, metavar='DERIVED_DATA')
@@ -43,13 +42,3 @@ if args.xcode:
     if actual != expected:
         raise SystemExit('Xcode resolved dependencies differ from the root lockfile')
 print('The app uses the local Winnow package and its committed third-party pin')
-
-# Tor remains an app-owned C framework, never a dependency of WalletCore.
-lock = tomllib.loads((root / 'TorBridge/Cargo.lock').read_text())
-manifest = tomllib.loads((root / 'TorBridge/Cargo.toml').read_text())
-assert manifest['dependencies']['arti-client']['version'] == '=0.46.0'
-assert all(p['version'] == '0.46.0' for p in lock['package'] if p['name'].startswith('tor-') or p['name'] == 'arti-client')
-assert all(p.get('checksum') for p in lock['package'] if p.get('source', '').startswith('registry+'))
-assert 'TorBridge/build/WinnowTor.xcframework' in project
-print('App Tor sources are locked to arti-client and Tor crates 0.46.0')
-subprocess.run([str(root / 'scripts/render-tor-notices'), '--check'], check=True)

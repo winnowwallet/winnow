@@ -43,15 +43,9 @@ targets:
         buildPhase: resources
       - path: docs/import.html
         buildPhase: resources
-      - path: TorBridge/tor-licenses.html
-        buildPhase: resources
-      - path: TorBridge/THIRD_PARTY_NOTICES.txt
-        buildPhase: resources
     dependencies:
       - package: Winnow
         product: WalletCore
-      - framework: TorBridge/build/WinnowTor.xcframework
-        embed: false
     settings:
       base:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

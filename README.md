@@ -1,6 +1,6 @@
 # Winnow
 
-A Bitcoin wallet for iOS with on-device compact-filter matching and opt-in Tor. The wallet is written in Swift; its embedded Arti transport uses a small Rust/C bridge.
+A Bitcoin wallet for iOS with on-device compact-filter matching, written in Swift.
 
 **[Download on the App Store](https://apps.apple.com/app/id6801502501)** — pre-release builds ship through [TestFlight](https://testflight.apple.com/join/83djpNE7). Mainnet by default; signet is one Advanced-mode toggle away. The broader beta is planned for 0.9; see the [release roadmap](https://winnowwallet.com/roadmap).
 
@@ -8,7 +8,7 @@ A Bitcoin wallet for iOS with on-device compact-filter matching and opt-in Tor. 
 - **Taproot today.** Current receiving uses P2TR (BIP86), with no ECDSA signing path. The planned 0.7 P2WSH Safe is a separate, opt-in addition.
 - **Pay people and share control.** Save a public payment card or Bitcoin address. From Wallet, create shared savings with a threshold such as 2-of-3: any two keys can spend while one is unavailable. A 1-of-n policy permits one key to spend. Cards carry public keys only.
 - **Require another signing device.** Advanced mode offers MuSig2 accounts where every key must participate. The app journey uses Bitcoin Core 31.1 as the second signer, confirms one Taproot key-path signature, and restores the account from a backup. Hardware-wallet compatibility needs its own test. Compare the [two signing journeys and their limits](docs/vaults.html).
-- **Bitcoin cryptography:** [`swift-secp256k1`](https://github.com/21-DOT-DEV/swift-secp256k1) (Bitcoin Core's libsecp256k1), pinned. The app additionally embeds [Arti 0.46.0](TorBridge/README.md) from locked Rust source for Tor transport; WalletCore and the census do not link Rust.
+- **Bitcoin cryptography:** [`swift-secp256k1`](https://github.com/21-DOT-DEV/swift-secp256k1) (Bitcoin Core's libsecp256k1), pinned; the only third-party dependency. The embedded Tor client shipped in 0.6 through 0.7.0 was removed in 0.7.1 (its source is kept on the `archive/tor-0.7.0` branch); Tor and I2P are on the [roadmap](https://winnowwallet.com/roadmap#private-transports).
 - **Warned explorer links** — choose mempool.space or a custom Esplora website; Winnow opens it only after a tap and privacy warning, never as a wallet backend.
 
 ## Release roadmap

@@ -200,10 +200,10 @@ struct WinnowGenerateTests {
                           clearnet: [CensusArtifact.Entry],
                           schemaVersion: Int = 1) -> CensusArtifact {
         CensusArtifact(schemaVersion: schemaVersion, date: date, tip: tip,
-                       networks: [.clearnet: clearnet])
+                       networks: ["clearnet": clearnet, "tor": [], "i2p": []])
     }
 
-    @Test("a peers.json parses into every overlay, tor and i2p included")
+    @Test("a peers.json parses with its tor and i2p arrays carried, not rendered")
     func censusParses() throws {
         let json = """
         {
@@ -229,13 +229,12 @@ struct WinnowGenerateTests {
         #expect(parsed.schemaVersion == 1)
         #expect(parsed.date == "2026-09-12")
         #expect(parsed.tip == 966_774)
-        // The overlay lists are parsed into the model even though nothing
-        // renders them yet — that is what the parser being "ready" means.
-        #expect(parsed.networks[.clearnet]?.map(\.host) == ["47.206.253.100"])
-        #expect(parsed.networks[.tor]?.map(\.host) == ["exampleonionaddressisherebutnotreal5581xyz.onion"])
-        #expect(parsed.networks[.i2p]?.map(\.host)
+        // The other lists are parsed into the model and never rendered:
+        // the wallet dials clearnet only.
+        #expect(parsed.networks["clearnet"]?.map(\.host) == ["47.206.253.100"])
+        #expect(parsed.networks["tor"]?.map(\.host) == ["exampleonionaddressisherebutnotreal5581xyz.onion"])
+        #expect(parsed.networks["i2p"]?.map(\.host)
             == ["exampleb32addressisherebutnotrealaaaaaaaaaaaaaaaaaaaa.b32.i2p"])
-        #expect(parsed.networks[.tor]?.first?.startHeight == 966_770)
     }
 
     @Test("anything that is not the fixed schema-v1 shape is refused, not half-read")
@@ -246,13 +245,15 @@ struct WinnowGenerateTests {
         #expect(throws: (any Error).self) {
             _ = try FallbackPeerGenerator.censusArtifact(from: Data("{}".utf8))
         }
-        // An unknown network key: the schema is clearnet/tor/i2p, exactly.
-        let unknownNetwork = """
-        {"schemaVersion": 1, "date": "2026-09-12", "tip": 966774,
-         "networks": {"clearnet": [], "fakenet": []}}
-        """
-        #expect(throws: (any Error).self) {
-            _ = try FallbackPeerGenerator.censusArtifact(from: Data(unknownNetwork.utf8))
+        // An unknown network key, or no clearnet key: the schema is
+        // clearnet/tor/i2p, with clearnet required.
+        for networks in ["{\"clearnet\": [], \"fakenet\": []}", "{\"tor\": [], \"i2p\": []}"] {
+            let malformed = """
+            {"schemaVersion": 1, "date": "2026-09-12", "tip": 966774, "networks": \(networks)}
+            """
+            #expect(throws: (any Error).self) {
+                _ = try FallbackPeerGenerator.censusArtifact(from: Data(malformed.utf8))
+            }
         }
     }
 
@@ -339,9 +340,6 @@ struct WinnowGenerateTests {
             static let generatedMainnetFallbackPeers: [PeerEndpoint] = [
                 PeerEndpoint(host: "1.2.3.4", port: 8333),  // /Satoshi:29.2.0/Knots:20260507/
                 PeerEndpoint(host: "9.9.9.9", port: 8333),  // /Satoshi:31.0.0/
-            ]
-            static let generatedMainnetTorFallbackPeers: [PeerEndpoint] = [
-
             ]
         }
 

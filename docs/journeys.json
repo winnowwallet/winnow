@@ -82,9 +82,9 @@
     "id": "sender-lookup",
     "section": "everyday",
     "title": "Choose a funding destination",
-    "description": "If you choose to consult an explorer, review what is disclosed and whether the request goes directly or through Tor. Then explicitly select any returned destination.",
+    "description": "If you choose to consult an explorer, review what is disclosed before asking. Then explicitly select any returned destination.",
     "journey": [
-      "Open the funding-address lookup and review the transaction ID and network route before giving consent.",
+      "Open the funding-address lookup and review the transaction ID and what the explorer learns before giving consent.",
       "Choose a returned address explicitly, even if the explorer returns only one.",
       "Save the destination with its unverified origin visible."
     ],
@@ -92,7 +92,7 @@
       "test18InferSenderWithExplorer"
     ],
     "image": "43-infer-sender",
-    "limitations": "The explorer receives the transaction ID. Direct mode reveals your connection IP; a clearnet explorer reached through Tor sees an exit IP. Returned addresses do not identify people."
+    "limitations": "The explorer receives the transaction ID and your connection's IP address. Returned addresses do not identify people."
   },
   {
     "id": "savings",
@@ -223,24 +223,6 @@
       "test20PeerCatalogRefreshAndFailureRecovery"
     ],
     "limitations": "Downloads expire after seven days, then automatic selection falls back to bundled candidates. Bundled and downloaded census entries count as the same trust source. Every selected peer still undergoes normal wallet checks.",
-    "image": "51-tor-census",
-    "liveCapture": "device-tor-census-response"
-  },
-  {
-    "id": "tor",
-    "section": "advanced",
-    "title": "Use Tor for wallet connections",
-    "description": "Turn on Tor to route peers, discovery, census refresh and explorer lookups through the embedded client. Networking stops in the background.",
-    "journey": [
-      "Turn on Tor in Advanced settings and wait for Ready.",
-      "Return to the app after it has been in the background and let Tor reconnect.",
-      "If Tor fails, retry or explicitly turn it off. Winnow never silently switches to a direct connection."
-    ],
-    "tests": [
-      "test21TorStatesFailClosed"
-    ],
-    "limitations": "Tor failure leaves Winnow offline. External browsers use their own routing; Winnow warns before opening them. I2P transport is deferred.",
-    "image": "52-tor-onion-peer",
-    "liveCapture": "device-tor-onion-bitcoin"
+    "image": "46-peer-refresh"
   }
 ]

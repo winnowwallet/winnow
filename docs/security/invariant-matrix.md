@@ -12,6 +12,11 @@ This is an August 2026 audit record. References to Silent Payments and its tweak
 index describe the implementation reviewed then; those features have since been
 removed. Historical findings and their evidence are retained below.
 
+Scope note (2026-09-15, 0.7.1): the opt-in Tor route and its embedded Arti
+client were removed (see the [audit manifest](audit-manifest.md)). S11's
+egress inventory loses its Arti row and its "through Tor" alternatives;
+`SEC-029`'s "Tor flag" default is cleared once at launch and no longer stored.
+
 Baseline: `98d90563a2c20b7137c708cb121e72b9b34552a3`
 
 

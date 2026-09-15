@@ -178,8 +178,7 @@ enum CheckpointGenerator {
                       genesisTime: base.genesisTime, genesisBits: base.genesisBits,
                       genesisNonce: base.genesisNonce, genesisMerkleRoot: base.genesisMerkleRoot,
                       genesisHash: base.genesisHash, powLimit: base.powLimit, dnsSeeds: base.dnsSeeds,
-                      fallbackPeers: base.fallbackPeers,
-                      overlayFallbackPeers: base.overlayFallbackPeers, checkpoint: checkpoint)
+                      fallbackPeers: base.fallbackPeers, checkpoint: checkpoint)
     }
 
     /// The first `wanted` headers of a genesis-rooted file, in the same

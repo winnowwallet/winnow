@@ -62,6 +62,14 @@
     <p><strong>Loans against bitcoin:</strong> a lending partner could provide stablecoins while bitcoin stays in a wallet shared by the borrower, lender, and an independent key agent. Any two could move it. The signers would apply repayment and liquidation terms; Bitcoin would only check their signatures. No lending partner or loan service is in place.</p>
   </section>
 
+  <section id="private-transports">
+    <h2>Tor and I2P · Private transports</h2>
+    <p><strong>Where this stands:</strong> versions 0.6 through 0.7.0 shipped an opt-in Tor route through an embedded <a href="https://gitlab.torproject.org/tpo/core/arti">Arti</a> client. 0.7.1 removed it: the client brought several hundred Rust crates that nobody outside the project had reviewed, and a wallet that promises fail-closed privacy cannot carry an unaudited transport. The removed code, its tests and its license inventory are kept on the <a href="https://github.com/winnowwallet/winnow/tree/archive/tor-0.7.0"><code>archive/tor-0.7.0</code></a> branch. Every connection the app makes today comes from the device’s own IP address.</p>
+    <p><strong>What you would gain:</strong> peers, peer-list downloads and explorer lookups that do not reveal your connection’s IP address, and the ability to reach nodes that only exist on an overlay network.</p>
+    <p><strong>Must pass before Tor returns:</strong> an independent review of the transport and its dependency tree, or a transport small enough to review in-house; a fail-closed journey on a real iPhone — Tor on, background, foreground, failure, explicit off — with no silent direct fallback; and measured battery and bandwidth cost of a circuit rebuilt on every foreground.</p>
+    <p><strong>I2P:</strong> an embedded router is out of scope until one spike answers whether a router builds tunnels reliably at a foreground-only wallet’s uptime pattern. The <a href="https://github.com/winnowwallet/winnow/issues/90">decision record</a> names emissary as the only candidate that builds for iOS today, what the spike must measure, and why i2pd is not it. A delegated router on hardware the owner controls remains the honest alternative.</p>
+  </section>
+
   <section id="research">
     <h2>2.0 direction · Research</h2>
     <p><strong>Potential user outcome:</strong> an explicit, opt-in migration path when future Bitcoin capabilities are ready.</p>

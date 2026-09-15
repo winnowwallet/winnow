@@ -65,7 +65,7 @@ struct NetworkParamsTests {
         #expect(!params.dnsSeeds.isEmpty)
     }
 
-    @Test("mainnet bundles public clearnet and valid Tor peers; unsupported transports stay empty")
+    @Test("mainnet bundles public clearnet peers; signet has none")
     func fallbackPeersShape() {
         #expect(NetworkParams.mainnet.fallbackPeers.count >= 4)
         for peer in NetworkParams.mainnet.fallbackPeers {
@@ -78,19 +78,6 @@ struct NetworkParamsTests {
             #expect(peer.netblock != nil, "\(peer.host) is not a public IP literal")
         }
         #expect(NetworkParams.signet.fallbackPeers.isEmpty)
-        // Tor is opt-in; I2P remains unavailable. Validate the shipped catalog
-        // without tying future observations to today's exact endpoint count.
-        #expect(NetworkParams.mainnet.fallbackPeers(for: .clearnet) == NetworkParams.mainnet.fallbackPeers)
-        let tor = NetworkParams.mainnet.fallbackPeers(for: .tor)
-        #expect(!tor.isEmpty)
-        #expect(tor.count <= 2_000)
-        #expect(Set(tor).count == tor.count)
-        for peer in tor {
-            #expect(peer.port > 0)
-            #expect(CensusCatalog.canonicalHost(peer.host, overlay: .tor) == peer.host)
-        }
-        #expect(NetworkParams.signet.fallbackPeers(for: .tor).isEmpty)
-        #expect(NetworkParams.mainnet.fallbackPeers(for: .i2p).isEmpty)
     }
 
     @Test("bits → target known values", arguments: [

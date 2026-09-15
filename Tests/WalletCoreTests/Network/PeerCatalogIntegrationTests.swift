@@ -25,7 +25,6 @@ struct PeerCatalogIntegrationTests {
         #expect(before === after)
         #expect(await before.isConnected)
         #expect(await pool.candidateSourcesForTest()[.init(host: "8.8.8.8", port: 8333)] == .fallback)
-        #expect(await pool.candidateSourcesForTest()[.init(host: CensusCatalogTests().onion, port: 8333)] == nil)
         await pool.stop()
         try await pool.forgetKnownGood()
         let candidates = await pool.candidateSourcesForTest()
@@ -47,37 +46,14 @@ struct PeerCatalogIntegrationTests {
         #expect(Set(await pool.candidateEndpointsForTest()) == Set(NetworkParams.mainnet.fallbackPeers))
     }
 
-    @Test func torPrefersOnionsOverRememberedClearnetWithoutOverridingManualChoices() async throws {
-        let fixture = CensusCatalogTests()
-        let remembered = PeerEndpoint(host: "8.8.8.8", port: 8333)
-        let manual = PeerEndpoint(host: "9.9.9.9", port: 8333)
-        let file = FileManager.default.temporaryDirectory.appending(path: "peer-order-\(UUID()).json")
-        defer { try? FileManager.default.removeItem(at: file) }
-        try JSONEncoder().encode(PersistedPeers([PeerCandidate(endpoint: remembered, source: .dnsSeed)]))
-            .write(to: file)
-        let pool = PeerPool(params: .mainnet, manualPeers: [manual], peersFileURL: file,
-                            route: .tor(proxy: .init(host: "127.0.0.1", port: 9050)),
-                            censusCatalog: fixture.catalog(), catalogNow: { fixture.now })
-        let candidates = await pool.candidateEndpointsForTest()
-        #expect(candidates == [manual, .init(host: fixture.onion, port: 8333), remembered])
-        let sources = await pool.candidateSourcesForTest()
-        #expect(sources[remembered] == .dnsSeed, "transport preference must preserve source diversity")
-        #expect(sources[manual] == .manual)
-    }
-
-    @Test func reshuffleAvoidsPreviousPeersAndOnionsRequireTor() async {
+    @Test func reshuffleAvoidsPreviousPeersAndCensusPeersAreOneSource() async {
         let fixture = CensusCatalogTests()
         var catalog = fixture.catalog()
         catalog.networks["clearnet"]!.append(.init(host: "9.9.9.9", port: 8333, userAgent: "", startHeight: 900_000))
         let previous = PeerEndpoint(host: "8.8.8.8", port: 8333)
         let pool = PeerPool(params: .mainnet, censusCatalog: catalog, catalogNow: { fixture.now }, avoidOnReset: [previous])
         #expect(await pool.candidateEndpointsForTest().first == .init(host: "9.9.9.9", port: 8333))
-        let tor = PeerPool(params: .mainnet, route: .tor(proxy: .init(host: "127.0.0.1", port: 9050)),
-                           censusCatalog: catalog, catalogNow: { fixture.now })
-        let candidates = await tor.candidateEndpointsForTest()
-        #expect(candidates.first?.host == fixture.onion)
-        #expect(!candidates.contains { $0.overlay == .i2p })
-        let sources = await tor.candidateSourcesForTest()
+        let sources = await pool.candidateSourcesForTest()
         #expect(Set(sources.values) == [.fallback], "bundled and refreshed census peers are one trust source")
     }
 }

@@ -33,7 +33,7 @@ struct CensusCatalogStoreTests {
         let original = try JSONEncoder().encode(fixture.catalog())
 
         let floored = CensusCatalogStore(url: directory.appendingPathComponent("floored.json"))
-        #expect(floored.minimumEntries == CensusCatalog.minimumOverlayEntries)
+        #expect(floored.minimumEntries == CensusCatalog.minimumClearnetEntries)
         #expect(throws: CensusCatalog.Invalid.thin) { try floored.replace(with: original, now: fixture.now) }
         #expect(!FileManager.default.fileExists(atPath: floored.url.path))
 

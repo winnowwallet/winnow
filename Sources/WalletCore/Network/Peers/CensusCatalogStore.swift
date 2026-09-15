@@ -13,11 +13,11 @@ public struct CensusCatalogStore: Sendable {
         public let sha256: String
     }
     public let url: URL
-    /// The floor applied to clearnet and Tor entries (`CensusCatalog.minimumOverlayEntries`);
+    /// The floor applied to the list (`CensusCatalog.minimumClearnetEntries`);
     /// 0 for a fixture-sized E2E census.
     public let minimumEntries: Int
 
-    public init(url: URL, minimumEntries: Int = CensusCatalog.minimumOverlayEntries) {
+    public init(url: URL, minimumEntries: Int = CensusCatalog.minimumClearnetEntries) {
         self.url = url
         self.minimumEntries = minimumEntries
     }

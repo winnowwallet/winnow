@@ -14,6 +14,15 @@ manifest at the tree the [independent review](independent-review-2026-09-14.md)
 was fixed against (IR-007), so that a reader following the pointers below
 finds the files they name.
 
+Scope note (2026-09-15, 0.7.1): the embedded Tor client — `TorBridge/`
+(Rust, Arti 0.46.0), `TorController.swift`, `NetworkRoute.swift`'s Tor route,
+`OnionChecksum.swift` and the SOCKS5 path in `PeerConnection.swift` — was
+removed after the 2026-09-14 review; its 400-crate dependency tree had never
+been independently reviewed (#95, #144). The rows below that name those files
+describe the reviewed tree, kept on the `archive/tor-0.7.0` branch. The
+current egress inventory has no Tor rows: every connection is direct, and
+`RoutedHTTPClient` now lives in `Network/Transport/RoutedHTTPClient.swift`.
+
 ## Frozen target, 2026-09-14
 
 | Item | Value |
@@ -82,7 +91,7 @@ The only external Swift package is `21-DOT-DEV/swift-secp256k1` version
 `0.23.2`, resolved to commit `e70a10e036a55fffea31568f0af92d69b6d449cd`, and
 `Package.resolved` is in the repository so builds record the reviewed
 revision. The app additionally embeds Arti 0.46.0 built from locked Rust
-source ([TorBridge](../../TorBridge/README.md)); `WalletCore` and the census
+source ([TorBridge](https://github.com/winnowwallet/winnow/tree/archive/tor-0.7.0/TorBridge), now on the archive branch); `WalletCore` and the census
 do not link Rust.
 
 ## Severity rules

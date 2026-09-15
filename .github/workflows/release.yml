@@ -61,12 +61,6 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Build pinned app Tor framework
-        run: |
-          scripts/install-rust
-          export PATH="$HOME/.cargo/bin:$PATH"
-          scripts/build-tor-bridge
-
       - name: Install pinned XcodeGen
         run: scripts/install-xcodegen
 

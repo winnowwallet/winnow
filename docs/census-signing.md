@@ -30,7 +30,7 @@ project owner can take.
   bundle an unsigned list.
 
 - `CensusCatalogStore` also refuses a list thinner than any real census (fewer
-  than 50 clearnet or Tor entries), and `RoutedHTTPClient` no longer follows a
+  than 50 clearnet entries), and `RoutedHTTPClient` no longer follows a
   redirect to another host.
 
 - `scripts/generate-fallback-peers --census-commit <sha>` takes

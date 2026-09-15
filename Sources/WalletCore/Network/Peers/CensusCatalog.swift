@@ -3,6 +3,10 @@ import Foundation
 
 /// Untrusted discovery input, never a replacement for peer/header/filter checks.
 /// Shared by release generation, refresh, and the census publisher.
+///
+/// The published list carries `clearnet`, `tor` and `i2p` arrays. The wallet
+/// dials clearnet only, so validation reads the clearnet array and keeps
+/// nothing else: a validated catalog has exactly one network.
 public struct CensusCatalog: Codable, Equatable, Sendable {
     public struct Entry: Codable, Equatable, Sendable {
         public var host: String
@@ -23,14 +27,13 @@ public struct CensusCatalog: Codable, Equatable, Sendable {
     }
     public static let endpoint = URL(string: "https://census.winnowwallet.com/census/peers.json")!
     public static let maximumBytes = 4 * 1_024 * 1_024
-    public static let overlayCap = 2_000
+    public static let maximumEntries = 65_536
     public static let maximumAgeDays = 7
-    /// Below this many clearnet or Tor entries a list is thin. The publisher
-    /// never makes one this small — a daily census lists hundreds of clearnet
-    /// and thousands of Tor nodes — so a list that arrives this small was cut
-    /// down somewhere in between, and taking it would empty the automatic
-    /// pool. I2P has no floor: it is delegated-only and may be empty.
-    public static let minimumOverlayEntries = 50
+    /// Below this many clearnet entries a list is thin. The publisher never
+    /// makes one this small — a daily census lists hundreds of clearnet
+    /// nodes — so a list that arrives this small was cut down somewhere in
+    /// between, and taking it would empty the automatic pool.
+    public static let minimumClearnetEntries = 50
 
     public enum Invalid: String, Error, LocalizedError {
         case schema, date, expired, future, size, endpoint, height, duplicate, diversity, thin
@@ -57,46 +60,40 @@ public struct CensusCatalog: Codable, Equatable, Sendable {
     }
 
     /// `minimumEntries` is the floor the wallet applies to a list it will
-    /// use (`minimumOverlayEntries`); the publisher and the tests validate
+    /// use (`minimumClearnetEntries`); the publisher and the tests validate
     /// shape alone.
     public func validated(now: Date = Date(), requireFresh: Bool = true, minimumEntries: Int = 0) throws -> Self {
-        guard schemaVersion == 1, Set(networks.keys) == Set(["clearnet", "tor", "i2p"]) else { throw Invalid.schema }
+        guard schemaVersion == 1, let entries = networks["clearnet"] else { throw Invalid.schema }
         guard let observed = Self.day(date) else { throw Invalid.date }
         let age = Int(floor(now.timeIntervalSince1970 / 86_400)) - observed
         guard age >= 0 else { throw Invalid.future }
         guard !requireFresh || age <= Self.maximumAgeDays else { throw Invalid.expired }
         guard tip > 0 else { throw Invalid.height }
         var result = self
-        for overlay in OverlayNetwork.allCases {
-            result.networks[overlay.rawValue] = try validatedEntries(overlay, minimum: minimumEntries)
-        }
+        result.networks = ["clearnet": try validatedEntries(entries, minimum: minimumEntries)]
         return result
     }
 
-    private func validatedEntries(_ overlay: OverlayNetwork, minimum: Int) throws -> [Entry] {
-        let entries = networks[overlay.rawValue] ?? []
-        guard overlay == .i2p || entries.count >= minimum else { throw Invalid.thin }
-        guard entries.count <= (overlay == .clearnet ? 65_536 : Self.overlayCap) else { throw Invalid.size }
+    private func validatedEntries(_ entries: [Entry], minimum: Int) throws -> [Entry] {
+        guard entries.count >= minimum else { throw Invalid.thin }
+        guard entries.count <= Self.maximumEntries else { throw Invalid.size }
         var seen = Set<PeerEndpoint>(), blocks = Set<String>()
         let canonical = try entries.map { input in
-            let entry = try validatedEntry(input, overlay: overlay)
+            let entry = try validatedEntry(input)
             guard seen.insert(entry.endpoint).inserted else { throw Invalid.duplicate }
-            if overlay == .clearnet {
-                guard let block = entry.endpoint.netblock else { throw Invalid.endpoint }
-                guard blocks.insert(block).inserted else { throw Invalid.diversity }
-            }
+            guard let block = entry.endpoint.netblock else { throw Invalid.endpoint }
+            guard blocks.insert(block).inserted else { throw Invalid.diversity }
             return entry
         }
         return canonical.sorted { ($0.host, $0.port) < ($1.host, $1.port) }
     }
 
-    private func validatedEntry(_ input: Entry, overlay: OverlayNetwork) throws -> Entry {
+    private func validatedEntry(_ input: Entry) throws -> Entry {
         var entry = input
-        guard entry.port > 0, entry.userAgent.utf8.count <= 256,
+        guard entry.port == 8333, entry.userAgent.utf8.count <= 256,
               !entry.userAgent.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 }),
-              let host = Self.canonicalHost(entry.host, overlay: overlay) else { throw Invalid.endpoint }
+              let host = Self.canonicalHost(entry.host) else { throw Invalid.endpoint }
         guard Self.nearTip(entry.startHeight, tip: tip) else { throw Invalid.height }
-        guard overlay != .clearnet || entry.port == 8333 else { throw Invalid.endpoint }
         entry.host = host
         return entry
     }
@@ -107,26 +104,9 @@ public struct CensusCatalog: Codable, Equatable, Sendable {
 
     /// Numeric public clearnet only. Collapse mapped IPv4 and IPv6 text aliases
     /// before deduplication and diversity; never invoke DNS here.
-    public static func canonicalHost(_ text: String, overlay: OverlayNetwork) -> String? {
+    public static func canonicalHost(_ text: String) -> String? {
         guard text.utf8.count <= 255, text == text.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
-        let host = text.lowercased()
-        if overlay != .clearnet { return canonicalOverlay(host, overlay: overlay) }
-        return canonicalIP(host)
-    }
-
-    private static func canonicalOverlay(_ host: String, overlay: OverlayNetwork) -> String? {
-            let suffix = overlay == .tor ? ".onion" : ".b32.i2p"
-            guard host.hasSuffix(suffix) else { return nil }
-            let label = String(host.dropLast(suffix.count))
-            guard let bytes = decodeBase32(label) else { return nil }
-            if overlay == .tor {
-                guard label.count == 56, bytes.count == 35, bytes[34] == 3 else { return nil }
-                let checksum = OnionChecksum.hash(Array(".onion checksum".utf8) + Array(bytes.prefix(32)) + [3])
-                guard bytes[32] == checksum[0], bytes[33] == checksum[1] else { return nil }
-            } else {
-                guard label.count == 52, bytes.count == 32 else { return nil }
-            }
-            return host
+        return canonicalIP(text.lowercased())
     }
 
     private static func canonicalIP(_ host: String) -> String? {
@@ -163,18 +143,5 @@ public struct CensusCatalog: Codable, Equatable, Sendable {
              (198, 18...19, _), (198, 51, 100), (203, 0, 113): return false
         default: return true
         }
-    }
-
-    private static func decodeBase32(_ text: String) -> [UInt8]? {
-        let alphabet = Array("abcdefghijklmnopqrstuvwxyz234567".utf8)
-        var buffer: UInt32 = 0, bits = 0
-        var result: [UInt8] = []
-        for ch in text.utf8 {
-            guard let value = alphabet.firstIndex(of: ch) else { return nil }
-            buffer = (buffer << 5) | UInt32(value); bits += 5
-            if bits >= 8 { bits -= 8; result.append(UInt8((buffer >> bits) & 255)) }
-        }
-        guard buffer & ((1 << bits) - 1) == 0 else { return nil }
-        return result
     }
 }

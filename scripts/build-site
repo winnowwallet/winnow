@@ -8,7 +8,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TEST_PATH = "UITests/WinnowAppUITests.swift"
-LIVE_TEST_PATH = "UITests/LiveTorDeviceTests.swift"
 SOURCE = "https://github.com/winnowwallet/winnow/blob/main/"
 RESULTS = "https://github.com/winnowwallet/winnow/actions/workflows/node-tests.yml"
 
@@ -40,12 +39,7 @@ def load_journeys(root):
                 raise ValueError(f"{identity}: invalid screenshot name")
             if not (root / f"docs/screenshots/{image}.png").is_file():
                 raise ValueError(f"{identity}: missing screenshot {image}")
-            live_capture = journey.get("liveCapture")
-            if live_capture:
-                live_source = (root / LIVE_TEST_PATH).read_text()
-                if not re.fullmatch(r"device-tor-[a-z-]+", live_capture) or f'capture(app, "{live_capture}")' not in live_source:
-                    raise ValueError(f"{identity}: missing live capture {live_capture}")
-            elif not any(f'"{image}", testCase: self' in cases[test][1] for test in journey["tests"]):
+            if not any(f'"{image}", testCase: self' in cases[test][1] for test in journey["tests"]):
                 raise ValueError(f"{identity}: screenshot was not captured by its app tests")
         if guide := journey.get("guide"):
             if not guide.startswith("/") or not (root / "docs" / (guide[1:] + ".html")).is_file():
@@ -78,8 +72,6 @@ def card(journey, cases):
     parts.append('</ol><p>Test code:')
     parts.append(", ".join(f'<a href="{SOURCE}{TEST_PATH}#L{cases[test][0]}">{escape(test)}</a>' for test in journey["tests"]))
     parts.append(f'. <a href="{RESULTS}">View test results</a>.</p>')
-    if journey.get("liveCapture"):
-        parts.append(f'<p>This screenshot comes from the separate <a href="{SOURCE}{LIVE_TEST_PATH}">live Tor journey</a> on an iPhone: real mainnet peers and the public census, with no funds. That journey also checks foreground recovery.</p>')
     parts.append('<p>The ordered tests use the app on a private Bitcoin test network. Screenshots show test funds. Open a test run to see which version was checked, what passed, and what failed.</p>')
     ending = '</div></details>' if expandable else '</section>'
     parts.append('<p><a href="/testing#artifacts">Read the logs and screenshots</a> · <a href="/testing#limits">What still needs testing</a></p></dialog>' + ending)

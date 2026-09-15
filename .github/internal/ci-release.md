@@ -3,8 +3,7 @@
 Winnow is one repository and one release train. The root Swift package organizes
 internal modules and development executables. The app, fuzz harness
 and debugging tool share one `Package.swift` and one `Package.resolved`; the Swift dependency
-is swift-secp256k1. The app also owns a locked Rust Arti bridge, rebuilt for
-each supported iOS architecture; WalletCore and census do not link it. Xcode resolution must match that root lockfile.
+is swift-secp256k1. Xcode resolution must match that root lockfile.
 
 ## Checks and ownership
 

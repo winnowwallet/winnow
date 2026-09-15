@@ -16,7 +16,7 @@ import os
 import pathlib
 import re
 import subprocess
-import tomllib
+
 from typing import Any
 
 
@@ -139,18 +139,6 @@ def main() -> None:
             }
         )
 
-    tor_lock = root / "TorBridge/Cargo.lock"
-    if tor_lock.exists():
-        for crate in sorted(tomllib.loads(tor_lock.read_text())["package"], key=lambda p: (p["name"], p["version"])):
-            if not crate.get("source"): continue
-            crate_id = spdx_id("cargo-" + crate["name"] + "-" + crate["version"])
-            url = "https://crates.io/api/v1/crates/" + crate["name"] + "/" + crate["version"] + "/download"
-            packages.append({"SPDXID": crate_id, "name": crate["name"], "versionInfo": crate["version"],
-                             "downloadLocation": url, "filesAnalyzed": False,
-                             "licenseConcluded": "NOASSERTION", "licenseDeclared": "NOASSERTION",
-                             "copyrightText": "NOASSERTION", "checksums": [{"algorithm": "SHA256", "checksumValue": crate["checksum"]}]})
-            relationships.append({"spdxElementId": root_id, "relationshipType": "DEPENDS_ON", "relatedSpdxElement": crate_id})
-            dependencies.append({"uri": url, "digest": {"sha256": crate["checksum"]}, "name": crate["name"], "version": crate["version"]})
 
     spdx = {
         "spdxVersion": "SPDX-2.3",
@@ -178,7 +166,7 @@ def main() -> None:
     materials = [
         {"uri": "git+https://github.com/winnowwallet/winnow.git", "digest": {"sha1": commit}},
         *[{"uri": f"file:{path.relative_to(root).as_posix()}", "digest": {"sha256": sha256_file(path)}}
-          for path in (package_path, resolved_path, project_path, root / "TorBridge/Cargo.toml", tor_lock, root / "TorBridge/rust-toolchain.toml", root / "scripts/build-tor-bridge", root / "TorBridge/license-inventory.json", root / "TorBridge/THIRD_PARTY_NOTICES.txt") if path.exists()],
+          for path in (package_path, resolved_path, project_path) if path.exists()],
         *dependencies,
     ]
     materials.sort(key=lambda material: material["uri"])

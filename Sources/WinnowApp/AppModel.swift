@@ -300,7 +300,19 @@ final class AppModel {
     let vaultStore: VaultStore
     let peopleStore: PeopleStore
     private let defaults: UserDefaults
-    let tor: TorController
+    /// The HTTP client behind census refresh, seed lookups and the consented
+    /// explorer lookup. Suspending networking cancels it, so a request that
+    /// was in flight fails rather than finishing in the background; the next
+    /// activation makes a new one.
+    private(set) var httpClient = RoutedHTTPClient()
+    /// Bumps on every suspend, network switch and rebuild. Async work reads
+    /// it before starting and again after each await, and drops its result
+    /// when the generation it started in is over.
+    private(set) var networkGeneration: UInt64 = 0
+    /// Set once, on the first launch after the Tor option was removed, for
+    /// an installation that had Tor on: it is about to connect directly for
+    /// the first time and is told so. Cleared when the notice is dismissed.
+    var torRemovedNotice = false
     private var changingNetwork = false
     private var peersToAvoid: Set<PeerEndpoint> = []
     private(set) var refreshingCatalog = false
@@ -361,6 +373,8 @@ final class AppModel {
         /// The pre-#81 flat keys, migrated once into the active network.
         static let legacyManualPeers = "manualPeers"
         static let legacyEsploraURL = "esploraURL"
+        /// The removed Tor option (0.6–0.7.0), cleared once at launch.
+        static let legacyTorEnabled = "torEnabled"
         /// Deliberately global: a preference, not a chain-specific endpoint.
         static let verifyFromGenesis = "verifyFromGenesis"
         /// Deliberately global, like verifyFromGenesis.
@@ -387,8 +401,13 @@ final class AppModel {
         peopleStore = PeopleStore(keys: storeKeys)
         let defaults = e2e?.defaults ?? defaults
         self.defaults = defaults
-        tor = TorController(enabled: defaults.bool(forKey: "torEnabled"),
-                            driver: e2e?.torDriver ?? NativeTorDriver.shared)
+        // 0.7.0 and earlier shipped an opt-in Tor route (`torEnabled`). It
+        // is gone with 0.7.1; an installation that had it on is told once
+        // rather than silently connecting directly.
+        if defaults.object(forKey: DefaultsKey.legacyTorEnabled) != nil {
+            torRemovedNotice = defaults.bool(forKey: DefaultsKey.legacyTorEnabled)
+            defaults.removeObject(forKey: DefaultsKey.legacyTorEnabled)
+        }
         // Mainnet is the default (#9). The E2E harness is a custom-signet
         // fixture, so a test launch that names no network still gets signet.
         let selectedNetwork = e2e?.forcedNetwork
@@ -497,7 +516,7 @@ final class AppModel {
             await activate()
         case .background:
             isActive = false
-            await tor.suspend()
+            suspendNetworking()
             await stopNetworking()
         default:
             break // .inactive: still foreground — keep syncing
@@ -506,18 +525,24 @@ final class AppModel {
 
     private func activate() async {
         // Boot must attach the saved wallet before a stack chooses its filters.
-        guard stage != .loading, isActive, !changingNetwork, let dir = storageDirectory() else { return }
+        guard stage != .loading, isActive, !changingNetwork, storageDirectory() != nil else { return }
         if case .storageDamaged = stage { return }
-        let epoch = tor.generation
-        let route = await tor.resume(directory: dir.appending(path: "tor"))
-        guard route != .offline, epoch == tor.generation, isActive else { return }
-        e2e?.journal("network.route", fields: ["mode": tor.enabled ? "tor" : "direct", "generation": String(epoch)])
+        let epoch = networkGeneration
+        if httpClient.isCancelled { httpClient = RoutedHTTPClient() }
         await buildStackIfNeeded()
-        guard epoch == tor.generation, isActive else { return }
+        guard epoch == networkGeneration, isActive else { return }
         startPhasePolling()
         await stack?.pool.start()
-        guard epoch == tor.generation, isActive else { return }
+        guard epoch == networkGeneration, isActive else { return }
         startSyncLoop()
+    }
+
+    /// Ends the current networking generation: every HTTP request in flight
+    /// fails, and async work that started before this call discards its
+    /// result. Callers then stop the pool; `activate()` starts the next one.
+    private func suspendNetworking() {
+        networkGeneration &+= 1
+        httpClient.cancel()
     }
 
     /// Retries peer discovery after the pool reported exhaustion (the UI's
@@ -641,8 +666,8 @@ final class AppModel {
         PeerPool(params: params, manualPeers: parsedManualPeers(),
                                 peersFileURL: dir.appending(path: "peers.json"),
                                 relayPreference: true,
-                                dialTimeout: tor.enabled ? .seconds(90) : .seconds(5),
-                                seedResolver: .routed(client: tor.client), route: tor.route,
+                                dialTimeout: .seconds(5),
+                                seedResolver: .routed(client: httpClient),
                                 censusCatalog: network == .mainnet
                                     ? catalogStore?.load(trusting: censusTrustedKeys)?.catalog : nil,
                                 avoidOnReset: peersToAvoid)
@@ -660,8 +685,8 @@ final class AppModel {
             await waitForStackBuild()
             return
         }
-        guard let dir = storageDirectory(), tor.route != .offline else { return }
-        let epoch = tor.generation
+        guard let dir = storageDirectory() else { return }
+        let epoch = networkGeneration
         buildingStack = true
         defer { buildingStack = false }
         do {
@@ -680,7 +705,7 @@ final class AppModel {
             let chain = try await Task.detached(priority: .userInitiated) {
                 try Self.openOrRebuildChain(params: params, storageURL: headersURL, start: start)
             }.value
-            guard epoch == tor.generation, isActive else { await pool.stop(); return }
+            guard epoch == networkGeneration, isActive else { await pool.stop(); return }
             let broadcaster = try makeBroadcaster(
                 pool: pool, storageURL: dir.appending(path: "broadcast.json"))
             var newStack = SyncStack(pool: pool, chain: chain, filters: nil, broadcaster: broadcaster)
@@ -688,7 +713,7 @@ final class AppModel {
                 newStack.filters = try await makeFilterSync(pool: pool, chain: chain,
                                                             startHeight: wallet.nextScanHeight)
             }
-            guard epoch == tor.generation, isActive else {
+            guard epoch == networkGeneration, isActive else {
                 await pool.stop(); await broadcaster.shutdown(); return
             }
             stack = newStack
@@ -2425,7 +2450,7 @@ final class AppModel {
     func switchNetwork(to newNetwork: BitcoinNetwork) async {
         guard e2e?.forcedNetwork == nil || e2e?.forcedNetwork == newNetwork else { return }
         guard newNetwork != network else { return }
-        await tor.suspend()
+        suspendNetworking()
         syncTask?.cancel()
         syncTask = nil
         await stack?.pool.stop()
@@ -2499,28 +2524,9 @@ final class AppModel {
         await previous?.broadcaster.shutdown()
     }
 
-    func setTorEnabled(_ enabled: Bool) async {
-        guard !changingNetwork, enabled != tor.enabled else { return }
-        changingNetwork = true
-        await tor.suspend()
-        await stopNetworking()
-        await tor.setEnabled(enabled)
-        defaults.set(enabled, forKey: "torEnabled")
-        changingNetwork = false
-        await activate()
-        await refresh()
-    }
-
-    func retryTor() async {
-        guard tor.enabled, !changingNetwork else { return }
-        await tor.suspend()
-        await stopNetworking()
-        await activate()
-    }
-
     /// Rebuilds the stack so changed peer settings take effect.
     func reconnect() async {
-        await tor.suspend()
+        suspendNetworking()
         await stopNetworking()
         await activate()
         await refresh()
@@ -2530,7 +2536,7 @@ final class AppModel {
     var catalogStore: CensusCatalogStore? {
         storageDirectory().map {
             CensusCatalogStore(url: $0.deletingLastPathComponent().appending(path: "mainnet/downloaded-census.json"),
-                               minimumEntries: e2e == nil ? CensusCatalog.minimumOverlayEntries : 0)
+                               minimumEntries: e2e == nil ? CensusCatalog.minimumClearnetEntries : 0)
         }
     }
 
@@ -2544,7 +2550,7 @@ final class AppModel {
     /// census is accepted until the owner compiles a key in.
     private func censusSignature(nextTo catalog: URL) async throws -> Data? {
         guard !censusTrustedKeys.isEmpty else { return nil }
-        return try await tor.client.get(CensusSignature.endpoint(for: catalog), maximumBytes: CensusSignature.maximumBytes)
+        return try await httpClient.get(CensusSignature.endpoint(for: catalog), maximumBytes: CensusSignature.maximumBytes)
     }
 
     func refreshPeerCatalog() async {
@@ -2552,24 +2558,28 @@ final class AppModel {
         refreshingCatalog = true
         catalogBytes = 0
         catalogError = nil
-        let epoch = tor.generation
+        let epoch = networkGeneration
         defer { refreshingCatalog = false }
         do {
             let catalogURL = e2e?.censusURL ?? CensusCatalog.endpoint
-            let data = try await tor.client.get(catalogURL, maximumBytes: CensusCatalog.maximumBytes) { [weak self] bytes in
-                Task { @MainActor in if self?.tor.generation == epoch { self?.catalogBytes = bytes } }
+            let data = try await httpClient.get(catalogURL, maximumBytes: CensusCatalog.maximumBytes) { [weak self] bytes in
+                Task { @MainActor in if self?.networkGeneration == epoch { self?.catalogBytes = bytes } }
             }
             let signature = try await censusSignature(nextTo: catalogURL)
-            guard epoch == tor.generation, isActive, let store = catalogStore else { throw CancellationError() }
+            guard epoch == networkGeneration, isActive, let store = catalogStore else { throw CancellationError() }
             let download = try store.replace(with: data, signature: signature, trusting: censusTrustedKeys)
             if network == .mainnet { try await stack?.pool.updateCensusCatalog(download.catalog) }
-            let clearnet = download.catalog.networks["clearnet"]?.count ?? 0
-            let onion = download.catalog.networks["tor"]?.count ?? 0
-            catalogNotice = "Observed \(download.catalog.date): \(clearnet) clearnet, \(onion) Tor candidates. Active peers unchanged."
+            catalogNotice = "Observed \(download.catalog.date): \(Self.candidateCount(download.catalog)). Active peers unchanged."
             e2e?.journal("peers.catalogRefreshed", fields: ["date": download.catalog.date, "sha256": download.sha256])
         } catch {
             catalogError = error is CancellationError ? "Refresh cancelled; previous peer list retained." : error.localizedDescription
         }
+    }
+
+    /// "977 candidates", for the peer-list notices.
+    static func candidateCount(_ catalog: CensusCatalog) -> String {
+        let count = catalog.networks["clearnet"]?.count ?? 0
+        return "\(count) \(count == 1 ? "candidate" : "candidates")"
     }
 
     /// Reset learned peers while preserving the downloaded catalog and settings.
@@ -2579,7 +2589,7 @@ final class AppModel {
         for peer in await pool?.connectedPeers() ?? [] {
             peersToAvoid.insert(await peer.endpoint)
         }
-        await tor.suspend()
+        suspendNetworking()
         await stopNetworking()
         do {
             if let pool { try await pool.forgetKnownGood() }
@@ -2678,36 +2688,32 @@ final class AppModel {
             .appending(path: address)
     }
 
-    /// A consented, routed explorer fetch for funding addresses of `txid`,
-    /// resolved at the selected explorer. Called only from the received
-    /// explicit destination-selection flow, after its privacy warning — never
-    /// in the background, never retried, never cached.
+    /// A consented explorer fetch for funding addresses of `txid`, resolved
+    /// at the selected explorer. Called only from the received explicit
+    /// destination-selection flow, after its privacy warning — never in the
+    /// background, never retried, never cached. The consent is tied to the
+    /// networking generation it was given in: a lookup that outlives a
+    /// suspend or a network switch is refused, not sent.
     struct ExplorerLookupConsent: Equatable {
         let txid: Data
         let baseURL: URL
         let network: BitcoinNetwork
-        let route: NetworkRoute
         let generation: UInt64
         var disclosure: String {
-            switch route {
-            case .direct: "The explorer receives this transaction ID and your IP address over a direct connection."
-            case .tor: "The explorer receives this transaction ID through Tor. A clearnet explorer sees a Tor exit IP, rather than your device IP."
-            case .offline: "Winnow is offline. No lookup can be sent."
-            }
+            "The explorer receives this transaction ID and your IP address over a direct connection."
         }
     }
 
     func senderLookupConsent(txid: Data) -> ExplorerLookupConsent {
-        ExplorerLookupConsent(txid: txid, baseURL: esploraBaseURL, network: network,
-                              route: tor.route, generation: tor.generation)
+        ExplorerLookupConsent(txid: txid, baseURL: esploraBaseURL, network: network, generation: networkGeneration)
     }
 
     func lookupSenderOnline(consent: ExplorerLookupConsent) async throws -> [String] {
-        guard isActive, consent == senderLookupConsent(txid: consent.txid), consent.route != .offline else {
-            throw SenderLookupError.unavailable("The network route changed. Review the lookup warning again.")
+        guard isActive, consent == senderLookupConsent(txid: consent.txid) else {
+            throw SenderLookupError.unavailable("The network connection changed. Review the lookup warning again.")
         }
         let addresses = try await EsploraSenderLookup.fundingAddresses(txid: consent.txid, baseURL: consent.baseURL,
-                                                                      network: consent.network, client: tor.client)
+                                                                      network: consent.network, client: httpClient)
         try Task.checkCancellation()
         guard isActive, consent == senderLookupConsent(txid: consent.txid) else { throw CancellationError() }
         e2e?.journal("sender.lookupOnline", fields: ["txid": consent.txid.displayHex, "explorer": consent.baseURL.host ?? ""])

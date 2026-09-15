@@ -141,33 +141,41 @@ jobs:
           retention-days: 14
 
   ui:
-    name: ui-${{ matrix.device }}-${{ matrix.story }}
+    name: ui-${{ matrix.lane }}-${{ matrix.story }}
     strategy:
       fail-fast: false
       # The journeys are four stories (UITests/WinnowAppUITests.swift), one
       # job each, so they run side by side on the VMs instead of one after
       # another in a single hour-long job. Pull requests run the iPhone
-      # stories on the self-hosted VMs only. The iPad stories — on hosted
-      # Apple silicon — run for main pushes, the nightly and confirmed manual
-      # runs. The Intel VM's iPad compositor aborts in CA::OGL::push_surface
-      # during lifecycle tests, which is why iPad never runs there; iPhone
-      # and package lanes retain Intel coverage.
+      # stories on the self-hosted VMs only. The hosted Apple silicon lanes
+      # — the iPad stories, and the iPhone stories once more — run for main
+      # pushes, the nightly and confirmed manual runs. The VMs have no Metal
+      # device, so their captures draw no tab bars, alert backgrounds or
+      # share sheets (#84); the hosted iPhone lane is where publishable
+      # iPhone captures come from, and the VM lane keeps gating PRs. The
+      # Intel VM's iPad compositor aborts in CA::OGL::push_surface during
+      # lifecycle tests, which is why iPad never runs there; iPhone and
+      # package lanes retain Intel coverage.
       matrix: >-
         ${{ fromJSON(github.event_name == 'pull_request'
           && '{"include":[
-                {"device":"iPhone","story":"first-wallet","class":"StoryFirstWallet","runner":["self-hosted","macOS","btc-swift","node-e2e"]},
-                {"device":"iPhone","story":"paying-people","class":"StoryPayingPeople","runner":["self-hosted","macOS","btc-swift","node-e2e"]},
-                {"device":"iPhone","story":"shared-savings","class":"StorySharedSavings","runner":["self-hosted","macOS","btc-swift","node-e2e"]},
-                {"device":"iPhone","story":"devices-network","class":"StoryDevicesAndNetwork","runner":["self-hosted","macOS","btc-swift","node-e2e"]}]}'
+                {"lane":"iPhone","device":"iPhone","story":"first-wallet","class":"StoryFirstWallet","hosted":false,"runner":["self-hosted","macOS","btc-swift","node-e2e"]},
+                {"lane":"iPhone","device":"iPhone","story":"paying-people","class":"StoryPayingPeople","hosted":false,"runner":["self-hosted","macOS","btc-swift","node-e2e"]},
+                {"lane":"iPhone","device":"iPhone","story":"shared-savings","class":"StorySharedSavings","hosted":false,"runner":["self-hosted","macOS","btc-swift","node-e2e"]},
+                {"lane":"iPhone","device":"iPhone","story":"devices-network","class":"StoryDevicesAndNetwork","hosted":false,"runner":["self-hosted","macOS","btc-swift","node-e2e"]}]}'
           || '{"include":[
-                {"device":"iPhone","story":"first-wallet","class":"StoryFirstWallet","runner":["self-hosted","macOS","btc-swift","node-e2e"]},
-                {"device":"iPhone","story":"paying-people","class":"StoryPayingPeople","runner":["self-hosted","macOS","btc-swift","node-e2e"]},
-                {"device":"iPhone","story":"shared-savings","class":"StorySharedSavings","runner":["self-hosted","macOS","btc-swift","node-e2e"]},
-                {"device":"iPhone","story":"devices-network","class":"StoryDevicesAndNetwork","runner":["self-hosted","macOS","btc-swift","node-e2e"]},
-                {"device":"iPad","story":"first-wallet","class":"StoryFirstWallet","runner":"macos-latest"},
-                {"device":"iPad","story":"paying-people","class":"StoryPayingPeople","runner":"macos-latest"},
-                {"device":"iPad","story":"shared-savings","class":"StorySharedSavings","runner":"macos-latest"},
-                {"device":"iPad","story":"devices-network","class":"StoryDevicesAndNetwork","runner":"macos-latest"}]}') }}
+                {"lane":"iPhone","device":"iPhone","story":"first-wallet","class":"StoryFirstWallet","hosted":false,"runner":["self-hosted","macOS","btc-swift","node-e2e"]},
+                {"lane":"iPhone","device":"iPhone","story":"paying-people","class":"StoryPayingPeople","hosted":false,"runner":["self-hosted","macOS","btc-swift","node-e2e"]},
+                {"lane":"iPhone","device":"iPhone","story":"shared-savings","class":"StorySharedSavings","hosted":false,"runner":["self-hosted","macOS","btc-swift","node-e2e"]},
+                {"lane":"iPhone","device":"iPhone","story":"devices-network","class":"StoryDevicesAndNetwork","hosted":false,"runner":["self-hosted","macOS","btc-swift","node-e2e"]},
+                {"lane":"iPhone-hosted","device":"iPhone","story":"first-wallet","class":"StoryFirstWallet","hosted":true,"runner":"macos-latest"},
+                {"lane":"iPhone-hosted","device":"iPhone","story":"paying-people","class":"StoryPayingPeople","hosted":true,"runner":"macos-latest"},
+                {"lane":"iPhone-hosted","device":"iPhone","story":"shared-savings","class":"StorySharedSavings","hosted":true,"runner":"macos-latest"},
+                {"lane":"iPhone-hosted","device":"iPhone","story":"devices-network","class":"StoryDevicesAndNetwork","hosted":true,"runner":"macos-latest"},
+                {"lane":"iPad","device":"iPad","story":"first-wallet","class":"StoryFirstWallet","hosted":true,"runner":"macos-latest"},
+                {"lane":"iPad","device":"iPad","story":"paying-people","class":"StoryPayingPeople","hosted":true,"runner":"macos-latest"},
+                {"lane":"iPad","device":"iPad","story":"shared-savings","class":"StorySharedSavings","hosted":true,"runner":"macos-latest"},
+                {"lane":"iPad","device":"iPad","story":"devices-network","class":"StoryDevicesAndNetwork","hosted":true,"runner":"macos-latest"}]}') }}
     needs: changes
     if: >-
       needs.changes.outputs.required == 'true'
@@ -184,7 +192,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Prepare the hosted Apple silicon fixture tools
-        if: matrix.device == 'iPad'
+        if: matrix.hosted
         run: |
           test "$(uname -m)" = arm64
           brew install bitcoin
@@ -208,7 +216,7 @@ jobs:
       # host-process bridge. A hosted runner has none and mines.
       - name: Start this run's isolated fixture
         env:
-          WINNOW_FIXTURE_TEMPLATE: ${{ matrix.device == 'iPhone' && '/Users/macdev/Library/Caches/winnow-signet-template' || '' }}
+          WINNOW_FIXTURE_TEMPLATE: ${{ !matrix.hosted && '/Users/macdev/Library/Caches/winnow-signet-template' || '' }}
         run: |
           test -d /Applications/Xcode.app/Contents/Developer
           command -v bitcoind
@@ -234,33 +242,6 @@ jobs:
           "$python_prefix/bin/python3.12" -c 'import tomllib'
           echo "$python_prefix/libexec/bin" >> "$GITHUB_PATH"
 
-      # The framework changes only when the bridge's locked source or its
-      # build script does, and building it from Rust source costs 9–12
-      # minutes per job. The key names every input, so a stale framework
-      # cannot be restored against changed source; a hit still re-checks the
-      # license evidence and the lockfile hash the build recorded.
-      - name: Restore the pinned app Tor framework
-        id: tor-cache
-        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-        with:
-          path: TorBridge/build
-          key: tor-bridge-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('TorBridge/Cargo.lock', 'TorBridge/Cargo.toml', 'TorBridge/rust-toolchain.toml', 'TorBridge/src/**', 'TorBridge/include/**', 'scripts/build-tor-bridge', 'scripts/install-rust') }}
-
-      - name: Build pinned app Tor framework
-        if: steps.tor-cache.outputs.cache-hit != 'true'
-        run: |
-          scripts/install-rust
-          export PATH="$HOME/.cargo/bin:$PATH"
-          scripts/build-tor-bridge
-
-      - name: Check the restored Tor framework against its locked source
-        if: steps.tor-cache.outputs.cache-hit == 'true'
-        run: |
-          scripts/render-tor-notices --check
-          cd TorBridge
-          grep ' Cargo.lock$' build/source-and-binary-sha256.txt | shasum -a 256 -c -
-          test -d build/WinnowTor.xcframework
-
       - name: Install pinned XcodeGen
         run: scripts/install-xcodegen
 
@@ -281,7 +262,7 @@ jobs:
       # app and the test runner rebuild incrementally instead of from scratch
       # (two to three minutes per job). Hosted runners start empty anyway.
       - name: Reuse the runner's build products
-        if: matrix.device == 'iPhone'
+        if: '!matrix.hosted'
         run: echo "DERIVED_DATA=$HOME/Library/Caches/winnow-node-app" >> "$GITHUB_ENV"
 
       - name: App UI tests (${{ matrix.story }})
@@ -314,7 +295,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: node-ui-${{ matrix.device }}-${{ matrix.story }}-${{ github.run_id }}
+          name: node-ui-${{ matrix.lane }}-${{ matrix.story }}-${{ github.run_id }}
           path: |
             ${{ env.RESULTS_DIR }}/node-ui.log
             ${{ env.RESULTS_DIR }}/NodeUI.xcresult
