@@ -1287,6 +1287,10 @@ final class StoryPayingPeople: WinnowAppJourney {
         // The original payment survived the interruption. Its existing fee
         // replacement journey continues from the same history entry.
         app.navigationBars.buttons["Winnow"].tap()
+        // The list is counted once it is back on screen; a hosted iPad has
+        // taken seconds to pop the detail.
+        XCTAssertTrue(app.buttons["historyPayment-\(original)"].waitForExistence(timeout: 30),
+                      "the payment is missing from history after reopening")
         XCTAssertEqual(app.buttons.matching(identifier: "historyPayment-\(original)").count, 1)
         openPayment(original, in: app)
         let bump = app.buttons["bumpFeeButton"].firstMatch
