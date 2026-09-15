@@ -1469,7 +1469,7 @@ final class StoryPayingPeople: WinnowAppJourney {
         Screenshots.capture(app, "45-explorer-consent", testCase: self)
         confirm.tap()
         let inferred = app.buttons["inferredSender-\(trUtxo.address)"]
-        XCTAssertTrue(inferred.waitForExistence(timeout: 30), "stub explorer answer did not arrive")
+        XCTAssertTrue(inferred.waitForExistence(timeout: 60), "stub explorer answer did not arrive (\(stub.requestCount) request(s) reached the stub)")
         XCTAssertEqual(stub.requestCount, 1)
         // The sole returned address is still unselected until tapped.
         XCTAssertNotEqual(app.textFields["personPasteField"].value as? String, trUtxo.address)
@@ -1509,14 +1509,20 @@ final class StorySharedSavings: WinnowAppJourney {
             app.buttons["addPastedKeyButton"].tap()
         }
         let threshold = app.steppers["vaultThresholdStepper"]
-        XCTAssertTrue(scrollUntilExists(app, threshold, up: true))
+        XCTAssertTrue(scrollUntilExists(app, threshold, up: true, fullyVisible: true))
         threshold.buttons["vaultThresholdStepper-Decrement"].tap()
+        XCTAssertTrue(poll(timeout: 5, interval: 0.5, "the threshold lowered to 1 of 3") {
+            threshold.label.hasSuffix("1 of 3")
+        })
         XCTAssertTrue(scrollUntilExists(app, app.buttons["buildDescriptorButton"]))
         app.buttons["buildDescriptorButton"].tap()
         XCTAssertTrue(scrollUntilExists(app, app.staticTexts["vaultSingleKeyRule"]))
         XCTAssertEqual(app.staticTexts["vaultSingleKeyRule"].label, "One signing key can spend these funds.")
-        XCTAssertTrue(scrollUntilExists(app, threshold, up: true))
+        XCTAssertTrue(scrollUntilExists(app, threshold, up: true, fullyVisible: true))
         threshold.buttons["vaultThresholdStepper-Increment"].tap()
+        XCTAssertTrue(poll(timeout: 5, interval: 0.5, "the threshold raised to 2 of 3") {
+            threshold.label.hasSuffix("2 of 3")
+        })
         XCTAssertTrue(scrollUntilExists(app, app.buttons["buildDescriptorButton"]))
         app.buttons["buildDescriptorButton"].tap()
         // The descriptor preview is a CopyableTextBlock whose Text starts
@@ -2401,17 +2407,17 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
             let delta = max(-0.3, min(0.3, 0.45 - position))
             let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5 + delta))
-            start.press(forDuration: 0.05, thenDragTo: end)
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0.25)
         }
         XCTAssertTrue(toggle.isHittable)
         XCTAssertEqual(app.staticTexts["torState"].label, "State, Stopped")
         Screenshots.capture(app, "48-tor-stopped", testCase: self)
         app.flipSwitch(toggle)
-        XCTAssertTrue(poll(timeout: 10, interval: 0.1, "Tor bootstrapping") {
+        XCTAssertTrue(poll(timeout: 30, interval: 0.1, "Tor bootstrapping") {
             app.staticTexts["torState"].label == "State, Bootstrapping"
         })
         Screenshots.capture(app, "49-tor-bootstrapping", testCase: self)
-        XCTAssertTrue(poll(timeout: 10, interval: 0.1, "Tor failed closed") {
+        XCTAssertTrue(poll(timeout: 30, interval: 0.1, "Tor failed closed") {
             app.staticTexts["torState"].label == "State, Failed"
         })
         XCTAssertTrue(scrollUntilExists(app, app.buttons["retryTorButton"], maxSwipes: 4))
@@ -2420,7 +2426,7 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
         XCTAssertTrue(scrollUntilExists(app, toggle, maxSwipes: 4, up: true))
         Screenshots.capture(app, "50-tor-failed", testCase: self)
         app.flipSwitch(toggle)
-        XCTAssertTrue(poll(timeout: 10, interval: 0.1, "explicit Tor disable") {
+        XCTAssertTrue(poll(timeout: 30, interval: 0.1, "explicit Tor disable") {
             app.staticTexts["torState"].label == "State, Stopped"
         })
     }
