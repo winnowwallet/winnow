@@ -5,19 +5,28 @@ a 12 GiB copy-on-write disk, and its own daemon state. QEMU runs as
 `libvirt-qemu`, managed by two systemd services. These are ordinary KVM VMs
 on the TDX host; this recipe does not enable confidential-guest attestation.
 
-The existing host Tailscale identity exposes their SOCKS5 listeners:
+Each VM has its own Tailscale identity and SOCKS5 listener:
 
-| Network | Winnow gateway | Host loopback forwarding | Guest SSH via host |
+| Network | Winnow gateway | MagicDNS hostname | Guest SSH via host |
 | --- | --- | --- | --- |
-| Tor | `100.112.65.68:9050` | `127.0.0.1:19050` → guest 9050 | 22051 |
-| I2P | `100.112.65.68:4447` | `127.0.0.1:14447` → guest 4447 | 22052 |
+| Tor | `100.75.175.127:9050` | `winnow-tor-gateway.degu-cliff.ts.net` | 22051 |
+| I2P | `100.74.30.8:4447` | `winnow-i2p-gateway.degu-cliff.ts.net` | 22052 |
 
-`tdx2.degu-cliff.ts.net` can replace the IP. Tailscale Serve is tailnet-only;
-there is no Funnel, public SOCKS listener, exit-node setting, or new subnet
-route. The VMs use separate QEMU user-mode networks, leaving existing
-libvirt networks and other VMs alone. Access follows the host's existing
-Tailscale ACLs. Clients must have Tailscale connected. The host, as gateway
-operator, is trusted with the proxy destinations.
+Use the hostname instead of the IP if preferred. The listed IPs belong to this
+deployment; freshly enrolled replacements get their own addresses. Clients
+must have Tailscale connected, and tailnet ACLs must permit TCP 9050/4447 to
+the respective VM. These are application SOCKS5 proxies, not Tailscale exit
+nodes. Applications must explicitly use the appropriate proxy with remote DNS.
+
+The VMs use separate QEMU user-mode networks, leaving existing libvirt networks
+and other VMs alone. Neither gateway accepts subnet routes, advertises routes,
+or changes the client's system-wide internet routing. SSH also works directly
+over the guest's Tailscale address using the `gateway` user and authorized key.
+
+The previous host-level Serve addresses `100.112.65.68:9050` and
+`100.112.65.68:4447` remain available for compatibility. They forward through
+host loopback ports 19050 and 14447. No Funnel or public SOCKS listener is used.
+The host, as gateway operator, is trusted with the proxy destinations.
 
 ## Reproduce
 
@@ -36,6 +45,9 @@ sudo python3 provision.py /path/to/admin.pub
 
 The recipe pins the Ubuntu cloud image by dated URL and SHA-256, apt to
 Ubuntu's 2026-09-15 snapshot, and upstream i2pd 2.61.0 by release-asset hash.
+Tailscale 1.102.4 is installed from its official Debian package, verified by
+SHA-256. Enrollment credentials and Tailscale state are never baked into the
+cloud image.
 Tor resolves to `0.4.9.11-0ubuntu0.24.04.1` from that snapshot. Both guests
 record `dpkg-query -W` in `/var/lib/gateway-packages.txt`. Reproducibility means
 the same software and configuration, with fresh machine and overlay identities.
@@ -49,17 +61,36 @@ ssh -J tdx2 -p 22051 gateway@127.0.0.1 'cloud-init status; systemctl is-active t
 ssh -J tdx2 -p 22052 gateway@127.0.0.1 'cloud-init status; systemctl is-active i2pd'
 ```
 
-Tor's journal should reach `Bootstrapped 100%`. I2P needs reseeding and tunnels
-before it can reach a peer. `publish.py` checks both SOCKS greetings and
-refuses to overwrite an unrelated Tailscale port configuration:
+Enroll each guest into the intended tailnet using the installed helper:
 
 ```sh
-sudo python3 publish.py
-sudo tailscale serve status
+ssh -J tdx2 -p 22051 gateway@127.0.0.1 'sudo /usr/local/sbin/enroll-gateway-tailscale tor'
+ssh -J tdx2 -p 22052 gateway@127.0.0.1 'sudo /usr/local/sbin/enroll-gateway-tailscale i2p'
 ```
 
+Open each printed login URL, sign in, and connect that named VM to your tailnet.
+For unattended deployment, place a scoped auth key in a root-owned 0600 file
+inside the guest and pass that file as the helper's second argument. Deliver
+it through your secret manager, remove it after enrollment, and never commit
+it or include it in cloud-init. Tailscale keeps each VM's distinct machine
+identity in `/var/lib/tailscale/` across reboots; never clone that directory.
+
+For already provisioned guests, copy and run `install-tailscale.sh` inside each
+VM, then use `enroll-tailscale.sh` to join it. Do not rerun cloud-init or recreate
+the disk to add Tailscale to an existing deployment.
+
+Confirm `tailscale status` reports Running and use `tailscale ip -4` to obtain
+each VM's address. Both deployed VM device keys currently expire on
+2027-03-14 under the existing tailnet policy; reauthenticate before expiry.
+This recipe does not change the tailnet's key-expiry policy.
+
+Tor's journal should reach `Bootstrapped 100%`. I2P needs reseeding and tunnels
+before it can reach a peer. Test the VM IPs with `check-peer.py` below. For the
+optional legacy host-level forwarding path, `sudo python3 publish.py` checks
+SOCKS greetings and refuses to replace an unrelated Serve port configuration.
+
 The configuration and disk live under `/var/lib/winnow-peer-gateways/`;
-services are `winnow-tor-gateway` and `winnow-i2p-gateway`. Both services and
+services are `winnow-tor-gateway` and `winnow-i2p-gateway`. Both services, guest tailscaled services, and optional
 Tailscale Serve persist across host reboots. Provisioning is serialized and
 idempotent. It does not restart a running VM or recreate an existing disk.
 A changed cloud-init configuration is rejected rather than silently ignored
@@ -101,8 +132,8 @@ and the compact-filter service bit. It sends no wallet addresses or transactions
 Supply a current peer from `https://census.winnowwallet.com/census/peers.json`:
 
 ```sh
-python3 check-peer.py 100.112.65.68 9050 PEER.onion 8333
-python3 check-peer.py 100.112.65.68 4447 PEER.b32.i2p 8333
+python3 check-peer.py 100.75.175.127 9050 PEER.onion 8333
+python3 check-peer.py 100.74.30.8 4447 PEER.b32.i2p 8333
 ```
 
 A successful greeting alone does not establish overlay connectivity. Some
@@ -136,4 +167,5 @@ The recipe never edits another agent's checkout or existing VM definitions.
 - [Ubuntu snapshot service](https://snapshot.ubuntu.com/)
 - [i2pd 2.61.0 release](https://github.com/PurpleI2P/i2pd/releases/tag/2.61.0)
 - [i2pd configuration](https://docs.i2pd.website/en/latest/user-guide/configuration/)
+- [Tailscale Linux installation](https://tailscale.com/docs/install/linux)
 - [Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve)

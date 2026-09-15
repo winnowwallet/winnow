@@ -40,7 +40,7 @@ Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
             'write_files':[{'path':config_path,'content':conf},
                            {'path':'/etc/apt/sources.list.d/ubuntu.sources','content':apt}],
             'apt':{'preserve_sources_list':True},
-            'package_update':True, 'packages':['tor'] if kind == 'tor' else ['ca-certificates','curl'],
+            'package_update':True, 'packages':['tor','ca-certificates','curl'] if kind == 'tor' else ['ca-certificates','curl'],
             'runcmd':[['systemctl','enable','--now',package], ['systemctl','restart',package],
                        ['sh','-c','dpkg-query -W > /var/lib/gateway-packages.txt']],
         }
@@ -49,6 +49,11 @@ Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
             cloud['write_files'].append({'path':'/usr/local/sbin/install-gateway-i2pd',
                 'permissions':'0755', 'content':(HERE/'install-i2pd.sh').read_text()})
             cloud['runcmd'] = [['/usr/local/sbin/install-gateway-i2pd']]
+        for filename, destination in [('install-tailscale.sh', 'install-gateway-tailscale'),
+                                      ('enroll-tailscale.sh', 'enroll-gateway-tailscale')]:
+            cloud['write_files'].append({'path':'/usr/local/sbin/'+destination,
+                'permissions':'0755', 'content':(HERE/filename).read_text()})
+        cloud['runcmd'].append(['/usr/local/sbin/install-gateway-tailscale'])
         # JSON is a YAML subset accepted by cloud-init.
         rendered = '#cloud-config\n'+json.dumps(cloud,indent=2)
         digest = hashlib.sha256(rendered.encode()).hexdigest()
