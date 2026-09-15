@@ -77,11 +77,14 @@ final class OfflinePaperTests: XCTestCase {
         withExtendedLifetime(coordinator) {}
     }
 
+    /// WebKit's first content process on a loaded hosted runner has taken
+    /// longer than ten seconds to come up; a minute is the allowance.
     private func loaded(_ view: WKWebView) async throws {
-        for _ in 0..<200 {
+        let deadline = ContinuousClock.now + .seconds(60)
+        while ContinuousClock.now < deadline {
             if view.title == "Offline proof", !view.isLoading { return }
             try await Task.sleep(for: .milliseconds(50))
         }
-        XCTFail("The local HTML paper did not finish loading")
+        XCTFail("The local HTML paper did not finish loading within a minute")
     }
 }

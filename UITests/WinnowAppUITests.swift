@@ -556,12 +556,17 @@ class WinnowAppJourney: XCTestCase {
             let result = try HostProcess.run("/bin/sh", ["-c",
                 "/usr/bin/python3 '\(script.path)' >'\(directory.path)/requests.log' 2>&1 </dev/null & echo $!"])
             processID = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-            for _ in 0..<100 where port == 0 {
+            // The first python3 start on a hosted runner has taken more
+            // than ten seconds under load; the listener's own log tells
+            // apart a slow start from a failed one.
+            let deadline = Date().addingTimeInterval(60)
+            while port == 0, Date() < deadline {
                 let value = try? String(contentsOf: self.directory.appending(path: "port"), encoding: .utf8)
                 self.port = UInt16(value ?? "") ?? 0
-                if port == 0 { Thread.sleep(forTimeInterval: 0.1) }
+                if port == 0 { Thread.sleep(forTimeInterval: 0.2) }
             }
-            XCTAssertGreaterThan(port, 0, "the isolated explorer listener did not start")
+            let serverLog = (try? String(contentsOf: directory.appending(path: "requests.log"), encoding: .utf8)) ?? ""
+            XCTAssertGreaterThan(port, 0, "the isolated explorer listener did not start within 60 s: \(serverLog.suffix(300))")
         }
 
         func stop() {
