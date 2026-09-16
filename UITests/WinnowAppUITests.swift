@@ -329,6 +329,12 @@ class WinnowAppJourney: XCTestCase {
         if configureLocalNode {
             launch["WINNOW_E2E_PEER"] = "\(BitcoinCLI.nodeHost):\(BitcoinCLI.p2pPort)"
             launch["WINNOW_E2E_CHALLENGE"] = BitcoinCLI.challengeHex
+            // One peer is the whole fixture, so the pool is not "connecting"
+            // for the rest of the run; and a journey waiting for a block to
+            // be scanned in waits on a ten-second loop, not the 45-second
+            // one a phone in a pocket gets.
+            launch["WINNOW_E2E_PEER_COUNT"] = "1"
+            launch["WINNOW_E2E_SYNC_INTERVAL"] = "10"
         }
         return launch
     }
@@ -2350,17 +2356,21 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
         let coin = try await Self.fundFromBank(try vault.address(index: 0), sats: 2_000_000)
         let fundingTxid = coin.txid
         app.resetToHome()
-        XCTAssertTrue(scrollUntilExists(app, app.buttons["walletSavings-\(name)"]))
-        app.buttons["walletSavings-\(name)"].tap()
-        XCTAssertTrue(poll(timeout: 240, interval: 2, "extra-device balance scanned") {
-            if self.scrollUntilExists(app, app.staticTexts["accountBalance"]),
-               app.staticTexts["accountBalance"].label != "0 sats" { return true }
-            app.navigationBars.buttons["Winnow"].tap()
+        let accountRow = app.buttons["walletSavings-\(name)"]
+        XCTAssertTrue(scrollUntilExists(app, accountRow))
+        // The row states what the account holds; wait on it, nudging the
+        // scan, until the bank's payment has been scanned in. The relaunch
+        // this step used to make forced that scan; a nudge does now.
+        XCTAssertTrue(poll(timeout: 240, interval: 3, "extra-device balance scanned") {
+            if accountRow.exists, !accountRow.label.hasSuffix("· 0 sats") { return true }
             self.nudgeSync(app)
-            _ = self.scrollUntilExists(app, app.buttons["walletSavings-\(name)"], up: true)
-            app.buttons["walletSavings-\(name)"].tap()
+            _ = self.scrollUntilExists(app, accountRow, up: true)
             return false
         })
+        accountRow.tap()
+        XCTAssertTrue(scrollUntilExists(app, app.staticTexts["accountBalance"]))
+        XCTAssertNotEqual(app.staticTexts["accountBalance"].label.filter(\.isNumber), "0",
+                          "the extra-device account shows no money")
         XCTAssertTrue(scrollUntilExists(app, app.staticTexts["vaultSingleKeyRule"], fullyVisible: true))
         XCTAssertEqual(app.staticTexts["vaultSingleKeyRule"].label, "One signing key cannot spend these funds.")
         Screenshots.capture(app, "35-extra-device-policy", testCase: self)

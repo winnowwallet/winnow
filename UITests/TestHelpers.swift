@@ -456,20 +456,28 @@ extension XCUIApplication {
                                "skipReceiveAddressLabelButton", "addSavingsCoOwnerButton", "savingsCardPasteButton",
                                "exportConfirmButton", "walletSharedSavingsButton"]
 
+    /// The dismissal a sheet's bar offers, if a sheet is up. One query.
+    private var sheetDismissal: XCUIElement? {
+        let bar = navigationBars.buttons.matching(NSPredicate(format: "label IN %@", ["Done", "Close", "Cancel"]))
+        return bar.count > 0 ? bar.firstMatch : nil
+    }
+
     /// Whether one of the app's sheets is up: its buttons exist, or its bar
     /// offers a way out. "Save with other people" marks the beginner
     /// chooser sheet; on the Advanced Wallet tab it is an ordinary row.
-    var sheetIsUp: Bool {
-        let markers = hasTabs ? Self.sheetMarkers.filter { $0 != "walletSharedSavingsButton" } : Self.sheetMarkers
-        return markers.contains(where: { buttons[$0].exists })
-            || ["Done", "Close", "Cancel"].contains(where: { navigationBars.buttons[$0].exists })
+    /// Two queries, whatever the number of markers: every one of these
+    /// costs a second on a slow runner.
+    func sheetIsUp(tabs: Bool) -> Bool {
+        let markers = tabs ? Self.sheetMarkers.filter { $0 != "walletSharedSavingsButton" } : Self.sheetMarkers
+        if buttons.matching(NSPredicate(format: "identifier IN %@", markers)).count > 0 { return true }
+        return sheetDismissal != nil
     }
 
     /// The wallet, with nothing over it and its top on screen: its own
     /// navigation bar in front, no sheet, and the balance row visible.
     var atHome: Bool {
         let root = navigationBars["Winnow"]
-        guard root.exists, root.isHittable, !sheetIsUp else { return false }
+        guard root.exists, root.isHittable, !sheetIsUp(tabs: hasTabs) else { return false }
         return staticTexts["balanceText"].exists
     }
 
@@ -493,23 +501,24 @@ extension XCUIApplication {
                 _ = close.waitForNonExistence(timeout: 10)
                 continue
             }
-            if hasTabs, tabBars.firstMatch.isHittable, !navigationTab("Wallet").isSelected {
+            let tabs = hasTabs
+            if tabs, tabBars.firstMatch.isHittable, !navigationTab("Wallet").isSelected {
                 navigationTab("Wallet").tap()
                 continue
             }
-            if atHome { return }
-            // A sheet closes from its bar.
-            if let dismiss = ["Done", "Close", "Cancel"].map({ navigationBars.buttons[$0] })
-                .first(where: { $0.exists && $0.isHittable })
-            {
-                dismiss.tap()
-                _ = dismiss.waitForNonExistence(timeout: 10)
-                continue
-            }
             let root = navigationBars["Winnow"]
-            if root.exists, root.isHittable, !sheetIsUp {
+            let rootInFront = root.exists && root.isHittable
+            let sheet = sheetIsUp(tabs: tabs)
+            if rootInFront, !sheet {
+                if staticTexts["balanceText"].exists { return }
                 // The wallet, scrolled: bring its top back.
                 scrollToTop()
+                continue
+            }
+            // A sheet closes from its bar.
+            if sheet, let dismiss = sheetDismissal, dismiss.isHittable {
+                dismiss.tap()
+                _ = dismiss.waitForNonExistence(timeout: 10)
                 continue
             }
             // A pushed screen pops from its back button — never from just any
