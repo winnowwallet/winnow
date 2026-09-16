@@ -123,7 +123,7 @@ struct AddPersonView: View {
                                   text: $pasted, axis: .vertical)
                             .autocorrectionDisabled().textInputAutocapitalization(.never)
                             .accessibilityIdentifier("personPasteField")
-                        Button("Paste from clipboard") { pasted = UIPasteboard.general.string ?? "" }
+                        Button("Paste from clipboard") { pasted = model.pasteboardText() ?? "" }
                             .accessibilityIdentifier("personPasteButton")
                     }
                 }

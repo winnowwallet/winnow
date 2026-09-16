@@ -82,7 +82,7 @@ struct OnboardingView: View {
                     }
                 }
                 if let busy {
-                    Section { ProgressView(model.syncStatusText ?? busy) }
+                    Section { BusyIndicator(text: model.syncStatusText ?? busy) }
                 }
                 if let error {
                     Section {
@@ -249,7 +249,7 @@ private struct MnemonicBackupView: View {
                 }
                 if let progress = model.syncStatusText {
                     Section {
-                        ProgressView(progress)
+                        BusyIndicator(text: progress)
                             .accessibilityIdentifier("backupSyncProgress")
                     } header: {
                         Text("Connecting to Bitcoin")
@@ -308,7 +308,7 @@ private struct ImportBundleView: View {
                             .textInputAutocapitalization(.never)
                             .accessibilityIdentifier("importJSONEditor")
                         Button("Paste from clipboard") {
-                            json = UIPasteboard.general.string ?? ""
+                            json = model.pasteboardText() ?? ""
                         }
                         .accessibilityIdentifier("importPasteButton")
                     } header: {
@@ -318,7 +318,7 @@ private struct ImportBundleView: View {
                     }
                 }
                 if busy {
-                    Section { ProgressView("Importing and verifying…") }
+                    Section { BusyIndicator(text: "Importing and verifying…") }
                 }
                 if let error {
                     Section { Text(error).foregroundStyle(.red).font(.footnote) }

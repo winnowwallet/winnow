@@ -161,7 +161,7 @@ struct BeginnerHomeView: View {
                 .foregroundStyle(.red)
                 .accessibilityIdentifier("syncSummaryText")
         case .syncing:
-            ProgressView("Syncing…")
+            BusyIndicator(text: "Syncing…")
                 .accessibilityIdentifier("syncSummaryText")
         case .synced:
             Label("Up to date", systemImage: "checkmark.circle")

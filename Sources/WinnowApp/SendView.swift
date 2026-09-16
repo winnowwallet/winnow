@@ -207,7 +207,7 @@ struct SendView: View {
                             .focused($focusedField, equals: .destination)
                             .accessibilityIdentifier("destinationField")
                         Button("Paste") {
-                            destination = UIPasteboard.general.string ?? ""
+                            destination = model.pasteboardText() ?? ""
                         }
                         .accessibilityIdentifier("pasteDestinationButton")
                     }

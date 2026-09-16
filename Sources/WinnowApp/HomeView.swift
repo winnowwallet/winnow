@@ -86,7 +86,7 @@ struct HomeView: View {
                             }
                             .accessibilityIdentifier("retryPeersButton")
                         } else {
-                            ProgressView(statusText)
+                            BusyIndicator(text: statusText)
                                 .accessibilityIdentifier("syncProgressText")
                         }
                     }
@@ -103,7 +103,7 @@ struct HomeView: View {
                     }
                     LabeledContent("Peers", value: "\(model.status.peerCount)")
                     if model.status.syncing, model.syncStatusText == nil {
-                        ProgressView("Scanning filters…")
+                        BusyIndicator(text: "Scanning filters…")
                     }
                     if let error = model.status.lastSyncError {
                         Text(error)
@@ -314,7 +314,7 @@ struct PaymentDetailView: View {
                 if entry.received > 0 { senderSection(entry) }
                 if entry.rawTransaction == nil, entry.spent > 0 {
                     Section {
-                        if loading || model.status.syncing { ProgressView("Loading payment details…") }
+                        if loading || model.status.syncing { BusyIndicator(text: "Loading payment details…") }
                         else { Button("Load payment details") { Task { await load() } } }
                     }
                 }
