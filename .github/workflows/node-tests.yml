@@ -141,41 +141,23 @@ jobs:
           retention-days: 14
 
   ui:
-    name: ui-${{ matrix.lane }}-${{ matrix.story }}
+    name: ui-${{ matrix.device }}
     strategy:
       fail-fast: false
-      # The journeys are four stories (UITests/WinnowAppUITests.swift), one
-      # job each, so they run side by side on the VMs instead of one after
-      # another in a single hour-long job. Pull requests run the iPhone
-      # stories on the self-hosted VMs only. The hosted Apple silicon lanes
-      # — the iPad stories, and the iPhone stories once more — run for main
-      # pushes, the nightly and confirmed manual runs. The VMs have no Metal
-      # device, so their captures draw no tab bars, alert backgrounds or
-      # share sheets (#84); the hosted iPhone lane is where publishable
-      # iPhone captures come from, and the VM lane keeps gating PRs. The
-      # Intel VM's iPad compositor aborts in CA::OGL::push_surface during
-      # lifecycle tests, which is why iPad never runs there; iPhone and
-      # package lanes retain Intel coverage.
+      # One job per device, each running all four stories
+      # (UITests/WinnowAppUITests.swift) in one session against one fixture.
+      # The suite used to fan out to twelve jobs across several machines so
+      # the stories ran side by side; it now runs on a single Apple silicon
+      # runner, where that fan-out only multiplied the per-job build,
+      # fixture and simulator setup without buying any parallelism.
+      # Apple silicon also has a Metal device, so these captures draw the
+      # tab bars, alert backgrounds and share sheets that the Intel VMs
+      # could not (#84). Pull requests run iPhone; iPad joins for main
+      # pushes, the nightly and confirmed manual runs.
       matrix: >-
         ${{ fromJSON(github.event_name == 'pull_request'
-          && '{"include":[
-                {"lane":"iPhone","device":"iPhone","story":"first-wallet","class":"StoryFirstWallet","hosted":false,"runner":["self-hosted","macOS","btc-swift","node-e2e"]},
-                {"lane":"iPhone","device":"iPhone","story":"paying-people","class":"StoryPayingPeople","hosted":false,"runner":["self-hosted","macOS","btc-swift","node-e2e"]},
-                {"lane":"iPhone","device":"iPhone","story":"shared-savings","class":"StorySharedSavings","hosted":false,"runner":["self-hosted","macOS","btc-swift","node-e2e"]},
-                {"lane":"iPhone","device":"iPhone","story":"devices-network","class":"StoryDevicesAndNetwork","hosted":false,"runner":["self-hosted","macOS","btc-swift","node-e2e"]}]}'
-          || '{"include":[
-                {"lane":"iPhone","device":"iPhone","story":"first-wallet","class":"StoryFirstWallet","hosted":false,"runner":["self-hosted","macOS","btc-swift","node-e2e"]},
-                {"lane":"iPhone","device":"iPhone","story":"paying-people","class":"StoryPayingPeople","hosted":false,"runner":["self-hosted","macOS","btc-swift","node-e2e"]},
-                {"lane":"iPhone","device":"iPhone","story":"shared-savings","class":"StorySharedSavings","hosted":false,"runner":["self-hosted","macOS","btc-swift","node-e2e"]},
-                {"lane":"iPhone","device":"iPhone","story":"devices-network","class":"StoryDevicesAndNetwork","hosted":false,"runner":["self-hosted","macOS","btc-swift","node-e2e"]},
-                {"lane":"iPhone-hosted","device":"iPhone","story":"first-wallet","class":"StoryFirstWallet","hosted":true,"runner":"macos-latest"},
-                {"lane":"iPhone-hosted","device":"iPhone","story":"paying-people","class":"StoryPayingPeople","hosted":true,"runner":"macos-latest"},
-                {"lane":"iPhone-hosted","device":"iPhone","story":"shared-savings","class":"StorySharedSavings","hosted":true,"runner":"macos-latest"},
-                {"lane":"iPhone-hosted","device":"iPhone","story":"devices-network","class":"StoryDevicesAndNetwork","hosted":true,"runner":"macos-latest"},
-                {"lane":"iPad","device":"iPad","story":"first-wallet","class":"StoryFirstWallet","hosted":true,"runner":"macos-latest"},
-                {"lane":"iPad","device":"iPad","story":"paying-people","class":"StoryPayingPeople","hosted":true,"runner":"macos-latest"},
-                {"lane":"iPad","device":"iPad","story":"shared-savings","class":"StorySharedSavings","hosted":true,"runner":"macos-latest"},
-                {"lane":"iPad","device":"iPad","story":"devices-network","class":"StoryDevicesAndNetwork","hosted":true,"runner":"macos-latest"}]}') }}
+          && '{"device":["iPhone"]}'
+          || '{"device":["iPhone","iPad"]}') }}
     needs: changes
     if: >-
       needs.changes.outputs.required == 'true'
@@ -183,7 +165,7 @@ jobs:
       && (github.event_name != 'pull_request' || github.event.pull_request.base.ref == 'main')
       && (github.event.action != 'edited' || github.event.changes.base != null)
       && (contains('pull_request push schedule', github.event_name) || inputs.confirm_dedicated_fixture)
-    runs-on: ${{ matrix.runner }}
+    runs-on: [self-hosted, macOS, btc-swift, node-e2e, apple-silicon]
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -191,14 +173,12 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Prepare the hosted Apple silicon fixture tools
-        if: matrix.hosted
+      - name: Record the runner's toolchain
         run: |
           test "$(uname -m)" = arm64
-          brew install bitcoin
-          bitcoin-cli --version
           sw_vers
           xcodebuild -version
+          bitcoin-cli --version | head -1
 
       - name: Stop simulator miners and fixtures left by an interrupted run
         run: |
@@ -209,15 +189,14 @@ jobs:
           echo "RESULTS_DIR=$RESULTS_DIR" >> "$GITHUB_ENV"
           echo "WINNOW_DATADIR=$RESULTS_DIR/winnow-signet-fixture" >> "$GITHUB_ENV"
 
-      # A self-hosted runner keeps a snapshot of the fixture with the UI
-      # stories' "bank" wallet already mined to maturity
-      # (scripts/signet-fixture snapshot); starting from it saves each story
-      # the six minutes of mining 101 blocks through the simulator's
-      # host-process bridge. A hosted runner has none and mines.
+      # The runner keeps a snapshot of the fixture with the UI stories'
+      # "bank" wallet already mined to maturity (scripts/signet-fixture
+      # snapshot); starting from it saves the six minutes of mining 101
+      # blocks through the simulator's host-process bridge. Without one the
+      # fixture starts from genesis and the first story mines instead.
       - name: Start this run's isolated fixture
-        env:
-          WINNOW_FIXTURE_TEMPLATE: ${{ !matrix.hosted && '/Users/macdev/Library/Caches/winnow-signet-template' || '' }}
         run: |
+          export WINNOW_FIXTURE_TEMPLATE="$HOME/Library/Caches/winnow-signet-template"
           test -d /Applications/Xcode.app/Contents/Developer
           command -v bitcoind
           command -v bitcoin-cli
@@ -258,14 +237,16 @@ jobs:
             echo "WINNOW_SCREENSHOT_DIR=$RESULTS_DIR/node-screenshots"
           } > "$HOME/.winnow-node.env"
 
-      # A self-hosted runner keeps its build products between runs, so the
-      # app and the test runner rebuild incrementally instead of from scratch
-      # (two to three minutes per job). Hosted runners start empty anyway.
+      # The runner keeps its build products between runs, so the app and the
+      # test runner rebuild incrementally instead of from scratch (two to
+      # three minutes per job).
       - name: Reuse the runner's build products
-        if: '!matrix.hosted'
         run: echo "DERIVED_DATA=$HOME/Library/Caches/winnow-node-app" >> "$GITHUB_ENV"
 
-      - name: App UI tests (${{ matrix.story }})
+      # All four stories in one invocation. XCTest runs the classes in
+      # alphabetical order, so the host-process probe goes first and clears
+      # any story state a previous run left behind.
+      - name: App UI tests (${{ matrix.device }})
         run: |
           set -o pipefail
           xcodebuild test -project WinnowApp.xcodeproj -scheme WinnowApp \
@@ -273,7 +254,10 @@ jobs:
             -derivedDataPath "${DERIVED_DATA:-$RUNNER_TEMP/winnow-node-app}" \
             -resultBundlePath "$RESULTS_DIR/NodeUI.xcresult" \
             -only-testing:WinnowAppUITests/HostProcessProbeTests \
-            -only-testing:WinnowAppUITests/${{ matrix.class }} \
+            -only-testing:WinnowAppUITests/StoryFirstWallet \
+            -only-testing:WinnowAppUITests/StoryPayingPeople \
+            -only-testing:WinnowAppUITests/StorySharedSavings \
+            -only-testing:WinnowAppUITests/StoryDevicesAndNetwork \
             -skipPackagePluginValidation -skipMacroValidation \
             2>&1 | tee "$RESULTS_DIR/node-ui.log"
 
@@ -295,7 +279,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: node-ui-${{ matrix.lane }}-${{ matrix.story }}-${{ github.run_id }}
+          name: node-ui-${{ matrix.device }}-${{ github.run_id }}
           path: |
             ${{ env.RESULTS_DIR }}/node-ui.log
             ${{ env.RESULTS_DIR }}/NodeUI.xcresult
