@@ -443,8 +443,23 @@ class WinnowAppJourney: XCTestCase {
             if app.buttons["newPaymentButton"].exists { app.buttons["newPaymentButton"].tap() }
             let picker = app.buttons["sendAccountPicker"]
             XCTAssertTrue(picker.waitForExistence(timeout: 20))
-            picker.tap()
-            app.buttons[name].firstMatch.tap()
+            // The picker is a menu, and its label carries the choice
+            // ("Account, Everyday wallet"). On the hosted iPad a tap that
+            // lands while the menu is still animating in is lost, and the
+            // menu stays open over the form, covering the fields below; so
+            // the choice is asked again until the label says it took.
+            let choice = app.buttons[name].firstMatch
+            let took = NSPredicate(format: "label CONTAINS %@", name)
+            var chosen = false
+            for _ in 0 ..< 3 where !chosen {
+                if !choice.exists {
+                    picker.tap()
+                    XCTAssertTrue(choice.waitForExistence(timeout: 10), "the account menu did not open")
+                }
+                choice.tap()
+                chosen = picker.waitUntil(took, timeout: 8)
+            }
+            XCTAssertTrue(chosen, "the account menu did not take \(name)")
         } else {
             XCTAssertTrue(scrollUntilExists(app, app.buttons["sendFromAccountButton"]))
             app.buttons["sendFromAccountButton"].tap()
@@ -469,10 +484,14 @@ class WinnowAppJourney: XCTestCase {
         save.tap()
     }
 
+    /// Opens a payment from the wallet's history. The row's tap is checked
+    /// against the pushed screen: on the hosted iPad a tap on a list that is
+    /// re-rendering under the sync loop is lost, and the journey then goes
+    /// looking for the payment's buttons on the list that stayed.
     fileprivate func openPayment(_ txid: String, in app: XCUIApplication) {
         let row = app.buttons["historyPayment-\(txid)"]
         XCTAssertTrue(scrollUntilExists(app, row, maxSwipes: 12), "payment missing from Wallet")
-        row.tap()
+        XCTAssertTrue(app.tap(row, until: app.navigationBars["Payment"]), "the payment did not open")
     }
 
     fileprivate func addPastedRecipient(_ name: String, in app: XCUIApplication) {
