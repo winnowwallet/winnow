@@ -56,8 +56,32 @@ struct E2EMode {
     /// `WINNOW_E2E_ADVANCED=1`: launch with advanced mode on, so a UI test can
     /// reach the advanced controls without tapping through Settings first.
     let advancedMode: Bool
+    /// `WINNOW_E2E_CONTROL_FILE`: a JSON file the test runner rewrites while
+    /// the app runs (`Control`), so a story hands the app a clipboard text or
+    /// a census URL without relaunching it.
+    let controlFile: URL?
+    /// `WINNOW_E2E_PEER_COUNT`: the pool's target, so a fixture with one
+    /// peer is not "connecting" for the rest of the run.
+    let peerCount: Int?
+    /// `WINNOW_E2E_SYNC_INTERVAL`: seconds between automatic sync passes.
+    let syncInterval: Duration?
 
     static let keychainServicePrefix = "org.btc-swift.wallet.e2e"
+
+    /// What the test runner can change while the app runs. Read from the
+    /// control file at the moment it is needed — a paste, a refresh — never
+    /// cached, so the runner's latest write is what the app sees.
+    struct Control: Codable, Equatable {
+        var clipboard: String?
+        var censusURL: String?
+    }
+
+    /// The control file's contents now; nil without a file, or when it
+    /// cannot be read or decoded.
+    func control() -> Control? {
+        guard let controlFile, let data = try? Data(contentsOf: controlFile) else { return nil }
+        return try? JSONDecoder().decode(Control.self, from: data)
+    }
 
     /// What an environment says about E2E mode.
     ///
@@ -102,7 +126,11 @@ struct E2EMode {
                            .flatMap(BitcoinNetwork.init(rawValue:)),
                        initialTab: environment["WINNOW_E2E_TAB"],
                        requireDeviceAuthentication: environment["WINNOW_E2E_DEVICE_AUTH"] == "1",
-                       advancedMode: environment["WINNOW_E2E_ADVANCED"] == "1"))
+                       advancedMode: environment["WINNOW_E2E_ADVANCED"] == "1",
+                       controlFile: environment["WINNOW_E2E_CONTROL_FILE"].map { URL(fileURLWithPath: $0) },
+                       peerCount: environment["WINNOW_E2E_PEER_COUNT"].flatMap(Int.init).flatMap { $0 > 0 ? $0 : nil },
+                       syncInterval: environment["WINNOW_E2E_SYNC_INTERVAL"].flatMap(Double.init)
+                           .flatMap { $0 > 0 ? .seconds($0) : nil }))
     }
 
     static var current: E2EMode? {
@@ -123,8 +151,11 @@ struct E2EMode {
     var keychainService: String { "\(Self.keychainServicePrefix).\(safeRunID)" }
     var defaultsSuiteName: String { "org.btc-swift.defaults.e2e.\(safeRunID)" }
     var defaults: UserDefaults { UserDefaults(suiteName: defaultsSuiteName) ?? .standard }
+    /// The control file's census URL when the runner set one, else the
+    /// launch environment's.
     var censusURL: URL? {
-        ProcessInfo.processInfo.environment["WINNOW_E2E_CENSUS_URL"].flatMap(URL.init(string:))
+        (control()?.censusURL ?? ProcessInfo.processInfo.environment["WINNOW_E2E_CENSUS_URL"])
+            .flatMap(URL.init(string:))
     }
     /// `WINNOW_E2E_CENSUS_KEYS=hex[,hex]`: the publisher keys the fixture
     /// census is signed under, in place of the compiled-in set. Unset, the
@@ -293,6 +324,9 @@ struct E2EMode {
     var initialTab: String? { unavailable() }
     var requireDeviceAuthentication: Bool { unavailable() }
     var advancedMode: Bool { unavailable() }
+    var controlFile: URL? { unavailable() }
+    var peerCount: Int? { unavailable() }
+    var syncInterval: Duration? { unavailable() }
     var keychainService: String { unavailable() }
     var defaults: UserDefaults { unavailable() }
     var networkParams: NetworkParams? { unavailable() }
@@ -300,6 +334,12 @@ struct E2EMode {
     var censusURL: URL? { unavailable() }
     var censusTrustedKeys: [Curve25519.Signing.PublicKey]? { unavailable() }
 
+    struct Control {
+        var clipboard: String?
+        var censusURL: String?
+    }
+
+    func control() -> Control? { unavailable() }
     func wipeIfRequested() { unavailable() }
     func journal(_: String, fields _: [String: String] = [:]) { unavailable() }
 

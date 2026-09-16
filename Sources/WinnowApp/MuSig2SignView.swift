@@ -129,7 +129,7 @@ struct MuSig2SignView: View {
                 .textInputAutocapitalization(.never)
                 .accessibilityIdentifier("psbtField")
             Button("Paste from clipboard") {
-                pasted = UIPasteboard.general.string ?? ""
+                pasted = model.pasteboardText() ?? ""
             }
             .accessibilityIdentifier("psbtPasteButton")
             Button("Add reply") { addPasted() }

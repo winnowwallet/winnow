@@ -456,6 +456,14 @@ final class AppModel {
         e2e?.journal("app.initialized", fields: ["network": network.rawValue])
     }
 
+    /// What a Paste button reads: the runner's control file under the UI
+    /// test harness, so a story can hand the app a card or a request without
+    /// relaunching it or crossing the system pasteboard; the pasteboard
+    /// otherwise.
+    func pasteboardText() -> String? {
+        e2e?.control()?.clipboard ?? UIPasteboard.general.string
+    }
+
     // MARK: - Lifecycle
 
     /// Opens the persisted wallet for the current network, if any.
@@ -698,7 +706,7 @@ final class AppModel {
     }
 
     private func makePeerPool(params: NetworkParams, directory dir: URL) -> PeerPool {
-        PeerPool(params: params, manualPeers: parsedManualPeers(),
+        PeerPool(params: params, peerCount: e2e?.peerCount ?? 3, manualPeers: parsedManualPeers(),
                                 peersFileURL: dir.appending(path: "peers.json"),
                                 relayPreference: true,
                                 dialTimeout: .seconds(5),
@@ -926,10 +934,11 @@ final class AppModel {
 
     private func startSyncLoop() {
         guard syncTask == nil, wallet != nil, stack?.filters != nil else { return }
+        let interval = e2e?.syncInterval ?? .seconds(45)
         syncTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.syncOnce()
-                try? await Task.sleep(for: .seconds(45))
+                try? await Task.sleep(for: interval)
             }
         }
     }

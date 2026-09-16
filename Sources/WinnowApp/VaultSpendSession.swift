@@ -263,7 +263,7 @@ struct ApprovalView: View {
                 if let session {
                     content(session)
                 } else {
-                    ProgressView()
+                    BusyIndicator()
                 }
             }
             .navigationTitle(session?.broadcastTxid == nil ? "Approve a request" : "Payment")
@@ -320,7 +320,7 @@ struct ApprovalView: View {
                 .textInputAutocapitalization(.never)
                 .accessibilityIdentifier("approvalRequestField")
             Button("Paste from clipboard") {
-                pasted = UIPasteboard.general.string ?? ""
+                pasted = model.pasteboardText() ?? ""
             }
             .accessibilityIdentifier("approvalPasteButton")
             Button("Review request") {

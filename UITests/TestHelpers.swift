@@ -63,10 +63,7 @@ extension XCTestCase {
             if button.isEnabled { button.tap() }
             return
         }
-        let sheetMarkers = ["closeSendButton", "newReceiveAddressButton", "saveReceiveAddressLabelButton",
-                            "skipReceiveAddressLabelButton", "addSavingsCoOwnerButton", "savingsCardPasteButton",
-                            "exportConfirmButton", "walletSharedSavingsButton"]
-        guard !sheetMarkers.contains(where: { app.buttons[$0].exists }) else { return }
+        guard !XCUIApplication.sheetMarkers.contains(where: { app.buttons[$0].exists }) else { return }
         let home = app.buttons["openSendButton"]
         guard home.exists, home.isHittable else { return }
         let list = app.collectionViews.firstMatch
@@ -74,6 +71,17 @@ extension XCTestCase {
         let start = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2))
         let end = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
         start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0.3)
+    }
+
+    /// The interface in the mode this journey wants, whichever mode the
+    /// last journey left it in. A switch made through the UI lands with
+    /// the tab bar before its tabs: the journey gets the Wallet tab ready.
+    @MainActor
+    func ensureMode(_ app: XCUIApplication, advanced: Bool) {
+        if app.hasTabs != advanced { setAdvancedMode(app, advanced) }
+        if advanced {
+            XCTAssertTrue(app.navigationTab("Wallet").waitForExistence(timeout: 15), "no Wallet tab in Advanced mode")
+        }
     }
 
     /// Switches the interface. Turning Advanced on asks first; Simple on
@@ -434,8 +442,109 @@ extension XCUIApplication {
         popToOneScreen()
         let open = buttons["openSendButton"]
         XCTAssertTrue(open.waitForExistence(timeout: 20), "no Send button on the one screen")
-        open.tap()
+        // A tap that lands while the list is still settling from the
+        // scroll above is lost; ask again rather than wait it out.
+        for _ in 0 ..< 3 where !buttons["closeSendButton"].exists {
+            open.tap()
+            _ = buttons["closeSendButton"].waitForExistence(timeout: 7)
+        }
         XCTAssertTrue(buttons["closeSendButton"].waitForExistence(timeout: 20), "the Send sheet did not open")
+    }
+
+    /// Buttons that exist only while one of the app's sheets is up.
+    static let sheetMarkers = ["closeSendButton", "newReceiveAddressButton", "saveReceiveAddressLabelButton",
+                               "skipReceiveAddressLabelButton", "addSavingsCoOwnerButton", "savingsCardPasteButton",
+                               "exportConfirmButton", "walletSharedSavingsButton"]
+
+    /// Whether one of the app's sheets is up: its buttons exist, or its bar
+    /// offers a way out. "Save with other people" marks the beginner
+    /// chooser sheet; on the Advanced Wallet tab it is an ordinary row.
+    var sheetIsUp: Bool {
+        let markers = hasTabs ? Self.sheetMarkers.filter { $0 != "walletSharedSavingsButton" } : Self.sheetMarkers
+        return markers.contains(where: { buttons[$0].exists })
+            || ["Done", "Close", "Cancel"].contains(where: { navigationBars.buttons[$0].exists })
+    }
+
+    /// The wallet, with nothing over it and its top on screen: its own
+    /// navigation bar in front, no sheet, and the balance row visible.
+    var atHome: Bool {
+        let root = navigationBars["Winnow"]
+        guard root.exists, root.isHittable, !sheetIsUp else { return false }
+        return staticTexts["balanceText"].exists
+    }
+
+    /// Back to the wallet from wherever the last journey stopped: keyboard
+    /// down, alerts answered, sheets closed, pushed screens popped, the
+    /// wallet scrolled to its top. A journey that attaches to the running
+    /// app starts here, the way one that launched afresh started at the
+    /// wallet.
+    @MainActor
+    func resetToHome() {
+        for _ in 0 ..< 10 {
+            dismissKeyboard()
+            if alerts.firstMatch.exists {
+                let cancel = alerts.buttons["Cancel"]
+                (cancel.exists ? cancel : alerts.buttons.firstMatch).tap()
+                continue
+            }
+            let close = buttons["closeSendButton"]
+            if close.exists, close.isHittable {
+                close.tap()
+                _ = close.waitForNonExistence(timeout: 10)
+                continue
+            }
+            if hasTabs, tabBars.firstMatch.isHittable, !navigationTab("Wallet").isSelected {
+                navigationTab("Wallet").tap()
+                continue
+            }
+            if atHome { return }
+            // A sheet closes from its bar.
+            if let dismiss = ["Done", "Close", "Cancel"].map({ navigationBars.buttons[$0] })
+                .first(where: { $0.exists && $0.isHittable })
+            {
+                dismiss.tap()
+                _ = dismiss.waitForNonExistence(timeout: 10)
+                continue
+            }
+            let root = navigationBars["Winnow"]
+            if root.exists, root.isHittable, !sheetIsUp {
+                // The wallet, scrolled: bring its top back.
+                scrollToTop()
+                continue
+            }
+            // A pushed screen pops from its back button — never from just any
+            // leading button: the wallet's own bar leads with the mode switch.
+            let back = navigationBars.buttons.matching(identifier: "BackButton").firstMatch
+            if back.exists, back.isHittable {
+                back.tap()
+                continue
+            }
+            let winnow = navigationBars.buttons["Winnow"]
+            if winnow.exists, winnow.isHittable {
+                winnow.tap()
+                continue
+            }
+            goToWallet()
+        }
+        XCTAssertTrue(atHome, "could not get back to the wallet")
+    }
+
+    /// The wallet's top row, its balance, back on screen: a List row
+    /// scrolled out of view is not in the tree. A tap on the status bar is
+    /// iOS's own scroll-to-top, and unlike a drag it cannot land on a row;
+    /// drags are the fallback.
+    func scrollToTop() {
+        let balance = staticTexts["balanceText"]
+        if balance.exists { return }
+        coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.012)).tap()
+        if balance.waitForExistence(timeout: 3) { return }
+        let list = collectionViews.firstMatch
+        for _ in 0 ..< 6 where !balance.exists {
+            guard list.exists else { break }
+            let start = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25))
+            let end = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0.25)
+        }
     }
 
     /// Back to the wallet: the tab, or closing the Send sheet and popping
@@ -464,13 +573,7 @@ extension XCUIApplication {
             back.tap()
             _ = navigationBars["Winnow"].waitForExistence(timeout: 5)
         }
-        let list = collectionViews.firstMatch
-        for _ in 0 ..< 6 where !buttons["openSendButton"].exists {
-            guard list.exists else { break }
-            let start = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25))
-            let end = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75))
-            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0.25)
-        }
+        scrollToTop()
     }
 }
 

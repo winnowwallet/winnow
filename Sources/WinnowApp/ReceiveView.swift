@@ -87,7 +87,7 @@ struct ReceiveView: View {
                             .multilineTextAlignment(.center)
                             .padding(.horizontal)
                     } else if error == nil {
-                        ProgressView()
+                        BusyIndicator()
                     }
                     if let error {
                         Text(error).foregroundStyle(.red)

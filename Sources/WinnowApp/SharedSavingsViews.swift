@@ -210,7 +210,7 @@ struct AddSharedSavingsView: View {
                         .textInputAutocapitalization(.never)
                         .accessibilityIdentifier("savingsCardField")
                     Button("Paste from clipboard") {
-                        pasted = UIPasteboard.general.string ?? ""
+                        pasted = model.pasteboardText() ?? ""
                     }
                     .accessibilityIdentifier("savingsCardPasteButton")
                 } footer: {

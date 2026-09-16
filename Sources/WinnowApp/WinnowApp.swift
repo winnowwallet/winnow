@@ -12,7 +12,7 @@ struct WinnowApp: App {
             Group {
                 switch model.stage {
                 case .loading:
-                    ProgressView("Opening wallet…")
+                    BusyIndicator(text: "Opening wallet…")
                 case .onboarding:
                     OnboardingView()
                 case .ready:

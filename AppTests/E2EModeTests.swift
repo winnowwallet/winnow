@@ -102,6 +102,54 @@ final class E2EEntropyPinningTests: XCTestCase {
         }
     }
 
+    // MARK: The runner's controls
+
+    /// The story's control file, peer target and sync interval are read
+    /// from the launch environment; a value that makes no sense is ignored
+    /// rather than applied.
+    func testTheRunnerControlsAreParsed() throws {
+        guard case let .active(mode) = resolve(["WINNOW_E2E": "1", "WINNOW_E2E_ENTROPY": pinnedHex,
+                                               "WINNOW_E2E_CONTROL_FILE": "/tmp/winnow-e2e-control.json",
+                                               "WINNOW_E2E_PEER_COUNT": "1",
+                                               "WINNOW_E2E_SYNC_INTERVAL": "10"]) else {
+            return XCTFail("pinned entropy must activate E2E mode")
+        }
+        XCTAssertEqual(mode.controlFile?.path, "/tmp/winnow-e2e-control.json")
+        XCTAssertEqual(mode.peerCount, 1)
+        XCTAssertEqual(mode.syncInterval, .seconds(10))
+        guard case let .active(unusable) = resolve(["WINNOW_E2E": "1", "WINNOW_E2E_ENTROPY": pinnedHex,
+                                                   "WINNOW_E2E_PEER_COUNT": "0",
+                                                   "WINNOW_E2E_SYNC_INTERVAL": "soon"]) else {
+            return XCTFail("pinned entropy must activate E2E mode")
+        }
+        XCTAssertNil(unusable.controlFile)
+        XCTAssertNil(unusable.peerCount)
+        XCTAssertNil(unusable.syncInterval)
+        XCTAssertNil(unusable.control(), "no control file, nothing to read")
+    }
+
+    /// The control file is read when it is needed, so a rewrite by the
+    /// runner is what the next paste or refresh sees, and a file that is gone
+    /// or damaged reads as nothing rather than as stale text.
+    func testTheControlFileIsReadOnEachCall() throws {
+        let file = FileManager.default.temporaryDirectory
+            .appending(path: "winnow-e2e-control-test-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        guard case let .active(mode) = resolve(["WINNOW_E2E": "1", "WINNOW_E2E_ENTROPY": pinnedHex,
+                                               "WINNOW_E2E_CONTROL_FILE": file.path]) else {
+            return XCTFail("pinned entropy must activate E2E mode")
+        }
+        XCTAssertNil(mode.control(), "the file does not exist yet")
+        try Data(#"{"clipboard":"first"}"#.utf8).write(to: file)
+        XCTAssertEqual(mode.control()?.clipboard, "first")
+        XCTAssertNil(mode.censusURL)
+        try Data(#"{"clipboard":"second","censusURL":"http://127.0.0.1:1/peers.json"}"#.utf8).write(to: file)
+        XCTAssertEqual(mode.control()?.clipboard, "second")
+        XCTAssertEqual(mode.censusURL?.absoluteString, "http://127.0.0.1:1/peers.json")
+        try Data("not json".utf8).write(to: file)
+        XCTAssertNil(mode.control())
+    }
+
     /// The other launch variables are irrelevant to the rule: nothing else
     /// substitutes for pinned entropy.
     func testOtherVariablesDoNotSubstituteForEntropy() {

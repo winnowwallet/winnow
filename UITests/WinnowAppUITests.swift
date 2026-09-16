@@ -118,6 +118,9 @@ class WinnowAppJourney: XCTestCase {
     private struct StoryState: Codable {
         var prepared: Set<String> = []
         var blocked: [String: String] = [:]
+        /// The run whose app is on screen, recorded by every launch, so a
+        /// journey that attaches can tell the wrong wallet from the right one.
+        var runningRun: String?
     }
     private static var storyStateURL: URL {
         FileManager.default.temporaryDirectory.appending(path: "winnow-e2e-stories.json")
@@ -134,6 +137,10 @@ class WinnowAppJourney: XCTestCase {
     private static var preparedStories: Set<String> {
         get { storyState.prepared }
         set { storyState.prepared = newValue }
+    }
+    private static var runningRun: String? {
+        get { storyState.runningRun }
+        set { storyState.runningRun = newValue }
     }
     private var story: String { String(describing: type(of: self)) }
 
@@ -226,7 +233,47 @@ class WinnowAppJourney: XCTestCase {
             let balance = journey.balanceText(app)
             return balance != "0 sats" && balance != ""
         })
-        app.terminate()
+        // The app stays up: this launch is the story's session, and the
+        // journeys attach to it.
+    }
+
+    // MARK: - The control file
+
+    /// What the runner can change under a running app: the text its Paste
+    /// buttons read and the census URL it refreshes from. Written here,
+    /// read by the app on each use (`E2EMode.Control`), so a journey hands
+    /// the app a card or a request without relaunching it — and without a
+    /// cross-process paste, whose consent prompt proved flaky.
+    struct Control: Codable {
+        var clipboard: String?
+        var censusURL: String?
+    }
+
+    /// One file per story, in the runner's own temp directory.
+    static var controlFile: URL {
+        FileManager.default.temporaryDirectory
+            .appending(path: "winnow-e2e-control-\(String(describing: self)).json")
+    }
+
+    static func updateControl(_ change: (inout Control) -> Void) {
+        var control = (try? JSONDecoder().decode(Control.self, from: Data(contentsOf: controlFile))) ?? Control()
+        change(&control)
+        try? JSONEncoder().encode(control).write(to: controlFile, options: .atomic)
+    }
+
+    static func clearControl() {
+        try? FileManager.default.removeItem(at: controlFile)
+    }
+
+    /// The text the app's next Paste reads.
+    func setClipboard(_ text: String) {
+        Self.updateControl { $0.clipboard = text }
+    }
+
+    /// Where the app's next peer-list refresh downloads from; nil restores
+    /// the launch environment's URL.
+    func setCensusURL(_ url: String?) {
+        Self.updateControl { $0.censusURL = url }
     }
 
     // MARK: - Launch
@@ -241,31 +288,79 @@ class WinnowAppJourney: XCTestCase {
                    environment: [String: String] = [:],
                    entropy: String = WinnowAppJourney.entropyHex) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchEnvironment = [
-            "WINNOW_E2E": "1",
-            "WINNOW_E2E_RUN": run ?? Self.runName,
-            "WINNOW_E2E_ENTROPY": entropy,
-        ]
-        // Advanced mode on from the first frame, so a test can reach the
-        // expert controls without tapping through Settings.
-        if advanced { app.launchEnvironment["WINNOW_E2E_ADVANCED"] = "1" }
-        if configureLocalNode {
-            app.launchEnvironment["WINNOW_E2E_PEER"] =
-                "\(BitcoinCLI.nodeHost):\(BitcoinCLI.p2pPort)"
-            app.launchEnvironment["WINNOW_E2E_CHALLENGE"] = BitcoinCLI.challengeHex
-        }
+        app.launchEnvironment = storyEnvironment(run: run, configureLocalNode: configureLocalNode,
+                                                 advanced: advanced, entropy: entropy)
         if reset { app.launchEnvironment["WINNOW_E2E_RESET"] = "1" }
-        if let clipboard { app.launchEnvironment["WINNOW_E2E_CLIPBOARD"] = clipboard }
         app.launchEnvironment.merge(environment) { _, new in new }
+        // A fresh wallet starts with an empty control file; a relaunch keeps
+        // what the story last handed the app.
+        if reset { Self.clearControl() }
+        if let clipboard { setClipboard(clipboard) }
         removeStagedExports()
         app.launch()
+        Self.runningRun = run ?? Self.runName
         if expectOnboarding {
             XCTAssertTrue(app.buttons["createWalletButton"].waitForExistence(timeout: 120),
                           "onboarding did not appear")
         } else {
             XCTAssertTrue(app.staticTexts["balanceText"].waitForExistence(timeout: 120),
                           "wallet home did not appear")
+            // The mode is a persisted setting: a journey that switched it
+            // and left decides nothing for the one that relaunches.
+            ensureMode(app, advanced: advanced)
         }
+        return app
+    }
+
+    /// The launch environment of this story's app: E2E mode, the story's
+    /// run, the pinned entropy, the local node, and the control file.
+    func storyEnvironment(run: String? = nil, configureLocalNode: Bool = true,
+                          advanced: Bool = false,
+                          entropy: String = WinnowAppJourney.entropyHex) -> [String: String] {
+        var launch = [
+            "WINNOW_E2E": "1",
+            "WINNOW_E2E_RUN": run ?? Self.runName,
+            "WINNOW_E2E_ENTROPY": entropy,
+            "WINNOW_E2E_CONTROL_FILE": Self.controlFile.path,
+        ]
+        // Advanced mode on from the first frame, so a test can reach the
+        // expert controls without tapping through Settings.
+        if advanced { launch["WINNOW_E2E_ADVANCED"] = "1" }
+        if configureLocalNode {
+            launch["WINNOW_E2E_PEER"] = "\(BitcoinCLI.nodeHost):\(BitcoinCLI.p2pPort)"
+            launch["WINNOW_E2E_CHALLENGE"] = BitcoinCLI.challengeHex
+        }
+        return launch
+    }
+
+    /// The story's running app, for a journey that continues where the last
+    /// one stopped: no relaunch, no wipe, no boot to wait for. The screen is
+    /// straightened first — whatever the last journey left open is closed,
+    /// the wallet is back on top, the interface is in the mode asked for —
+    /// so a journey starts from the same place it did when every journey
+    /// launched afresh. Launches only when nothing is running, or the wrong
+    /// run is (a journey opened a fresh wallet and left), which is where a
+    /// relaunch used to be the only way anyway.
+    @discardableResult
+    func attachApp(advanced: Bool = false) -> XCUIApplication {
+        let app = XCUIApplication()
+        // Configured before anything is asked of the proxy: a proxy that
+        // ends up launching must launch in E2E mode.
+        app.launchEnvironment = storyEnvironment(advanced: advanced)
+        switch app.state {
+        case .runningForeground where Self.runningRun == Self.runName:
+            break
+        case .runningBackground, .runningBackgroundSuspended:
+            guard Self.runningRun == Self.runName else { return launchApp(advanced: advanced) }
+            app.activate()
+            XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15), "the app did not come back")
+        default:
+            return launchApp(advanced: advanced)
+        }
+        app.resetToHome()
+        ensureMode(app, advanced: advanced)
+        removeStagedExports()
+        XCTAssertTrue(app.staticTexts["balanceText"].waitForExistence(timeout: 30), "wallet home did not appear")
         return app
     }
 
@@ -676,7 +771,7 @@ final class StoryFirstWallet: WinnowAppJourney {
     // MARK: - 02 Receive + funding
 
     func test02ReceiveAndFunding() async throws {
-        var app = launchApp()
+        var app = attachApp()
 
         let receiveStart = Date()
         app.buttons["receiveButton"].tap()
@@ -757,7 +852,7 @@ final class StoryFirstWallet: WinnowAppJourney {
         // keypool — it can't hand out receive addresses). Typed, not pasted:
         // cross-process pasteboard consent prompts proved flaky.
         let destination = try Self.fixtureAddress(0xC3)
-        let app = launchApp()
+        let app = attachApp()
         XCTAssertTrue(poll(timeout: 120, "persisted funded balance") {
             self.balanceText(app) != "0 sats" && self.balanceText(app) != ""
         })
@@ -877,7 +972,7 @@ final class StoryFirstWallet: WinnowAppJourney {
     /// Save a backup, open the share sheet, then explicitly include the key.
     /// Inspect the real staged files and their deletion after dismissal.
     func test08ExportBundle() throws {
-        let app = launchApp()
+        let app = attachApp()
         openBackup(app)
         let exportButton = app.buttons["exportBundleButton"]
         XCTAssertTrue(scrollUntilExists(app, exportButton), "no export button in Backup")
@@ -965,7 +1060,7 @@ final class StoryFirstWallet: WinnowAppJourney {
     /// settings, nothing technical. Advanced brings the three tabs and the
     /// expert rows; Simple takes them away again without deleting anything.
     func test11OneScreenHidesAdvancedControls() throws {
-        let app = launchApp()
+        let app = attachApp()
 
         XCTAssertFalse(app.hasTabs, "beginner mode has no tabs")
         // The one-liner is a ProgressView, a Label or a Text depending on the
@@ -1004,7 +1099,11 @@ final class StoryFirstWallet: WinnowAppJourney {
         XCTAssertTrue(app.textFields["personNameField"].waitForExistence(timeout: 20))
         app.navigationBars["Add co-owner"].buttons["Cancel"].tap()
         app.navigationBars["New shared savings"].buttons["Cancel"].tap()
-        XCTAssertTrue(app.buttons["openSendButton"].waitForExistence(timeout: 10),
+        XCTAssertTrue(app.buttons["addSavingsCoOwnerButton"].waitForNonExistence(timeout: 10),
+                      "cancelling did not close the savings sheets")
+        // The one screen is still scrolled to where "Save with someone" was;
+        // its Send button lives at the top.
+        XCTAssertTrue(scrollUntilExists(app, app.buttons["openSendButton"], maxSwipes: 8, up: true),
                       "cancelling did not return to the one screen")
 
         // Send is a sheet without fee controls, and opens alone.
@@ -1051,7 +1150,7 @@ final class StoryFirstWallet: WinnowAppJourney {
         let payer = Self.bankWallet
         let payout = try AddressDecoder.scriptPubKey(for: Self.fixtureAddress(0xD4), network: .signet)
 
-        let app = launchApp()
+        let app = attachApp()
         app.buttons["receiveButton"].tap()
         if app.buttons["skipReceiveAddressLabelButton"].waitForExistence(timeout: 5) {
             app.buttons["skipReceiveAddressLabelButton"].tap()
@@ -1128,7 +1227,7 @@ final class StoryPayingPeople: WinnowAppJourney {
         ]
         let json = String(decoding: try JSONSerialization.data(withJSONObject: bundle), as: UTF8.self)
 
-        // The app puts the bundle on its own pasteboard at boot.
+        // The bundle waits in the control file for the Paste button.
         let app = launchApp(run: "import", reset: true, clipboard: json, expectOnboarding: true)
         app.buttons["importWalletButton"].tap()
         XCTAssertTrue(app.buttons["importPasteButton"].waitForExistence(timeout: 20))
@@ -1188,7 +1287,7 @@ final class StoryPayingPeople: WinnowAppJourney {
 
     func test10SaveRecipientFromPayment() async throws {
         let address = try Self.fixtureAddress(0xE1)
-        var app = launchApp()
+        var app = attachApp()
         app.openSend()
         app.typeInto("destinationField", address)
         app.typeInto("amountField", "20000")
@@ -1256,8 +1355,8 @@ final class StoryPayingPeople: WinnowAppJourney {
         let aliceKey = try Self.fixtureCosigner(0xA1)
         let card = try PersonCard(network: .signet, name: "Alice", payTo: "tr(\(aliceKey))",
                                   signerKey: aliceKey).serialized()
-        app.terminate()
-        app = launchApp(clipboard: card)
+        setClipboard(card)
+        app.resetToHome()
         app.openSend()
         app.buttons["savedRecipientsButton"].tap()
         addPastedRecipient("Alice", in: app)
@@ -1289,7 +1388,7 @@ final class StoryPayingPeople: WinnowAppJourney {
     }
 
     func test15ReviewAndReplacePendingPayment() async throws {
-        var app = launchApp(advanced: true)
+        var app = attachApp(advanced: true)
         app.navigationTab("Send").tap()
         app.typeInto("amountField", "20000")
         app.typeInto("destinationField", try Self.fixtureAddress(0xD5))
@@ -1371,7 +1470,7 @@ final class StoryPayingPeople: WinnowAppJourney {
         // The bank pays from a P2WPKH output of its own, so the input's
         // witness names the funding address the sender sheet can offer.
         let utxo = try await ensureSegwitUtxo(wallet: Self.bankWallet)
-        var app = launchApp()
+        var app = attachApp()
 
         app.buttons["receiveButton"].tap()
         if app.buttons["skipReceiveAddressLabelButton"].waitForExistence(timeout: 5) {
@@ -1460,7 +1559,7 @@ final class StoryPayingPeople: WinnowAppJourney {
 
         // Advanced, because the explorer picker is an expert row; the
         // sender flow itself is not gated.
-        let app = launchApp(advanced: true)
+        let app = attachApp(advanced: true)
 
         app.buttons["receiveButton"].tap()
         if app.buttons["skipReceiveAddressLabelButton"].waitForExistence(timeout: 5) {
@@ -1545,7 +1644,7 @@ final class StorySharedSavings: WinnowAppJourney {
     func test04VaultCreate() throws {
         // The raw vault tools live in Wallet,
         // in Advanced mode; beginners see the same records as shared savings.
-        let app = launchApp(advanced: true)
+        let app = attachApp(advanced: true)
         app.navigationTab("Wallet").tap()
         let createStart = Date()
         let newVault = app.buttons["newVaultButton"]
@@ -1623,7 +1722,7 @@ final class StorySharedSavings: WinnowAppJourney {
         func freshCoins() throws -> [(txid: String, vout: UInt32, amount: Int64, height: UInt32)] {
             try BitcoinCLI.unspents(scriptHex: savingsScript.hex).filter { $0.height >= startHeight }
         }
-        var app = launchApp()
+        let app = attachApp()
         app.goToWallet()
         let savingsRow = app.staticTexts["E2E Vault"].firstMatch
         XCTAssertTrue(revealOnOneScreen(app, savingsRow),
@@ -1700,8 +1799,8 @@ final class StorySharedSavings: WinnowAppJourney {
                                           psbt: psbt).serialized()
 
         // 3. This phone reads it, approves, and finishes.
-        app.terminate()
-        app = launchApp(clipboard: request)
+        setClipboard(request)
+        app.resetToHome()
         XCTAssertTrue(revealOnOneScreen(app, savingsRow))
         savingsRow.tap()
         let approve = app.buttons["approveRequestButton"]
@@ -1769,15 +1868,16 @@ final class StorySharedSavings: WinnowAppJourney {
         let bobKey = try Self.fixtureCosigner(0xC3)
         let bobCard = try PersonCard(network: .signet, name: "Bob", payTo: "tr(\(bobKey))",
                                      signerKey: bobKey).serialized()
-        var app = launchApp(clipboard: bobCard)
+        setClipboard(bobCard)
+        let app = attachApp()
         app.openSend()
         app.buttons["savedRecipientsButton"].tap()
         addPastedRecipient("Bob", in: app)
         if !app.buttons["chooseRecipient-Alice"].exists {
             let aliceCard = try PersonCard(network: .signet, name: "Alice", payTo: "tr(\(aliceKey))",
                                            signerKey: aliceKey).serialized()
-            app.terminate()
-            app = launchApp(clipboard: aliceCard)
+            setClipboard(aliceCard)
+            app.resetToHome()
             app.openSend()
             app.buttons["savedRecipientsButton"].tap()
             addPastedRecipient("Alice", in: app)
@@ -1916,7 +2016,7 @@ final class StorySharedSavings: WinnowAppJourney {
         // 1. Create the vault through the UI: device key + the group + a
         //    silent third.
         let vaultName = "Group Vault \(UInt16.random(in: 100 ..< 999))"
-        var app = launchApp(advanced: true)
+        let app = attachApp(advanced: true)
         app.navigationTab("Wallet").tap()
         let newVault = app.buttons["newVaultButton"]
         XCTAssertTrue(scrollUntilExists(app, newVault), "no Vaults section in Advanced mode")
@@ -1949,26 +2049,27 @@ final class StorySharedSavings: WinnowAppJourney {
         let fundingTxid = funding.txid
         let fundingVout = String(funding.vout)
 
-        // 3. Relaunch so the scan credits the coin, then create the spend in
-        //    the UI and read the PSBT off the screen.
-        app = launchApp(advanced: true)
+        // 3. Back to the wallet; the poll below nudges the scan that
+        //    credits the coin. Then create the spend in the UI and read the
+        //    PSBT off the screen.
+        app.resetToHome()
         app.navigationTab("Wallet").tap()
-        let vaultRow = app.staticTexts[vaultName].firstMatch
+        let vaultRow = app.buttons["walletSavings-\(vaultName)"]
         XCTAssertTrue(scrollUntilExists(app, vaultRow), "group vault row not reachable")
+        // The row states what the account holds; wait on it, nudging the
+        // scan, until the bank's payment has been scanned in. The relaunch
+        // this step used to make forced that scan; a nudge does now.
+        XCTAssertTrue(poll(timeout: 300, interval: 3, "group vault funding scanned in") {
+            if vaultRow.exists, !vaultRow.label.hasSuffix("· 0 sats") { return true }
+            self.nudgeSync(app)
+            _ = self.scrollUntilExists(app, vaultRow, up: true)
+            return false
+        })
         vaultRow.tap()
         // Read the account's confirmed balance before spending.
         let fundedBalance = app.staticTexts["accountBalance"]
         XCTAssertTrue(scrollUntilExists(app, fundedBalance), "no shared-savings balance")
-        poll(timeout: 300, interval: 2, "group vault funding scanned in") {
-            if fundedBalance.exists, !fundedBalance.label.isEmpty, fundedBalance.label != "0 sats" {
-                return true
-            }
-            app.navigationTab("Wallet").tap()
-            if app.navigationBars.buttons["Winnow"].exists { app.navigationBars.buttons["Winnow"].tap() }
-            self.nudgeSync(app)
-            if vaultRow.exists { vaultRow.tap() }
-            return false
-        }
+        XCTAssertNotEqual(fundedBalance.label.filter(\.isNumber), "0", "the group vault shows no money")
         reviewFromAccount(app, name: vaultName, address: try Self.fixtureAddress(0xE5), amount: "1000000", chooseInSend: true)
         Screenshots.capture(app, "31-group-spend-created", testCase: self)
         app.buttons["sendButton"].tap()
@@ -1994,9 +2095,10 @@ final class StorySharedSavings: WinnowAppJourney {
         let signed = try Self.groupSign(base64: phoneSigned, memberSecrets: memberSecrets,
                                         synthetic: synthetic)
 
-        // 5. Relaunch with the group's PSBT on the clipboard; the app pastes,
+        // 5. The group's PSBT goes into the control file; the app pastes,
         //    reviews both approvals, finalizes, and broadcasts.
-        app = launchApp(clipboard: signed, advanced: true)
+        setClipboard(signed)
+        app.resetToHome()
         app.navigationTab("Wallet").tap()
         let signingVaultRow = app.staticTexts[vaultName].firstMatch
         XCTAssertTrue(scrollUntilExists(app, signingVaultRow), "group vault row not reachable")
@@ -2058,7 +2160,7 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
 
     func test05SettingsPeersAndExplorerWarning() throws {
         // Connected peers and the explorer setting are Advanced-mode rows.
-        let app = launchApp(advanced: true)
+        let app = attachApp(advanced: true)
         app.navigationTab("Settings").tap()
 
         // SwiftUI Forms materialize rows lazily: scroll the Connected peers
@@ -2228,7 +2330,7 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
         let vault = try Vault("tr(musig(\(ownKey),\(externalKey))/<0;1>/*)", network: .signet)
         try external.importVault(vault)
         let name = "Extra device \(UUID().uuidString.prefix(6))"
-        var app = launchApp(advanced: true)
+        var app = attachApp(advanced: true)
         XCTAssertTrue(scrollUntilExists(app, app.buttons["walletExtraDeviceButton"]))
         app.buttons["walletExtraDeviceButton"].tap()
         XCTAssertTrue(app.staticTexts["vaultPurpose"].waitForExistence(timeout: 20))
@@ -2247,7 +2349,7 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
 
         let coin = try await Self.fundFromBank(try vault.address(index: 0), sats: 2_000_000)
         let fundingTxid = coin.txid
-        app = launchApp(advanced: true)
+        app.resetToHome()
         XCTAssertTrue(scrollUntilExists(app, app.buttons["walletSavings-\(name)"]))
         app.buttons["walletSavings-\(name)"].tap()
         XCTAssertTrue(poll(timeout: 240, interval: 2, "extra-device balance scanned") {
@@ -2374,7 +2476,9 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
         let restoredBalance = app.staticTexts["accountBalance"].label.filter(\.isNumber)
         XCTAssertEqual(Int64(restoredBalance), expectedChange, "restoring replayed the old balance")
         Screenshots.capture(app, "38-extra-device-restored", testCase: self)
-
+        // A fresh run's app is not the story's; the next journey launches
+        // the story's wallet again.
+        app.terminate()
     }
 
     // MARK: - 19 Reset and shuffle peers
@@ -2384,7 +2488,7 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
     /// the manual peer is the only source, so the same peer must return —
     /// the shuffle itself is covered in PeerPoolTests.
     func test19ResetAndShufflePeers() throws {
-        let app = launchApp(advanced: true)
+        let app = attachApp(advanced: true)
         app.navigationTab("Settings").tap()
 
         let refresh = app.buttons["refreshPeersButton"]
@@ -2427,7 +2531,8 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
             "tor": [], "i2p": []
         ])
         try stub.catalog(JSONEncoder().encode(catalog))
-        let app = launchApp(advanced: true, environment: ["WINNOW_E2E_CENSUS_URL": stub.baseURL + "/peers.json"])
+        setCensusURL(stub.baseURL + "/peers.json")
+        let app = attachApp(advanced: true)
         app.navigationTab("Settings").tap()
         // The row sits at the fold under the floating tab bar on a 6.3-inch
         // phone: bring it fully clear before each tap, and tap only once the
@@ -2447,6 +2552,7 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
         XCTAssertTrue(app.staticTexts["peerCatalogError"].waitForExistence(timeout: 15))
         XCTAssertTrue(notice.label.contains(today))
         Screenshots.capture(app, "47-peer-refresh-failed", testCase: self)
+        setCensusURL(nil)
         app.terminate()
         let reopened = launchApp(advanced: true)
         reopened.navigationTab("Settings").tap()

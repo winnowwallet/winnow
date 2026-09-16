@@ -4,6 +4,26 @@ import UIKit
 import UniformTypeIdentifiers
 import WebKit
 
+/// An indeterminate `ProgressView`, except under the UI test harness, where
+/// it is a still label: an activity indicator never stops animating, and
+/// XCTest waits up to a minute for the app to go quiet before every tap, so
+/// a spinner on screen turned each of a story's taps into a minute.
+struct BusyIndicator: View {
+    var text: String?
+
+    private static let still = E2EMode.current != nil
+
+    var body: some View {
+        if Self.still {
+            Label(text ?? "Working…", systemImage: "hourglass")
+        } else if let text {
+            ProgressView(text)
+        } else {
+            ProgressView()
+        }
+    }
+}
+
 /// How long a copied item lives, and whether it may leave the device.
 ///
 /// The clipboard is the one place wallet material sits outside the app's
