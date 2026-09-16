@@ -366,7 +366,6 @@ class WinnowAppJourney: XCTestCase {
         app.resetToHome()
         ensureMode(app, advanced: advanced)
         removeStagedExports()
-        XCTAssertTrue(app.staticTexts["balanceText"].waitForExistence(timeout: 30), "wallet home did not appear")
         return app
     }
 
@@ -2544,6 +2543,9 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
         setCensusURL(stub.baseURL + "/peers.json")
         let app = attachApp(advanced: true)
         app.navigationTab("Settings").tap()
+        // Settings is where the peer-reset journey left it, scrolled to
+        // its foot; the peer-list rows are near its top.
+        app.scrollTabToTop()
         // The row sits at the fold under the floating tab bar on a 6.3-inch
         // phone: bring it fully clear before each tap, and tap only once the
         // previous refresh has released the button.

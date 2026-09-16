@@ -488,6 +488,9 @@ extension XCUIApplication {
     /// wallet.
     @MainActor
     func resetToHome() {
+        // The common case first, and cheaply: the last journey ended on the
+        // wallet. Every query below is a second on a slow runner.
+        if atHome { return }
         for _ in 0 ..< 10 {
             dismissKeyboard()
             if alerts.firstMatch.exists {
@@ -538,14 +541,21 @@ extension XCUIApplication {
         XCTAssertTrue(atHome, "could not get back to the wallet")
     }
 
+    /// iOS's own scroll-to-top: a tap on the status bar. Unlike a drag it
+    /// cannot land on a row. For the screen in front, whatever it is — a
+    /// tab keeps its scroll position while another is shown, so a journey
+    /// that switches to Settings starts wherever the last one left it.
+    func scrollTabToTop() {
+        coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.012)).tap()
+    }
+
     /// The wallet's top row, its balance, back on screen: a List row
-    /// scrolled out of view is not in the tree. A tap on the status bar is
-    /// iOS's own scroll-to-top, and unlike a drag it cannot land on a row;
+    /// scrolled out of view is not in the tree. The status-bar tap first;
     /// drags are the fallback.
     func scrollToTop() {
         let balance = staticTexts["balanceText"]
         if balance.exists { return }
-        coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.012)).tap()
+        scrollTabToTop()
         if balance.waitForExistence(timeout: 3) { return }
         let list = collectionViews.firstMatch
         for _ in 0 ..< 6 where !balance.exists {
