@@ -173,9 +173,13 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
+      # A runner needs only Xcode and the simulators; the Bitcoin tools,
+      # Python and XcodeGen install themselves on first use, so adding a
+      # machine to the pool is registering it and nothing else.
       - name: Record the runner's toolchain
         run: |
           test "$(uname -m)" = arm64
+          command -v bitcoind >/dev/null || brew install bitcoin
           sw_vers
           xcodebuild -version
           bitcoin-cli --version | head -1
