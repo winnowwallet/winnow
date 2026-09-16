@@ -430,6 +430,24 @@ extension XCUIApplication {
         return buttons["closeSendButton"].exists
     }
 
+    /// Taps `element` until `marker` exists. A tap that lands while the
+    /// screen is still settling — a list re-rendering under the sync loop,
+    /// a pushed screen popping, a menu animating in — is lost on the hosted
+    /// iPad, and nothing tells the test except the screen that never came.
+    /// The tap is repeated only while `element` is still there: once it has
+    /// gone the screen is changing, and a second tap would land on whatever
+    /// takes its place.
+    @discardableResult
+    func tap(_ element: XCUIElement, until marker: XCUIElement,
+             timeout: TimeInterval = 8, attempts: Int = 3) -> Bool {
+        for _ in 0 ..< attempts {
+            guard element.exists else { return marker.waitForExistence(timeout: timeout) }
+            element.tap()
+            if marker.waitForExistence(timeout: timeout) { return true }
+        }
+        return false
+    }
+
     /// Opens Send: the tab, or the one screen's button. Already open is
     /// fine. A screen pushed over the one screen (a payment, an account)
     /// is popped first, since the button is only on the screen itself.
@@ -601,8 +619,14 @@ extension XCUIElement {
     /// condition `typeText` checks before it synthesizes a keystroke.
     @MainActor
     func waitForKeyboardFocus(timeout: TimeInterval) -> Bool {
-        let focused = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "hasKeyboardFocus == true"), object: self)
-        return XCTWaiter().wait(for: [focused], timeout: timeout) == .completed
+        waitUntil(NSPredicate(format: "hasKeyboardFocus == true"), timeout: timeout)
+    }
+
+    /// Whether `predicate` holds for this element within `timeout`; the
+    /// element is re-queried on each evaluation.
+    @MainActor
+    func waitUntil(_ predicate: NSPredicate, timeout: TimeInterval) -> Bool {
+        let holds = XCTNSPredicateExpectation(predicate: predicate, object: self)
+        return XCTWaiter().wait(for: [holds], timeout: timeout) == .completed
     }
 }
