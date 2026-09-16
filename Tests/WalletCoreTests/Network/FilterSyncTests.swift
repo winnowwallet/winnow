@@ -168,7 +168,8 @@ struct FilterSyncTests {
                             manualPeers: endpoints,
                             peersFileURL: tempFileURL("peers.json"))
         await pool.start()
-        #expect(await pool.connectedPeers().count == peerCount)
+        let seatedPeers = await seatedPeerCount(pool, reaching: peerCount)
+        #expect(seatedPeers == peerCount)
 
         let chain = try HeaderChain(params: synthetic.params)
         let progressFile = tempFileURL("filter-progress.json")
@@ -378,7 +379,8 @@ struct FilterSyncTests {
                             peersFileURL: tempFileURL("peers.json"), dialTimeout: .seconds(30))
         await pool.start()
         defer { Task { await pool.stop() } }
-        try #require(await pool.connectedPeers().count == 1, "the filter fixture must complete its handshake")
+        let seatedPeers = await seatedPeerCount(pool, reaching: 1)
+        try #require(seatedPeers == 1, "the filter fixture must complete its handshake")
         let chain = try HeaderChain(params: synthetic.params)
         let progressFile = tempFileURL("chunked-progress.json")
         defer { try? FileManager.default.removeItem(at: progressFile.deletingLastPathComponent()) }
@@ -508,7 +510,8 @@ struct FilterSyncTests {
         }
         #expect(await sync.nextScanHeight == 100)
         #expect(try Data(contentsOf: store) == original)
-        #expect(await pool.connectedPeers().count == 1)
+        let seatedPeers = await seatedPeerCount(pool, reaching: 1)
+        #expect(seatedPeers == 1)
     }
 
     @Test("a failed batch write leaves the in-memory frontier and pins unchanged")
@@ -647,7 +650,8 @@ struct FilterSyncTests {
                             peersFileURL: tempFileURL("peers.json"), dialTimeout: .seconds(30))
         await pool.start()
         defer { Task { await pool.stop() } }
-        try #require(await pool.connectedPeers().count == 1, "the filter fixture must complete its handshake")
+        let seatedPeers = await seatedPeerCount(pool, reaching: 1)
+        try #require(seatedPeers == 1, "the filter fixture must complete its handshake")
         let chain = try HeaderChain(params: synthetic.params)
         let sync = try FilterSync(pool: pool, chain: chain, startHeight: 999,
                                   storageURL: progressFile, requiredCheckpointPeers: 1)
@@ -736,7 +740,8 @@ struct FilterSyncTests {
                             peersFileURL: tempFileURL("peers.json"), dialTimeout: .seconds(30))
         await pool.start()
         defer { Task { await pool.stop() } }
-        try #require(await pool.connectedPeers().count == 1, "the filter fixture must complete its handshake")
+        let seatedPeers = await seatedPeerCount(pool, reaching: 1)
+        try #require(seatedPeers == 1, "the filter fixture must complete its handshake")
         let resumed = try FilterSync(pool: pool, chain: try HeaderChain(params: synthetic.params),
                                      startHeight: 999, storageURL: progressFile,
                                      requiredCheckpointPeers: 1)
@@ -773,7 +778,8 @@ struct FilterSyncTests {
                             peersFileURL: tempFileURL("peers.json"), dialTimeout: .seconds(30))
         await pool.start()
         defer { Task { await pool.stop() } }
-        try #require(await pool.connectedPeers().count == 1, "the filter fixture must complete its handshake")
+        let seatedPeers = await seatedPeerCount(pool, reaching: 1)
+        try #require(seatedPeers == 1, "the filter fixture must complete its handshake")
         let resumed = try FilterSync(pool: pool, chain: try HeaderChain(params: synthetic.params),
                                      startHeight: 999, storageURL: progressFile,
                                      requiredCheckpointPeers: 1)

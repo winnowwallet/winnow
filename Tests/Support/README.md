@@ -29,7 +29,7 @@ configuration and under Xcode.
 | `Vectors.swift` | `Vectors.data/string/json/decode` (each target passes its own `Bundle.module`), `VectorError`, `ttTags`, the shared BIP158 and BIP387/BIP390 vector loaders |
 | `TempFiles.swift` | `TempDir` (removed on deinit) and `tempFileURL(_:)` under one per-process root |
 | `SeededRandom.swift` | `SeededRandom` (SplitMix64) with the `int`/`count`/`below`/`pick`/`bytes` draws |
-| `Collectors.swift` | `MatchCollector`, `EventCollector`, `pollUntil`, `settle` |
+| `Collectors.swift` | `MatchCollector`, `EventCollector`, `pollUntil`, `settle`, `seatedPeerCount` |
 | `WalletFixtures.swift` | `testEntropy`, `testMnemonic`, `testMaster`, `fakeHeader`, `coinbaseInput`, `fakeMatch`, `matureCoinbase`, `testChainTip`, `makeTestWallet`, `fund`, `fundedWallet` |
 | `TestScripts.swift` | `TestScripts.p2trDestination`, `TestScripts.bip86FirstMainnetAddress` |
 | `TestVaults.swift` | Deterministic cosigner masters, key expressions, the 2-of-3 `multi_a` and 2-of-2 MuSig2 vault builders, `funding` |

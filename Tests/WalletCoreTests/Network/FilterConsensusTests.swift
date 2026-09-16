@@ -80,7 +80,8 @@ struct FilterConsensusTests {
     func singleClassMajorityIsNoMajority() async throws {
         let fixture = try await Self.fixture(manualLies: [7, 7])
         defer { fixture.stop() }
-        #expect(await fixture.pool.connectedPeers().count == 3)
+        let seatedPeers = await seatedPeerCount(fixture.pool, reaching: 3)
+        #expect(seatedPeers == 3)
         let matches = Matches()
 
         await #expect(throws: FilterSyncError.self) {

@@ -81,7 +81,8 @@ struct MempoolWindowTests {
                             manualPeers: [await nodeA.endpoint, await nodeB.endpoint],
                             relayPreference: true)
         await pool.start()
-        #expect(await pool.connectedPeers().count == 2)
+        let seatedPeers = await seatedPeerCount(pool, reaching: 2)
+        #expect(seatedPeers == 2)
 
         let window = MempoolWindow(pool: pool, watchScripts: [Self.watchedScript])
         let seen = EventCollector<MempoolWindow.Event>()
@@ -204,7 +205,8 @@ struct MempoolWindowTests {
         // Both dials must have handshaked before anything is announced: a peer
         // the pool never adopted gets no listener, and the inv below would then
         // fail as an opaque getdata timeout instead of naming the real cause.
-        #expect(await pool.connectedPeers().count == 2)
+        let seatedPeers = await seatedPeerCount(pool, reaching: 2)
+        #expect(seatedPeers == 2)
 
         let window = MempoolWindow(pool: pool, watchScripts: [Self.watchedScript])
         let seen = EventCollector<MempoolWindow.Event>()

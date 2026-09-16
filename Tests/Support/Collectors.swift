@@ -74,3 +74,27 @@ public func settle(_ pool: PeerPool,
     }
     return seen
 }
+
+/// Polls the pool until it has seated `count` peers and returns the count it
+/// last saw: the call site keeps its own assertion and its own message.
+///
+/// `PeerPool.start()` awaits `replenish()`, so the seats are normally filled
+/// by the time it returns. Normally — a dial or a handshake that lands late on
+/// a contended runner leaves the count short, and a bare assertion straight
+/// after `start()` reads a slow runner as a broken fixture (#152). Waiting for
+/// the handshake the test actually needs asserts nothing about how long it took.
+///
+/// The timeout is a HANG-GUARD, not a performance claim, for the reason
+/// `pollUntil` gives above. It matches the longest `dialTimeout` these fixtures
+/// pass, so the guard never expires before the dial it is waiting on could have
+/// finished, and it does not outlast the pool's 30-second replacement tick, so a
+/// peer that was genuinely dropped is not papered over by a later replenish.
+public func seatedPeerCount(_ pool: PeerPool, reaching count: Int,
+                            within timeout: Duration = .seconds(30)) async -> Int {
+    var seen = 0
+    _ = await pollUntil(timeout) {
+        seen = await pool.connectedPeers().count
+        return seen == count
+    }
+    return seen
+}

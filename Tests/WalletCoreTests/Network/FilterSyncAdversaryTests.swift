@@ -260,7 +260,8 @@ struct FilterSyncAdversaryTests {
         let fixture = try await Self.threePeerFixture(liars: [nil, nil, .filterCommitments(salt: 0xFF)])
         defer { fixture.stopNodes() }
         let liarEndpoint = fixture.liarEndpoints[0]
-        #expect(await fixture.pool.connectedPeers().count == 3)
+        let seatedPeers = await seatedPeerCount(fixture.pool, reaching: 3)
+        #expect(seatedPeers == 3)
 
         let collector = MatchCollector()
         try await fixture.sync.sync(watchScripts: [fixture.synthetic.watchScript]) { collector.add($0) }
@@ -289,7 +290,8 @@ struct FilterSyncAdversaryTests {
         let fixture = try await Self.threePeerFixture(
             liars: [nil, .filterCommitments(salt: 0xFF), .filterCommitments(salt: 0x0F)])
         defer { fixture.stopNodes() }
-        #expect(await fixture.pool.connectedPeers().count == 3)
+        let seatedPeers = await seatedPeerCount(fixture.pool, reaching: 3)
+        #expect(seatedPeers == 3)
 
         var thrown: (any Error)?
         do {
@@ -356,7 +358,8 @@ struct FilterSyncAdversaryTests {
             delays: [.zero, .milliseconds(150), .milliseconds(250)])
         defer { fixture.stopNodes() }
         let liarEndpoint = fixture.liarEndpoints[0]
-        #expect(await fixture.pool.connectedPeers().count == 3)
+        let seatedPeers = await seatedPeerCount(fixture.pool, reaching: 3)
+        #expect(seatedPeers == 3)
         // Precondition for what this test is actually about.
         let first = await fixture.pool.connectedPeers().first
         #expect(await first?.endpoint.description == liarEndpoint.description,
@@ -415,7 +418,8 @@ struct FilterSyncAdversaryTests {
         let fixture = try await Self.threePeerFixture(liars: [nil, nil, .stopHash])
         defer { fixture.stopNodes() }
         let liarEndpoint = fixture.liarEndpoints[0]
-        #expect(await fixture.pool.connectedPeers().count == 3)
+        let seatedPeers = await seatedPeerCount(fixture.pool, reaching: 3)
+        #expect(seatedPeers == 3)
 
         let collector = MatchCollector()
         try await fixture.sync.sync(watchScripts: [fixture.synthetic.watchScript]) { collector.add($0) }
@@ -677,7 +681,8 @@ struct FilterSyncAdversaryTests {
         let liarEndpoint = fixture.liarEndpoints[0]
         let honestEndpoints = fixture.honestEndpoints
         let peersFile = fixture.peersFile
-        #expect(await fixture.pool.connectedPeers().count == 3)
+        let seatedPeers = await seatedPeerCount(fixture.pool, reaching: 3)
+        #expect(seatedPeers == 3)
         // Precondition for what this test is actually about.
         let first = await fixture.pool.connectedPeers().first
         #expect(await first?.endpoint.description == liarEndpoint.description,
@@ -846,7 +851,8 @@ struct FilterSyncAdversaryTests {
                             manualPeers: [await manualA.endpoint, await manualB.endpoint],
                             peersFileURL: peersFile)
         await pool.start()
-        #expect(await pool.connectedPeers().count == 3)
+        let seatedPeers = await seatedPeerCount(pool, reaching: 3)
+        #expect(seatedPeers == 3)
         #expect(await pool.source(of: persisted.endpoint) == .persisted)
 
         let chain = try HeaderChain(params: synthetic.params)
@@ -876,7 +882,8 @@ struct FilterSyncAdversaryTests {
             delays: [.zero, .zero, .milliseconds(300)])
         defer { fixture.stopNodes() }
         let shortEndpoint = fixture.endpoints[2]
-        #expect(await fixture.pool.connectedPeers().count == 3,
+        let seatedPeers = await seatedPeerCount(fixture.pool, reaching: 3)
+        #expect(seatedPeers == 3,
                 "51 behind is inside the tolerance; the pool keeps the short peer")
 
         let collector = MatchCollector()

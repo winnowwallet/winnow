@@ -36,7 +36,8 @@ struct TxBroadcasterTests {
         let store = tempFileURL("pending-txs.json")
         let pool = PeerPool(params: params, peerCount: 3, manualPeers: endpoints)
         await pool.start()
-        #expect(await pool.connectedPeers().count == 3)
+        let seatedPeers = await seatedPeerCount(pool, reaching: 3)
+        #expect(seatedPeers == 3)
 
         let broadcaster = try TxBroadcaster(pool: pool, storageURL: store,
                                         rebroadcastBaseInterval: .seconds(3_600))
@@ -222,7 +223,8 @@ struct TxBroadcasterTests {
 
         let pool = PeerPool(params: params, peerCount: 3, manualPeers: endpoints)
         await pool.start()
-        #expect(await pool.connectedPeers().count == 3)
+        let seatedPeers = await seatedPeerCount(pool, reaching: 3)
+        #expect(seatedPeers == 3)
 
         let broadcaster = try TxBroadcaster(pool: pool,
                                         rebroadcastBaseInterval: .milliseconds(150),
