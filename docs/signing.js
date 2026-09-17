@@ -53,18 +53,3 @@ document.querySelectorAll('.signing-story').forEach(story => {
   reducedMotion.addEventListener('change', () => selectScene());
   selectScene();
 });
-
-// Keep mobile browsing short; the same content stays one tap away.
-const compact = window.matchMedia('(max-width: 40rem)');
-const journeys = [...document.querySelectorAll('details.journey')];
-const revealLinkedJourney = () => {
-  const linked = document.getElementById(window.location.hash.slice(1));
-  if (journeys.includes(linked)) linked.open = true;
-};
-const arrangeJourneys = () => {
-  journeys.forEach(journey => { journey.open = !compact.matches; });
-  revealLinkedJourney();
-};
-compact.addEventListener('change', arrangeJourneys);
-window.addEventListener('hashchange', revealLinkedJourney);
-arrangeJourneys();

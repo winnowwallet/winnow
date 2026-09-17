@@ -13,5 +13,6 @@ P2P package or another test runner.
 Run `swift test --filter WalletCoreTests` from the repository root.
 [FilterSync adversaries](FilterSyncAdversaryTests.swift)
 and [relay-store tests](TxBroadcasterStoreTests.swift)
-cover important failure paths. [Core comparisons](../../DifferentialTests/README.md)
-and retained [soak evidence](../../../docs/security/evidence/README.md) add different observations.
+cover important failure paths. The [UI journey](../../../UITests/README.md)
+exercises payment discovery and relay against a real signet node.
+Retained [soak evidence](../../../docs/security/evidence/README.md) provides additional observations.

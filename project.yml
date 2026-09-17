@@ -104,12 +104,12 @@ targets:
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "2858MX5336"
 
-  # End-to-end UI tests (XCUITest): drive the app on the local custom-signet
-  # node and capture screenshots of every major use case into run artifacts.
+  # One iPhone UI journey (XCUITest) receives, sends and confirms for an
+  # ordinary wallet, MuSig2 and 2-of-3 on local custom signet, with run artifacts.
   # Node access (bitcoin-cli mining/funding) happens from
   # the macOS test-runner process. The miner and RPC helpers live in the
-  # package's TestSupport library (Tests/Support), shared with the SwiftPM
-  # differential suite, so they have one implementation.
+  # package's TestSupport library (Tests/Support), whose process and key
+  # parsing helpers are covered by the ordinary SwiftPM unit tests.
   WinnowAppUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -145,6 +145,9 @@ schemes:
       config: Debug
     test:
       config: Debug
+      # ci-ui-journey records one continuous video; avoid a second encoder.
+      captureScreenshotsAutomatically: false
+      preferredScreenCaptureFormat: screenshots
       targets:
         - WinnowAppTests
         - WinnowAppUITests

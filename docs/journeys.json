@@ -5,14 +5,12 @@
     "title": "Set up your wallet",
     "description": "Create a wallet and write down your recovery words. If you stop partway through, you can finish the backup when you return.",
     "journey": [
-      "Create a wallet while it connects to the network.",
-      "Leave the backup unfinished, reopen the app, and finish it. Check that viewing the recovery words requires unlocking."
+      "Create a wallet and open its recovery-word backup.",
+      "Confirm that the words are written down, then reach the wallet home screen."
     ],
     "tests": [
-      "test01OnboardingCreateWallet",
-      "test09BackupResumeAndReveal"
+      "test01CreateReceiveSendConfirm"
     ],
-    "image": "01-onboarding",
     "limitations": "Save a backup file too. Winnow needs it to find your past payments when you restore the wallet."
   },
   {
@@ -21,15 +19,13 @@
     "title": "Receive bitcoin",
     "description": "Label who an address is for, or what the payment is for, before sharing it. You can skip. Matching payments carry the local note in your wallet.",
     "journey": [
-      "Save a receive address label, request a new address and skip its label. Reopen the app and confirm that a payment to the old address still carries its note.",
-      "Confirm a payment on the test network and check that it appears in the wallet.",
-      "Watch a new payment arrive on Receive before it is confirmed, then check that its status updates after confirmation."
+      "Tap Receive and skip the optional address label.",
+      "Read the receive address and return to the wallet; fund the address from the test node and mine a block.",
+      "Check the funded balance and the received payment in wallet history."
     ],
     "tests": [
-      "test02ReceiveAndFunding",
-      "test14IncomingPaymentBeforeConfirmation"
+      "test01CreateReceiveSendConfirm"
     ],
-    "image": "03-receive",
     "limitations": "An address label does not verify the sender or create a payment destination. Labels stay on this device and are not included in wallet backups."
   },
   {
@@ -38,14 +34,13 @@
     "title": "Send bitcoin",
     "description": "Choose an account, recipient, and amount. Check the address, fee, and total before sending or continuing to the account’s approvals.",
     "journey": [
-      "Enter an address and amount on the simple send screen.",
-      "Edit a reviewed payment, then verify the new amount, full address, fee, and total before sending.",
-      "Check that Bitcoin Core received the payment, open its details, and wait for the app to show it as confirmed."
+      "Open Send in beginner mode, paste an address, and enter the amount.",
+      "Review the destination, amount, and fee before sending.",
+      "Check that Bitcoin Core accepts the payment; mine a block, see the receipt confirm, and return to wallet history."
     ],
     "tests": [
-      "test03Send"
-    ],
-    "image": "06-send-review"
+      "test01CreateReceiveSendConfirm"
+    ]
   },
   {
     "id": "people",
@@ -53,14 +48,10 @@
     "title": "Pay someone again",
     "description": "Name someone you’ve paid, or save their payment card. Next time, choose them in Send.",
     "journey": [
-      "Send to a new address, open that payment in Wallet, save the recipient, and rename them.",
-      "Reopen the app and check the name on the payment. Remove and re-add the saved recipient without losing the label.",
-      "Choose a saved address in Send and check the address-reuse notice. Pay a saved card, then check that the next payment uses a fresh address."
+      "Open a sent payment and save its recipient with a name.",
+      "Next time, choose the saved person in Send. A payment card can provide a fresh address for each payment."
     ],
-    "tests": [
-      "test10SaveRecipientFromPayment"
-    ],
-    "image": "24-saved-recipient"
+    "tests": []
   },
   {
     "id": "senders",
@@ -68,14 +59,10 @@
     "title": "Name who paid you",
     "description": "Give a received payment a local name without attaching an address. Add a payment card or explicitly choose a destination before sending.",
     "journey": [
-      "Save a name-only label on a received payment, relaunch and check that the label persists.",
-      "Verify that a name-only person cannot send until a destination is attached.",
-      "Explicitly select a locally reconstructed funding address and continue through the normal amount and confirmation flow."
+      "Open a received payment and save a local name for its sender.",
+      "Add a payment card or choose a destination explicitly before using Send to that person."
     ],
-    "tests": [
-      "test17SaveSenderFromReceivedPayment"
-    ],
-    "image": "44-name-only-label",
+    "tests": [],
     "limitations": "Funding addresses are unverified destinations, not proof of who paid you. Winnow never selects one automatically. Sending to an address again can reveal address reuse."
   },
   {
@@ -88,10 +75,7 @@
       "Choose a returned address explicitly, even if the explorer returns only one.",
       "Save the destination with its unverified origin visible."
     ],
-    "tests": [
-      "test18InferSenderWithExplorer"
-    ],
-    "image": "43-infer-sender",
+    "tests": [],
     "limitations": "The explorer receives the transaction ID and your connection's IP address. Returned addresses do not identify people."
   },
   {
@@ -100,15 +84,13 @@
     "title": "Save with other people",
     "description": "Choose who shares the wallet and how many approvals a payment needs. With two approvals out of three, one person can be away and the other two can still pay.",
     "journey": [
-      "Create shared savings from the wallet screen and choose who can approve payments.",
-      "Back up the funded account from its detail screen, then open Send, choose a saved recipient, and check the account, amount, and fee.",
-      "Continue straight to approvals without copying the request into another screen. Complete two approvals without the third person."
+      "Receive test bitcoin into a script-path 2-of-3 account containing the phone’s key and two Bitcoin Core cosigners.",
+      "Review a payment, approve on the phone, and add one Core cosigner’s approval; the other Core key is available but unused.",
+      "Send and check that the node accepts the payment and the app discovers its confirmation."
     ],
     "tests": [
-      "test12SharedSavingsCreateAndAsk",
-      "test07ApproveRequest"
+      "test01CreateReceiveSendConfirm"
     ],
-    "image": "27-shared-payment-review",
     "limitations": "For shared control, each person must keep their own key. If you choose just one required approval, any one of them can spend.",
     "guide": "/vaults"
   },
@@ -118,21 +100,15 @@
     "title": "Combine your phone with another signer",
     "description": "Use 2-of-2 MuSig2 so your phone and a separate key must both approve every payment. You can also use a MuSig2 group as one cosigner in a larger threshold vault.",
     "journey": [
-      "Set up an account with one key on the phone and another generated by Bitcoin Core.",
-      "Receive test funds and save a backup that includes the account.",
-      "Use Send to review the account, address, amount, and fee, then continue directly to the second-signer screen.",
-      "Leave a signing exchange, then start again with fresh signing data.",
-      "Review and approve on the phone, exchange replies with Core, and confirm a payment with one on-chain signature.",
-      "Restore the earlier backup with the recovery words and check that it finds the payment and the remaining balance.",
-      "In a separate flow, approve on the phone and share the raw request with a MuSig2 group acting as one signer. Import the group’s reply through Approve a request, then send."
+      "Receive test bitcoin into a 2-of-2 MuSig2 account shared by the phone and one Bitcoin Core cosigner.",
+      "Review a payment and exchange signing data between the phone and Core; both keys are required.",
+      "Send and check node acceptance and confirmation in the app."
     ],
     "tests": [
-      "test16MuSig2RequiresSecondDevice",
-      "test13GroupCosignerVault"
+      "test01CreateReceiveSendConfirm"
     ],
     "guide": "/core-cosigner",
-    "image": "35-extra-device-policy",
-    "limitations": "Bitcoin Core 31.1 is the tested second signer. A hardware wallet needs its own compatibility test. Keep the wallet backup file, the phone’s recovery words, and a separate backup of the other signer’s key. Every key is required."
+    "limitations": "This journey uses Bitcoin Core as the second signer. It does not establish hardware-wallet compatibility or every signing order. Keep the wallet backup file, the phone’s recovery words, and a separate backup of the other signer’s key. Every key is required."
   },
   {
     "id": "recovery",
@@ -140,13 +116,10 @@
     "title": "Back up and restore",
     "description": "Save a backup file with your payment history and shared accounts. Keep your recovery words too. You need both to restore the wallet and sign again.",
     "journey": [
-      "Export a backup with private keys and one without them.",
-      "Restore a wallet that has funds and check that the backup is valid and the funds are found."
+      "Save a backup file and keep the recovery words securely.",
+      "To restore, paste the backup, read its verification report, and continue once verification finishes."
     ],
-    "tests": [
-      "test06ImportBundleVerification",
-      "test08ExportBundle"
-    ],
+    "tests": [],
     "limitations": "Keep both your recovery words and your backup file. The words alone won’t restore your payment history."
   },
   {
@@ -155,13 +128,12 @@
     "title": "One screen, or the full set of controls",
     "description": "Beginner mode is one screen with no settings. Advanced mode, one tap from its corner, is the three-tab interface: fee controls, network connections, signing tools and every setting.",
     "journey": [
-      "Check that beginner mode is one screen: balance and status, Receive and Send, activity, one way into shared savings and the backup, with no tabs and nothing technical.",
-      "Turn Advanced mode on and off, checking that the tabs, fee controls, vault tools and Settings appear and disappear, and that the switch is not a setting."
+      "Create, receive, and send using the beginner interface.",
+      "Return to the one-screen wallet and see its balance and payment history."
     ],
     "tests": [
-      "test11OneScreenHidesAdvancedControls"
-    ],
-    "image": "56-home-beginner"
+      "test01CreateReceiveSendConfirm"
+    ]
   },
   {
     "id": "vaults",
@@ -169,14 +141,12 @@
     "title": "Inspect and import signing policies",
     "description": "Create a Taproot vault from public signer keys and coordinate approvals using PSBT text. Inspect the policy and reviewed transaction explicitly.",
     "journey": [
-      "Create a vault through the advanced form.",
-      "Import an approval request, review it, and contribute the device’s signature."
+      "Use the phone-plus-Core MuSig2 account and the script-path 2-of-3 account within the same wallet journey.",
+      "Receive into each account, review a payment, collect its required approvals, and confirm the spend."
     ],
     "tests": [
-      "test04VaultCreate",
-      "test07ApproveRequest"
+      "test01CreateReceiveSendConfirm"
     ],
-    "image": "11-vault-list",
     "guide": "/core-cosigner"
   },
   {
@@ -185,12 +155,10 @@
     "title": "Replace a pending payment with a higher fee",
     "description": "Review a replacement’s fee and change before authorizing it. The original remains visible as replaced.",
     "journey": [
-      "Disconnect the test node before sending. Reopen the app, find the pending payment, then reconnect and check that the same payment reaches the node.",
-      "Use Bump fee, review and sign the replacement, then confirm it and inspect the app’s history."
+      "Open a pending outgoing payment in Advanced mode and choose Bump fee.",
+      "Review the replacement’s fee and change before authorizing it. History keeps the original marked as replaced."
     ],
-    "tests": [
-      "test15ReviewAndReplacePendingPayment"
-    ]
+    "tests": []
   },
   {
     "id": "network",
@@ -198,16 +166,12 @@
     "title": "Inspect peers and control external disclosure",
     "description": "Inspect connected peers and network settings. Explorer links open only after an explicit warning about the information sent to that website.",
     "journey": [
-      "Open the real peer settings.",
-      "Open an explorer warning and cancel before leaving the app.",
-      "Reset and shuffle the remembered peers, and watch fresh connections arrive."
+      "Open Advanced settings to inspect connected peers.",
+      "Review the warning before opening an external explorer; cancel to stay in the app.",
+      "Use Reset and shuffle peers when you want to discard remembered candidates and reconnect."
     ],
-    "tests": [
-      "test05SettingsPeersAndExplorerWarning",
-      "test19ResetAndShufflePeers"
-    ],
-    "limitations": "Explorer websites are not wallet backends. A single or coordinated set of peers can still withhold information; multiple connections are not proof of independent operators.",
-    "image": "42-peer-reset"
+    "tests": [],
+    "limitations": "Explorer websites are not wallet backends. A single or coordinated set of peers can still withhold information; multiple connections are not proof of independent operators."
   },
   {
     "id": "peer-refresh",
@@ -216,13 +180,10 @@
     "description": "Download dated candidates from Winnow’s census without interrupting active peers. Reset and shuffle peers is a separate action.",
     "journey": [
       "Choose Refresh peer list in Advanced settings, then read the observation date and candidate counts.",
-      "Keep your active connections while the new list becomes available for future connections.",
-      "If a refresh fails, keep using the previous valid list. Reset and shuffle remains a separate choice."
+      "Existing connections stay active while the new list becomes available for future connections.",
+      "Reset and shuffle remains a separate choice."
     ],
-    "tests": [
-      "test20PeerCatalogRefreshAndFailureRecovery"
-    ],
-    "limitations": "Downloads expire after seven days, then automatic selection falls back to bundled candidates. Bundled and downloaded census entries count as the same trust source. Every selected peer still undergoes normal wallet checks.",
-    "image": "46-peer-refresh"
+    "tests": [],
+    "limitations": "Downloads expire after seven days, then automatic selection falls back to bundled candidates. Bundled and downloaded census entries count as the same trust source. Every selected peer still undergoes normal wallet checks."
   }
 ]

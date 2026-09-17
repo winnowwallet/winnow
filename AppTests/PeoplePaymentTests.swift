@@ -230,4 +230,135 @@ final class PeoplePaymentTests: XCTestCase {
             XCTFail("missing account fell back to the ordinary wallet")
         } catch AppModel.VaultSpendError.unknownVault { }
     }
+
+    /// The counter behind a person's fresh addresses moves when an ordinary
+    /// wallet payment commits, not at review: the next payment to them then
+    /// derives a different address.
+    func testAnOrdinarySendAdvancesTheCardIndex() async throws {
+        let environment = [
+            "WINNOW_E2E": "1",
+            "WINNOW_E2E_RUN": "card-index-\(UUID().uuidString)",
+            "WINNOW_E2E_ENTROPY": String(repeating: "a1", count: 16),
+            "WINNOW_E2E_PEER": "127.0.0.1:1",
+            "WINNOW_E2E_CHALLENGE": "51",
+        ]
+        guard case let .active(mode) = E2EMode.resolve(environment: environment),
+              case let .active(cleanup) = E2EMode.resolve(
+                environment: environment.merging(["WINNOW_E2E_RESET": "1"]) { _, reset in reset })
+        else { return XCTFail("could not create isolated send fixture") }
+        let model = AppModel(e2e: mode, storeKeys: InMemoryStoreKeyVault(), keyStore: InMemoryKeyStore())
+        addTeardownBlock {
+            await model.scenePhaseChanged(.background)
+            cleanup.wipeIfRequested()
+        }
+        let directory = try XCTUnwrap(model.storageDirectory())
+        let wallet = try Wallet.create(network: .signet, keyStore: model.keyStore,
+                                       storageURL: directory.appending(path: "wallet.json"), entropy: mode.entropy)
+        try await fund(wallet, amount: 80_000, height: 100)
+        try await matureCoinbase(wallet, height: 100)
+        await model.boot()
+        XCTAssertEqual(model.stage, .ready)
+        // A send hands its transaction to the stack's broadcaster; no peer
+        // answers here, which only queues the relay.
+        await model.scenePhaseChanged(.active)
+        XCTAssertNotNil(model.stack)
+
+        let key = try TestVaults.keyExpression(master: TestVaults.master(entropyByte: 0xD4))
+        let alex = try await model.addPerson(name: "Alex", payTo: PersonPayTo.descriptor("tr(\(key))", network: .signet),
+                                              signerKey: nil)
+        let first = try model.nextPaymentAddress(for: alex)
+        XCTAssertEqual(first.index, 0)
+        let preview = try await model.previewSend(to: alex, amount: 20_000, priority: .medium, override: 2)
+        XCTAssertEqual(preview.destination, first.address)
+        XCTAssertEqual(model.people.first?.nextPaymentIndex, 0, "review alone reserved the address")
+        _ = try await model.send(preview: preview)
+        let paid = try XCTUnwrap(model.people.first { $0.id == alex.id })
+        XCTAssertEqual(paid.nextPaymentIndex, 1, "the committed payment did not advance the card")
+        XCTAssertNotEqual(try model.nextPaymentAddress(for: paid).address, first.address)
+    }
+
+    /// Unsaving a recipient takes them off the send screen's shortcut list
+    /// and nothing more: a payment already made to them keeps its name, and
+    /// so does a shared-savings output that pays them.
+    func testUnsavingARecipientHidesTheShortcutButKeepsTheLabel() async throws {
+        let model = makeModel(network: .signet)
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("people-unsave-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        await model.peopleStore.configure(storageURL: directory.appendingPathComponent("people.json"), network: .signet)
+        let key = try TestVaults.keyExpression(master: TestVaults.master(entropyByte: 0xD4))
+        let alex = try await model.addPerson(name: "Alex", payTo: PersonPayTo.descriptor("tr(\(key))", network: .signet),
+                                              signerKey: nil)
+        let (address, _) = try model.nextPaymentAddress(for: alex)
+        let script = try AddressDecoder.scriptPubKey(for: address, network: .signet)
+        let transaction = Transaction(version: 2, inputs: [Transaction.Input(
+            previousOutput: Transaction.Outpoint(txid: Data(repeating: 1, count: 32), vout: 0),
+            scriptSig: Data(), sequence: 0xffff_fffd)],
+            outputs: [Transaction.Output(value: 20_000, scriptPubKey: script)], locktime: 0)
+        let payment = HistoryEntry(txid: transaction.txid, height: 10, received: 0, spent: 21_000,
+                                   rawTransaction: transaction.serialized(includeWitness: false))
+        XCTAssertEqual(model.savedRecipients.map(\.name), ["Alex"])
+        XCTAssertEqual(model.paymentRecipients(payment).first?.person?.name, "Alex")
+
+        try await model.updateRecipient(id: alex.id, saved: false)
+        XCTAssertTrue(model.savedRecipients.isEmpty, "an unsaved recipient kept a shortcut")
+        XCTAssertEqual(model.people.first?.savedRecipient, false, "the picker's own predicate still lists them")
+        XCTAssertEqual(model.people.map(\.name), ["Alex"], "unsaving must not delete the person")
+        XCTAssertEqual(model.paymentRecipients(payment).first?.person?.name, "Alex", "the payment lost its label")
+        XCTAssertEqual(model.personScripts()[script], "Alex")
+    }
+
+    /// A co-owner's approval counts whether or not this phone holds their
+    /// card; when it does not, the approval screen says so in those words.
+    func testAPartialFromAnUnknownSignerCountsAsAnUnnamedCoOwner() async throws {
+        let model = makeModel(network: .signet)
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("people-unnamed-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        await model.vaultStore.configure(storageURL: directory.appendingPathComponent("vaults.json"), network: .signet)
+        await model.peopleStore.configure(storageURL: directory.appendingPathComponent("people.json"), network: .signet)
+        let (vault, masters) = try TestVaults.multiAVault()
+        let descriptor = vault.descriptor.serialized()
+        let coin = try TestVaults.funding(vault: vault, amount: 80_000, height: 0)
+        let record = VaultRecord(id: String(descriptor.split(separator: "#").last!), name: "Savings",
+                                 descriptor: descriptor, createdAtHeight: 0, nextReceiveIndex: 1, allUtxos: [coin])
+        try await model.vaultStore.restore([record])
+        // Alice's card is saved; the third signer's never was.
+        try await model.addPerson(name: "Alice", payTo: nil, signerKey: TestVaults.keyExpression(master: masters[0]))
+        await model.refresh()
+
+        var proposal = try vault.createSpend(utxos: [coin], payments: [Payment(amount: 20_000, scriptPubKey: Data([0x51]))],
+                                             changeIndex: 0, feeRateSatPerVByte: 2, chainTip: 0)
+        let change = [Vault.OutputCoordinate(choice: 1, index: 0)]
+        try vault.partialSign(&proposal, master: masters[1], knownUTXOs: [coin],
+                              ownedOutputCoordinates: change, chainTip: 0)
+        let session = VaultSpendSession(model: model, recordID: record.id)
+        session.add(text: proposal.base64)
+        XCTAssertNil(session.error)
+        XCTAssertEqual(session.approvals.count, 1)
+        XCTAssertFalse(session.approvedByYou)
+        let progress = session.progressText
+        XCTAssertTrue(progress.hasPrefix("Approved by an unnamed co-owner"), progress)
+        XCTAssertTrue(progress.hasSuffix("(1 of 2)"), progress)
+        XCTAssertTrue(progress.contains("waiting for"), progress)
+        XCTAssertTrue(progress.contains("Alice"), progress)
+        XCTAssertEqual(progress.components(separatedBy: "an unnamed co-owner").count - 1, 2,
+                       "both signers without a card are unnamed: \(progress)")
+
+        // Alice's approval arrives too: named, beside the unnamed one.
+        try vault.partialSign(&proposal, master: masters[0], knownUTXOs: [coin],
+                              ownedOutputCoordinates: change, chainTip: 0)
+        session.add(text: proposal.base64)
+        XCTAssertNil(session.error)
+        XCTAssertEqual(session.approvals.count, 2)
+        XCTAssertTrue(session.canFinish)
+        let complete = session.progressText
+        XCTAssertTrue(complete.hasPrefix("Approved by "), complete)
+        XCTAssertTrue(complete.hasSuffix("(2 of 2)"), complete)
+        XCTAssertTrue(complete.contains("Alice"), complete)
+        XCTAssertTrue(complete.contains("an unnamed co-owner"), complete)
+        XCTAssertFalse(complete.contains("waiting for"), complete)
+    }
 }

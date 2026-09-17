@@ -9,7 +9,7 @@
 <meta property="og:type" content="article">
 <meta property="og:url" content="https://winnowwallet.com/core-cosigner">
 <meta property="og:title" content="Sign with Bitcoin Core &mdash; Winnow">
-<meta property="og:description" content="Use Bitcoin Core as your phone’s second signer, with tested payment and recovery steps.">
+<meta property="og:description" content="Use Bitcoin Core as your phone’s second signer, with payment and recovery instructions.">
 <meta property="og:image" content="https://winnowwallet.com/og.png">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="stylesheet" href="site.css">
@@ -22,7 +22,6 @@
       <a href="/custody">How you hold it</a>
       <a href="/present">Talk</a>
       <a href="/architecture">Architecture</a>
-      <a href="/testing">Testing</a>
       <a href="https://github.com/winnowwallet/winnow">Source</a>
     </nav>
   </div>
@@ -30,7 +29,7 @@
 <main>
 <h1>Sign with Bitcoin Core</h1>
 <p>Your phone holds one key. Bitcoin Core on your desktop holds another. Winnow and Core 31.1 can exchange signing requests and complete a payment together.</p>
-<p>The <a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift">app test</a> covers setup, payment, restarting an interrupted exchange, and restoring an earlier backup. The <a href="https://github.com/winnowwallet/winnow/blob/main/Tests/DifferentialTests/VaultInteropDiffTests.swift">Core comparisons</a> also complete payments with either signer starting first. These use a private test chain with no real money.</p>
+<p>The <a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift">one integration journey</a> makes an ordinary payment, receives and sends with one Core MuSig2 cosigner, then receives and sends from a script-path 2-of-3 account with two Core cosigners available. The private signet fixture mines blocks automatically. <a href="https://github.com/winnowwallet/winnow/blob/main/AppTests/VaultBackupTests.swift">Focused app tests</a> check account backup rules.</p>
 
 <h2 id="phone-and-core">Your phone plus Core</h2>
 <p>Use a 2-of-2 MuSig2 account when you want both devices to approve every payment. Neither key can spend alone. On Bitcoin, the payment has one ordinary Taproot signature.</p>
@@ -72,10 +71,10 @@ bitcoin-cli -signet -rpcwallet=winnow-signer \
 <p>The final <code>false</code> asks Core to leave the signing data available for Winnow to combine. The app handles the file format conversion. Keep its signing screen open during the exchange.</p>
 <p>If you leave the screen or lock the phone, tap <strong>Start again</strong> and exchange the fresh request with Core. Do not reuse an old reply.</p>
 <figure>
-<img src="screenshots/36-extra-device-review.png" width="1206" height="2622" loading="lazy" alt="Payment review showing the recipient, change, and fee before approval.">
+<img src="screenshots/36-extra-device-review.png" width="1206" height="2622" loading="lazy" alt="Payment review showing the account, destination, amount, fee, and total before approval.">
 <img src="screenshots/37-extra-device-waiting.png" width="1206" height="2622" loading="lazy" alt="After the phone approves, Winnow asks for the other signer’s reply. Sending remains unavailable.">
 <img src="screenshots/39-extra-device-sent.png" width="1206" height="2622" loading="lazy" alt="Payment sent, with its transaction ID and a button to close the screen.">
-<figcaption>Check the payment, exchange approvals, then send. See the <a href="https://github.com/winnowwallet/winnow/blob/main/docs/screenshots/README.md">capture notes</a> for the app revision and test evidence.</figcaption>
+<figcaption>The recorded journey shows payment review, the signing exchange, and the sent receipt. See the <a href="/recording">recording provenance</a> for the app revision and test evidence.</figcaption>
 </figure>
 
 <h2 id="backups">5. Keep a backup of both sides</h2>
@@ -83,7 +82,7 @@ bitcoin-cli -signet -rpcwallet=winnow-signer \
 <p>The phone’s file includes the account and its tracked funds. Restoring an older file checks for later payments, so an already-spent coin does not come back as available. The file does not contain Core’s private key or a live signing exchange. Losing either required key and all its backups leaves this account unable to spend.</p>
 <figure>
 <img src="screenshots/38-extra-device-restored.png" width="1206" height="2622" loading="lazy" alt="The restored two-key account showing the balance left after the payment.">
-<figcaption>The test restores the backup saved before payment and checks that the remaining balance is correct.</figcaption>
+<figcaption>An earlier UI run restored a backup saved before payment and checked the remaining balance. See the capture notes for that run’s provenance.</figcaption>
 </figure>
 
 <h2 id="a-2-of-3-with-bitcoin-core">A shared 2-of-3 account</h2>
@@ -91,10 +90,10 @@ bitcoin-cli -signet -rpcwallet=winnow-signer \
 <p>The account uses <code>tr(NUMS, sortedmulti_a(2, …))</code>. Import it into each Core signer with only that signer’s private expression. Each signer runs <code>walletprocesspsbt</code>; combine the replies in Winnow. It needs two signatures, with no MuSig2 preparation round for ordinary individual keys.</p>
 <p>Any two keys can move the money. A payment reveals the three public keys and the two-required rule, but not people’s names or device types.</p>
 <h2 id="two-core-signers">Two Core signers</h2>
-<p>The comparison suite also has two independently created Core wallets approve while Winnow’s key stays unused. That tests the account’s any-two rule.</p>
+<p>The integration journey imports the 2-of-3 descriptor into two Core wallets. The phone and one Core wallet approve the payment; the other Core key stays available but unused. It exercises this one combination, not every possible pair or signing order.</p>
 <h2 id="group-as-cosigner">Use a group as one signer</h2>
 <p>A phone-and-second-key MuSig2 group can fill one slot in a larger shared account. Both group members must participate to fill that slot. The other two outer signers can still spend together without the group. See <a href="/vaults#the-two-policies">the group setup</a>.</p>
-<p><a href="/testing#artifacts">Find the test logs and app screenshots</a> · <a href="/vaults">Signing accounts explained</a> · <a href="/roadmap#signing-partners">Hardware wallets and future partners</a></p>
+<p><a href="/recording">Watch the recorded payments</a> · <a href="https://github.com/winnowwallet/winnow/actions">Current test runs and artifacts</a> · <a href="/vaults">Signing accounts explained</a> · <a href="/roadmap#signing-partners">Hardware wallets and future partners</a></p>
 </main>
 <footer>
   <div class="bar">

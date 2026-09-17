@@ -10,6 +10,7 @@ let package = Package(
         .library(name: "TestSupport", targets: ["TestSupport"]),
         .executable(name: "winnow-debug", targets: ["WinnowDebug"]),
         .executable(name: "WinnowFuzz", targets: ["WinnowFuzz"]),
+        .executable(name: "winnow-fixture", targets: ["WinnowFixture"]),
     ],
     dependencies: [
         .package(url: "https://github.com/21-DOT-DEV/swift-secp256k1", exact: "0.23.2"),
@@ -63,6 +64,11 @@ let package = Package(
             path: "Tests/Support",
             exclude: ["Node/README.md", "P2P/README.md", "README.md"]
         ),
+        .executableTarget(
+            name: "WinnowFixture",
+            dependencies: ["TestSupport"],
+            path: "Tools/Fixture"
+        ),
         .testTarget(
             name: "BitcoinCoreTests",
             dependencies: ["WalletCore", "TestSupport"],
@@ -74,12 +80,6 @@ let package = Package(
             dependencies: ["WalletCore", "TestSupport"],
             exclude: ["Network/README.md", "README.md"],
             resources: [.copy("Vectors")]
-        ),
-        .testTarget(
-            name: "DifferentialTests",
-            dependencies: ["WalletCore", "TestSupport"],
-            path: "Tests/DifferentialTests",
-            exclude: ["README.md"]
         ),
         // The development tools, tested together: the debugging commands, the
         // release-path generators, and the fuzz crash corpus replayed out of

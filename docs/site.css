@@ -137,14 +137,6 @@ a:hover{text-decoration:underline;text-underline-offset:3px}
 .signing-footer{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.5rem}
 .home main>.lede{margin-bottom:1.25rem}
 .home .connection-note{margin-top:1rem}
-details.journey{padding:0;border-top:1px solid var(--rule)}
-details.journey>summary{display:flex;align-items:center;justify-content:space-between;gap:1rem;min-height:64px;padding:1.15rem 0;cursor:pointer;list-style:none}
-details.journey>summary::-webkit-details-marker{display:none}
-details.journey>summary::after{content:'+';font-size:1.5rem;color:var(--seed);flex-shrink:0}
-details.journey[open]>summary::after{content:'−'}
-details.journey>summary h2{margin:0;padding:0;border:0}
-.journey-body{display:flow-root;padding-bottom:1rem}
-.journey-body>p:first-child{margin-top:0}
 .combined-signers{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.5rem;margin:1.5rem 0}
 .combined-signers>div{display:flex;flex-direction:column;justify-content:space-between;gap:.5rem;padding:.7rem .4rem;border:1px solid var(--rule-2);border-radius:.5rem;text-align:center;font-size:.85rem;background:var(--paper-2)}
 .combined-signers .combined-you{border-color:var(--seed)}
@@ -153,14 +145,11 @@ details.journey>summary h2{margin:0;padding:0;border:0}
   .home main{padding-top:1.75rem}
   .home .topbar .links{gap:.85rem}
   .home .topbar .links a[href="/"]{display:none}
-  .home .jump-links{display:none}
   .home .signing-choices{gap:2.5rem}
   .signing-demo{padding:.5rem}
   .signing-label{font-size:20px}
   .signing-footer{padding-bottom:.5rem}
   .signing-choices .signing-caption{min-height:3.2em}
-  .home details.journey>summary h2{font-size:1.15rem;line-height:1.4}
-  .home details.journey:first-of-type{margin-top:2rem}
   .combined-signers{grid-template-columns:1fr}
 }
 

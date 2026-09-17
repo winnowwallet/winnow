@@ -1,19 +1,23 @@
 # Features, journeys, and evidence
 
-The [public testing guide](https://winnowwallet.com/testing) explains the suites,
-how to read a run, and where to find its artifacts.
+This developer policy explains the test suites and evidence requirements.
+The [CI runbook](../.github/internal/ci-release.md) describes how to run checks
+and inspect their artifacts.
 
 The supported product is the real iPhone app plus explicit debugging tools.
-Everyday and advanced journeys are declared in docs/journeys.json. The homepage
-and advanced page are generated from that file and the actual app test source
-by scripts/build-site. The public roadmap owns future work; it is not evidence
-that a feature ships.
+Everyday and advanced features are documented in docs/journeys.json.
+scripts/build-site generates the homepage overview and signing illustrations
+and the separate recording page. Recording evidence identifies the steps
+exercised by the current focused UI journey. The
+public roadmap owns future work; it is not evidence that a feature ships.
 
 ## What earns a place
 
-- A user-facing feature needs a documented journey through the real app.
-  Include its review, failure, interruption, or recovery behavior where those
-  affect the promise. Advanced features follow the same rule.
+- A user-facing feature needs clear usage instructions and focused tests for
+  its decisions and failure cases. One UI integration journey checks ordinary,
+  MuSig2, and script-path 2-of-3 receiving, sending, and confirmation through
+  the real app. Detailed coverage belongs in app, wallet, and protocol tests
+  without repeated screen navigation.
 - A debugging command needs a concrete diagnostic purpose, a runbook, and
   meaningful command/protocol checks. Help output alone does not prove a live
   network operation.
@@ -40,17 +44,48 @@ app release version.
 
 ## Which tests say what
 
-The two multiple-key stories have separate acceptance evidence. Shared control
-uses a 2-of-3 account: two approvals complete the payment while the third signer
-is absent. The extra-device MuSig2 journey requires both keys, refuses to finish
-with only the phone's signature, abandons nonces when its signing screen closes,
-and completes a single-signature key-path spend with Bitcoin Core 31.1 as the
-second signer. Both shared-payment flows check that sending ends on a clear
-success screen, without leaving an obsolete signing review in view. The MuSig2
-journey saves a backup before payment and restores it afterward, checking the
-remaining account balance. It does not establish hardware-wallet
-or custody-provider compatibility. A group nested inside a threshold account is a
-separate advanced composition, not substitute evidence for the direct MuSig2 UI.
+The one integration test is `test01CreateReceiveSendConfirm` in
+`UITests/WinnowAppUITests.swift`. It starts with a quick ordinary receive and
+send, then receives and sends with a 2-of-2 MuSig2 account shared by the phone
+and one Core cosigner. Finally it receives and sends through a script-path
+2-of-3 account containing the phone’s key and two Core cosigners. Both Core
+wallets know that account, but only the phone and one Core key approve its
+payment. The test checks the funded destinations, accepted transactions, and
+confirmation through the app. The private signet fixture mines blocks
+automatically so confirmations follow promptly. Start validation on an iPhone
+simulator; iPad validation follows separately.
+
+This is one continuous UI/video journey, not a broad interoperability matrix.
+There is no separate DifferentialTests target or node comparison job. Other
+signing orders, combinations, and physical hardware need their own evidence.
+The retained video and screenshots are evidence only for the revision and
+coverage recorded in their provenance.
+
+CI has one `build` job for package, app, fuzz, lint/test gates and release checks,
+followed by a reusable `website` job. One Debug build serves app unit tests
+and this journey with the same simulator and build directory. A fresh run's
+`app-tests-…` artifact contains `units/` and `journey/` result bundles and logs,
+plus the journey recording and checkpoint screenshots. The build job runs on
+GitHub-hosted Apple silicon (`macos-26`) with per-run build products and a fresh
+signet fixture, independently of any developer Mac. Fork pull requests use
+the same image for package and app checks without the private node, UI journey
+or deployment credentials. Manual, nightly and release runs execute fresh tests.
+
+For website-only edits, `scripts/ci-journey-cache` hashes test/build inputs and
+finds a successful same-repository run's normalized media artifact. Matching
+inputs allow build and wallet test steps to skip while the current website is
+generated and checked. App-bundled HTML/CSS stays in the fingerprint; changed
+inputs, missing media or API errors require fresh tests. Reused media retains
+its original source and result, rather than claiming a new test execution.
+There are no separate architecture, complexity, selector or LOC jobs. The LOC
+reporter remains available for manual size comparisons.
+
+The detailed rules stay in smaller suites. `AppTests/PeoplePaymentTests.swift`
+and `AppTests/SenderLabelTests.swift` cover people, payment decisions, and sender
+labels. `AppTests/WalletStartupTests.swift` and `AppTests/VaultBackupTests.swift`
+cover persisted startup and backup state. `Tests/WalletCoreTests/VaultSpendTests.swift`
+checks threshold and missing-signature rules. These focused checks supplement
+the journey without repeating every behavior through screen navigation.
 
 Policy explanations must come from the actual descriptor, including 1-of-n.
 Names, contact mappings, and PSBT metadata must not change signing requirements
@@ -59,39 +94,45 @@ forged change metadata, missing signatures, and nonce reuse. Provider, trust,
 physical key separation, and coercion claims require evidence outside a
 simulator; their unverified integrations belong on the roadmap.
 
-- UITests drives setup/backup, receipt, send, recovery/export, people, shared
-  savings, beginner controls, advanced approvals, group signing, fee replacement,
-  and disclosure controls. CI runs the complete ordered suite for app/protocol
-  changes on same-repository pull requests and main, as well as scheduled runs.
+- UITests runs the one focused journey against a disposable signet node and
+  checks its screen and node outcomes. The host records one continuous video
+  for review and the website; checkpoint screenshots remain secondary artifacts.
 - AppTests checks protected actions, review invalidation, persisted state,
-  network separation, and OS integration around those journeys.
+  network separation, people, and OS integration.
 - WalletCoreTests checks wallet/network invariants and hostile peer behavior.
   The former BitcoinP2PTests are grouped under WalletCoreTests/Network.
 - BitcoinCoreTests retains independent vectors and parser/cryptographic bounds.
-- DifferentialTests asks Bitcoin Core to judge transactions, replacement policy,
-  envelopes, and cosigning. The full-loop fixture uses prepare, relay, commit;
-  it no longer requires an alternate production send API.
 - ToolsTests and the fuzz harness cover debugging commands and hostile inputs.
 
-The old convenience-send test and staged storefront sequence are retired.
-Unconfirmed receipts and fee replacement now have focused app journeys.
-Screenshots come from these tests, not a second demonstration script.
+The larger UI story suite and separate differential matrix are retired. The
+three payment flows share one journey; other detailed behavior and interruptions
+use focused tests. The [recording page](https://winnowwallet.com/recording)
+shows the continuous journey and its source provenance. Older guide
+illustrations retain their provenance.
 
 ## What generated pages do and do not establish
 
 Generation refuses a missing test selector, an app scenario with no documented
-journey, or a screenshot that its linked scenarios do not capture. This catches
-documentation drift; it is not runtime coverage analysis or proof that every
-line executed. A supported feature still needs a passing app run and the
-relevant invariant tests before merging. Do not replace an assertion with a
-screenshot or infer success from the presence of an image.
+journey, or a missing/unresolved journey video. The recording page embeds the
+video once with its tested source and run; the signing guides explain the
+policies and setup steps.
+This catches documentation drift; it is not runtime coverage analysis. Changes
+need checks appropriate to their behavior; the integration journey does not replace
+relevant invariant tests.
 
-CI's xcresult bundle and logs are authoritative for success, failure, and the
-tested revision. Timings include only the current process's observations;
-partial runs never inherit older scenarios under a new timestamp. Captures go
-to CI artifacts or fresh temporary directories, not directly into public docs.
-Only deliberately selected, reviewed test images belong on the site. Historical
-images, audit notes, and findings retain their historical status.
+The xcresult bundle and logs are authoritative for success, failure, and the
+tested revision. The host records the simulator while the journey runs; the
+recording and checkpoint screenshots do not replace test assertions. Keep the
+revision, device, date, and result bundle together in the deployment's
+`/recording` provenance. [Repository video notes](videos/README.md) preserve
+the dated history of checked-in recordings.
+`scripts/prepare-site-artifact` assembles a fresh website with either a new
+journey or cached normalized video and all 16 checkpoints. Its `--media-output`
+bundle preserves source provenance for reuse. The deployment's `/recording`
+page identifies that source and run. The website job downloads the ready site
+artifact from the same CI run and deploys it without rebuilding or running its
+content. Trusted PRs get previews; main gets production. Historical images,
+timing files, audit notes, and findings retain their historical status.
 
 Simulator tests do not establish locked-device Keychain enforcement, battery
 life, real-world peer independence, or independent review. Keep those limitations

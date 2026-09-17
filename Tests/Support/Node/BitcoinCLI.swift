@@ -3,14 +3,12 @@ import Foundation
 
 /// Process-based `bitcoin-cli` runner for the dev custom-signet node
 /// (default datadir ~/.bitcoin-mysignet, RPC :38400, P2P :38401 on
-/// 127.0.0.1), plus the JSON accessors the differential checks lean on.
+/// 127.0.0.1), plus JSON accessors for the UI journey's chain checks.
 ///
-/// Shared by the SwiftPM differential and Xcode UI test targets through the
-/// TestSupport library.
+/// The UI test target consumes this through the TestSupport library.
 ///
-/// Node location is env-configurable (CI runners reach the node over
-/// LAN/Tailscale, not loopback); the defaults reproduce the local dev setup
-/// exactly:
+/// Node location is env-configurable; CI supplies its disposable fixture's
+/// connection settings:
 /// - WINNOW_NODE_HOST — RPC/P2P host (default 127.0.0.1)
 /// - WINNOW_P2P_PORT  — P2P port (default 38401)
 /// - WINNOW_RPC_PORT  — RPC port (default 38400)
@@ -22,8 +20,8 @@ import Foundation
 /// xcodebuild; the same keys are then read from ~/.winnow-node.env on the
 /// host (see env(_:) below).
 ///
-/// Everything here is read-only against the node EXCEPT `generatetoaddress`
-/// mining on the disposable custom signet, which is expected and safe.
+/// Callers also create fixture wallets, import descriptors, fund payments,
+/// and submit transactions and mined blocks on the disposable custom signet.
 public enum BitcoinCLI {
     /// The node's BIP325 signet challenge (hex); its signing key lives in the
     /// "miner" wallet of the same datadir.
@@ -191,30 +189,8 @@ public enum BitcoinCLI {
 
     // MARK: - Node facts
 
-    public static func blockCount() throws -> Int {
-        try Int(run(["getblockcount"]))!
-    }
-
-    public static func blockHash(at height: Int) throws -> String {
-        try run(["getblockhash", String(height)])
-    }
-
     public static func bestBlockHash() throws -> String {
         try run(["getbestblockhash"])
-    }
-
-    /// The scriptPubKey (hex) paid by output `vout` of `txid` (txindex on).
-    public static func spentScript(txid: String, vout: Int) throws -> String {
-        let tx = try runObject(["getrawtransaction", txid, "true"])
-        let vouts = try array(tx, "vout")
-        let output = vouts[vout] as! [String: Any]
-        let scriptPubKey = output["scriptPubKey"] as! [String: Any]
-        return scriptPubKey["hex"] as! String
-    }
-
-    /// A fresh bech32m address from the node's "miner" wallet (send target).
-    public static func newMinerAddress() throws -> String {
-        try run(["getnewaddress", "e2e", "bech32m"], wallet: "miner")
     }
 
     // MARK: - A spending wallet on the node
@@ -247,32 +223,6 @@ public enum BitcoinCLI {
         let amount = "\(sats / 100_000_000)." + String(format: "%08d", sats % 100_000_000)
         return try run(["-named", "sendtoaddress", "address=\(address)", "amount=\(amount)",
                         "fee_rate=\(feeRate)"], wallet: wallet)
-    }
-
-    /// (txid, value in sats, scriptPubKey hex) of a transaction's output 0.
-    public static func outputZero(txid: String) throws -> (txid: String, amount: Int64, scriptPubKey: String) {
-        let tx = try runObject(["getrawtransaction", txid, "true"])
-        let vouts = try array(tx, "vout")
-        guard let output = vouts.first as? [String: Any],
-              let scriptPubKey = output["scriptPubKey"] as? [String: Any],
-              let hex = scriptPubKey["hex"] as? String, let value = output["value"]
-        else { throw CLIError(arguments: ["getrawtransaction"], status: -1, output: "no vout 0") }
-        return (txid, try sats(value), hex)
-    }
-
-    /// The coinbase txid of a block.
-    public static func coinbaseTxid(blockHash: String) throws -> String {
-        let block = try runObject(["getblock", blockHash])
-        let txs = try array(block, "tx")
-        guard let txid = txs.first as? String else {
-            throw CLIError(arguments: ["getblock"], status: -1, output: "no coinbase")
-        }
-        return txid
-    }
-
-    /// The height a block was accepted at.
-    public static func blockHeight(of blockHash: String) throws -> Int {
-        try int(runObject(["getblock", blockHash]), "height")
     }
 
     /// Current mempool txids (display hex).

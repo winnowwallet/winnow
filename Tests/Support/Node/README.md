@@ -3,16 +3,23 @@
 # Real-node test helpers
 
 BitcoinCLI, HostProcess, and SignetMiner let tests query a node and mine blocks
-on the disposable custom signet. Differential and GUI tests need the same
-transactions and chain operations, so these helpers are shared once.
-CoreSigner creates a real Core-held key and exchanges PSBT files; both suites
-use it instead of an in-process imitation of the second signer.
+on the disposable custom signet. The UI journey uses these chain operations
+for ordinary-wallet, MuSig2 and 2-of-3 payments. CoreSigner creates real
+Core-held keys and exchanges PSBTs for the other signing wallets.
 
-Consumers are [Core comparisons](../../DifferentialTests/README.md) and
-[app journeys](../../../UITests/README.md). They live in the framework-agnostic
+`SignetFixture` shares the bank setup used by the native
+`winnow-fixture prepare-bank` command and the UI journey's readiness checks.
+The host command reuses `BitcoinCLI` and `SignetMiner` to mature the bank before
+recording or XCTest starts. A fresh CI fixture still mines 101 blocks; no bank
+snapshot is reused across CI runs. The UI test then checks the chain and ready
+balance, and mines only the blocks needed for its payments.
+
+The [UI journey](../../../UITests/README.md) consumes these helpers from the framework-agnostic
 [TestSupport library](../README.md); assertions belong to callers.
 
-[HostProcess tests](../../DifferentialTests/HostProcessTests.swift) cover
-subprocess behavior. [Node CI](../../../.github/workflows/node-tests.yml) exercises
-the RPC/miner path against its own temporary node. This directory does not
+[HostProcess tests](../../WalletCoreTests/HostProcessTests.swift) cover
+subprocess behavior, and [CoreSigner tests](../../WalletCoreTests/CoreSignerTests.swift)
+cover descriptor parsing without a node. The required [CI workflow](../../../.github/workflows/ci.yml)
+exercises the RPC/miner path through host bank preparation and the UI journey
+against its temporary node. This directory does not
 provision TDX machines or register runners.

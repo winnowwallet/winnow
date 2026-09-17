@@ -25,14 +25,13 @@
       <a href="/custody">How you hold it</a>
       <a href="/present">Talk</a>
       <a href="/architecture">Architecture</a>
-      <a href="/testing">Testing</a>
       <a href="https://github.com/winnowwallet/winnow">Source</a>
     </nav>
   </div>
 </header>
 <main>
   <h1 id="the-read-side-how-a-private-mobile-bitcoin-wallet-learns-whats-its-own">The Read Side: How a Private Mobile Bitcoin Wallet Learns What’s Its Own</h1>
-  <p><em>One paper in the Winnow set. The phone itself is <a href="/mobile">A phone wallet</a>; paying is <a href="/write-side">the write side</a>; shared custody is <a href="/vaults">vaults</a>; moving a wallet in is <a href="/import">import</a>. This paper owns one question: how the phone learns which coins are its own.</em> <em>All numbers marked “approx.” are order-of-magnitude estimates for orientation, not measurements; they are labeled as such wherever they appear. Exact protocol constants are exact. Signet UI timings are measured and live in <code>screenshots/timings.json</code>.</em></p>
+  <p><em>One paper in the Winnow set. The phone itself is <a href="/mobile">A phone wallet</a>; paying is <a href="/write-side">the write side</a>; shared custody is <a href="/vaults">vaults</a>; moving a wallet in is <a href="/import">import</a>. This paper owns one question: how the phone learns which coins are its own.</em> <em>All numbers marked “approx.” are order-of-magnitude estimates for orientation, not measurements; they are labeled as such wherever they appear. Exact protocol constants are exact. Historical signet UI measurements live in <code>screenshots/timings.json</code>; the current integration test does not update them.</em></p>
   <hr />
   <p>The <a href="screenshots/54-receive-label-prompt.png">receive label prompt</a> and <a href="screenshots/55-payment-receive-label.png">payment details</a> show these notes on a private test network. Receive address labels are local notes: who an address was shared with, or what a payment is for. Receive asks for a label before showing an unlabeled address, with an explicit skip. History matches the note against the payment’s exact output script; it does not infer a sender or make an explorer request. A new address starts unlabeled, and payments to an older labeled address retain that note. Labels are separate from contacts, excluded from copied addresses, QR codes, payment cards and wallet backups, and removed when the wallet is deleted or replaced.</p>
   <h2 id="the-problem">1. The problem</h2>
@@ -307,12 +306,11 @@
   <p>Nothing in this paper asks to be taken on faith — the code is checked against independent ground truth at every layer:</p>
   <ul>
   <li><strong>Official BIP test vectors</strong> for every cryptographic surface: BIP39/32/86 (keys), BIP340 (Schnorr), BIP341 (Taproot trees, tweaks, control blocks, sighash — script-path vectors generated via Bitcoin Core’s own functional-test framework where the official file is silent), BIP350 (bech32m), BIP158 (GCS filters, byte-for-byte against real blocks), BIP327 (MuSig2), BIP380/387/389/390 (descriptors).</li>
-  <li><strong>Differential testing against Bitcoin Core</strong> (env-gated, against a local node): descriptor addresses vs <code>deriveaddresses</code>, transaction serialization vs <code>decoderawtransaction</code>, filter construction vs <code>getblockfilter</code>, header checks vs <code>getblockheader</code>, PSBT semantics vs <code>decodepsbt</code>/<code>finalizepsbt</code>, and a full mine→discover→sign→relay→confirm loop on a live signet. This layer has already caught a consensus-facing sync bug that unit tests shared with a wrong mock could not.</li>
   <li><strong>Loopback fake-node tests</strong> for the P2P layer: handshakes, filter sync, lying-filter detection, relay state machine — deterministic, no network.</li>
-  <li><strong>End-to-end UI tests</strong> on signet that drive the actual app and capture screenshots, with per-scenario timings.</li>
+  <li><strong>One end-to-end UI test</strong> makes ordinary, MuSig2, and script-path 2-of-3 payments against a private signet node. Core supplies the external cosigners, accepts the transactions, and mines blocks automatically for prompt confirmation in the app. The host records one continuous video; detailed failures stay in focused tests.</li>
   <li><strong>The crypto boundary:</strong> all secret-key operations delegate to libsecp256k1 (via P256K) — Bitcoin Core’s constant-time, exhaustively tested curve library. No Swift code does raw curve math on secrets.</li>
   </ul>
-  <p>The suite is ~200 tests and runs in CI on every push and pull request.</p>
+  <p>Inspect the <a href="https://github.com/winnowwallet/winnow/actions">current test runs and artifacts</a>. The <a href="/recording">payment recording</a> identifies the source and run behind that journey.</p>
   <hr />
   <h2 id="references">6. References</h2>
   <ul>

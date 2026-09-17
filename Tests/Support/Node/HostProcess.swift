@@ -85,16 +85,23 @@ public enum HostProcess {
         let outFD = outPipe[0], errFD = errPipe[0]
         // Dedicated readers cannot be starved by synchronous tests occupying
         // every thread in Swift's shared cooperative pool on small runners.
+        // Match the waiting caller: DispatchGroup.wait does not promote a
+        // default-QoS reader when the UI runner needs its output synchronously.
+        let readerQuality = Thread.current.qualityOfService
         group.enter()
-        Thread.detachNewThread {
+        let outputReader = Thread {
             output.data = FileHandle(fileDescriptor: outFD, closeOnDealloc: true).readDataToEndOfFile()
             group.leave()
         }
+        outputReader.qualityOfService = readerQuality
+        outputReader.start()
         group.enter()
-        Thread.detachNewThread {
+        let errorReader = Thread {
             errors.data = FileHandle(fileDescriptor: errFD, closeOnDealloc: true).readDataToEndOfFile()
             group.leave()
         }
+        errorReader.qualityOfService = readerQuality
+        errorReader.start()
         if let input, !input.isEmpty {
             input.withUnsafeBytes { bytes in
                 var offset = 0

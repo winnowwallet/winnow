@@ -11,7 +11,7 @@
 <body>
 <header class="topbar"><div class="bar">
   <a class="mark" href="/"><b>&#8383;</b> Winnow</a>
-  <nav class="links" aria-label="Main"><a href="/">The wallet</a><a href="/testing">Testing</a><a href="/architecture">How it works</a><a href="https://github.com/winnowwallet/winnow">Source</a></nav>
+  <nav class="links" aria-label="Main"><a href="/">The wallet</a><a href="/architecture">How it works</a><a href="https://github.com/winnowwallet/winnow">Source</a></nav>
 </div></header>
 <main>
   <h1>Roadmap</h1>
@@ -21,7 +21,7 @@
   <section id="now">
     <h2>Now · A smaller, testable product</h2>
     <p><strong>What you gain:</strong> the same supported wallet journeys with fewer alternate paths and clearer documentation.</p>
-    <p><strong>Must pass:</strong> the real app creates a wallet, receives a payment, reviews and sends it, restores a backup, pays a person, and coordinates shared savings. Advanced features have their own documented journeys. Public feature descriptions and screenshots point to those tests.</p>
+    <p><strong>Must pass:</strong> one real-app integration test makes an ordinary payment, then receives and sends through MuSig2 and script-path 2-of-3 accounts with Core cosigners. The private signet fixture mines blocks automatically for prompt confirmation. Focused app, wallet, and protocol tests cover detailed rules and failures. Public pages show one continuous video of this tested flow and distinguish it from feature guidance and older illustrations.</p>
     <p><strong>Still to resolve:</strong> which boundaries, convenience APIs, duplicate tests, and undocumented features can be removed. Keep focused checks for cryptography, hostile inputs, and recovery failures that a successful screen flow cannot establish.</p>
   </section>
 
@@ -77,6 +77,6 @@
     <p><strong>Open work:</strong> the <a href="https://github.com/winnowwallet/winnow/issues/10">P2MR investigation</a> and other <a href="https://github.com/winnowwallet/winnow/issues/7">roadmap proposals</a>. No deployment date or automatic upgrade is implied.</p>
   </section>
 </main>
-<footer><div class="bar"><a href="/">Winnow</a> · <a href="/testing">Testing</a> · <a href="/privacy">Privacy</a> · <a href="https://github.com/winnowwallet/winnow">Source and issues</a></div></footer>
+<footer><div class="bar"><a href="/">Winnow</a> · <a href="/privacy">Privacy</a> · <a href="https://github.com/winnowwallet/winnow">Source and issues</a></div></footer>
 </body>
 </html>

@@ -25,7 +25,6 @@
       <a href="/custody">How you hold it</a>
       <a href="/present">Talk</a>
       <a href="/architecture">Architecture</a>
-      <a href="/testing">Testing</a>
       <a href="https://github.com/winnowwallet/winnow">Source</a>
     </nav>
   </div>
@@ -115,7 +114,7 @@
   <h3 id="two-modern-multisig-flavors-same-read-path">4.3 Two modern multisig flavors, same read path</h3>
   <p>A vault is another descriptor and another watch list. The phone does not run a coordinator, a coinjoin server, or a notification service for cosigners. The PSBT <em>is</em> the coordinator; AirDrop, a file, a message are the transport. <a href="/vaults">Vaults</a>.</p>
   <h3 id="default-network-is-signet">4.4 Default network is signet</h3>
-  <p>Development and the shipped TestFlight path target signet. Mainnet is in the Settings picker and has its own on-device wallet; it is not the network the e2e suite, the screenshots, or the timings are taken on. The papers describe the protocol as it runs on any network; the numbers in <code>screenshots/timings.json</code> are signet.</p>
+  <p>The app opens on mainnet by default; signet is available in Advanced settings with its own wallet state. The focused UI integration test and its continuous video use a disposable signet fixture. The numbers in <code>screenshots/timings.json</code> are historical signet measurements.</p>
   <hr />
   <h2 id="trust-on-a-phone">5. Trust on a phone</h2>
   <p>What the user is asked to trust, stated as mechanisms rather than intentions:</p>
@@ -140,7 +139,7 @@
   <p>Each absence has a paper that says what you get instead. The landing page lists the user-visible costs (slower news, coarser fees, bring your history, sending still shows at the relay peers). This list is the engineering version of the same honesty.</p>
   <hr />
   <h2 id="how-the-implementation-is-checked">7. How the implementation is checked</h2>
-  <p>The validation appendix of <a href="/read-side">the read side</a> covers the stack. The mobile-specific claim — that the <em>app</em> does what the libraries promise — is the signet UI suite: it drives the real binary, mines to it, spends from it, cosigns a vault, verifies an import, and writes the screenshots on this site plus <code>screenshots/timings.json</code>. Latest run (iPhone 17 Pro Max simulator, 2026-08-17): wallet create 2.74s, address shown 2.16s, mined→filter-detected 0.69s, form→broadcast 0.66s.</p>
+  <p>The validation appendix of <a href="/read-side">the read side</a> covers the stack. The focused signet UI integration test drives ordinary, MuSig2, and script-path 2-of-3 receive/send flows through the real binary while the host records a continuous video. The fixture provides Core cosigners and mines confirmation blocks automatically. Detailed behavior and import rules have focused app, wallet, and protocol tests. Guide illustrations and <code>screenshots/timings.json</code> retain their historical provenance; they are not current-run evidence.</p>
   <p>The suite is ~200 tests plus those UI scenarios, on every push.</p>
   <hr />
   <h2 id="status">8. Status</h2>

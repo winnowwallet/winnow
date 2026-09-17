@@ -825,4 +825,40 @@ struct WalletTests {
         #expect(again.rawTransaction == nil)
     }
 
+    /// A received payment's funding scripts are distilled while the full
+    /// transaction is in hand and the witness-stripped raw kept beside them
+    /// cannot yield them again. They must come back from the state file
+    /// themselves, so a relaunch still offers the funder's address.
+    @Test("fundingScripts round-trip through the wallet state file")
+    func fundingScriptsRoundTrip() async throws {
+        let url = tempFileURL("funding-scripts-wallet.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let keyStore = InMemoryKeyStore()
+        let wallet = try makeTestWallet(storageURL: url, keyStore: keyStore)
+        // A P2WPKH spend: the witness reveals the funder's public key.
+        let funder = Transaction.Input(
+            previousOutput: .init(txid: Data(repeating: 0x11, count: 32), vout: 0),
+            scriptSig: Data(), sequence: 0xFFFF_FFFE,
+            witness: [FundingSourcesTests.derSignature, FundingSourcesTests.generator])
+        let payment = Transaction(version: 2, inputs: [funder], outputs: [
+            Transaction.Output(value: 42_000, scriptPubKey: try await wallet.scriptPubKey(chain: .receive, index: 0)),
+        ], locktime: 0)
+        try await wallet.apply(match: fakeMatch(height: 100, transactions: [payment]))
+        let expected = [Data([0x00, 0x14]) + FundingSourcesTests.generatorHash160]
+        let entry = try #require(await wallet.history.first { $0.txid == payment.txid })
+        #expect(entry.fundingScripts == expected)
+        #expect(entry.rawTransaction == payment.serialized(includeWitness: false))
+
+        // The file carries the scripts as their own field.
+        let json = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let entries = try #require(json["history"] as? [[String: Any]])
+        let row = try #require(entries.first { $0["txid"] as? String == payment.txid.displayHex })
+        #expect(row["fundingScripts"] != nil)
+
+        let reopened = try Wallet.open(storageURL: url, keyStore: keyStore)
+        let reread = try #require(await reopened.history.first { $0.txid == payment.txid })
+        #expect(reread.fundingScripts == expected)
+        #expect(FundingSources.fundingScripts(of: try #require(try reread.transaction())).isEmpty,
+                "the stored transaction alone reveals no funder")
+    }
 }

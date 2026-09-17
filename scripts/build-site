@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate current feature pages from documented, real app test journeys."""
+"""Generate the homepage and the focused app journey recording page."""
 import argparse
 import html
 import json
@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 TEST_PATH = "UITests/WinnowAppUITests.swift"
 SOURCE = "https://github.com/winnowwallet/winnow/blob/main/"
-RESULTS = "https://github.com/winnowwallet/winnow/actions/workflows/node-tests.yml"
+VIDEO_PATH = "videos/wallet-journey.mp4"
 
 def load_journeys(root):
     journeys = json.loads((root / "docs/journeys.json").read_text())
@@ -18,8 +18,6 @@ def load_journeys(root):
     cases = {}
     for index, match in enumerate(matches):
         name = match.group(1)
-        if name == "test00CanSpawnHostProcesses":
-            continue
         end = matches[index + 1].start() if index + 1 < len(matches) else len(source)
         cases[name] = (source.count("\n", 0, match.start()) + 1, source[match.start():end])
     seen, ids = set(), set()
@@ -28,8 +26,8 @@ def load_journeys(root):
         if not re.fullmatch(r"[a-z][a-z0-9-]*", identity) or identity in ids:
             raise ValueError(f"duplicate or invalid journey id: {identity}")
         ids.add(identity)
-        if journey["section"] not in {"everyday", "advanced"} or not journey["tests"]:
-            raise ValueError(f"{identity}: choose a section and at least one app test")
+        if journey["section"] not in {"everyday", "advanced"}:
+            raise ValueError(f"{identity}: choose an everyday or advanced section")
         for test in journey["tests"]:
             if test not in cases:
                 raise ValueError(f"{identity}: missing app test {test}")
@@ -46,36 +44,16 @@ def load_journeys(root):
                 raise ValueError(f"{identity}: missing local guide {guide}")
     if unowned := set(cases) - seen:
         raise ValueError("app tests need a documented journey: " + ", ".join(sorted(unowned)))
+    video = root / "docs" / VIDEO_PATH
+    if not video.is_file():
+        raise ValueError(f"missing journey video: {VIDEO_PATH}")
+    with video.open("rb") as recording:
+        if recording.read(128).startswith(b"version https://git-lfs.github.com/spec/v1"):
+            raise ValueError("journey video is an unresolved LFS pointer")
     return journeys, cases
 
 def escape(value):
     return html.escape(value, quote=True)
-
-def card(journey, cases):
-    expandable = journey["section"] == "everyday"
-    tag = "details" if expandable else "section"
-    parts = [f'<{tag} class="journey" id="{journey["id"]}"{" open" if expandable else ""}>']
-    heading = f'<h2>{escape(journey["title"])}</h2>'
-    description = f'<p>{escape(journey["description"])}</p>'
-    parts.append(f'<summary>{heading}</summary><div class="journey-body">{description}' if expandable else heading + description)
-    if image := journey.get("image"):
-        parts.append(f'<img class="app-shot" src="screenshots/{image}.png" width="1320" height="2868" loading="lazy" alt="Winnow: {escape(journey["title"])}.">')
-    if limitation := journey.get("limitations"):
-        parts.append(f'<p class="limit">{escape(limitation)}</p>')
-    if guide := journey.get("guide"):
-        parts.append(f'<p><a href="{guide}">Read the guide</a></p>')
-    dialog = f'{journey["id"]}-tests'
-    parts.append(f'<button class="test-link" type="button" data-dialog="{dialog}" aria-controls="{dialog}" aria-haspopup="dialog">How this is tested</button>')
-    parts.append(f'<dialog id="{dialog}" aria-labelledby="{dialog}-title">')
-    parts.append(f'<div class="dialog-heading"><h2 id="{dialog}-title">How we test: {escape(journey["title"])}</h2><form method="dialog"><button class="dialog-close" autofocus>Close</button></form></div><ol>')
-    parts.extend(f'<li>{escape(step)}</li>' for step in journey["journey"])
-    parts.append('</ol><p>Test code:')
-    parts.append(", ".join(f'<a href="{SOURCE}{TEST_PATH}#L{cases[test][0]}">{escape(test)}</a>' for test in journey["tests"]))
-    parts.append(f'. <a href="{RESULTS}">View test results</a>.</p>')
-    parts.append('<p>The ordered tests use the app on a private Bitcoin test network. Screenshots show test funds. Open a test run to see which version was checked, what passed, and what failed.</p>')
-    ending = '</div></details>' if expandable else '</section>'
-    parts.append('<p><a href="/testing#artifacts">Read the logs and screenshots</a> · <a href="/testing#limits">What still needs testing</a></p></dialog>' + ending)
-    return "\n".join(parts)
 
 def signing_animation(scene):
     shared = scene in {"shared", "borrowing"}
@@ -140,12 +118,13 @@ def signing_animation(scene):
 def signing_choices():
     options = []
     for name, heading, scenes, links in [
-        ("devices", "Protect your key.", [("attack", "Stolen key"), ("payment", "Your payment")], '<a href="/advanced#second-device">About two-device signing →</a>'),
+        ("devices", "Protect your key.", [("attack", "Stolen key"), ("payment", "Your payment")], '<a href="/vaults#extra-device">About two-device signing →</a>'),
         ("shared", "Share control.", [("shared", "Savings"), ("borrowing", "Borrowing")], '<a href="/vaults#shared-control">About shared signing →</a>'),
     ]:
         switches = ''.join(f'<label><input type="radio" name="{name}-example" value="{scene}" aria-controls="{scene}-scene"{" checked" if index == 0 else ""}>{label}</label>' for index, (scene, label) in enumerate(scenes))
         drawings = ''.join(signing_animation(scene) for scene, _ in scenes)
-        options.append(f'<article class="signing-story"><h3>{heading}</h3><fieldset class="signing-switch" hidden><legend>Choose an example</legend>{switches}</fieldset>{drawings}<div class="signing-footer"><button class="signing-replay" type="button" aria-label="Replay {heading}" hidden>Replay ↻</button><p class="signing-links">{links}</p></div></article>')
+        anchor = ' id="savings"' if name == "shared" else ""
+        options.append(f'<article class="signing-story"{anchor}><h3>{heading}</h3><fieldset class="signing-switch" hidden><legend>Choose an example</legend>{switches}</fieldset>{drawings}<div class="signing-footer"><button class="signing-replay" type="button" aria-label="Replay {heading}" hidden>Replay ↻</button><p class="signing-links">{links}</p></div></article>')
     return '''<section id="signing-choices"><h2>Two ways to protect your bitcoin</h2><div class="signing-choices">''' + ''.join(options) + '''</div>
 <button class="test-link" type="button" data-dialog="combined-signing" aria-controls="combined-signing" aria-haspopup="dialog">Use both together</button>
 <dialog id="combined-signing" aria-labelledby="combined-signing-title">
@@ -160,33 +139,21 @@ def signing_choices():
 <p><a href="/vaults">How the two signing methods fit together</a></p>
 </dialog></section>'''
 
-def page(section, journeys, cases):
-    advanced = section == "advanced"
-    title = "Advanced wallet journeys" if advanced else "A Bitcoin wallet for your iPhone."
-    intro = ("Turn on Advanced mode for explicit vault policies, signing exchanges, fee controls and replacement, and peer controls."
-             if advanced else "Send and receive bitcoin, keep track of payments, and save with other people.")
-    selected = [j for j in journeys if j["section"] == section]
-    content = "\n".join(card(j, cases) for j in selected)
-    links = " ".join(f'<a href="#{j["id"]}">{escape(j["title"])}</a>' for j in selected)
-    cta = "" if advanced else ('<p><a class="action" href="https://apps.apple.com/app/id6801502501">Download on the App Store</a></p>\n'
-                               '<p class="cta-note">Pre-release builds ship through <a href="https://testflight.apple.com/join/83djpNE7">TestFlight</a>.</p>')
-    choices = "" if advanced else signing_choices()
-    body_class = "" if advanced else ' class="home"'
-    connection = ('<p>Your wallet connects directly to the Bitcoin network. Your private keys stay on your phone unless you choose to export them.</p>'
-                  if advanced else '<p class="connection-note">Your phone connects directly to Bitcoin.</p>')
+def homepage():
+    title = "A Bitcoin wallet for your iPhone."
+    intro = "Send and receive bitcoin, keep track of payments, and save with other people."
     return f"""<!doctype html>
-<!-- Generated by scripts/build-site from docs/journeys.json and the app test source. -->
+<!-- Generated by scripts/build-site. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{escape(title)} — Winnow</title>
 <meta name="description" content="{escape(intro)}">
-<link rel="canonical" href="https://winnowwallet.com/{'advanced' if advanced else ''}">
-<link rel="stylesheet" href="site.css">{'<script src="signing.js" defer></script>' if not advanced else ''}
+<link rel="canonical" href="https://winnowwallet.com/">
+<link rel="stylesheet" href="site.css"><script src="signing.js" defer></script>
 <style>
-main{{max-width:64rem}} .journey{{display:flow-root;padding-bottom:1.2rem}}
-.app-shot{{float:right;width:min(34%,220px);height:auto;margin:0 0 1.5rem 2rem;border:1px solid var(--rule);border-radius:1.4rem}}
+main{{max-width:64rem}}
 .test-link,.dialog-close{{font:inherit;cursor:pointer;color:var(--seed);background:none;border:0;min-height:44px}}
 .test-link{{margin:.5rem 0;font-size:.95rem;font-weight:600;text-decoration:underline;text-underline-offset:3px}}
 .dialog-close{{padding:.4rem .7rem;border:1px solid var(--rule-2);border-radius:.5rem}}
@@ -197,33 +164,27 @@ dialog::backdrop{{background:rgb(0 0 0 / .55)}} html:has(dialog[open]){{overflow
 dialog a{{overflow-wrap:anywhere}}
 .action{{display:inline-block;background:var(--seed);color:var(--paper);padding:.7rem 1rem;border-radius:.6rem;font-weight:650}}
 .cta-note{{margin-top:-.4rem;font-size:.9rem}}
-.jump-links{{display:flex;flex-wrap:wrap;gap:.6rem 1rem;margin:1.5rem 0;font-size:.95rem}}
-.limit{{border-left:2px solid var(--rule-2);padding-left:1rem}}
 .signing-choices{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2rem}}
 .signing-choices article{{border-top:3px solid var(--seed);padding-top:1rem}}
 .signing-choices .lede{{font-size:.95rem}}
 @media(max-width:40rem){{.signing-choices{{grid-template-columns:1fr}}}}
-@media(max-width:35rem){{.app-shot{{float:none;display:block;width:190px;margin:1.2rem auto}}}}
 </style>
 </head>
-<body{body_class}>
+<body class="home">
 <header class="topbar"><div class="bar">
 <a class="mark" href="/"><b>&#8383;</b> Winnow</a>
-<nav class="links" aria-label="Main"><a href="/">Home</a><a href="/advanced">Advanced</a><a href="/testing">Testing</a><a href="/roadmap">Roadmap</a><a href="https://github.com/winnowwallet/winnow">GitHub</a></nav>
+<nav class="links" aria-label="Main"><a href="/">Home</a><a href="/roadmap">Roadmap</a><a href="https://github.com/winnowwallet/winnow">GitHub</a></nav>
 </div></header>
 <main>
-<p class="lede">Early access · open source{' · iPhone' if advanced else ''}</p>
+<p class="lede">Early access · open source</p>
 <h1>{escape(title)}</h1>
 <p class="lede">{escape(intro)}</p>
-{cta}
-{connection}
-{choices}
-<nav class="jump-links" aria-label="On this page">{links}</nav>
-{content}
-<p id="evidence"><a href="/testing">How we test Winnow</a></p>
-{"<section id='debugging'><h2>Local debugging tools</h2><p>Use winnow-debug for environment checks, simulator diagnostics, release-data generation, and network soak runs. These are operator tools, with their own command and protocol checks.</p><p><a href='" + SOURCE + "Tools/Debug/README.md'>Debugging commands and their limits</a></p></section>" if advanced else "<p><a href='/advanced'>Advanced features</a> · <a href='/roadmap'>What’s next</a></p>"}
+<p><a class="action" href="https://apps.apple.com/app/id6801502501">Download on the App Store</a></p>
+<p class="cta-note">Pre-release builds ship through <a href="https://testflight.apple.com/join/83djpNE7">TestFlight</a>.</p>
+<p class="connection-note">Your phone connects directly to Bitcoin.</p>
+{signing_choices()}
 </main>
-<footer><div class="bar"><a href="/">Winnow</a> · <a href="/advanced">Advanced</a> · <a href="/testing">Testing</a> · <a href="/roadmap">Roadmap</a> · <a href="/privacy">Privacy</a> · <a href="/architecture">How it works</a></div></footer>
+<footer><div class="bar"><a href="/">Winnow</a> · <a href="/roadmap">Roadmap</a> · <a href="/privacy">Privacy</a> · <a href="/architecture">How it works</a></div></footer>
 <script>
 document.querySelectorAll('[data-dialog]').forEach(button => {{
   const dialog = document.getElementById(button.dataset.dialog);
@@ -240,20 +201,48 @@ document.querySelectorAll('[data-dialog]').forEach(button => {{
 </html>
 """
 
+def recording_page(root):
+    manifest = root / "docs/journey-provenance.json"
+    if manifest.exists():
+        evidence = json.loads(manifest.read_text())
+        source = escape(evidence["source_sha"])
+        video = evidence["video"]
+        details = f'''<p>This recording and its {len(evidence["screenshots"])} checkpoint screenshots come from <a href="{escape(evidence["run_url"])}">this successful CI run</a>.</p>
+<p>Test: <code>{escape(evidence["test"])}</code>, {evidence["test_seconds"]:.3f} seconds. Source: <a href="{SOURCE.replace('/blob/main/', '/commit/')}{source}"><code>{source}</code></a>.</p>
+<p>The full host recording is retained without cuts or speed changes. The browser copy is H.264, {video["width"]} × {video["height"]}, {video["duration_seconds"]:.3f} seconds, {video["bytes"]:,} bytes.</p>
+<p><a href="/journey-provenance.json">Media checksums and original recording details</a>. The run’s app artifact contains the original recording, log, and result bundle. Those assertions establish success; the video illustrates the flow.</p>
+<p>A website-only build can reuse this recording. Its source and run above remain the ones that produced the media. Other guide illustrations retain their <a href="{SOURCE}docs/screenshots/README.md">historical provenance</a>.</p>'''
+    else:
+        details = f'''<p>This is the reviewed repository reference recording, retained when a build has no fresh or cached journey media. It does not claim a new integration run.</p>
+<p>Read its <a href="{SOURCE}docs/videos/README.md">recording provenance</a> and <a href="{SOURCE}docs/screenshots/README.md">screenshot provenance</a> for the tested source, date, and result.</p>'''
+    return f'''<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wallet journey — Winnow</title><link rel="stylesheet" href="/site.css">
+<style>video{{display:block;width:min(100%,26rem);max-height:75vh;margin:1.5rem auto;border:1px solid var(--rule);border-radius:1rem;background:#111}}</style></head>
+<body><main><p><a href="/">Winnow</a></p><h1>Wallet journey</h1>
+<video controls playsinline preload="metadata" poster="/screenshots/56-home-beginner.png" aria-label="Ordinary and shared-account payments in Winnow">
+<source src="/{VIDEO_PATH}" type="video/mp4">
+<a href="/{VIDEO_PATH}">Download the wallet journey recording</a>.
+</video>
+<h2>Recording provenance</h2>{details}</main></body></html>
+'''
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="fail if generated pages are stale")
+    parser.add_argument("--root", type=Path, default=ROOT, help="repository or staging root")
     args = parser.parse_args()
-    journeys, cases = load_journeys(ROOT)
-    for section, name in [("everyday", "index.html"), ("advanced", "advanced.html")]:
-        output = ROOT / "docs" / name
-        rendered = page(section, journeys, cases)
+    journeys, cases = load_journeys(args.root)
+    pages = {"index.html": homepage(),
+             "recording.html": recording_page(args.root)}
+    for name, rendered in pages.items():
+        output = args.root / "docs" / name
         if args.check:
             if not output.exists() or output.read_text() != rendered:
                 raise SystemExit(f"{name} is stale; run scripts/build-site")
         else:
             output.write_text(rendered)
-    print(f"{len(journeys)} documented journeys own {len(cases)} app scenarios")
+    print(f"Documented features: {len(journeys)}; UI test scenarios: {len(cases)}")
 
 if __name__ == "__main__":
     main()

@@ -19,5 +19,5 @@ received-payment labeling.
 [funding-source tests](../../../Tests/WalletCoreTests/FundingSourcesTests.swift)
 check the rules.
 [Send-preview tests](../../../AppTests/SendPreviewTests.swift) protect the app boundary,
-and [Core comparisons](../../../Tests/DifferentialTests/TransactionAndPSBTDiffTests.swift)
-check independently accepted transaction behavior.
+and the [UI journey](../../../UITests/README.md)
+checks that Core accepts and confirms the app's ordinary and shared-account payments.
