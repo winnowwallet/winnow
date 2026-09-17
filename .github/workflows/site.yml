@@ -1,60 +1,57 @@
 name: Website
 
-# docs/ is the single static website source; five papers and site.css are also
-# bundled by project.yml. CI validates those app resources with the same tree.
+# CI uploads the validated static site. This consumer deploys that exact
+# same-run artifact without checking out source or running site code.
 on:
-  workflow_dispatch:
-  push:
-    branches: [main]
-    paths: ['docs/**', 'scripts/check-site', 'scripts/build-site', 'UITests/**', '.github/workflows/site.yml']
-  pull_request:
-    paths: ['docs/**', 'scripts/check-site', 'scripts/build-site', 'UITests/**', '.github/workflows/site.yml']
+  workflow_call:
+    inputs:
+      artifact-name:
+        description: Exact name of the static site artifact from this run
+        required: true
+        type: string
+      deployment-branch:
+        description: main, pr-<number>, or preview-<run-id>
+        required: true
+        type: string
+    secrets:
+      CF_API_TOKEN:
+        required: true
+      CF_ACCOUNT_ID:
+        required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: site-${{ github.event.pull_request.number || github.ref }}
+  group: site-${{ inputs.deployment-branch }}
   cancel-in-progress: true
 
 jobs:
-  check:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-          lfs: true
-      - name: Validate generated journeys, local links and LFS images
-        run: |
-          python3 -m unittest discover -s scripts/tests -p test_build_site.py
-          scripts/check-site
-
   deploy:
-    needs: check
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment:
-      name: ${{ github.ref == 'refs/heads/main' && 'website' || 'website-preview' }}
+      name: ${{ inputs.deployment-branch == 'main' && 'website' || 'website-preview' }}
       url: ${{ steps.deploy.outputs.deployment-url }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-          lfs: true
-      - name: Select production or preview
-        id: target
+      - name: Prepare the deployment tool
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          ARTIFACT_NAME: ${{ inputs.artifact-name }}
+          DEPLOYMENT_BRANCH: ${{ inputs.deployment-branch }}
         run: |
-          if [[ "$GITHUB_REF" == refs/heads/main ]]; then
-            echo 'branch=main' >> "$GITHUB_OUTPUT"
-          elif [[ -n "$PR_NUMBER" ]]; then
-            echo "branch=pr-$PR_NUMBER" >> "$GITHUB_OUTPUT"
-          else
-            echo "branch=preview-$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
-          fi
+          # An empty download name would select every artifact in the run.
+          test -n "$ARTIFACT_NAME"
+          [[ "$DEPLOYMENT_BRANCH" =~ ^(main|pr-[0-9]+|preview-[0-9]+)$ ]]
+          # Wrangler installs beside site/, never inside downloaded content.
+          printf '{"private":true}\n' > package.json
+
+      - name: Download this run's validated website
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: site
+
       - name: Deploy the static website
         id: deploy
         uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
@@ -63,10 +60,10 @@ jobs:
           accountId: ${{ secrets.CF_ACCOUNT_ID }}
           packageManager: npm
           wranglerVersion: '4.125.0'
-          command: pages deploy docs --project-name=winnow --branch=${{ steps.target.outputs.branch }} --commit-dirty=true
+          command: pages deploy site --project-name=winnow --branch=${{ inputs.deployment-branch }} --commit-dirty=true
       - name: Show website URL
         env:
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment-url }}
-          DEPLOYMENT_BRANCH: ${{ steps.target.outputs.branch }}
+          DEPLOYMENT_BRANCH: ${{ inputs.deployment-branch }}
         run: |
           printf 'Website (%s): [%s](%s)\n' "$DEPLOYMENT_BRANCH" "$DEPLOYMENT_URL" "$DEPLOYMENT_URL" >> "$GITHUB_STEP_SUMMARY"

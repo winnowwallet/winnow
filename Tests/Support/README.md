@@ -3,7 +3,7 @@
 # TestSupport
 
 One fixture library for every test target: the SwiftPM suites
-(`BitcoinCoreTests`, `WalletCoreTests`, `DifferentialTests`)
+(`BitcoinCoreTests`, `WalletCoreTests`)
 and the Xcode bundles (`WinnowAppTests`, `WinnowAppUITests`) all link the
 `TestSupport` product declared in `Package.swift`, so a helper is written once
 and imported with `import TestSupport`.
@@ -28,19 +28,18 @@ configuration and under Xcode.
 | `InMemoryKeyStore.swift` | Test-only secret storage, outside the production Keychain implementation, plus `CountingKeyStore` (the same store, counting its `load` calls) |
 | `Vectors.swift` | `Vectors.data/string/json/decode` (each target passes its own `Bundle.module`), `VectorError`, `ttTags`, the shared BIP158 and BIP387/BIP390 vector loaders |
 | `TempFiles.swift` | `TempDir` (removed on deinit) and `tempFileURL(_:)` under one per-process root |
-| `SeededRandom.swift` | `SeededRandom` (SplitMix64) with the `int`/`count`/`below`/`pick`/`bytes` draws |
+| `SeededRandom.swift` | `SeededRandom` (SplitMix64) with the `int`/`count` draws for coin-selection property tests |
 | `Collectors.swift` | `MatchCollector`, `EventCollector`, `pollUntil`, `settle` |
 | `WalletFixtures.swift` | `testEntropy`, `testMnemonic`, `testMaster`, `fakeHeader`, `coinbaseInput`, `fakeMatch`, `matureCoinbase`, `testChainTip`, `makeTestWallet`, `fund`, `fundedWallet` |
 | `TestScripts.swift` | `TestScripts.p2trDestination`, `TestScripts.bip86FirstMainnetAddress` |
 | `TestVaults.swift` | Deterministic cosigner masters, key expressions, the 2-of-3 `multi_a` and 2-of-2 MuSig2 vault builders, `funding` |
 | `P2P/` | `SyntheticChain`/`makeSyntheticChain`, `minedHeader`, `makeTestParams`, `makeFakeSegwitTx`, `ResumeOnce`, `LoopbackNode`, `LoopbackHTTPServer` |
-| `Node/` | `BitcoinCLI`, `HostProcess`, `SignetMiner`: the dev custom-signet node harness for the differential and UI suites |
+| `Node/` | `BitcoinCLI`, `CoreSigner`, `HostProcess`, `SignetMiner`: the custom-signet node and other signing wallets used by the UI journey |
 
 Helpers that only one target can use stay in that target: `blockOutputScripts`
-in `BitcoinCoreTests/TestHelpers.swift`, the PSBT v0 envelope conversion and
-`diffEnabled` in `DifferentialTests/TestSupport.swift`, and anything that
+in `BitcoinCoreTests/TestHelpers.swift` and anything that
 conforms to an app protocol (`SilentAuthenticator`) in `AppTests/TestSupport.swift`.
 
-These helpers support [wallet tests](../WalletCoreTests/README.md),
-[Core comparisons](../DifferentialTests/README.md), and [GUI journeys](../../UITests/README.md).
+These helpers support [wallet tests](../WalletCoreTests/README.md)
+and the [UI journey](../../UITests/README.md).
 Run their consuming suites to validate changes; fixture code alone makes no assertions.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Provision the disposable custom-signet fixture the differential suite needs.
+# Provision the disposable custom-signet fixture the UI journey needs.
 #
 # The previous fixture existed only as a datadir on one workstation, and it was
 # lost with that machine's disk. Its challenge key went with it, which made the
@@ -36,7 +36,7 @@ cli() { bitcoin-cli -datadir="$DATADIR" -rpcport="$RPC_PORT" "$@"; }
 write_conf() {
   mkdir -p "$DATADIR"
   cat > "$DATADIR/bitcoin.conf" <<CONF
-# Winnow differential-test fixture: a disposable custom signet holding no value.
+# Winnow UI integration fixture: a disposable custom signet holding no value.
 # Regenerate with scripts/signet-fixture.
 signet=1
 
@@ -50,10 +50,11 @@ listen=1
 bind=127.0.0.1:$P2P_PORT
 discover=0
 connect=0
-# The suite diffs our filters against the node's, so it must serve them.
+# The wallet discovers payments through the node's compact filters.
 blockfilterindex=1
 peerblockfilters=1
 txindex=1
+debug=net
 fallbackfee=0.0002
 # Isolated: this chain has no seeds and must not look for peers.
 dnsseed=0
@@ -98,7 +99,7 @@ case "${1:-up}" in
     fi
     ensure_miner_wallet
     echo "fixture up: rpc=$RPC_PORT p2p=$P2P_PORT height=$(cli getblockcount)"
-    echo "run the suite with: WINNOW_DIFF=1 swift test --filter DifferentialTests"
+    echo "configure the simulator node connection as in UITests/README.md, then run scripts/ci-ui-journey <fresh-results-directory>"
     ;;
   down)
     cli stop >/dev/null 2>&1 || true

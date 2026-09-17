@@ -14,7 +14,7 @@ while nonces and partial signatures identify the derived output key.
 [app signing screens](../../WinnowApp/README.md) consume these types.
 
 [PSBT tests](../../../Tests/WalletCoreTests/PSBTTests.swift) cover parsing, combination,
-and finalization; [Core comparisons](../../../Tests/DifferentialTests/TransactionAndPSBTDiffTests.swift)
-check interoperability. [Fuzz regressions](../../../Tests/ToolsTests/Cases/psbt/README.md)
+and finalization; the [UI journey](../../../UITests/README.md)
+exchanges MuSig2 and 2-of-3 PSBTs with Core signers. [Fuzz regressions](../../../Tests/ToolsTests/Cases/psbt/README.md)
 keep a previously problematic encoding in the ordinary test run.
 Accepting a PSBT does not itself authorize its payment outputs; the app reviews those.

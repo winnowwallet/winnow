@@ -10,8 +10,8 @@ import P256K
 /// getblocktemplate → build coinbase → BIP325 block signature (legacy
 /// SIGHASH_ALL against the challenge) → PoW grind → submitblock.
 ///
-/// Shared by the SwiftPM differential and Xcode UI test targets through the
-/// TestSupport library.
+/// The UI journey uses this through the TestSupport library to mature
+/// fixture funding and confirm its payments.
 public enum SignetMiner {
     public enum MinerError: Error, Equatable {
         case wallet(String)
@@ -154,70 +154,9 @@ public enum SignetMiner {
         String(describing: type(of: error))
     }
 
-    /// Mines one block paying the subsidy (+fees) to `payoutScript`. Returns
-    /// the accepted block hash (display hex) whether or not it became the tip;
-    /// callers that need the tip use `mineOntoTip`.
-    ///
-    /// `result=connected-at-submit` is exactly what a nil `submitblock` answer
-    /// licenses — the node accepted the block and connected it *then*. It is
-    /// not a tip claim: this path never re-reads `bestBlockHash`, so a block
-    /// reorged out a moment later still traces as connected-at-submit.
-    ///
-    /// `call_s` and `draws_s` are equal here by construction — the call is
-    /// exactly one draw and does nothing else. Both are emitted anyway so one
-    /// awk recipe reads either trace line.
-    @discardableResult
-    public static func mineBlock(payingTo payoutScript: Data) async throws -> String {
-        let start = ContinuousClock.now
-        let submission: (hash: String, answer: String?)
-        do {
-            submission = try await submitMinedBlock(payingTo: payoutScript)
-        } catch {
-            // draws_s=0.000, not "-": no draw completed, so no exposure was
-            // accrued, and keeping the field numeric everywhere means one awk
-            // recipe reads every line shape without special cases.
-            trace("mineBlock result=threw attempts=1 drawn=0"
-                + " call_s=\(seconds(ContinuousClock.now - start)) draws_s=0.000"
-                + " error=\(label(error))")
-            throw error
-        }
-        let draw = ContinuousClock.now - start
-        trace("mineBlock result=\(submission.answer == nil ? "connected-at-submit" : "offchain")"
-            + " attempts=1 drawn=1 call_s=\(seconds(draw)) draws_s=\(seconds(draw))"
-            + " answer=\(submission.answer ?? "-")")
-        return submission.hash
-    }
-
-    /// Mines until one of our blocks is the tip. The dev node's background
-    /// miner produces a block every ~10 minutes, so losing a race is expected:
-    /// re-mine on the winner rather than failing the test.
-    ///
-    /// Mines until the chain holds at least `target` blocks, paying an
-    /// unspendable burn key. The dedicated fixture starts at genesis, so a
-    /// suite that reads "the recent chain" ages it here instead of assuming
-    /// a previous run already did — the assumption that failed the first
-    /// differential run on a fresh runner, at height 0. Distinct from the
-    /// filter tests' outsider script (0xEE): mining to that one would turn
-    /// the false-positive control into a false negative.
-    public static func ensureChainHeight(atLeast target: Int) async throws {
-        let burnScript = Data([0x51, 0x20]) + Data(repeating: 0xB0, count: 32)
-        while try BitcoinCLI.blockCount() < target {
-            try await mineOntoTip(payingTo: burnScript)
-        }
-    }
-
-    /// `maxAttempts` bounds one tip win, but the suites need long unbroken
-    /// runs of them — 101 in `FullLoopDiffTests`, 102 across the UI e2e — so
-    /// at a per-race loss probability `p` a suite survives with probability
-    /// `(1 - p^maxAttempts)^101`: 4.05% at p = 0.5 on the old bound of 5, and
-    /// 99.99% at 20. Extra attempts cost nothing on runs that lose no race,
-    /// which is what makes raising the bound safe *before* the measurement it
-    /// is waiting on; size it for real once the traces above give a p (#28).
-    ///
-    /// First measurement, uncontended: 0 losses in 101 draws, so p ≤ 2.9% at
-    /// 95% confidence. That is the regime with one suite on the node. The
-    /// contended p — two suites mining together — is still unobserved, and it
-    /// is the one this bound has to survive.
+    /// Mines one block paying `payoutScript` and verifies it became the tip.
+    /// Retries up to `maxAttempts` if another miner wins the race. An uncached
+    /// UI fixture needs 101 consecutive tip wins to mature its bank funding.
     @discardableResult
     public static func mineOntoTip(payingTo payoutScript: Data,
                             maxAttempts: Int = 20) async throws -> String {

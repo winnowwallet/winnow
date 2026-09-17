@@ -13,5 +13,5 @@ The directory is an organizational boundary, not another runtime layer.
 [BIP341 tests](../../../Tests/BitcoinCoreTests/BIP341Tests.swift) cover commitments
 and signatures; [BIP387](../../../Tests/BitcoinCoreTests/BIP387Tests.swift) and
 [BIP390 tests](../../../Tests/BitcoinCoreTests/BIP390Tests.swift) cover script policies.
-[Vault interop tests](../../../Tests/DifferentialTests/VaultInteropDiffTests.swift)
-exercise shared spending with Bitcoin Core.
+The [UI journey](../../../UITests/README.md)
+exercises shared spending with Core-held cosigner keys.

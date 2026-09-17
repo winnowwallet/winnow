@@ -9,42 +9,52 @@ is swift-secp256k1. Xcode resolution must match that root lockfile.
 
 | Workflow | When | Responsibility |
 | --- | --- | --- |
-| CI | PR, main push, manual, release caller | Complexity, package and debugging tests, app/Keychain tests, release warning and E2E exclusion gates, inspection smoke, provenance, fixed fuzz corpus |
-| LOC | Every PR, main push and manual run | cloc 2.10, committed paths, matching JSON/CSV/Markdown and merge-base deltas; 90-day artifacts subject to org limits |
+| CI | PR, main push, nightly, manual, release caller | One build job owns lint/test gates, package and debugging tests, app/Keychain tests and signet UI journey, release warning and E2E exclusion gates, inspection smoke, provenance, fixed fuzz corpus, and website preparation |
 | Fuzz sanitizers | Weekly or manual seed replay | Sustained address/thread sanitizer coverage; does not repeat normal suites |
-| Node integration | Differential and UI: same-repo PRs touching code, main pushes, nightly, release, confirmed manual run | Core differential tests and app UI tests, each on a fresh fixture owned by that job |
-| Release | New stable version tag or manual validation | Calls CI and Node integration, then signs/uploads and publishes only for tag pushes |
+| Release | New stable version tag or manual validation | Calls CI, then signs/uploads and publishes only for tag pushes |
 | TestFlight recovery | Manual, exact version and build number | Finish notes/group assignment for an existing upload |
 | App Store submission | Manual | Attach a processed build and optionally submit for review |
-| Website | docs changes or manual | Validate generated journey pages, links and LFS, then deploy the same static docs tree |
+| Website | Reusable job after CI build, for trusted PRs, main and manual previews | Download and deploy the ready website artifact from the same run; no checkout, build or test steps |
 
-CI and Node integration first select work on Linux with `scripts/ci-required`.
-README and website-only changes avoid Mac jobs; the HTML/CSS bundled in the app
-still requires an app build. PR jobs check out the PR head explicitly. A main
-push may reuse a successful run of the same workflow only when the entire Git
-tree matches and every required Mac job passed. The selection summary links the
-evidence. API errors, missing evidence and changed trees run fresh checks.
-Manual, nightly and release calls always run fresh checks.
+CI has only `build` and `website` jobs; there are no separate selector,
+complexity, architecture or size-report jobs. The build job checks out the PR
+head explicitly. `scripts/ci-journey-cache` hashes the test/build inputs,
+including HTML/CSS bundled in the app, and looks for normalized media from a
+successful same-repository run with the same inputs. Website-only edits can
+reuse that media, skip compilation and wallet tests, and still prepare and
+check a fresh website. Reuse preserves the original recording's source and run;
+it does not establish a new test result for the website revision. Missing
+artifacts, API errors or changed inputs run fresh checks. Manual, nightly and
+release calls always run fresh checks.
 
-Hosted runners carry the app and package checks. Persistent Intel and node
-runners additionally take pull requests from this repository, never forks.
-Separate Mac VMs can run jobs concurrently. Within each VM one Winnow listener
-serializes jobs, so simulator cleanup and the fixed fixture ports cannot collide.
-Node suites share the source in `Tests/Support/Node`; each job gets its own fixture.
+The single build job runs on GitHub-hosted Apple silicon with `macos-26`.
+Each job gets its own Mac environment; it does not depend on a developer's
+Mac mini or a registered self-hosted runner. Same-repository pull requests and
+trusted push, manual, nightly and release runs include the signet journey.
+Fork pull requests use the same hosted runner image for package and app checks,
+without the node fixture, UI journey or deployment credentials.
+The UI journey uses `Tests/Support/Node` for chain operations and Core-held
+cosigner keys. The broad differential target and its separate CI job are retired.
 
-Runner VM provisioning, registration, and machine inventory live in the separate
-private runner repository. Winnow requires a prepared macOS/Xcode seat with
-Bitcoin Core tools and the workflow's labels; it manages only its temporary
-node through `scripts/signet-fixture`.
+The workflow provisions Python on every run and installs the Bitcoin Core and
+video tools when a fresh journey is needed. Debug build products use a per-run
+DerivedData directory. The temporary node starts from a fresh fixture through
+`scripts/signet-fixture`, without a persistent prepared-bank or simulator cache.
+The iPhone journey covers ordinary-wallet,
+MuSig2 and 2-of-3 payments, with Core supplying the other signing keys.
 
-Each job owns fixture setup and teardown under its temporary directory.
-Test logs, screenshots, and result bundles use a fresh `mktemp` evidence
+The build job owns fixture setup and teardown under its temporary directory.
+Test logs, checkpoint screenshots, the continuous video, and result bundles use a fresh `mktemp` evidence
 directory per job so cancelled runs cannot poison a later Xcode result path; prior
-wallet state and difficulty retargets cannot affect the next run.
+wallet state and difficulty retargets cannot affect the next run. The single
+`app-tests-<run-id>` artifact contains `debug-build.log`, `units/` with
+`AppTests.xcresult`, `journey/` with `NodeUI.xcresult`, `journey.mp4`,
+`video.log` and `node-screenshots/`, plus `release-build.log`.
 The three Keychain attribute checks use the app's existing iOS test host.
 They verify recorded attributes and round-trip storage; device-lock enforcement
 still needs real hardware. The retired story/media workflow has no CI role;
-app screenshots now come from the asserted UI journeys.
+app screenshots and video now come from the asserted UI journey through
+`scripts/ci-ui-journey`.
 
 ## Release
 
@@ -66,11 +76,13 @@ The signed app archive is checked for E2E controls and its provenance is
 attached to the GitHub release.
 
 The CI workflow is reused directly, so release definitions cannot drift into a
-second copy of package/app/fuzz checks. Debug app tests already build the app;
-there is no extra debug build. Native inspection smoke and provenance use the same
+second copy of package/app/fuzz checks. One unfiltered Debug `build-for-testing`
+builds the app and both test runners. App unit tests and the UI journey then
+reuse those products with `test-without-building`, using the same simulator
+and DerivedData directory. Native inspection smoke and provenance use the same
 warning-checked release binary. Fuzz smoke reuses its compiled modules, while
 `swift test` runs the library and debugging-tool suites together once per
-architecture. The iOS Release build separately checks shipping compiler settings
+run. The iOS Release build separately checks shipping compiler settings
 and bundled resources.
 
 If App Store Connect processing outlasts a release, use **TestFlight recovery**
@@ -82,19 +94,38 @@ and tools change together and need no internal version bumps.
 
 ## Website
 
-`docs/` is static HTML. `scripts/build-site` generates home and Advanced from
-`docs/journeys.json` and app-test selectors; the other pages are authored directly.
+`docs/` is static HTML. `scripts/build-site` validates the journey inventory
+against app-test selectors and generates the homepage and recording page;
+the other pages are authored directly. The retired Advanced URLs redirect home.
 The app bundles the five design papers and `site.css` directly from that directory. Edit them once.
 Run `scripts/build-site` after changing journey inputs, then `scripts/check-site`
 after `git lfs pull` to check local page/asset links and reject unresolved image pointers.
 
+The CI build job runs the website regressions and calls
+`scripts/prepare-site-artifact <output> --journey <results>` after a fresh
+journey, or `--media <bundle>` when test inputs match retained evidence.
+`--media-output <directory>` writes the dedicated reusable bundle: normalized
+video, all 16 checkpoints, and `journey-provenance.json`. Reuse copies those
+files unchanged into a freshly generated site. The generated `/recording` page
+identifies the original source, run and media processing. `journey-media-<hash>`
+artifacts last 30 days; the ready `website-<run-id>-<attempt>` artifact lasts
+14 days. Expired media requires a fresh test run.
+
+The reusable website job downloads only that run's exact named website artifact
+and deploys it. It has no source checkout, generation or tests and does not run
+code from the downloaded content.
+
 Website deploys to the existing Cloudflare Pages project `winnow`, using
 `CF_API_TOKEN` and `CF_ACCOUNT_ID`. Only `main` deploys production at
-<https://winnowwallet.com>. PRs and manually selected branches get previews;
+<https://winnowwallet.com>. Trusted PRs use `pr-<number>` previews; manually
+selected non-main branches use `preview-<run-id>`;
 the deployment URL appears in the Actions summary and environment. Fork PRs
 validate without deployment credentials. There is no second GitHub Pages site.
 
 ## LOC policy
+
+The LOC workflow is removed. `scripts/report-loc.py` remains a manual tool;
+size reports do not add CI jobs or gate merges.
 
 Total source sums nonblank, noncomment lines in app/library/CLI source, tests,
 webpages and tooling. Other text has its own physical nonblank count. Fixtures,
@@ -109,5 +140,6 @@ python3 scripts/report-loc.py --cloc /path/to/cloc-2.10.pl \
   --ref HEAD --base-ref origin/main --output-dir /tmp/winnow-loc
 ```
 
-Both sides of a PR use the head policy at their merge base. LOC growth is
-informational; counting, validation and upload failures fail the job.
+Both sides of a comparison use the head policy at their merge base. The tool
+checks the cloc release checksum and fails if counting or validation fails;
+save or share its output explicitly when a size report is useful.

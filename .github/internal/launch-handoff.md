@@ -2,6 +2,9 @@
 
 Status recorded 2026-08-17. This is a handoff checkpoint, not authorization to spend bitcoin, switch the default network, tag v1.0.0, upload assets, or submit the app.
 
+The runner setup instructions below are historical. The [current CI runbook](ci-release.md)
+uses GitHub-hosted Apple silicon with a fresh disposable signet fixture.
+
 ## Merged and verified
 
 - PR #36 is merged. Push and pull-request CI now runs only the package and app-build suites; both passed on the PR and again on `main`. Node-backed differential/UI E2E is manual-only and requires a dedicated `node-e2e` runner label, so it cannot fall back to a developer workstation. The former local custom-signet services and repository RPC credential were removed. Issue #35 is closed.

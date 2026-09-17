@@ -243,6 +243,38 @@ struct VaultAdmissionTests {
         #expect(draft.cosigners.count == 2)
     }
 
+    /// A MuSig2 group takes one seat of a k-of-n through its BIP328
+    /// synthetic xpub: depth 0, the fixed chaincode, the aggregate key, and
+    /// an origin naming only the key's own fingerprint. Admission alone is
+    /// not the claim — a well-formed depth-0 tpub of anything would pass —
+    /// so the seat must resolve to the group's own key-path internal key.
+    @Test("a BIP328 synthetic group xpub is admitted as a script-path cosigner")
+    func syntheticGroupXpubAdmitted() throws {
+        let (group, _) = try TestVaults.muSig2Vault()
+        let context = try group.muSig2Context(choice: 0, index: 0)
+        let synthetic = try MuSig.syntheticExtendedKey(aggregatePublicKey: context.aggregate)
+        let groupSeat = "[\(String(format: "%08x", synthetic.fingerprint))]"
+            + synthetic.serialized(network: .testnet) + "/<0;1>/*"
+        var draft = VaultDraft(role: .scriptPath)
+        try draft.add(groupSeat, network: .signet)
+        #expect(!draft.canBuild)
+        try draft.add(TestVaults.keyExpression(master: TestVaults.masters()[2]), network: .signet)
+        #expect(draft.canBuild)
+        #expect(draft.threshold == 2)
+        #expect(draft.cosigners.count == 2)
+        let seatKey = try draft.cosigners[0].publicKey(index: 0, choice: 0)
+        #expect(Data(seatKey.dropFirst()) == context.internalKey,
+                "the seat must derive the group's internal key, not merely parse")
+
+        let descriptor = try Vault.multiADescriptor(threshold: draft.threshold,
+                                                    cosigners: draft.cosigners.map(\.expression))
+        let vault = try Vault(descriptor: descriptor, network: .signet)
+        #expect(vault.isScriptPath)
+        #expect(vault.threshold == 2)
+        #expect(vault.signerCount == 2)
+        #expect(try vault.signerKeys().contains(seatKey))
+    }
+
     /// Script-path and MuSig2 participants use different derivation shapes, so
     /// the policy must not change underneath expressions already entered.
     @Test("the role cannot change once cosigners have been entered")

@@ -8,7 +8,7 @@ They keep release decisions tied to observations rather than undocumented confid
 
 [The audit manifest](audit-manifest.md) identifies evidence,
 while [the findings register](findings.md) records results and
-remaining work. [The testing guide](../testing.html) explains suite limits.
+remaining work. [The testing policy](../testing.md) explains suite limits.
 Raw [soak observations](evidence/README.md) remain separate from
 the interpretation written in the reports.
 

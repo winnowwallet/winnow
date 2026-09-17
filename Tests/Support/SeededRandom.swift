@@ -1,5 +1,3 @@
-import Foundation
-
 /// A SplitMix64 generator: the same generator as `WinnowFuzz`, so a failing
 /// case can be replayed there, and deterministic so a failure names the seed
 /// and iteration that reproduce it exactly.
@@ -26,13 +24,4 @@ public struct SeededRandom: RandomNumberGenerator {
 
     /// A draw in `0 ..< max(upperBound, 1)`.
     public mutating func count(_ upperBound: Int) -> Int { Int(next() % UInt64(max(upperBound, 1))) }
-
-    /// A draw in `0 ..< bound`; zero for a bound of zero or less.
-    public mutating func below(_ bound: Int) -> Int { bound <= 0 ? 0 : Int(next() % UInt64(bound)) }
-
-    public mutating func pick<T>(_ options: [T]) -> T { options[below(options.count)] }
-
-    public mutating func bytes(_ count: Int) -> Data {
-        Data((0 ..< count).map { _ in UInt8(next() & 0xFF) })
-    }
 }

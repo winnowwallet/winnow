@@ -25,7 +25,6 @@
       <a href="/custody">How you hold it</a>
       <a href="/present">Talk</a>
       <a href="/architecture">Architecture</a>
-      <a href="/testing">Testing</a>
       <a href="https://github.com/winnowwallet/winnow">Source</a>
     </nav>
   </div>
@@ -127,7 +126,7 @@
   </tbody>
   </table></div>
   <p><code>matchesBundle</code> is <code>spentSinceBundle.isEmpty</code>. A stale export (you spent after you wrote the file) is a report the user can see, not a silent rewrite. Discovered UTXOs are applied — the point of the forward scan is to catch up — but a claimed-and-spent coin is never left in the spendable set as if the bundle were current.</p>
-  <p>The report core (<code>ImportReport.make</code>) is a pure function of the bundle plus the <code>MatchEffect</code>s of the scanned blocks, so it is unit-tested without a network. The e2e suite drives the real app through an import and captures the report screen (<code>14-import-report.png</code>); latest run spent 18.79s in verify (signet, iPhone 17 Pro Max simulator, 2026-08-17, <code>screenshots/timings.json</code>).</p>
+  <p>The report core (<code>ImportReport.make</code>) is a pure function of the bundle plus the <code>MatchEffect</code>s of the scanned blocks, so it is unit-tested without a network. Import is outside the current payment journey. An earlier UI suite captured the report (<code>14-import-report.png</code>); its 18.79s verification measurement was recorded on 2026-08-17 using a signet iPhone 17 Pro Max simulator (<code>screenshots/timings.json</code>), not the current test.</p>
   <p>Cost is proportional to how stale the bundle is, not to how old the wallet is. A bundle exported at the tip is a JSON parse and a zero-length scan.</p>
   <hr />
   <h2 id="what-a-lying-bundle-can-and-cannot-do">4. What a lying bundle can and cannot do</h2>

@@ -259,7 +259,7 @@
     <p class="sub" style="margin-top:1.1rem;max-width:40rem">Five choices that make a private wallet practical on a phone. Each one is a real trade, drawn rather than asserted.</p>
     <nav aria-label="Technical guides" id="technical-guides">
       <p class="sub" style="margin-top:1.1rem">Read in detail: <a href="/mobile">phone constraints</a> · <a href="/read-side">discovery and trust</a> · <a href="/write-side">payments and relay</a> · <a href="/vaults">vault policies</a> · <a href="/import">backup and import</a>.</p>
-      <p class="sub"><a href="/testing">Tests and evidence</a> · <a href="/roadmap">Planned work</a></p>
+      <p class="sub"><a href="https://github.com/winnowwallet/winnow/actions">Current test runs</a> · <a href="/roadmap">Planned work</a></p>
     </nav>
   </div>
 </header>
@@ -359,7 +359,7 @@
   <!-- ═══ FIGURE 4 ═══ -->
   <figure class="fig" id="fig-musig">
     <h2>4 · A second signing device, one signature.</h2>
-    <p class="sub">Elena keeps a key on her phone and uses an independent signer for the second key. Her 2-of-2 MuSig2 savings require both for every payment. Two rounds, public nonces then partial signatures, produce a single Schnorr signature. The app test uses Bitcoin Core 31.1 as the second signer and restores the account from a backup after payment. Hardware-wallet compatibility needs a separate test.</p>
+    <p class="sub">Elena keeps a key on her phone and uses an independent signer for the second key. Her 2-of-2 MuSig2 savings require both for every payment. Two rounds, public nonces then partial signatures, produce a single Schnorr signature. The focused integration journey uses Bitcoin Core as the second signer, then exercises a script-path 2-of-3 payment. The private signet fixture mines confirmation blocks automatically. Focused app tests cover backup state. Hardware-wallet compatibility needs a separate test.</p>
     <div class="stage">
       <div class="f4">
         <div class="f4-stage">

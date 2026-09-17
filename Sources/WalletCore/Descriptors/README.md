@@ -13,5 +13,5 @@ It describes policies and signing operations; it does not own app state or peers
 [Descriptor tests](../../../Tests/BitcoinCoreTests/DescriptorTests.swift),
 [parser bounds](../../../Tests/BitcoinCoreTests/DescriptorBoundsTests.swift), and
 [MuSig2 tests](../../../Tests/BitcoinCoreTests/MuSig2Tests.swift) cover derivation,
-malformed input, known answers, and session safety. [Core comparisons](../../../Tests/DifferentialTests/DescriptorDiffTests.swift)
-check agreement with an independent implementation.
+malformed input, known answers, and session safety. The [UI journey](../../../UITests/README.md)
+uses Core wallets as the other signers for MuSig2 and 2-of-3 payments.

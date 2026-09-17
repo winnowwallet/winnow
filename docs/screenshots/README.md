@@ -1,24 +1,66 @@
 [Back to main README](../../README.md)
 
-# Selected app captures
+# App screenshots and historical illustrations
 
-These committed images illustrate app journeys on the website; timings.json
-retains capture-session observations. They let readers see the GUI being described.
-PNGs use Git LFS, so fetch the image objects before viewing or publishing.
+The [recording page](https://winnowwallet.com/recording) presents one continuous
+journey video with its source provenance.
+The recorded ordinary, MuSig2, and script-path 2-of-3 payment journey retained
+16 checkpoint screenshots as secondary run artifacts. The homepage keeps the
+overview and signing illustrations; detailed recording and test evidence live
+on separate pages.
 
-[UI tests](../../UITests/README.md) produce new captures in each run's artifacts.
-[Journey metadata](../journeys.json) selects the images used by generated pages,
-and [build-site](../../scripts/build-site) checks their named capture ownership.
-Select replacements from a successful run of the intended revision and retain its
-provenance in the change; follow the [screenshot guidance](../../.github/internal/app-store-screenshots.md).
+| Capture | Moment |
+| --- | --- |
+| `01-onboarding` | Before creating the wallet. |
+| `03-receive` | The receive address after skipping the optional label. |
+| `56-home-beginner` | The funded one-screen wallet. |
+| `06-send-review` | The destination, amount, fee, and total before sending. |
+| `08-send-confirmed` | The receipt after confirmation. |
+| `09-home-after-send` | Wallet history after the payment. |
+| `35-extra-device-policy` | Funded phone-plus-Core account and its 2-of-2 requirement. |
+| `36-extra-device-review` | Account, destination, amount, fee, and total before approval. |
+| `37-extra-device-waiting` | The signing exchange waiting for the Core reply. |
+| `39-extra-device-sent` | The MuSig2 payment sent, with its transaction ID. |
+| `40-extra-device-confirmed` | The MuSig2 account’s remaining confirmed balance. |
+| `26-savings-share` | Public account details shared with Alice and Bob. |
+| `27-savings-funded` | The funded script-path account and its 2-of-3 requirement. |
+| `14-approval-waiting` | The phone’s approval, waiting for one Core cosigner. |
+| `15-approval-sent` | The 2-of-3 payment sent, before confirmation. |
+| `28-savings-confirmed` | The 2-of-3 account’s remaining confirmed balance. |
 
-Neither an image nor the timing file proves that the current app passes its
-tests. The historical `store-*.png` candidates were retired with the 0.7.0
-one-screen interface; they showed the four-tab layout with a People tab.
-[check-site](../../scripts/check-site) checks referenced assets and unresolved LFS
-pointers; reviewing the actual rendered image remains necessary.
+These stills share the [published recording’s provenance](../videos/README.md):
+`test01CreateReceiveSendConfirm`, source
+[`809c383`](https://github.com/winnowwallet/winnow/commit/809c38313c1262b0526e24870bea2d144a37771b),
+iPhone 17 Pro simulator running iOS 26.5, 2026-09-17. The test passed with zero
+failures in 213.202 seconds; the app journey measured 212.342 seconds and bank
+preparation measured 0.325 seconds. The same run checked the funded destinations,
+cosigner coins, accepted payments and change outputs against Bitcoin Core,
+then discovered confirmation through the app.
 
-The retained Send captures (`05`, `07`, and `08`) come from
+The retained local evidence is
+`recovery/shared-account-2026-09-17/video-run/`: `NodeUI.xcresult`, `node-ui.log`,
+`journey.mp4`, and the 16 original PNGs in `screenshots/`. The captures come from
+[WinnowAppUITests.swift](../../UITests/WinnowAppUITests.swift) and its
+[MultisigJourney.swift](../../UITests/MultisigJourney.swift) continuation.
+Keep replacements with the matching log, result bundle, revision, device, and
+date. iPad evidence must be recorded separately.
+
+Existing guides retain other screenshots as dated illustrations. This run does
+not refresh those images, their flows, or the old `timings.json`.
+A screenshot is a recorded moment, not proof that the current test passed.
+PNGs use Git LFS; [check-site](../../scripts/check-site) checks referenced assets
+and unresolved pointers before publishing. Follow the
+[screenshot guidance](../../.github/internal/app-store-screenshots.md) when
+selecting images.
+
+## Historical capture provenance
+
+The records below describe earlier suites. The 16 exact filenames listed above
+now use the September 17 recording; other images retain their earlier provenance.
+Historical `store-*.png` candidates
+were retired with the 0.7.0 one-screen interface and showed the four-tab layout.
+
+Earlier Send captures (`05`, `07`, and `08`) came from
 [app revision d02ffa3](https://github.com/winnowwallet/winnow/commit/d02ffa314d198f4759069e8398d84bb8a50f19d2).
 All 16 app journeys passed in [this UI run](https://github.com/winnowwallet/winnow/actions/runs/34171647009),
 including editing a payment, keeping custom fees out of beginner mode, opening
@@ -26,29 +68,29 @@ payment diagnostics, and following Bitcoin Core confirmation.
 The [run artifact](https://github.com/winnowwallet/winnow/actions/runs/34171647009/artifacts/10036468223)
 contains the original captures, log, and result bundle.
 
-The retained Receive and account captures (`03`, `10`, and `11`) come from
+Earlier Receive and account captures (`03`, `10`, and `11`) came from
 [app revision 4559ecd](https://github.com/winnowwallet/winnow/commit/4559ecd150b2f3399f0b4613cce9db689bcb2d51).
-They are unchanged originals captured locally on 2026-09-08 with an iPhone 17 Pro
+Those captures were taken locally on 2026-09-08 with an iPhone 17 Pro
 simulator running iOS 26.5 against a disposable signet node.
 All 16 app journeys passed in that run, along with the app unit tests.
 The local evidence is `recipients-final-ui.xcresult` and
 `winnow-recipients-final-ui.log`.
-The recipient journey covers saving, renaming, restarting, removing and re-adding,
-then paying through Send. The extra-device journey uses Bitcoin Core as the other
-signer and covers setup, review, interruption and restart, both approvals, the
+That recipient journey covered saving, renaming, restarting, removing and re-adding,
+then paying through Send. That extra-device journey used Bitcoin Core as the other
+signer and covered setup, review, interruption and restart, both approvals, the
 sent receipt, and restoring the pre-payment backup to find the remaining balance.
 
-The current saved-recipient review (`25`) and
-extra-device captures (`35` through `39`) use
+The earlier saved-recipient review (`25`) and
+extra-device captures (`35` through `39`) came from
 [app source c5dd3c1](https://github.com/winnowwallet/winnow/commit/c5dd3c1ce7b5f14eb12326f1ce5afae77bb37f81).
-They are unchanged originals captured locally on 2026-09-08 with an iPhone 17 Pro
+Those captures were taken locally on 2026-09-08 with an iPhone 17 Pro
 simulator running iOS 26.5 against a disposable signet node.
 All 16 app journeys passed, along with 148 XCTest cases and 8 Swift Testing tests.
 The local evidence is `one-send-final-ui.xcresult` and
 `winnow-one-send-final-ui.log`; originals are in `one-send-final-screenshots`.
-The ordinary, shared, and phone-plus-Core journeys use the same Send form and
-review. Shared payments continue directly to approvals. The Core journey also
-checks leaving and restarting the signing exchange, the completed payment, and
+Those ordinary, shared, and phone-plus-Core journeys used the same Send form and
+review. Shared payments continued directly to approvals. That Core journey also
+checked leaving and restarting the signing exchange, the completed payment, and
 restoring the earlier backup to find the remaining balance.
 
 The sender-label captures (`40-save-sender`, `41-send-to-person`, and
@@ -67,11 +109,10 @@ journey's reset scenario passed in the same run (`winnow-kimi-t19.xcresult`):
 the remembered good peers are forgotten and the manual fixture peer dials back.
 
 The 0.7.0 captures (`01-onboarding`, `06-send-review`, `24-saved-recipient`,
-`27-shared-payment-review` and the new `56-home-beginner`, which replaces
-`23-settings-beginner` now that beginner mode has no Settings) are unchanged
-originals captured locally on 2026-09-15 with an iPhone 17 Pro simulator
-running iOS 26.5, from the `ui/one-screen` working tree that this change
-commits. The signet fixture was recreated from the CI template
+`27-shared-payment-review` and `56-home-beginner`, which replaced
+`23-settings-beginner` when beginner mode lost Settings) were captured locally
+on 2026-09-15 with an iPhone 17 Pro simulator
+running iOS 26.5, from the `ui/one-screen` working tree. The signet fixture was recreated from the CI template
 (`scripts/signet-fixture up` with `WINNOW_FIXTURE_TEMPLATE`) before the
 first-wallet captures. The iPhone and iPad first-wallet stories share the
 fixed-entropy wallet, so `56-home-beginner`, taken after both, shows two of
@@ -85,9 +126,9 @@ local evidence is `final2-fw.xcresult` and `final2-fw-b.xcresult`
 (shared-savings) with their logs.
 
 The Tor captures (`48-tor-stopped` through `52-tor-onion-peer`) were removed
-with the embedded Tor client in 0.7.1, and the peer-refresh journey now shows
+with the embedded Tor client in 0.7.1, and the peer-refresh journey then captured
 `46-peer-refresh`, recaptured by `test20PeerCatalogRefreshAndFailureRecovery`
-on the `remove/tor` working tree that this change commits: an unchanged
+on the `remove/tor` working tree: an unchanged
 original taken locally on 2026-09-15 with an iPhone 17 Pro simulator running
 iOS 26.5, against the signet fixture recreated from the CI template. The
 first-wallet story and the devices-and-network journeys 05, 09, 19 and 20
