@@ -58,25 +58,16 @@ enum Timings {
         Screenshots.directory.appending(path: "timings.json")
     }
 
-    /// The simulator's device name (e.g. "iPhone 17"), resolved host-side via
-    /// simctl against the runner's SIMULATOR_UDID.
-    static var deviceName: String {
+    /// The simulator's device name (e.g. "iPhone 17"), from the environment
+    /// the simulator gives every process it runs. `simctl` is not an option
+    /// from in here: CoreSimulatorService refuses the connection and the
+    /// spawn hangs for twenty seconds before failing, once per record.
+    static let deviceName: String = {
         let environment = ProcessInfo.processInfo.environment
-        if let udid = environment["SIMULATOR_UDID"],
-           let listed = try? HostProcess.run("/usr/bin/xcrun",
-                                             ["simctl", "list", "devices", "booted", "-j"]),
-           listed.status == 0,
-           let data = listed.stdout.data(using: .utf8),
-           let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let runtimes = parsed["devices"] as? [String: [[String: Any]]] {
-            for devices in runtimes.values {
-                for device in devices where device["udid"] as? String == udid {
-                    if let name = device["name"] as? String { return name }
-                }
-            }
-        }
-        return environment["SIMULATOR_DEVICE_NAME"] ?? "iOS Simulator"
-    }
+        return environment["SIMULATOR_DEVICE_NAME"]
+            ?? environment["SIMULATOR_MODEL_IDENTIFIER"]
+            ?? "iOS Simulator"
+    }()
 
     /// Write only this process's observations. A partial run must never
     /// relabel a previous run's scenarios with today's timestamp.

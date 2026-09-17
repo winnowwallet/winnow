@@ -226,7 +226,7 @@ class WinnowAppJourney: XCTestCase {
         app.buttons["createWalletButton"].tap()
         XCTAssertTrue(journey.backupConfirmationIsReachable(app), "backup sheet did not appear after create")
         XCTAssertTrue(journey.confirmBackupAndContinue(app), "backup confirmation was not completed")
-        XCTAssertTrue(app.staticTexts["balanceText"].waitForExistence(timeout: 60), "home did not appear")
+        XCTAssertTrue(app.staticTexts["balanceText"].appears(within: 60), "home did not appear")
         _ = try await fundFromBank(try walletReceiveAddress(index: 0), sats: 5_000_000)
         XCTAssertTrue(journey.poll(timeout: 180, interval: 2, "the story's wallet sees its money") {
             journey.nudgeSync(app)
@@ -300,10 +300,10 @@ class WinnowAppJourney: XCTestCase {
         app.launch()
         Self.runningRun = run ?? Self.runName
         if expectOnboarding {
-            XCTAssertTrue(app.buttons["createWalletButton"].waitForExistence(timeout: 120),
+            XCTAssertTrue(app.buttons["createWalletButton"].appears(within: 120),
                           "onboarding did not appear")
         } else {
-            XCTAssertTrue(app.staticTexts["balanceText"].waitForExistence(timeout: 120),
+            XCTAssertTrue(app.staticTexts["balanceText"].appears(within: 120),
                           "wallet home did not appear")
             // The mode is a persisted setting: a journey that switched it
             // and left decides nothing for the one that relaunches.
@@ -331,10 +331,10 @@ class WinnowAppJourney: XCTestCase {
             launch["WINNOW_E2E_CHALLENGE"] = BitcoinCLI.challengeHex
             // One peer is the whole fixture, so the pool is not "connecting"
             // for the rest of the run; and a journey waiting for a block to
-            // be scanned in waits on a ten-second loop, not the 45-second
+            // be scanned in waits on a three-second loop, not the 45-second
             // one a phone in a pocket gets.
             launch["WINNOW_E2E_PEER_COUNT"] = "1"
-            launch["WINNOW_E2E_SYNC_INTERVAL"] = "10"
+            launch["WINNOW_E2E_SYNC_INTERVAL"] = "3"
         }
         return launch
     }
@@ -442,7 +442,7 @@ class WinnowAppJourney: XCTestCase {
             app.openSend()
             if app.buttons["newPaymentButton"].exists { app.buttons["newPaymentButton"].tap() }
             let picker = app.buttons["sendAccountPicker"]
-            XCTAssertTrue(picker.waitForExistence(timeout: 20))
+            XCTAssertTrue(picker.appears(within: 20))
             // The picker is a menu, and its label carries the choice
             // ("Account, Everyday wallet"). On the hosted iPad a tap that
             // lands while the menu is still animating in is lost, and the
@@ -454,7 +454,7 @@ class WinnowAppJourney: XCTestCase {
             for _ in 0 ..< 3 where !chosen {
                 if !choice.exists {
                     picker.tap()
-                    XCTAssertTrue(choice.waitForExistence(timeout: 10), "the account menu did not open")
+                    XCTAssertTrue(choice.appears(within: 10), "the account menu did not open")
                 }
                 choice.tap()
                 chosen = picker.waitUntil(took, timeout: 8)
@@ -469,7 +469,7 @@ class WinnowAppJourney: XCTestCase {
         app.typeInto("amountField", amount)
         XCTAssertTrue(scrollUntilExists(app, app.buttons["reviewButton"]))
         app.buttons["reviewButton"].tap()
-        XCTAssertTrue(app.staticTexts["reviewAccount"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.staticTexts["reviewAccount"].appears(within: 30))
         XCTAssertEqual(app.staticTexts["reviewAccount"].label, name)
         XCTAssertEqual(app.staticTexts["reviewDestination"].label, address)
         XCTAssertTrue(scrollUntilExists(app, app.buttons["sendButton"]))
@@ -498,12 +498,12 @@ class WinnowAppJourney: XCTestCase {
         let row = app.buttons["chooseRecipient-\(name)"]
         if row.exists { return }
         app.buttons["addRecipientButton"].tap()
-        XCTAssertTrue(app.buttons["personPasteButton"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["personPasteButton"].appears(within: 20))
         app.buttons["personPasteButton"].tap()
-        XCTAssertTrue(app.staticTexts["personPayToSummary"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["personPayToSummary"].appears(within: 10))
         XCTAssertEqual(app.staticTexts["personPayToSummary"].label, "Fresh address each payment")
         savePerson(in: app)
-        XCTAssertTrue(row.waitForExistence(timeout: 30), "recipient was not saved")
+        XCTAssertTrue(row.appears(within: 30), "recipient was not saved")
     }
 
     /// Alice's receive address at `index`, as her wallet would derive it from
@@ -571,7 +571,7 @@ class WinnowAppJourney: XCTestCase {
     fileprivate func accountBackup(in app: XCUIApplication) throws -> ImportBundle {
         XCTAssertTrue(scrollUntilExists(app, app.buttons["accountBackupButton"]))
         app.buttons["accountBackupButton"].tap()
-        XCTAssertTrue(app.buttons["exportConfirmButton"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["exportConfirmButton"].appears(within: 20))
         app.buttons["exportConfirmButton"].tap()
         let backup = try stagedExport(in: app, expectingNote: "Recovery words are not included. Keep them separately.",
                                       "no staged share link after the account backup").bundle
@@ -587,9 +587,9 @@ class WinnowAppJourney: XCTestCase {
     /// backups so the next change to the sheet cannot desync them.
     fileprivate func stagedExport(in app: XCUIApplication, expectingNote expected: String,
                               _ message: String) throws -> (path: String, bundle: ImportBundle) {
-        XCTAssertTrue(app.buttons["exportShareLink"].waitForExistence(timeout: 60), message)
+        XCTAssertTrue(app.buttons["exportShareLink"].appears(within: 60), message)
         let note = app.staticTexts["backupContentsNote"]
-        XCTAssertTrue(note.waitForExistence(timeout: 20))
+        XCTAssertTrue(note.appears(within: 20))
         XCTAssertEqual(note.label, expected)
         return try stagedBackup()
     }
@@ -752,7 +752,7 @@ final class StoryFirstWallet: WinnowAppJourney {
         app.buttons["createWalletButton"].tap()
         // Backup is deliberately independent of peer/header catch-up.
         let toggle = app.switches["writtenDownToggle"]
-        XCTAssertTrue(toggle.waitForExistence(timeout: 30), "backup sheet did not appear promptly")
+        XCTAssertTrue(toggle.appears(within: 30), "backup sheet did not appear promptly")
         XCTAssertTrue(app.buttons["backupCopyPhraseButton"].exists,
                       "backup sheet does not offer an explicit phrase copy")
         Timings.record("onboarding", step: "wallet-create", from: createStart)
@@ -787,7 +787,7 @@ final class StoryFirstWallet: WinnowAppJourney {
         XCTAssertTrue(scrollUntilExists(app, done, maxSwipes: 4), "backup Done button was not reachable")
         XCTAssertTrue(poll(timeout: 10, interval: 1, "backup Done button enabled") { done.isEnabled })
         done.tap()
-        XCTAssertTrue(app.staticTexts["balanceText"].waitForExistence(timeout: 60),
+        XCTAssertTrue(app.staticTexts["balanceText"].appears(within: 60),
                       "wallet home did not appear after backup")
         Timings.record("onboarding", step: "backup→home", from: backupStart)
     }
@@ -799,14 +799,14 @@ final class StoryFirstWallet: WinnowAppJourney {
 
         let receiveStart = Date()
         app.buttons["receiveButton"].tap()
-        XCTAssertTrue(app.textFields["receiveAddressLabelField"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.textFields["receiveAddressLabelField"].appears(within: 30))
         XCTAssertFalse(app.staticTexts["receiveAddress"].exists, "sharing waits for a label or explicit skip")
         XCTAssertFalse(app.buttons["saveReceiveAddressLabelButton"].isEnabled)
         app.typeInto("receiveAddressLabelField", "Alice / invoice 12")
         Screenshots.capture(app, "54-receive-label-prompt", testCase: self)
         app.buttons["saveReceiveAddressLabelButton"].tap()
         let addressElement = app.staticTexts["receiveAddress"]
-        XCTAssertTrue(addressElement.waitForExistence(timeout: 30), "no receive address")
+        XCTAssertTrue(addressElement.appears(within: 30), "no receive address")
         Timings.record("receive", step: "address-shown", from: receiveStart)
         Screenshots.capture(app, "03-receive", testCase: self)
         guard let address = addressElement.value as? String, address.hasPrefix("tb1") else {
@@ -815,11 +815,11 @@ final class StoryFirstWallet: WinnowAppJourney {
         }
         XCTAssertEqual(app.staticTexts["receiveAddressLabel"].label, "Alice / invoice 12")
         app.buttons["newReceiveAddressButton"].tap()
-        XCTAssertTrue(app.textFields["receiveAddressLabelField"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.textFields["receiveAddressLabelField"].appears(within: 10))
         XCTAssertEqual(app.textFields["receiveAddressLabelField"].value as? String, "Alice · invoice 12",
                        "the new address must not inherit the previous label")
         app.buttons["skipReceiveAddressLabelButton"].tap()
-        XCTAssertTrue(addressElement.waitForExistence(timeout: 10))
+        XCTAssertTrue(addressElement.appears(within: 10))
         let freshAddress = try XCTUnwrap(addressElement.value as? String)
         XCTAssertNotEqual(freshAddress, address)
         XCTAssertFalse(app.staticTexts["receiveAddressLabel"].exists)
@@ -857,14 +857,14 @@ final class StoryFirstWallet: WinnowAppJourney {
         }
         Timings.record("funding", step: "mined→detected-by-filters", from: detectStart)
         // A history entry must be there too.
-        XCTAssertTrue(app.staticTexts["Received"].waitForExistence(timeout: 60),
+        XCTAssertTrue(app.staticTexts["Received"].appears(within: 60),
                       "no history entry after funding")
         let labelRow = app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@", "paymentReceiveLabels-")).firstMatch
-        XCTAssertTrue(labelRow.waitForExistence(timeout: 30))
+        XCTAssertTrue(labelRow.appears(within: 30))
         XCTAssertEqual(labelRow.label, "Alice / invoice 12", "payment to the old address keeps its label after rotation and relaunch")
         Screenshots.capture(app, "04-home-funded", testCase: self)
         labelRow.tap()
-        XCTAssertTrue(app.staticTexts["Receive address labels"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Receive address labels"].appears(within: 10))
         Screenshots.capture(app, "55-payment-receive-label", testCase: self)
     }
 
@@ -889,7 +889,7 @@ final class StoryFirstWallet: WinnowAppJourney {
         app.typeInto("amountField", "100000")
         app.buttons["reviewButton"].tap()
         let sendButton = app.buttons["sendButton"]
-        XCTAssertTrue(sendButton.waitForExistence(timeout: 30), "review did not replace the form")
+        XCTAssertTrue(sendButton.appears(within: 30), "review did not replace the form")
         XCTAssertTrue(sendButton.isHittable, "sending should not require scrolling past the form")
         XCTAssertEqual(app.staticTexts["reviewDestination"].label, destination, "show the full address")
         XCTAssertFalse(app.textFields["amountField"].exists)
@@ -902,7 +902,7 @@ final class StoryFirstWallet: WinnowAppJourney {
         XCTAssertFalse(sendButton.exists)
         app.typeInto("amountField", String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6) + "1000000")
         app.buttons["reviewButton"].tap()
-        XCTAssertTrue(sendButton.waitForExistence(timeout: 30))
+        XCTAssertTrue(sendButton.appears(within: 30))
         XCTAssertTrue(sendButton.isHittable)
         let amount = try XCTUnwrap(app.staticTexts["reviewAmount"].value as? String)
         let fee = try XCTUnwrap(app.staticTexts["reviewFee"].value as? String)
@@ -921,15 +921,15 @@ final class StoryFirstWallet: WinnowAppJourney {
         app.typeInto("feeOverrideField", "99")
         // Keyboard dismissal animates independently of app idleness. Await
         // the resulting state, including when iPad supplies a Return key.
-        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5),
+        XCTAssertTrue(app.keyboards.firstMatch.disappears(within: 5),
                       "Return or Done must dismiss the fee keypad")
         // Exercise the app's accessory separately from the system Return key.
         app.textFields["feeOverrideField"].tap()
         let feeDone = app.buttons["sendKeyboardDone"]
-        XCTAssertTrue(feeDone.waitForExistence(timeout: 5))
+        XCTAssertTrue(feeDone.appears(within: 5))
         XCTAssertTrue(feeDone.isHittable)
         feeDone.tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5),
+        XCTAssertTrue(app.keyboards.firstMatch.disappears(within: 5),
                       "The fee keypad's Done button must end editing")
         setAdvancedMode(app, false)
         app.openSend()
@@ -938,7 +938,7 @@ final class StoryFirstWallet: WinnowAppJourney {
         app.typeInto("amountField", "1000000")
         Screenshots.capture(app, "05-send-form", testCase: self)
         app.buttons["reviewButton"].tap()
-        XCTAssertTrue(sendButton.waitForExistence(timeout: 30))
+        XCTAssertTrue(sendButton.appears(within: 30))
         XCTAssertEqual(app.staticTexts["reviewFee"].value as? String, fee)
         XCTAssertEqual(app.staticTexts["reviewTotal"].value as? String, total)
         Screenshots.capture(app, "06-send-review", testCase: self)
@@ -956,7 +956,7 @@ final class StoryFirstWallet: WinnowAppJourney {
         Screenshots.capture(app, "07-send-broadcast", testCase: self)
         // Recovery diagnostics remain reachable without crowding the status.
         let details = app.buttons["transactionDetailsButton"]
-        XCTAssertTrue(details.waitForExistence(timeout: 10))
+        XCTAssertTrue(details.appears(within: 10))
         details.tap()
         XCTAssertTrue(scrollUntilExists(app, app.buttons["copyRawTransactionButton"], maxSwipes: 2))
         app.navigationBars["Transaction details"].buttons["Payment"].tap()
@@ -980,13 +980,13 @@ final class StoryFirstWallet: WinnowAppJourney {
         Timings.record("send", step: "mine→confirmed", from: confirmStart)
         Screenshots.capture(app, "08-send-confirmed", testCase: self)
         app.buttons["newPaymentButton"].tap()
-        XCTAssertTrue(app.textFields["destinationField"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.textFields["destinationField"].appears(within: 10))
         XCTAssertFalse(app.buttons["reviewButton"].isEnabled)
         XCTAssertFalse(sendButton.exists)
 
         app.goToWallet()
         self.nudgeSync(app)
-        XCTAssertTrue(app.staticTexts["Sent"].waitForExistence(timeout: 60),
+        XCTAssertTrue(app.staticTexts["Sent"].appears(within: 60),
                       "no sent entry in history")
         Screenshots.capture(app, "09-home-after-send", testCase: self)
     }
@@ -1004,7 +1004,7 @@ final class StoryFirstWallet: WinnowAppJourney {
 
         // Watch-only is the default: no toggle flip, straight to export.
         let confirm = app.buttons["exportConfirmButton"]
-        XCTAssertTrue(confirm.waitForExistence(timeout: 20), "no export confirm button")
+        XCTAssertTrue(confirm.appears(within: 20), "no export confirm button")
         let toggle = app.switches["exportIncludeMnemonicToggle"]
         XCTAssertEqual(toggle.value as? String, "0", "seed export must not be the default")
         confirm.tap()
@@ -1031,7 +1031,7 @@ final class StoryFirstWallet: WinnowAppJourney {
             // ShareLink presents a popover on iPad. A tap on its backdrop
             // dismisses only that popover; the backup form remains open.
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.08)).tap()
-        } else if closeShare.waitForExistence(timeout: 5), closeShare.isHittable {
+        } else if closeShare.appears(within: 5), closeShare.isHittable {
             closeShare.tap()
         } else {
             // Fallback: drag the iPhone sheet down to dismiss.
@@ -1046,10 +1046,10 @@ final class StoryFirstWallet: WinnowAppJourney {
         // Including the key replaces the staged file only after confirmation.
         XCTAssertTrue(scrollUntilExists(app, toggle, up: true), "no seed toggle")
         app.flipSwitch(toggle)
-        XCTAssertTrue(confirm.waitForExistence(timeout: 10), "toggle did not reset the export")
+        XCTAssertTrue(confirm.appears(within: 10), "toggle did not reset the export")
         confirm.tap()
         let alert = app.alerts["Include the recovery phrase?"]
-        XCTAssertTrue(alert.waitForExistence(timeout: 10), "no seed confirm alert")
+        XCTAssertTrue(alert.appears(within: 10), "no seed confirm alert")
         Screenshots.capture(app, "18-export-seed-confirm", testCase: self)
         alert.buttons["Export with phrase"].tap()
         let withKey = try stagedExport(in: app, expectingNote: "Includes your recovery words. Keep this file private.",
@@ -1092,7 +1092,7 @@ final class StoryFirstWallet: WinnowAppJourney {
         // first scan settle before scrolling: each payment it finds redraws
         // Activity, which puts the list back at its top.
         let syncSummary = app.descendants(matching: .any).matching(identifier: "syncSummaryText").firstMatch
-        XCTAssertTrue(syncSummary.waitForExistence(timeout: 10) || app.buttons["retryPeersButton"].exists,
+        XCTAssertTrue(syncSummary.appears(within: 10) || app.buttons["retryPeersButton"].exists,
                       "no one-line status")
         _ = poll(timeout: 120, interval: 2, "the wallet up to date") { app.staticTexts["Up to date"].exists }
         for identifier in ["receiveButton", "openSendButton"] {
@@ -1115,15 +1115,15 @@ final class StoryFirstWallet: WinnowAppJourney {
         // One way into shared savings: start with people you've added, or join.
         XCTAssertTrue(revealOnOneScreen(app, app.buttons["saveWithSomeoneButton"]))
         app.buttons["saveWithSomeoneButton"].tap()
-        XCTAssertTrue(app.buttons["walletSharedSavingsButton"].waitForExistence(timeout: 20), "no savings chooser")
+        XCTAssertTrue(app.buttons["walletSharedSavingsButton"].appears(within: 20), "no savings chooser")
         XCTAssertTrue(app.buttons["addSharedSavingsButton"].exists)
         app.buttons["walletSharedSavingsButton"].tap()
-        XCTAssertTrue(app.buttons["addSavingsCoOwnerButton"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["addSavingsCoOwnerButton"].appears(within: 20))
         app.buttons["addSavingsCoOwnerButton"].tap()
-        XCTAssertTrue(app.textFields["personNameField"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.textFields["personNameField"].appears(within: 20))
         app.navigationBars["Add co-owner"].buttons["Cancel"].tap()
         app.navigationBars["New shared savings"].buttons["Cancel"].tap()
-        XCTAssertTrue(app.buttons["addSavingsCoOwnerButton"].waitForNonExistence(timeout: 10),
+        XCTAssertTrue(app.buttons["addSavingsCoOwnerButton"].disappears(within: 10),
                       "cancelling did not close the savings sheets")
         // The one screen is still scrolled to where "Save with someone" was;
         // its Send button lives at the top.
@@ -1132,11 +1132,11 @@ final class StoryFirstWallet: WinnowAppJourney {
 
         // Send is a sheet without fee controls, and opens alone.
         app.openSend()
-        XCTAssertTrue(app.textFields["amountField"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.textFields["amountField"].appears(within: 10))
         XCTAssertFalse(app.textFields["feeOverrideField"].exists)
         XCTAssertFalse(app.textFields["receiveAddressLabelField"].exists, "Send must not open Receive as well")
         app.buttons["closeSendButton"].tap()
-        XCTAssertTrue(app.buttons["openSendButton"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["openSendButton"].appears(within: 10))
 
         // Backup is an action on the screen, not a setting.
         openBackup(app)
@@ -1163,7 +1163,7 @@ final class StoryFirstWallet: WinnowAppJourney {
         setAdvancedMode(app, false)
         XCTAssertFalse(app.hasTabs)
         app.openSend()
-        XCTAssertTrue(app.textFields["amountField"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.textFields["amountField"].appears(within: 10))
         XCTAssertFalse(app.textFields["feeOverrideField"].exists)
         app.buttons["closeSendButton"].tap()
     }
@@ -1176,16 +1176,16 @@ final class StoryFirstWallet: WinnowAppJourney {
 
         let app = attachApp()
         app.buttons["receiveButton"].tap()
-        if app.buttons["skipReceiveAddressLabelButton"].waitForExistence(timeout: 5) {
+        if app.buttons["skipReceiveAddressLabelButton"].appears(within: 5) {
             app.buttons["skipReceiveAddressLabelButton"].tap()
         }
         let field = app.staticTexts["receiveAddress"]
-        XCTAssertTrue(field.waitForExistence(timeout: 30))
+        XCTAssertTrue(field.appears(within: 30))
         let address = try XCTUnwrap(field.value as? String)
         let txid = try BitcoinCLI.sendToAddress(
             wallet: payer, address: address, sats: 50_000, feeRate: 2)
         let pending = app.staticTexts["unconfirmedPayment"]
-        XCTAssertTrue(pending.waitForExistence(timeout: 120),
+        XCTAssertTrue(pending.appears(within: 120),
                       "Receive did not show the peer-relayed payment before confirmation")
         XCTAssertEqual(pending.label.filter(\.isNumber), "50000")
         Screenshots.capture(app, "33-receive-unconfirmed", testCase: self)
@@ -1197,10 +1197,10 @@ final class StoryFirstWallet: WinnowAppJourney {
             return app.staticTexts["transactionConfirmation-\(txid)"].exists
         })
         app.buttons["receiveButton"].tap()
-        if app.buttons["skipReceiveAddressLabelButton"].waitForExistence(timeout: 5) {
+        if app.buttons["skipReceiveAddressLabelButton"].appears(within: 5) {
             app.buttons["skipReceiveAddressLabelButton"].tap()
         }
-        XCTAssertTrue(field.waitForExistence(timeout: 30))
+        XCTAssertTrue(field.appears(within: 30))
         XCTAssertFalse(pending.exists, "confirmed payment still shown as unconfirmed")
         app.buttons["Done"].tap()
     }
@@ -1254,7 +1254,7 @@ final class StoryPayingPeople: WinnowAppJourney {
         // The bundle waits in the control file for the Paste button.
         let app = launchApp(run: "import", reset: true, clipboard: json, expectOnboarding: true)
         app.buttons["importWalletButton"].tap()
-        XCTAssertTrue(app.buttons["importPasteButton"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["importPasteButton"].appears(within: 20))
         app.buttons["importPasteButton"].tap()
         // The system may still ask for paste consent — allow it, retry.
         let allowPaste = app.buttons["Allow Paste"]
@@ -1274,7 +1274,7 @@ final class StoryPayingPeople: WinnowAppJourney {
         // Imported JSON may contain the seed. Leaving the active scene must
         // erase it before the app can be foregrounded again.
         backgroundAndReturn(app)
-        XCTAssertTrue(app.buttons["importPasteButton"].waitForExistence(timeout: 20),
+        XCTAssertTrue(app.buttons["importPasteButton"].appears(within: 20),
                       "import sheet did not return after activation")
         XCTAssertFalse(((app.textViews["importJSONEditor"].value as? String) ?? "")
             .contains("lastKnownHeight"), "seed-bearing import JSON survived backgrounding")
@@ -1303,7 +1303,7 @@ final class StoryPayingPeople: WinnowAppJourney {
         XCTAssertTrue(scrollUntilExists(app, app.buttons["importContinueButton"]),
                       "no Continue button after report")
         app.buttons["importContinueButton"].tap()
-        XCTAssertTrue(app.staticTexts["balanceText"].waitForExistence(timeout: 60),
+        XCTAssertTrue(app.staticTexts["balanceText"].appears(within: 60),
                       "wallet home did not appear after import")
     }
 
@@ -1332,11 +1332,11 @@ final class StoryPayingPeople: WinnowAppJourney {
         save.tap()
         app.typeInto("personNameField", "Coffee")
         savePerson(in: app)
-        XCTAssertTrue(app.buttons["Rename recipient"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["Rename recipient"].appears(within: 20))
         save.tap()
         app.typeInto("personNameField", String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6) + "Cafe")
         savePerson(in: app)
-        XCTAssertTrue(app.staticTexts["Cafe"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["Cafe"].appears(within: 20))
 
         // The name belongs to the address and survives reopening the wallet.
         app.terminate()
@@ -1350,23 +1350,23 @@ final class StoryPayingPeople: WinnowAppJourney {
         let remove = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'removePaymentRecipient-'" )).firstMatch
         XCTAssertTrue(scrollUntilExists(app, remove))
         remove.tap()
-        XCTAssertTrue(app.buttons["Save recipient"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["Save recipient"].appears(within: 20))
         app.openSend()
         app.buttons["savedRecipientsButton"].tap()
-        XCTAssertTrue(app.buttons["addRecipientButton"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["addRecipientButton"].appears(within: 20))
         XCTAssertFalse(app.buttons["chooseRecipient-Cafe"].exists)
         app.buttons["Done"].tap()
         app.goToWallet()
         XCTAssertTrue(app.staticTexts["Sent to Cafe"].exists, "removing a shortcut erased the old label")
         // Leaving for Send popped the payment; open it again to re-add.
         openPayment(txid, in: app)
-        XCTAssertTrue(save.waitForExistence(timeout: 20))
+        XCTAssertTrue(save.appears(within: 20))
         save.tap()
         savePerson(in: app)
-        XCTAssertTrue(app.buttons["Rename recipient"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["Rename recipient"].appears(within: 20))
         app.openSend()
         app.buttons["savedRecipientsButton"].tap()
-        XCTAssertTrue(app.buttons["chooseRecipient-Cafe"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["chooseRecipient-Cafe"].appears(within: 20))
         app.buttons["chooseRecipient-Cafe"].tap()
         app.typeInto("amountField", "1000")
         app.buttons["reviewButton"].tap()
@@ -1425,18 +1425,18 @@ final class StoryPayingPeople: WinnowAppJourney {
         _ = try BitcoinCLI.run(["setnetworkactive", "false"])
         defer { _ = try? BitcoinCLI.run(["setnetworkactive", "true"]) }
         app.buttons["sendButton"].tap()
-        XCTAssertTrue(app.staticTexts["broadcastPending"].waitForExistence(timeout: 60))
+        XCTAssertTrue(app.staticTexts["broadcastPending"].appears(within: 60))
         XCTAssertFalse(app.buttons["sendButton"].exists, "a saved payment must not offer Send again")
         app.buttons["transactionDetailsButton"].tap()
         let identifier = app.staticTexts.matching(NSPredicate(format: "label MATCHES %@", "[0-9a-f]{64}")).firstMatch
-        XCTAssertTrue(identifier.waitForExistence(timeout: 10))
+        XCTAssertTrue(identifier.appears(within: 10))
         let original = identifier.label
         XCTAssertEqual(try BitcoinCLI.mempoolTxids().sorted(), before.sorted(), "the offline node received a payment")
 
         app.terminate()
         app = launchApp(advanced: true)
         openPayment(original, in: app)
-        XCTAssertTrue(app.staticTexts["awaiting confirmation"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["awaiting confirmation"].appears(within: 20))
         XCTAssertFalse(app.staticTexts["transactionConfirmation-\(original)"].exists)
         Screenshots.capture(app, "39-payment-after-disconnect", testCase: self)
         _ = try BitcoinCLI.run(["setnetworkactive", "true"])
@@ -1448,7 +1448,7 @@ final class StoryPayingPeople: WinnowAppJourney {
         app.navigationBars.buttons["Winnow"].tap()
         // The list is counted once it is back on screen; a hosted iPad has
         // taken seconds to pop the detail.
-        XCTAssertTrue(app.buttons["historyPayment-\(original)"].waitForExistence(timeout: 30),
+        XCTAssertTrue(app.buttons["historyPayment-\(original)"].appears(within: 30),
                       "the payment is missing from history after reopening")
         XCTAssertEqual(app.buttons.matching(identifier: "historyPayment-\(original)").count, 1)
         openPayment(original, in: app)
@@ -1456,7 +1456,7 @@ final class StoryPayingPeople: WinnowAppJourney {
         XCTAssertTrue(scrollUntilExists(app, bump, maxSwipes: 8))
         bump.tap()
         let rate = app.textFields["bumpFeeRateField"]
-        XCTAssertTrue(rate.waitForExistence(timeout: 30))
+        XCTAssertTrue(rate.appears(within: 30))
         XCTAssertTrue(poll(timeout: 30, interval: 0.2, "suggested replacement fee loaded") {
             Double((rate.value as? String) ?? "") != nil
         })
@@ -1465,7 +1465,7 @@ final class StoryPayingPeople: WinnowAppJourney {
         XCTAssertTrue(scrollUntilExists(app, confirm, maxSwipes: 5))
         Screenshots.capture(app, "34-fee-replacement-review", testCase: self)
         confirm.tap()
-        XCTAssertTrue(app.buttons["copyReplacementTransactionIDButton"].waitForExistence(timeout: 60))
+        XCTAssertTrue(app.buttons["copyReplacementTransactionIDButton"].appears(within: 60))
         XCTAssertTrue(poll(timeout: 60, interval: 1, "replacement in Core mempool") {
             guard let current = try? Set(BitcoinCLI.mempoolTxids()) else { return false }
             return !current.contains(original) && !current.subtracting(before).isEmpty
@@ -1497,11 +1497,11 @@ final class StoryPayingPeople: WinnowAppJourney {
         var app = attachApp()
 
         app.buttons["receiveButton"].tap()
-        if app.buttons["skipReceiveAddressLabelButton"].waitForExistence(timeout: 5) {
+        if app.buttons["skipReceiveAddressLabelButton"].appears(within: 5) {
             app.buttons["skipReceiveAddressLabelButton"].tap()
         }
         let receiveField = app.staticTexts["receiveAddress"]
-        XCTAssertTrue(receiveField.waitForExistence(timeout: 30))
+        XCTAssertTrue(receiveField.appears(within: 30))
         let address = try XCTUnwrap(receiveField.value as? String)
         app.buttons["Done"].tap()
 
@@ -1519,41 +1519,41 @@ final class StoryPayingPeople: WinnowAppJourney {
 
         openPayment(txid, in: app)
         app.buttons["saveSenderButton"].tap()
-        XCTAssertTrue(app.textFields["personNameField"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.textFields["personNameField"].appears(within: 20))
         // Even a sole candidate requires an explicit choice. First save only a label.
         XCTAssertNotEqual(app.textFields["personPasteField"].value as? String, utxo.address)
         app.typeInto("personNameField", "Node")
         Screenshots.capture(app, "44-name-only-label", testCase: self)
         savePerson(in: app)
-        XCTAssertTrue(app.staticTexts["senderName"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["senderName"].appears(within: 20))
         XCTAssertEqual(app.staticTexts["senderName"].label, "Node")
         app.navigationBars.buttons["Winnow"].tap()
-        XCTAssertTrue(app.staticTexts["Received from Node"].waitForExistence(timeout: 20),
+        XCTAssertTrue(app.staticTexts["Received from Node"].appears(within: 20),
                       "history did not label the sender")
 
         // The label survives reopening the wallet.
         app.terminate()
         app = launchApp()
-        XCTAssertTrue(app.staticTexts["Received from Node"].waitForExistence(timeout: 60))
+        XCTAssertTrue(app.staticTexts["Received from Node"].appears(within: 60))
 
         // Pay the sender back from the payment screen.
         openPayment(txid, in: app)
         XCTAssertFalse(app.buttons["sendToSenderButton"].exists)
         app.buttons["attachSenderDestinationButton"].tap()
         let candidate = app.buttons["senderCandidate-0"]
-        XCTAssertTrue(candidate.waitForExistence(timeout: 20))
+        XCTAssertTrue(candidate.appears(within: 20))
         XCTAssertNotEqual(app.textFields["personPasteField"].value as? String, utxo.address)
         candidate.tap()
         XCTAssertEqual(app.textFields["personPasteField"].value as? String, utxo.address)
         XCTAssertTrue(app.staticTexts["senderCandidateWarning"].exists)
         Screenshots.capture(app, "40-save-sender", testCase: self)
         savePerson(in: app)
-        XCTAssertTrue(app.buttons["sendToSenderButton"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["sendToSenderButton"].appears(within: 20))
         app.buttons["sendToSenderButton"].tap()
         XCTAssertTrue(app.sendIsOpen)
         app.typeInto("amountField", "1000")
         app.buttons["reviewButton"].tap()
-        XCTAssertTrue(app.staticTexts["reviewRecipient"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.staticTexts["reviewRecipient"].appears(within: 30))
         XCTAssertEqual(app.staticTexts["reviewDestination"].label, utxo.address)
         XCTAssertTrue(scrollUntilExists(app, app.descendants(matching: .any)["addressReuseWarning"]),
                       "paying a fixed funding address must warn about reuse")
@@ -1586,11 +1586,11 @@ final class StoryPayingPeople: WinnowAppJourney {
         let app = attachApp(advanced: true)
 
         app.buttons["receiveButton"].tap()
-        if app.buttons["skipReceiveAddressLabelButton"].waitForExistence(timeout: 5) {
+        if app.buttons["skipReceiveAddressLabelButton"].appears(within: 5) {
             app.buttons["skipReceiveAddressLabelButton"].tap()
         }
         let receiveField = app.staticTexts["receiveAddress"]
-        XCTAssertTrue(receiveField.waitForExistence(timeout: 30))
+        XCTAssertTrue(receiveField.appears(within: 30))
         let address = try XCTUnwrap(receiveField.value as? String)
         app.buttons["Done"].tap()
 
@@ -1612,15 +1612,15 @@ final class StoryPayingPeople: WinnowAppJourney {
         let picker = app.buttons["explorerProviderPicker"]
         XCTAssertTrue(scrollUntilExists(app, picker))
         picker.tap()
-        XCTAssertTrue(app.buttons["Custom"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["Custom"].appears(within: 10))
         app.buttons["Custom"].tap()
-        XCTAssertTrue(app.textFields["esploraURLField"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.textFields["esploraURLField"].appears(within: 10))
         app.typeInto("esploraURLField", stub.baseURL)
 
         app.navigationTab("Wallet").tap()
         openPayment(txid, in: app)
         app.buttons["saveSenderButton"].tap()
-        XCTAssertTrue(app.textFields["personNameField"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.textFields["personNameField"].appears(within: 20))
         // Taproot key-path: nothing to attach locally — the explorer is asked.
         // (An empty field reports its placeholder, never the address.)
         XCTAssertNotEqual(app.textFields["personPasteField"].value as? String, trUtxo.address)
@@ -1629,7 +1629,7 @@ final class StoryPayingPeople: WinnowAppJourney {
         XCTAssertTrue(scrollUntilExists(app, infer), "no infer button for an opaque payment")
         infer.tap()
         let confirm = app.buttons["confirmInferSenderButton"].firstMatch
-        XCTAssertTrue(confirm.waitForExistence(timeout: 10), "no infer warning")
+        XCTAssertTrue(confirm.appears(within: 10), "no infer warning")
         XCTAssertEqual(stub.requestCount, 0, "Opening the consent dialog cannot send a request")
         Screenshots.capture(app, "45-explorer-consent", testCase: self)
         confirm.tap()
@@ -1652,9 +1652,9 @@ final class StoryPayingPeople: WinnowAppJourney {
         app.typeInto("personNameField", "Miner")
         Screenshots.capture(app, "43-infer-sender", testCase: self)
         savePerson(in: app)
-        XCTAssertTrue(app.staticTexts["senderName"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["senderName"].appears(within: 20))
         app.navigationBars.buttons["Winnow"].tap()
-        XCTAssertTrue(app.staticTexts["Received from Miner"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["Received from Miner"].appears(within: 20))
     }
 }
 
@@ -1713,7 +1713,7 @@ final class StorySharedSavings: WinnowAppJourney {
         XCTAssertTrue(scrollUntilExists(app, app.buttons["saveVaultButton"]),
                       "save button did not appear")
         app.buttons["saveVaultButton"].tap()
-        XCTAssertTrue(app.staticTexts["E2E Vault"].firstMatch.waitForExistence(timeout: 30),
+        XCTAssertTrue(app.staticTexts["E2E Vault"].firstMatch.appears(within: 30),
                       "vault was not saved")
         Timings.record("vault", step: "create", from: createStart)
         XCTAssertTrue(scrollUntilExists(app, app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH '2 of 3 keys required'")).firstMatch),
@@ -1761,7 +1761,7 @@ final class StorySharedSavings: WinnowAppJourney {
             let text = balance.label.isEmpty ? ((balance.value as? String) ?? "") : balance.label
             return Int64(text.filter(\.isNumber)) ?? -1
         }
-        _ = balance.waitForExistence(timeout: 20)
+        _ = balance.appears(within: 20)
         let balanceBefore = max(shownBalance(), 0)
         var fundedNow: Int64 = 0
         if try freshCoins().isEmpty {
@@ -1830,7 +1830,7 @@ final class StorySharedSavings: WinnowAppJourney {
         let approve = app.buttons["approveRequestButton"]
         XCTAssertTrue(scrollUntilExists(app, approve), "savings detail did not load")
         approve.tap()
-        XCTAssertTrue(app.buttons["approvalPasteButton"].waitForExistence(timeout: 20),
+        XCTAssertTrue(app.buttons["approvalPasteButton"].appears(within: 20),
                       "approval sheet did not appear")
         let reviewStart = Date()
         app.buttons["approvalPasteButton"].tap()
@@ -1875,7 +1875,7 @@ final class StorySharedSavings: WinnowAppJourney {
 
         // Sensitive state is dropped on a background transition.
         backgroundAndReturn(app)
-        XCTAssertFalse(progress.waitForExistence(timeout: 3), "approval review survived backgrounding")
+        XCTAssertFalse(progress.appears(within: 3), "approval review survived backgrounding")
     }
 
     // MARK: - 12 Shared savings from Wallet (mines)
@@ -1916,19 +1916,19 @@ final class StorySharedSavings: WinnowAppJourney {
             app.goToWallet()
             XCTAssertTrue(scrollUntilExists(app, app.buttons["saveWithSomeoneButton"]))
             app.buttons["saveWithSomeoneButton"].tap()
-            XCTAssertTrue(app.buttons["walletSharedSavingsButton"].waitForExistence(timeout: 20), "no savings chooser")
+            XCTAssertTrue(app.buttons["walletSharedSavingsButton"].appears(within: 20), "no savings chooser")
             app.buttons["walletSharedSavingsButton"].tap()
-            XCTAssertTrue(app.buttons["coOwnerToggle-Alice"].waitForExistence(timeout: 20), "no co-owner picker")
+            XCTAssertTrue(app.buttons["coOwnerToggle-Alice"].appears(within: 20), "no co-owner picker")
             app.buttons["coOwnerToggle-Alice"].tap()
             app.buttons["coOwnerToggle-Bob"].tap()
             // The count lives in the Stepper's label, not in a Text of its own.
             let threshold = app.descendants(matching: .any).matching(
                 NSPredicate(format: "label CONTAINS '2 of 3' OR value CONTAINS '2 of 3'")).firstMatch
-            XCTAssertTrue(threshold.waitForExistence(timeout: 5), "the threshold did not settle at 2 of 3")
+            XCTAssertTrue(threshold.appears(within: 5), "the threshold did not settle at 2 of 3")
             app.typeInto("savingsNameField", savingsName)
             XCTAssertTrue(scrollUntilExists(app, app.buttons["createSharedSavingsButton"]))
             app.buttons["createSharedSavingsButton"].tap()
-            XCTAssertTrue(app.staticTexts["savingsShareNotice"].waitForExistence(timeout: 60),
+            XCTAssertTrue(app.staticTexts["savingsShareNotice"].appears(within: 60),
                           "creating did not lead to the share step")
             Timings.record("vault", step: "shared-savings-create", from: createStart)
             Screenshots.capture(app, "26-savings-share", testCase: self)
@@ -1941,7 +1941,7 @@ final class StorySharedSavings: WinnowAppJourney {
         XCTAssertTrue(revealOnOneScreen(app, savingsRow), "the savings were not listed")
         savingsRow.tap()
         let addressBlock = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'tb1p'")).firstMatch
-        XCTAssertTrue(addressBlock.waitForExistence(timeout: 20), "no receive address on the savings")
+        XCTAssertTrue(addressBlock.appears(within: 20), "no receive address on the savings")
         let savingsAddress = addressBlock.label
         let savingsScript = try AddressDecoder.scriptPubKey(for: savingsAddress, network: .signet)
         // Only a coin mined since the savings were created is one the app
@@ -1990,18 +1990,18 @@ final class StorySharedSavings: WinnowAppJourney {
         XCTAssertTrue(app.sendIsOpen)
         app.buttons["savedRecipientsButton"].tap()
         let aliceItem = app.buttons["chooseRecipient-Alice"]
-        XCTAssertTrue(aliceItem.waitForExistence(timeout: 20))
+        XCTAssertTrue(aliceItem.appears(within: 20))
         aliceItem.tap()
         app.typeInto("amountField", "20000")
         app.buttons["reviewButton"].tap()
-        XCTAssertTrue(app.staticTexts["reviewAccount"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["reviewAccount"].appears(within: 20))
         XCTAssertEqual(app.staticTexts["reviewAccount"].label, savingsName)
         XCTAssertEqual(app.staticTexts["reviewRecipient"].label, "Alice")
         Screenshots.capture(app, "27-shared-payment-review", testCase: self)
         XCTAssertTrue(scrollUntilExists(app, app.buttons["sendButton"]))
         XCTAssertEqual(app.buttons["sendButton"].label, "Continue to approvals")
         app.buttons["sendButton"].tap()
-        XCTAssertTrue(app.staticTexts["approvalProgress"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["approvalProgress"].appears(within: 20))
         XCTAssertTrue(app.staticTexts["approvalProgress"].label.contains("No approvals yet"))
         XCTAssertTrue(scrollUntilExists(app, app.buttons["finishApprovalButton"]))
         XCTAssertFalse(app.buttons["finishApprovalButton"].isEnabled)
@@ -2131,7 +2131,7 @@ final class StorySharedSavings: WinnowAppJourney {
         let approveRequest = app.buttons["approveRequestButton"]
         XCTAssertTrue(scrollUntilExists(app, approveRequest))
         approveRequest.tap()
-        XCTAssertTrue(app.buttons["approvalPasteButton"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["approvalPasteButton"].appears(within: 20))
         app.buttons["approvalPasteButton"].tap()
         let resumedProgress = app.staticTexts["approvalProgress"]
         XCTAssertTrue(poll(timeout: 240, interval: 2, "group approval reviewed once the tip caught up") {
@@ -2223,7 +2223,7 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
         XCTAssertTrue(scrollUntilExists(app, explorerLink), "no transaction explorer link")
         explorerLink.tap()
         let alert = app.alerts["Open external block explorer?"]
-        XCTAssertTrue(alert.waitForExistence(timeout: 10), "explorer warning did not appear")
+        XCTAssertTrue(alert.appears(within: 10), "explorer warning did not appear")
         Screenshots.capture(app, "13-esplora-warning", testCase: self)
         alert.buttons["Cancel"].tap()
     }
@@ -2261,10 +2261,10 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
         // A background transition erases the phrase and dismisses its sheet;
         // resuming requires another explicit action (and production auth).
         backgroundAndReturn(resumed)
-        XCTAssertFalse(resumed.switches["writtenDownToggle"].waitForExistence(timeout: 3),
+        XCTAssertFalse(resumed.switches["writtenDownToggle"].appears(within: 3),
                        "onboarding recovery phrase survived backgrounding")
         let resumeBackup = resumed.buttons["resumeBackupButton"]
-        XCTAssertTrue(resumeBackup.waitForExistence(timeout: 20),
+        XCTAssertTrue(resumeBackup.appears(within: 20),
                       "pending backup has no explicit resume action")
         resumeBackup.tap()
         XCTAssertTrue(backupConfirmationIsReachable(resumed),
@@ -2273,7 +2273,7 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
         // Complete the backup: toggle + Done -> wallet home.
         XCTAssertTrue(confirmBackupAndContinue(resumed),
                       "backup confirmation was not completed after explicit resume")
-        XCTAssertTrue(resumed.staticTexts["balanceText"].waitForExistence(timeout: 60),
+        XCTAssertTrue(resumed.staticTexts["balanceText"].appears(within: 60),
                       "home did not appear after backup Done")
 
         // A confirmed backup must not re-prompt on the next launch.
@@ -2281,7 +2281,7 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
         let settled = XCUIApplication()
         settled.launchEnvironment = backupEnvironment
         settled.launch()
-        XCTAssertTrue(settled.staticTexts["balanceText"].waitForExistence(timeout: 60),
+        XCTAssertTrue(settled.staticTexts["balanceText"].appears(within: 60),
                       "confirmed backup re-prompted on relaunch")
 
         // Reveal from Back up wallet: the fixed entropy's numbered first
@@ -2291,7 +2291,7 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
         XCTAssertTrue(scrollUntilExists(settled, revealButton), "no reveal button in Backup")
         revealButton.tap()
         let firstWord = "1. " + (Self.mnemonic.split(separator: " ").first.map(String.init) ?? "")
-        XCTAssertTrue(settled.staticTexts[firstWord].waitForExistence(timeout: 30),
+        XCTAssertTrue(settled.staticTexts[firstWord].appears(within: 30),
                       "revealed phrase grid missing \(firstWord)")
         XCTAssertTrue(settled.buttons["settingsCopyPhraseButton"].exists,
                       "Settings recovery screen does not offer phrase copy")
@@ -2310,14 +2310,14 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
                       "no export button after phrase dismissal")
         exportButton.tap()
         let seedToggle = settled.switches["exportIncludeMnemonicToggle"]
-        XCTAssertTrue(seedToggle.waitForExistence(timeout: 20), "no seed-export toggle")
+        XCTAssertTrue(seedToggle.appears(within: 20), "no seed-export toggle")
         settled.flipSwitch(seedToggle)
         settled.buttons["exportConfirmButton"].tap()
         let seedAlert = settled.alerts["Include the recovery phrase?"]
-        XCTAssertTrue(seedAlert.waitForExistence(timeout: 10), "no seed-export warning")
+        XCTAssertTrue(seedAlert.appears(within: 10), "no seed-export warning")
         seedAlert.buttons["Export with phrase"].tap()
         let shareLink = settled.buttons["exportShareLink"]
-        XCTAssertTrue(shareLink.waitForExistence(timeout: 30), "seed export was not staged")
+        XCTAssertTrue(shareLink.appears(within: 30), "seed export was not staged")
         backgroundAndReturn(settled)
         // `waitForExistence` answers at once for an element that is still
         // there, so give the scene-phase change time to land, as test08 does.
@@ -2338,7 +2338,7 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
         XCTAssertTrue(((importApp.textViews["importJSONEditor"].value as? String) ?? "")
             .contains(privateMarker), "import test marker was not entered")
         backgroundAndReturn(importApp)
-        XCTAssertTrue(importApp.buttons["importPasteButton"].waitForExistence(timeout: 20),
+        XCTAssertTrue(importApp.buttons["importPasteButton"].appears(within: 20),
                       "empty import sheet did not remain available")
         XCTAssertFalse(((importApp.textViews["importJSONEditor"].value as? String) ?? "")
             .contains(privateMarker), "import text survived backgrounding")
@@ -2357,7 +2357,7 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
         var app = attachApp(advanced: true)
         XCTAssertTrue(scrollUntilExists(app, app.buttons["walletExtraDeviceButton"]))
         app.buttons["walletExtraDeviceButton"].tap()
-        XCTAssertTrue(app.staticTexts["vaultPurpose"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["vaultPurpose"].appears(within: 20))
         XCTAssertTrue(app.staticTexts["vaultPurpose"].label.contains("Every key is needed"))
         app.typeInto("vaultNameField", name)
         app.buttons["addDeviceKeyButton"].tap()
@@ -2403,9 +2403,12 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
         XCTAssertTrue(scrollUntilExists(app, psbtOutput), "payment was not handed straight to the second-signer flow")
         let unsigned = psbtOutput.label
 
+        // Pasted, not typed: a Base64 PSBT is hundreds of keystrokes, and the
+        // button reads the same control-file clipboard the other pastes use.
         func combine(_ text: String) {
-            XCTAssertTrue(scrollUntilExists(app, app.textFields["psbtField"], up: true))
-            app.typeInto("psbtField", text)
+            XCTAssertTrue(scrollUntilExists(app, app.buttons["psbtPasteButton"], up: true))
+            setClipboard(text)
+            app.buttons["psbtPasteButton"].tap()
             app.buttons["addPSBTButton"].tap()
         }
         XCTAssertTrue(scrollUntilExists(app, app.buttons["musigSignButton"]))
@@ -2467,7 +2470,7 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
         XCTAssertTrue(poll(timeout: 60, interval: 1, "MuSig2 spend accepted by Core") {
             ((try? Set(BitcoinCLI.mempoolTxids()).subtracting(before).isEmpty) ?? true) == false
         })
-        XCTAssertTrue(app.staticTexts["vaultPaymentSent"].waitForExistence(timeout: 60))
+        XCTAssertTrue(app.staticTexts["vaultPaymentSent"].appears(within: 60))
         XCTAssertFalse(app.staticTexts["Winnow cannot safely review this proposal"].exists)
         XCTAssertFalse(app.buttons["musigBroadcastButton"].exists)
         Screenshots.capture(app, "39-extra-device-sent", testCase: self)
@@ -2488,14 +2491,14 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
         app = launchApp(run: "musig-restore", reset: true,
                         clipboard: try backup.serialized(), expectOnboarding: true, advanced: true)
         app.buttons["importWalletButton"].tap()
-        XCTAssertTrue(app.buttons["importPasteButton"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["importPasteButton"].appears(within: 20))
         app.buttons["importPasteButton"].tap()
         XCTAssertTrue(poll(timeout: 15, interval: 1, "backup pasted for restore") {
             if app.buttons["Allow Paste"].exists { app.buttons["Allow Paste"].tap() }
             return ((app.textViews["importJSONEditor"].value as? String) ?? "").contains("lastKnownHeight")
         })
         app.buttons["importVerifyButton"].tap()
-        XCTAssertTrue(app.staticTexts["Verification report"].waitForExistence(timeout: 180))
+        XCTAssertTrue(app.staticTexts["Verification report"].appears(within: 180))
         XCTAssertTrue(scrollUntilExists(app, app.buttons["importContinueButton"]))
         app.buttons["importContinueButton"].tap()
         XCTAssertTrue(scrollUntilExists(app, app.buttons["walletSavings-\(name)"]))
@@ -2537,7 +2540,7 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
         XCTAssertTrue(scrollUntilExists(app, reset), "no peer reset button")
         reset.tap()
         let confirm = app.buttons["confirmResetPeersButton"].firstMatch
-        XCTAssertTrue(confirm.waitForExistence(timeout: 10), "no reset confirmation")
+        XCTAssertTrue(confirm.appears(within: 10), "no reset confirmation")
         Screenshots.capture(app, "42-peer-reset", testCase: self)
         confirm.tap()
 
@@ -2572,7 +2575,7 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
         XCTAssertTrue(scrollUntilExists(app, refresh, maxSwipes: 8, fullyVisible: true))
         refresh.tap()
         let notice = app.staticTexts["peerCatalogNotice"]
-        XCTAssertTrue(notice.waitForExistence(timeout: 15))
+        XCTAssertTrue(notice.appears(within: 15))
         XCTAssertTrue(notice.label.contains(today))
         XCTAssertTrue(notice.label.contains("1 candidate"))
         Screenshots.capture(app, "46-peer-refresh", testCase: self)
@@ -2580,7 +2583,7 @@ final class StoryDevicesAndNetwork: WinnowAppJourney {
         XCTAssertTrue(scrollUntilExists(app, refresh, maxSwipes: 4, fullyVisible: true))
         XCTAssertTrue(poll(timeout: 10, interval: 0.5, "refresh button released") { refresh.isEnabled })
         refresh.tap()
-        XCTAssertTrue(app.staticTexts["peerCatalogError"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["peerCatalogError"].appears(within: 15))
         XCTAssertTrue(notice.label.contains(today))
         Screenshots.capture(app, "47-peer-refresh-failed", testCase: self)
         setCensusURL(nil)

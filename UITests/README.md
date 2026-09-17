@@ -9,6 +9,8 @@ Beginner journeys run on the one-screen interface (Send is a sheet, backup is
 a row, the mode switch is a toolbar button); Advanced journeys launch with
 `WINNOW_E2E_ADVANCED=1` and use the three tabs. `openSend`, `goToWallet`,
 `openBackup` and `setAdvancedMode` in TestHelpers.swift work in either mode.
+Waits go through `appears(within:)` and `disappears(within:)` there: a check at
+once, then polling, where `waitForExistence` first looks a second after the call.
 The ordinary, shared, and extra-device journeys all start payments in Send.
 Form editing is checked once; each signing journey then checks its own approval
 rules and the result accepted by the Bitcoin node. Ordinary co-owner requests

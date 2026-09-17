@@ -63,7 +63,8 @@ extension XCTestCase {
             if button.isEnabled { button.tap() }
             return
         }
-        guard !XCUIApplication.sheetMarkers.contains(where: { app.buttons[$0].exists }) else { return }
+        let markers = NSPredicate(format: "identifier IN %@", XCUIApplication.sheetMarkers)
+        guard app.buttons.matching(markers).count == 0 else { return }
         let home = app.buttons["openSendButton"]
         guard home.exists, home.isHittable else { return }
         let list = app.collectionViews.firstMatch
@@ -80,7 +81,7 @@ extension XCTestCase {
     func ensureMode(_ app: XCUIApplication, advanced: Bool) {
         if app.hasTabs != advanced { setAdvancedMode(app, advanced) }
         if advanced {
-            XCTAssertTrue(app.navigationTab("Wallet").waitForExistence(timeout: 15), "no Wallet tab in Advanced mode")
+            XCTAssertTrue(app.navigationTab("Wallet").appears(within: 15), "no Wallet tab in Advanced mode")
         }
     }
 
@@ -92,10 +93,10 @@ extension XCTestCase {
             XCTAssertFalse(app.hasTabs, "already in Advanced mode")
             app.goToWallet()
             let advanced = app.buttons["advancedModeButton"]
-            XCTAssertTrue(advanced.waitForExistence(timeout: 10), "no Advanced button on the one screen")
+            XCTAssertTrue(advanced.appears(within: 10), "no Advanced button on the one screen")
             advanced.tap()
             let confirm = app.alerts.buttons["Turn on"]
-            XCTAssertTrue(confirm.waitForExistence(timeout: 10), "Advanced mode did not ask first")
+            XCTAssertTrue(confirm.appears(within: 10), "Advanced mode did not ask first")
             confirm.tap()
             XCTAssertTrue(poll(timeout: 15, interval: 0.5, "the three tabs") { app.hasTabs },
                           "Advanced mode did not show its tabs")
@@ -103,9 +104,9 @@ extension XCTestCase {
             XCTAssertTrue(app.hasTabs, "already in beginner mode")
             app.navigationTab("Wallet").tap()
             let simple = app.buttons["advancedModeButton"]
-            XCTAssertTrue(simple.waitForExistence(timeout: 10), "no Simple button on the Wallet tab")
+            XCTAssertTrue(simple.appears(within: 10), "no Simple button on the Wallet tab")
             simple.tap()
-            XCTAssertTrue(app.buttons["openSendButton"].waitForExistence(timeout: 15),
+            XCTAssertTrue(app.buttons["openSendButton"].appears(within: 15),
                           "Simple did not bring the one screen back")
         }
     }
@@ -132,7 +133,7 @@ extension XCTestCase {
         let row = app.buttons["backupButton"]
         XCTAssertTrue(scrollUntilExists(app, row), "no Back up row on the one screen")
         row.tap()
-        XCTAssertTrue(app.buttons["exportBundleButton"].waitForExistence(timeout: 20), "Back up did not open")
+        XCTAssertTrue(app.buttons["exportBundleButton"].appears(within: 20), "Back up did not open")
     }
 
     /// Scrolls the topmost scroll view until `element` exists (SwiftUI
@@ -160,7 +161,7 @@ extension XCTestCase {
             // Long enough for a row to materialise after a drag animates on
             // a slow CI VM, short enough that a row several drags down does
             // not cost many seconds of waiting per drag.
-            if element.waitForExistence(timeout: 1.5) {
+            if element.appears(within: 1.5) {
                 guard fullyVisible || surface != nil else { return true }
                 if let revealed = reveal(app, element, on: surface ?? scrollSurface(app), fullyVisible: fullyVisible) {
                     return revealed
@@ -174,7 +175,7 @@ extension XCTestCase {
             let end = scrolled.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: up ? 0.75 : 0.25))
             start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0.25)
         }
-        guard element.waitForExistence(timeout: 1.5) else { return false }
+        guard element.appears(within: 1.5) else { return false }
         return reveal(app, element, on: surface ?? scrollSurface(app), fullyVisible: fullyVisible) ?? false
     }
 
@@ -244,7 +245,7 @@ extension XCTestCase {
     /// visible rows. First await the sheet, then scroll its actual content.
     @MainActor
     func backupConfirmationIsReachable(_ app: XCUIApplication) -> Bool {
-        guard app.navigationBars["Wallet backup"].waitForExistence(timeout: 30) else { return false }
+        guard app.navigationBars["Wallet backup"].appears(within: 30) else { return false }
         return scrollUntilExists(app, app.switches["writtenDownToggle"], maxSwipes: 5)
     }
 
@@ -324,7 +325,7 @@ extension XCUIApplication {
     func typeInto(_ identifier: String, _ text: String) {
         var field = textFields[identifier]
         if !field.exists { field = textViews[identifier] }
-        XCTAssertTrue(field.waitForExistence(timeout: 20), "no text field \(identifier)")
+        XCTAssertTrue(field.appears(within: 20), "no text field \(identifier)")
         var focused = false
         for _ in 1...3 where !focused {
             field.tap()
@@ -342,7 +343,7 @@ extension XCUIApplication {
         defer {
             // The dismissal animates independently of app idleness; the next
             // tap must not race it.
-            _ = keyboard.waitForNonExistence(timeout: 5)
+            _ = keyboard.disappears(within: 5)
         }
         let returnKey = keyboards.buttons["return"]
         if returnKey.exists, returnKey.isHittable {
@@ -352,7 +353,7 @@ extension XCUIApplication {
         // Keypads without a return key get an input-accessory Done button
         // (a toolbar floating above the keyboard).
         let toolbarDone = toolbars.buttons["Done"]
-        if toolbarDone.waitForExistence(timeout: 2), toolbarDone.isHittable {
+        if toolbarDone.appears(within: 2), toolbarDone.isHittable {
             toolbarDone.tap()
             return
         }
@@ -441,9 +442,9 @@ extension XCUIApplication {
     func tap(_ element: XCUIElement, until marker: XCUIElement,
              timeout: TimeInterval = 8, attempts: Int = 3) -> Bool {
         for _ in 0 ..< attempts {
-            guard element.exists else { return marker.waitForExistence(timeout: timeout) }
+            guard element.exists else { return marker.appears(within: timeout) }
             element.tap()
-            if marker.waitForExistence(timeout: timeout) { return true }
+            if marker.appears(within: timeout) { return true }
         }
         return false
     }
@@ -459,14 +460,14 @@ extension XCUIApplication {
         if buttons["closeSendButton"].exists { return }
         popToOneScreen()
         let open = buttons["openSendButton"]
-        XCTAssertTrue(open.waitForExistence(timeout: 20), "no Send button on the one screen")
+        XCTAssertTrue(open.appears(within: 20), "no Send button on the one screen")
         // A tap that lands while the list is still settling from the
         // scroll above is lost; ask again rather than wait it out.
         for _ in 0 ..< 3 where !buttons["closeSendButton"].exists {
             open.tap()
-            _ = buttons["closeSendButton"].waitForExistence(timeout: 7)
+            _ = buttons["closeSendButton"].appears(within: 7)
         }
-        XCTAssertTrue(buttons["closeSendButton"].waitForExistence(timeout: 20), "the Send sheet did not open")
+        XCTAssertTrue(buttons["closeSendButton"].appears(within: 20), "the Send sheet did not open")
     }
 
     /// Buttons that exist only while one of the app's sheets is up.
@@ -519,7 +520,7 @@ extension XCUIApplication {
             let close = buttons["closeSendButton"]
             if close.exists, close.isHittable {
                 close.tap()
-                _ = close.waitForNonExistence(timeout: 10)
+                _ = close.disappears(within: 10)
                 continue
             }
             let tabs = hasTabs
@@ -539,7 +540,7 @@ extension XCUIApplication {
             // A sheet closes from its bar.
             if sheet, let dismiss = sheetDismissal, dismiss.isHittable {
                 dismiss.tap()
-                _ = dismiss.waitForNonExistence(timeout: 10)
+                _ = dismiss.disappears(within: 10)
                 continue
             }
             // A pushed screen pops from its back button — never from just any
@@ -574,7 +575,7 @@ extension XCUIApplication {
         let balance = staticTexts["balanceText"]
         if balance.exists { return }
         scrollTabToTop()
-        if balance.waitForExistence(timeout: 3) { return }
+        if balance.appears(within: 3) { return }
         let list = collectionViews.firstMatch
         for _ in 0 ..< 6 where !balance.exists {
             guard list.exists else { break }
@@ -595,7 +596,7 @@ extension XCUIApplication {
         let close = buttons["closeSendButton"]
         if close.exists {
             close.tap()
-            _ = close.waitForNonExistence(timeout: 10)
+            _ = close.disappears(within: 10)
         }
         popToOneScreen()
     }
@@ -608,13 +609,31 @@ extension XCUIApplication {
             let back = navigationBars.buttons["Winnow"]
             guard back.exists, back.isHittable else { break }
             back.tap()
-            _ = navigationBars["Winnow"].waitForExistence(timeout: 5)
+            _ = navigationBars["Winnow"].appears(within: 5)
         }
         scrollToTop()
     }
 }
 
 extension XCUIElement {
+    /// Whether this element exists within `timeout`: checked now, then
+    /// every fifth of a second until the deadline. `waitForExistence`
+    /// answers the same question through XCTWaiter, whose first look at
+    /// the element comes a second after the call however quickly it
+    /// appeared; in one nightly every one of the suite's six hundred
+    /// waits resolved on that first look, a second late each.
+    @MainActor
+    func appears(within timeout: TimeInterval) -> Bool {
+        holds(within: timeout) { $0.exists }
+    }
+
+    /// Whether this element is gone within `timeout`: the polling
+    /// counterpart of `waitForNonExistence`.
+    @MainActor
+    func disappears(within timeout: TimeInterval) -> Bool {
+        holds(within: timeout) { !$0.exists }
+    }
+
     /// Whether this element holds the keyboard within `timeout`: the
     /// condition `typeText` checks before it synthesizes a keystroke.
     @MainActor
@@ -623,10 +642,25 @@ extension XCUIElement {
     }
 
     /// Whether `predicate` holds for this element within `timeout`; the
-    /// element is re-queried on each evaluation.
+    /// element is re-queried on each evaluation. The predicate is evaluated
+    /// directly rather than through an `XCTNSPredicateExpectation`, for
+    /// the reason `appears(within:)` gives.
     @MainActor
     func waitUntil(_ predicate: NSPredicate, timeout: TimeInterval) -> Bool {
-        let holds = XCTNSPredicateExpectation(predicate: predicate, object: self)
-        return XCTWaiter().wait(for: [holds], timeout: timeout) == .completed
+        holds(within: timeout) { predicate.evaluate(with: $0) }
+    }
+
+    /// Polls `condition` against this element until it holds or the
+    /// deadline passes: a check at once, one every 0.2 s, and a last one
+    /// at the deadline itself.
+    @MainActor
+    private func holds(within timeout: TimeInterval, _ condition: (XCUIElement) -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while true {
+            if condition(self) { return true }
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { return false }
+            Thread.sleep(forTimeInterval: min(0.2, remaining))
+        }
     }
 }
