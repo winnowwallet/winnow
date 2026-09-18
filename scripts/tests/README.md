@@ -3,7 +3,7 @@
 # Regression tests for repository tooling
 
 These Python tests check journey media reuse, website preparation and code-size
-reports. They prevent skipped checks being mistaken for evidence, missing test
+reports, App Store status parsing, and release policy. They prevent skipped checks being mistaken for evidence, missing test
 mappings, and changes in counting policy that produce misleading output.
 
 [test_ci_journey_cache.py](test_ci_journey_cache.py) checks test/build input
@@ -19,8 +19,11 @@ uses temporary repositories to check file categories and historical comparisons.
 Its synthetic infra paths intentionally test older trees after that directory's deletion.
 
 From the root, run `python3 -m unittest discover -s scripts/tests -p test_build_site.py`.
-The CI build job runs the cache, generation and preparation regressions; the
-website job only deploys its ready artifact. The LOC reporter is manual.
+The CI build job runs cache, generation, preparation, App Store status and release
+policy regressions; the website job only deploys its ready artifact. The release
+tooling tests use local fixtures, with no App Store requests or signing. The LOC
+reporter and its six tests remain manual because the LOC job was retired; they
+require the pinned external counter below.
 For all suites, download the official `cloc-2.10.pl` release asset and use
 [report-loc.py](../report-loc.py)'s pinned checksum, then run
 `CLOC=/path/to/cloc-2.10.pl python3 -m unittest discover -s scripts/tests`.

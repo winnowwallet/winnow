@@ -1,11 +1,6 @@
 import WalletCore
 import Foundation
 
-/// Disambiguates the wire-format transaction from `SwiftUI.Transaction` in
-/// app files that import both SwiftUI and BitcoinP2P (the module name also
-/// collides with the `BitcoinP2P` enum, so module qualification is no help).
-typealias BitcoinTransaction = Transaction
-
 enum VaultStorageOpenResult: Equatable, Sendable {
     case missing
     case loaded

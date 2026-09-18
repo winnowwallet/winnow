@@ -533,7 +533,7 @@ struct MuSig2SignView: View {
 
     /// Broadcasts the finalized spend and commits it to the vault's local
     /// UTXO set (inputs out, change in pending — the `Wallet.send` rule).
-    private func commitAndBroadcast(_ transaction: BitcoinTransaction, vault: Vault,
+    private func commitAndBroadcast(_ transaction: WalletCore.Transaction, vault: Vault,
                                     record: VaultRecord) async throws -> Data {
         try await model.broadcastVaultSpend(transaction, vault: vault, record: record)
     }

@@ -1,14 +1,9 @@
-import CryptoKit
 import Foundation
+import enum P256K.SHA256
 
-/// BIP340 tagged hash: SHA256(SHA256(tag) || SHA256(tag) || msg).
+/// BIP340 tagged hash, delegated to the pinned secp256k1 implementation.
 public enum TaggedHash {
     public static func hash(_ tag: String, _ message: Data) -> Data {
-        let tagHash = Data(SHA256.hash(data: Data(tag.utf8)))
-        var sha = SHA256()
-        sha.update(data: tagHash)
-        sha.update(data: tagHash)
-        sha.update(data: message)
-        return Data(sha.finalize())
+        Data(SHA256.taggedHash(tag: Data(tag.utf8), data: message))
     }
 }

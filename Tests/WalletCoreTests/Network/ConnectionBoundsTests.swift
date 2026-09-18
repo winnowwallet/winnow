@@ -98,8 +98,31 @@ struct ConnectionBoundsTests {
         // host must not turn one late pong into a false disconnect.
         let peer = try await connected(to: node, pingInterval: .milliseconds(100),
                                        readIdleTimeout: .seconds(2))
+        defer { Task { await peer.disconnect() } }
         #expect(await peer.isConnected)
-        try await Task.sleep(for: .seconds(3.5))
+        let failures = EventCollector<any Error>()
+        let events = await peer.events()
+        let consumer = Task {
+            do {
+                for try await _ in events { }
+            } catch {
+                failures.add(error)
+            }
+        }
+        defer { consumer.cancel() }
+
+        // Observe the keepalive's idle failure, not a race between its task
+        // and a fixed test sleep on a contended runner. No other disconnect
+        // reason satisfies this assertion; the timeout is only a hang guard.
+        let disconnected = await pollUntil { !failures.events.isEmpty }
+        #expect(disconnected, "the silent peer never reported its idle failure")
+        let failure = try #require(failures.events.first)
+        guard let peerFailure = failure as? PeerError,
+              case let .disconnected(reason) = peerFailure else {
+            Issue.record("expected an idle disconnect, got \(failure)")
+            return
+        }
+        #expect(reason.hasPrefix("no bytes received for "))
         #expect(await peer.isConnected == false)
     }
 

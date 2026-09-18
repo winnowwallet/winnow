@@ -16,3 +16,13 @@ This is a source grouping inside WalletCore, not a separate service.
 [BIP158 tests](../../../Tests/BitcoinCoreTests/BIP158Tests.swift) exercise known answers
 and invalid inputs. These checks support the implementation; they do not replace
 an independent cryptographic review.
+
+`TaggedHash` keeps WalletCore's `String`/`Data` interface but delegates hashing to
+`P256K.SHA256.taggedHash` in the pinned secp256k1 dependency. Known-answer tests
+cover empty, binary, and UTF-8 inputs; BIP341 and MuSig vector tests exercise its
+protocol callers.
+
+The upstream Schnorr signer signs a digest supplied by the caller. WalletCore
+still owns transaction signature-message construction in `SighashBIP341`, and
+script-tree/control-block construction in `Taproot`; these are not replaced by
+key-tweak or signature APIs.
