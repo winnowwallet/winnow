@@ -10,6 +10,35 @@ ROOT = Path(__file__).resolve().parent.parent
 TEST_PATH = "UITests/WinnowAppUITests.swift"
 SOURCE = "https://github.com/winnowwallet/winnow/blob/main/"
 VIDEO_PATH = "videos/wallet-journey.mp4"
+RESULTS = "https://github.com/winnowwallet/winnow/actions/workflows/ci.yml"
+# The recorded journey's checkpoints, in the order the run tells its story.
+# load_journeys refuses any name here that the UI journey does not capture, so
+# the homepage cannot show a screen no test produced.
+ACTS = [
+    ("An ordinary payment", [
+        ("01-onboarding", "Create a wallet"),
+        ("03-receive", "Show a receive address"),
+        ("56-home-beginner", "The coins arrive"),
+        ("06-send-review", "Check address, fee, total"),
+        ("08-send-confirmed", "Confirmed on Bitcoin"),
+        ("09-home-after-send", "History keeps the receipt"),
+    ]),
+    ("Two devices, one signature", [
+        ("35-extra-device-policy", "Both keys required"),
+        ("36-extra-device-review", "Review the payment"),
+        ("37-extra-device-waiting", "Waiting for the second key"),
+        ("39-extra-device-sent", "Both signed, sent"),
+        ("40-extra-device-confirmed", "Confirmed"),
+    ]),
+    ("Shared savings, two of three", [
+        ("26-savings-share", "Invite the other owners"),
+        ("27-savings-funded", "Savings funded"),
+        ("14-approval-waiting", "One approval so far"),
+        ("15-approval-sent", "Two approve, it sends"),
+        ("28-savings-confirmed", "Confirmed"),
+    ]),
+]
+SHOT_WIDTH, SHOT_HEIGHT = 1206, 2622
 
 def load_journeys(root):
     journeys = json.loads((root / "docs/journeys.json").read_text())
@@ -44,6 +73,16 @@ def load_journeys(root):
                 raise ValueError(f"{identity}: missing local guide {guide}")
     if unowned := set(cases) - seen:
         raise ValueError("app tests need a documented journey: " + ", ".join(sorted(unowned)))
+    captured = set()
+    for swift in sorted((root / "UITests").glob("*.swift")):
+        captured.update(re.findall(r'Screenshots\.capture\(app, "([a-z0-9-]+)", testCase: self\)',
+                                   swift.read_text()))
+    listed = {name for _, shots in ACTS for name, _ in shots}
+    if unproven := listed - captured:
+        raise ValueError("checkpoint is not captured by the journey: " + ", ".join(sorted(unproven)))
+    for name in sorted(listed):
+        if not (root / f"docs/screenshots/{name}.png").is_file():
+            raise ValueError(f"missing checkpoint screenshot: {name}.png")
     video = root / "docs" / VIDEO_PATH
     if not video.is_file():
         raise ValueError(f"missing journey video: {VIDEO_PATH}")
@@ -54,6 +93,22 @@ def load_journeys(root):
 
 def escape(value):
     return html.escape(value, quote=True)
+
+def recorded_run():
+    """The journey's own checkpoints, shown in order: the app, not a description of it."""
+    acts = []
+    for heading, shots in ACTS:
+        frames = "".join(
+            f'<li><figure><a href="screenshots/{name}.png">'
+            f'<img src="screenshots/{name}.png" width="{SHOT_WIDTH}" height="{SHOT_HEIGHT}" '
+            f'loading="lazy" decoding="async" alt="Winnow on iPhone: {escape(caption.lower())}."></a>'
+            f'<figcaption>{escape(caption)}</figcaption></figure></li>'
+            for name, caption in shots)
+        acts.append(f'<h3 class="act-name">{escape(heading)}</h3>\n<ol class="filmstrip">{frames}</ol>')
+    total = sum(len(shots) for _, shots in ACTS)
+    return f'''<section id="run"><h2>See it work</h2>
+<p class="run-lede">{total} screens from one recorded run against a real Bitcoin node: an ordinary payment, then two shared accounts. Nothing here is a mockup. <a href="/recording">Watch the recording →</a></p>
+{"".join(acts)}</section>'''
 
 def signing_animation(scene):
     shared = scene in {"shared", "borrowing"}
@@ -139,7 +194,7 @@ def signing_choices():
 <p><a href="/vaults">How the two signing methods fit together</a></p>
 </dialog></section>'''
 
-def homepage():
+def homepage(journeys, cases):
     title = "A Bitcoin wallet for your iPhone."
     intro = "Send and receive bitcoin, keep track of payments, and save with other people."
     return f"""<!doctype html>
@@ -167,6 +222,15 @@ dialog a{{overflow-wrap:anywhere}}
 .signing-choices{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2rem}}
 .signing-choices article{{border-top:3px solid var(--seed);padding-top:1rem}}
 .signing-choices .lede{{font-size:.95rem}}
+.run-lede{{margin:0 0 .5rem}}
+.act-name{{margin:1.9rem 0 .8rem;font-size:1rem;color:var(--ink-2)}}
+.filmstrip{{display:flex;gap:1rem;margin:0;padding:0 0 .6rem;list-style:none;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity}}
+.filmstrip li{{flex:0 0 auto;margin:0;scroll-snap-align:start}}
+.filmstrip figure{{margin:0;width:8.75rem}}
+.filmstrip a{{display:block}}
+.filmstrip img{{display:block;width:100%;height:auto;border:1px solid var(--rule-2);border-radius:.9rem;background:var(--paper-2)}}
+.filmstrip figcaption{{margin-top:.5rem;font-size:.82rem;line-height:1.35;color:var(--ink-2)}}
+@media(max-width:34rem){{.filmstrip figure{{width:8rem}}}}
 @media(max-width:40rem){{.signing-choices{{grid-template-columns:1fr}}}}
 </style>
 </head>
@@ -183,6 +247,7 @@ dialog a{{overflow-wrap:anywhere}}
 <p class="cta-note">Pre-release builds ship through <a href="https://testflight.apple.com/join/83djpNE7">TestFlight</a>.</p>
 <p class="connection-note">Your phone connects directly to Bitcoin.</p>
 {signing_choices()}
+{recorded_run()}
 </main>
 <footer><div class="bar"><a href="/">Winnow</a> · <a href="/roadmap">Roadmap</a> · <a href="/privacy">Privacy</a> · <a href="/architecture">How it works</a></div></footer>
 <script>
@@ -233,7 +298,7 @@ def main():
     parser.add_argument("--root", type=Path, default=ROOT, help="repository or staging root")
     args = parser.parse_args()
     journeys, cases = load_journeys(args.root)
-    pages = {"index.html": homepage(),
+    pages = {"index.html": homepage(journeys, cases),
              "recording.html": recording_page(args.root)}
     for name, rendered in pages.items():
         output = args.root / "docs" / name

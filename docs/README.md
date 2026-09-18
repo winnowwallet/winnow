@@ -8,8 +8,14 @@ technical guides and site.css so those explanations are available offline.
 
 [The journey inventory](journeys.json) and
 [app test source](../UITests/README.md) feed [build-site](../scripts/build-site),
-which generates home and recording pages. The homepage gives an overview and
-illustrates the signing choices. The [signing guide](vaults.html) explains
+which generates home and recording pages. The homepage gives an overview,
+illustrates the signing choices, and then shows the journey itself: the sixteen
+checkpoint screenshots the UI run captures, in three acts, each linking to the
+full-size image. Generation refuses any checkpoint the journey does not capture,
+so the page cannot show a screen no test produced. A link opens the full
+recording; detailed feature descriptions stay off the homepage. Filmstrip styles
+stay inline on the homepage, so site.css is unaffected.
+The [signing guide](vaults.html) explains
 the policies, and the [recording page](https://winnowwallet.com/recording) presents
 the continuous payment journey with playback controls and source provenance.
 Other pages are authored directly. Older guide illustrations keep their dated provenance.

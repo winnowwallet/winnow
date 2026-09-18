@@ -1,6 +1,7 @@
 import importlib.machinery
 import importlib.util
 import json
+import re
 from pathlib import Path
 import tempfile
 import unittest
@@ -22,6 +23,12 @@ class JourneyOwnershipTests(unittest.TestCase):
         self.source = self.root / site.TEST_PATH
         self.source.write_text("    func test01Receive() {}\n")
         (self.root / "docs" / site.VIDEO_PATH).write_bytes(b"recording fixture")
+        # the homepage's checkpoints must exist and be captured by the journey
+        self.checkpoints = [name for _, shots in site.ACTS for name, _ in shots]
+        for name in self.checkpoints:
+            (self.root / f"docs/screenshots/{name}.png").write_bytes(b"image fixture")
+        (self.root / "UITests/Checkpoints.swift").write_text("extension WinnowAppUITests {\n" + "".join(
+            f'        Screenshots.capture(app, "{name}", testCase: self)\n' for name in self.checkpoints) + "}\n")
         self.journeys = [{"id": "receive", "section": "everyday", "tests": ["test01Receive"]}]
         self.save()
 
@@ -91,8 +98,24 @@ class JourneyOwnershipTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate or invalid"):
             site.load_journeys(self.root)
 
+    def documented_inventory(self):
+        """One fully documented journey with a test, and one guide without."""
+        self.journeys = [
+            {"id": "receive", "section": "everyday", "title": "Receive bitcoin",
+             "description": "Share an address.", "tests": ["test01Receive"],
+             "journey": ["Tap Receive.", "Read the address."],
+             "limitations": "Labels stay on this device."},
+            {"id": "fees", "section": "advanced", "title": "Replace a pending payment",
+             "description": "Bump the fee.", "journey": ["Choose Bump fee."],
+             "tests": [], "guide": "/vaults"},
+        ]
+        self.save()
+        (self.root / "docs/vaults.html").write_text("<p>the signing guide</p>")
+        return site.load_journeys(self.root)
+
     def test_homepage_keeps_opening_material_and_video_lives_on_recording_page(self):
-        homepage = site.homepage()
+        journeys, cases = self.documented_inventory()
+        homepage = site.homepage(journeys, cases)
         recording = site.recording_page(self.root)
         main = homepage.split("<main>", 1)[1].split("</main>", 1)[0]
         self.assertIn("A Bitcoin wallet for your iPhone.", main)
@@ -104,6 +127,9 @@ class JourneyOwnershipTests(unittest.TestCase):
         self.assertNotIn('class="journey"', main)
         self.assertNotIn('class="jump-links"', main)
         self.assertNotIn('id="evidence"', main)
+        self.assertNotIn("What the wallet does today", main)
+        self.assertNotIn('class="snippet"', main)
+        self.assertNotIn('id="journeys"', main)
         self.assertNotIn("Advanced features", main)
         self.assertNotIn("What’s next", main)
         self.assertNotIn('href="/advanced', homepage)
@@ -112,7 +138,18 @@ class JourneyOwnershipTests(unittest.TestCase):
         self.assertIn('<video controls playsinline preload="metadata"', recording)
         self.assertIn(f'<source src="/{site.VIDEO_PATH}" type="video/mp4">', recording)
         self.assertNotIn("autoplay", recording)
-        self.assertNotIn("<img", homepage)
+        shown = re.findall(r'<img src="screenshots/([a-z0-9-]+)\.png"', homepage)
+        self.assertEqual(shown, self.checkpoints)  # every checkpoint, in the run's order, and nothing else
+
+    def test_homepage_cannot_show_a_screen_the_journey_never_captured(self):
+        (self.root / "UITests/Checkpoints.swift").write_text("")
+        with self.assertRaisesRegex(ValueError, "not captured by the journey"):
+            site.load_journeys(self.root)
+
+    def test_missing_checkpoint_image_is_rejected(self):
+        (self.root / f"docs/screenshots/{self.checkpoints[0]}.png").unlink()
+        with self.assertRaisesRegex(ValueError, "missing checkpoint screenshot"):
+            site.load_journeys(self.root)
 
 if __name__ == "__main__":
     unittest.main()
