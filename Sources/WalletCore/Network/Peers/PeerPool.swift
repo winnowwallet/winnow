@@ -66,6 +66,7 @@ public actor PeerPool {
     private var monitorTask: Task<Void, Never>?
     private var started = false
     private var replenishing = false
+    private var catalogChangedDuringRound = false
     private var attemptsThisRound = 0
     private var exhausted = false
     /// Endpoints rejected for a protocol/chain failure during this pool run.
@@ -618,7 +619,7 @@ public actor PeerPool {
         replenishing = true
         attemptsThisRound = 0
         exhausted = false
-        defer { replenishing = false }
+        defer { finishReplenish() }
 
         // Dial manual / persisted / census first. Resolve DNS seeds only
         // if those sources cannot fill the pool — a working manual peer
@@ -662,6 +663,14 @@ public actor PeerPool {
             // Refill the slots just freed. `replenishing` is still set here,
             // so the follow-up runs after this round has fully returned.
             Task { await self.pruneAndReplenish() }
+        }
+    }
+
+    private func finishReplenish() {
+        replenishing = false
+        if catalogChangedDuringRound {
+            catalogChangedDuringRound = false
+            Task { await self.replenish() }
         }
     }
 
@@ -738,6 +747,10 @@ public actor PeerPool {
     /// Refresh only changes future discovery. Existing peers stay connected.
     public func updateCensusCatalog(_ catalog: CensusCatalog) throws {
         censusCatalog = try catalog.validated(now: catalogNow())
+        // A startup download may arrive after this round captured its queue.
+        // Refill empty seats promptly without disconnecting healthy peers.
+        if replenishing { catalogChangedDuringRound = true }
+        else { Task { await self.replenish() } }
     }
 
     /// DNS-seed results (DoH, then getaddrinfo). Called only when local

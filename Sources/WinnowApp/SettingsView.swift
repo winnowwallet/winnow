@@ -66,7 +66,7 @@ struct SettingsView: View {
                         } else { Text("Using bundled candidates. Downloaded catalogs expire after seven days.") }
                         if let error = model.catalogError { Text(error).foregroundStyle(.red).accessibilityIdentifier("peerCatalogError") }
                     } header: { Text("Mainnet peer list") } footer: {
-                        Text("Downloads candidates from census.winnowwallet.com. Refresh keeps active connections. Every selected peer still undergoes Winnow's normal checks.")
+                        Text("Mainnet downloads a signed list automatically when needed. Refresh checks census.winnowwallet.com now and keeps active connections. Every selected peer still undergoes Winnow's normal checks.")
                     }
                 }
 

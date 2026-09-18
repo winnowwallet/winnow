@@ -1,7 +1,7 @@
 # Census signing
 
 The [peer census](https://census.winnowwallet.com/census/peers.json) supplies
-the manual refresh in Settings. Every downloaded
+automatic mainnet discovery and the manual refresh in Settings. Every downloaded
 list must carry an Ed25519 signature from a publisher key compiled into the
 wallet. Peers remain untrusted: the wallet still validates their headers and
 filters independently.
@@ -30,14 +30,16 @@ Both publisher deployment paths require a signature matching the pinned key.
 Missing or mismatched secrets stop daily publication; missing, modified, or
 foreign signatures stop deployment. The previous published list stays in use.
 
-The wallet requires the signature on manual refresh and verifies the stored
+The wallet requires the signature on every refresh and verifies the stored
 bytes again on load. An empty trust configuration rejects every list. Old
 unsigned caches are ignored; saved peers and DNS discovery remain available, and a
-successful manual refresh replaces the cache. Signature checks supplement the
+successful refresh replaces the cache. Signature checks supplement the
 existing size, age, schema, and minimum-peer checks.
 
-The app ships no peer-address snapshot. A fresh install can discover peers
-through DNS seeds without downloading the census. An expired census stops
+The app ships no peer-address snapshot. A fresh mainnet install automatically downloads the signed census while saved
+peers and DNS discovery start independently. Missing or expired catalogs are
+retried while the app is active, with at least a minute between failed attempts.
+Signet does not download the mainnet census. An expired census stops
 supplying new candidates; previously connected peers remain in the saved
 peer cache, and DNS supplies additional candidates.
 

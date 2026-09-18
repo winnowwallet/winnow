@@ -328,6 +328,8 @@ final class AppModel {
     private var changingNetwork = false
     private var peersToAvoid: Set<PeerEndpoint> = []
     private(set) var refreshingCatalog = false
+    private var automaticCatalogTask: Task<Void, Never>?
+    private var nextAutomaticCatalogAttempt = Date.distantPast
     private(set) var catalogBytes = 0
     private(set) var catalogNotice: String?
     private(set) var catalogError: String?
@@ -576,6 +578,7 @@ final class AppModel {
         if httpClient.isCancelled { httpClient = RoutedHTTPClient() }
         await buildStackIfNeeded()
         guard epoch == networkGeneration, isActive else { return }
+        schedulePeerCatalogRefresh()
         startPhasePolling()
         await stack?.pool.start()
         guard epoch == networkGeneration, isActive else { return }
@@ -586,6 +589,8 @@ final class AppModel {
     /// fails, and async work that started before this call discards its
     /// result. Callers then stop the pool; `activate()` starts the next one.
     private func suspendNetworking() {
+        automaticCatalogTask?.cancel()
+        automaticCatalogTask = nil
         networkGeneration &+= 1
         httpClient.cancel()
     }
@@ -593,6 +598,8 @@ final class AppModel {
     /// Retries peer discovery after the pool reported exhaustion (the UI's
     /// Retry button). Rebuilds the stack when it never came up.
     func retryPeerDiscovery() async {
+        nextAutomaticCatalogAttempt = .distantPast
+        schedulePeerCatalogRefresh()
         if let stack {
             await stack.pool.retry()
         } else {
@@ -1067,6 +1074,7 @@ final class AppModel {
         configureReceiveAddressLabels()
         journalSnapshotIfChanged()
         scheduleCloudBackup()
+        schedulePeerCatalogRefresh()
     }
 
     // MARK: - Wallet creation / import (onboarding)
@@ -2618,6 +2626,23 @@ final class AppModel {
     /// The required signature beside the downloaded list.
     private func censusSignature(nextTo catalog: URL) async throws -> Data {
         return try await httpClient.get(CensusSignature.endpoint(for: catalog), maximumBytes: CensusSignature.maximumBytes)
+    }
+
+    /// Discovery starts immediately from remembered peers/DNS while a missing
+    /// or expired mainnet catalog downloads. An outage never gates the pool.
+    private func schedulePeerCatalogRefresh() {
+        guard isActive, network == .mainnet, e2e == nil || e2e?.censusURL != nil,
+              automaticCatalogTask == nil, !refreshingCatalog,
+              Date() >= nextAutomaticCatalogAttempt,
+              let store = catalogStore else { return }
+        nextAutomaticCatalogAttempt = Date().addingTimeInterval(60)
+        guard store.load(trusting: censusTrustedKeys) == nil else { return }
+        let epoch = networkGeneration
+        automaticCatalogTask = Task { [weak self] in
+            await self?.refreshPeerCatalog()
+            guard let self, self.networkGeneration == epoch else { return }
+            self.automaticCatalogTask = nil
+        }
     }
 
     func refreshPeerCatalog() async {
