@@ -1,23 +1,17 @@
-Tor is gone, and the wallet key now asks for you itself
+Winnow 0.7.3: signed peer lists and wallet regression checks
 
-0.7.2 removes the opt-in Tor client that 0.6 through 0.7.0 embedded, and puts the wallet's key behind the phone's own passcode or Face ID check inside the Keychain, not only the app's. The app now always connects directly, the way it did with Tor off. Nothing else in the interface has moved.
+Peer-list updates now require a valid signature from the pinned census publisher. Older unsigned cached lists are ignored; the app can use its bundled peers instead. The bundled list has been refreshed.
 
-The wallet key check
+Connections
 
-Reveal the recovery phrase, send a payment, or export a backup with the phrase: you should see one passcode or Face ID prompt, not two. An existing wallet opens with no prompt and nothing changes; the stronger protection is put on quietly the first time this version opens the wallet. A prompt worded "Unlock this wallet's protected key" means the app's own check and the Keychain's did not join up: report it, with what you were doing and whether Face ID or the passcode was used.
+Open an existing wallet and check that it connects and syncs. In Advanced settings, use "Refresh peer list" and check the reported observation date and candidate count. Reconnect peers and check that the wallet resumes syncing. Report any connection failure with the network and app version.
 
-If you had Tor on
+Payments and shared accounts
 
-The first launch shows one alert, "Tor is no longer part of Winnow", and the app then connects directly. The alert appears once. If you never turned Tor on, there is no alert.
+On signet, receive and send an ordinary payment, then receive and send with a MuSig2 shared account and a script-path 2-of-3 account. Check the recipient, amount, fee, approvals, and confirmed balance. The automated iPhone journey covers these payments with Bitcoin Core cosigners; report any difference you see in normal use.
 
-Advanced settings
+Upgrading from an older version
 
-The Tor section is gone, and so is the "Tor open-source licenses" row under About. "Refresh peer list" reports the observed date and a number of candidates. "Reconnect peers", "Reset and shuffle peers" and the manual peers still behave as in 0.7.0.
+Check that your accounts, transaction history, and backups remain available. Reveal the recovery phrase, send a payment, or export a backup with the phrase and check the passcode or Face ID prompt. Winnow now connects directly: users who previously enabled Tor should see the removal notice once.
 
-Explorer lookups
-
-The funding-address consent now says only that the explorer receives the transaction ID and your IP address. The external-browser warning says the browser shares its IP address with the site.
-
-Everything else
-
-Beginner mode, Send, Receive, shared savings, backups, signing with a second device and the iPad and Mac builds should behave exactly as in 0.7.0. Anything that differs is a regression.
+Report bugs publicly at https://github.com/winnowwallet/winnow/issues. Include the app version, device, network, and steps to reproduce. Never include recovery words, private keys, or wallet backup files.
