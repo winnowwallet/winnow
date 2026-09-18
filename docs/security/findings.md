@@ -7,9 +7,11 @@ This is an August 2026 audit record. References to Silent Payments and its tweak
 index describe the implementation reviewed then; those features have since been
 removed. Historical findings and their evidence are retained below.
 
-This public register contains fixed findings and sanitized open risks. Details
-that would enable exploitation before a fix belong in a private GitHub security
-advisory, not here.
+Current reporting policy (September 18, 2026): report bugs, including security
+vulnerabilities, in [public GitHub issues](https://github.com/winnowwallet/winnow/issues/new),
+as described in [SECURITY.md](../../SECURITY.md). Reports and fixes are tracked
+publicly; do not include recovery words, private keys, credentials, or personal
+wallet data. This register retains findings and their disposition.
 
 | ID | Severity | Invariant | Status | Summary | Evidence |
 |---|---|---|---|---|---|

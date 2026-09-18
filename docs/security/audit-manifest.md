@@ -98,7 +98,7 @@ do not link Rust.
 
 | Severity | Release meaning |
 |---|---|
-| Critical | Practical unauthorized fund loss or broad secret extraction. Stop release; handle exploitable details privately. |
+| Critical | Practical unauthorized fund loss or broad secret extraction. Stop release; track the finding in a public issue under SECURITY.md. |
 | High | Authorization bypass, key/nonce compromise, unintended spend path, or trusted-state corruption under a credible attacker. Stop release. |
 | Medium | Security control weakness needing meaningful preconditions, bounded privacy disclosure, recoverable corruption, or resource exhaustion. Fix or record owner, mitigation, and release decision. |
 | Low | Defense-in-depth, diagnostic, or hardening gap without a credible direct loss path. Track normally. |
@@ -227,8 +227,9 @@ README and lockfile; the census publisher (winnowwallet/census) consumes
   observed to be requested and recorded, never to be honoured — the
   simulator releases the secret to a read that forbids interaction; that is
   Apple's contract and needs real hardware.
-- Owner-gated after the 2026-09-14 review: private vulnerability reporting
-  (IR-009) and the census signing key (IR-003, `docs/census-signing.md`).
+- Current owner setup: the census signing key (IR-003, `docs/census-signing.md`).
+  On 2026-09-18 the owner chose public GitHub issues for bug and vulnerability
+  reports (IR-009); enabling private vulnerability reporting is not pending.
   IR-023 (an access-control class on the Keychain item) was fixed on
   2026-09-15.
 
@@ -237,5 +238,5 @@ README and lockfile; the census publisher (winnowwallet/census) consumes
 The frozen commit remains the comparison base. Each bounded security change
 must name the invariant, tests, residual risk, and rollback. Unrelated
 refactors in the inventoried modules should wait until the next review pass or
-be reviewed as changes to the audit target. Exploitable findings remain
-private until fixed.
+be reviewed as changes to the audit target. Report and track findings publicly
+under [SECURITY.md](../../SECURITY.md).
