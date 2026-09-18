@@ -107,8 +107,11 @@ UI_VIDEO_PID=$!
 
 # simctl emits this only after processing its first frame. The test must
 # not launch the app until the recording is ready to include onboarding.
+# A cold hosted simulator can acknowledge its first frame after 30 seconds
+# even after bootstatus finishes. Keep readiness bounded without retrying
+# the journey or recording only part of it.
 UI_VIDEO_READY=false
-UI_VIDEO_DEADLINE=$((SECONDS + 30))
+UI_VIDEO_DEADLINE=$((SECONDS + 60))
 while (( SECONDS < UI_VIDEO_DEADLINE )); do
   if ! kill -0 "$UI_VIDEO_PID" 2>/dev/null; then
     echo "Video recorder stopped before its first frame; see $UI_RESULTS/video.log." >&2
@@ -121,7 +124,7 @@ while (( SECONDS < UI_VIDEO_DEADLINE )); do
   sleep 0.2
 done
 if [[ "$UI_VIDEO_READY" != true ]]; then
-  echo "Video recorder did not start within 30 seconds; see $UI_RESULTS/video.log." >&2
+  echo "Video recorder did not start within 60 seconds; see $UI_RESULTS/video.log." >&2
   exit 1
 fi
 

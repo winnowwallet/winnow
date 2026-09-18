@@ -4,7 +4,7 @@ import Testing
 @testable import WalletCore
 
 /// The publisher's signature over `peers.json`: what it covers, which keys it
-/// is accepted under, and the one rule that lets it ship before the key does.
+/// is accepted under, and the requirement enforced in production.
 struct CensusSignatureTests {
     @Test func signsAndVerifiesTheExactBytesUnderATrustedKey() throws {
         let key = Curve25519.Signing.PrivateKey()
@@ -60,15 +60,25 @@ struct CensusSignatureTests {
         }
     }
 
-    @Test func thePublisherRequiresASignatureOnlyOnceAKeyIsTrusted() throws {
+    @Test func thePublisherRequiresASignatureAndATrustedKey() throws {
         let payload = Data("x".utf8)
-        try CensusPublisher.verify(payload, signature: nil, trusting: [])
+        #expect(throws: CensusSignature.Invalid.unknownKey) {
+            try CensusPublisher.verify(payload, signature: nil, trusting: [])
+        }
         let key = Curve25519.Signing.PrivateKey()
         #expect(throws: CensusSignature.Invalid.missing) {
             try CensusPublisher.verify(payload, signature: nil, trusting: [key.publicKey])
         }
         try CensusPublisher.verify(payload, signature: try CensusSignature.sign(payload, with: key).encoded(),
                                    trusting: [key.publicKey])
+        #expect(!CensusPublisher.trustedKeys.isEmpty, "production must trust a publisher")
+        #expect(throws: CensusSignature.Invalid.missing) {
+            try CensusPublisher.verify(payload, signature: nil, trusting: CensusPublisher.trustedKeys)
+        }
+        #expect(throws: CensusSignature.Invalid.unknownKey) {
+            try CensusPublisher.verify(payload, signature: try CensusSignature.sign(payload, with: key).encoded(),
+                                       trusting: CensusPublisher.trustedKeys)
+        }
         #expect(CensusPublisher.trustedKeys.count == CensusPublisher.trustedKeysHex.count,
                 "every compiled-in key parses")
         #expect(CensusSignature.endpoint(for: CensusCatalog.endpoint).absoluteString

@@ -101,8 +101,7 @@ enum FallbackPeerGenerator {
     static func run(_ options: Options) async throws {
         switch options.source {
         case let .census(source):
-            try await runCensus(options, input: CensusInput(data: try await censusData(from: source),
-                                                            signature: nil, source: source, commit: nil))
+            try await runCensus(options, input: try await censusInput(from: source))
         case let .censusCommit(commit):
             try await runCensus(options, input: try await pinnedCensus(commit: commit))
         case .crawl:
@@ -125,10 +124,6 @@ enum FallbackPeerGenerator {
     /// — the census CI did the reaching; this run decides what to trust.
     static func runCensus(_ options: Options, input: CensusInput) async throws {
         try CensusPublisher.verify(input.data, signature: input.signature, trusting: CensusPublisher.trustedKeys)
-        if CensusPublisher.trustedKeys.isEmpty {
-            print("generator: no census publisher key is compiled in; the list is taken "
-                  + (input.signature == nil ? "unsigned" : "unsigned although a signature was published"))
-        }
         let catalog = try CensusCatalog.decode(input.data, minimumEntries: CensusCatalog.minimumClearnetEntries)
         let peers = (catalog.networks["clearnet"] ?? []).map {
             VerifiedPeer(endpoint: $0.endpoint, userAgent: $0.userAgent, startHeight: $0.startHeight)
@@ -188,17 +183,30 @@ enum FallbackPeerGenerator {
         Data(Insecure.SHA1.hash(data: Data("blob \(data.count)\u{0}".utf8) + data)).hex
     }
 
-    static func censusData(from source: String) async throws -> Data {
+    /// Both mutable URLs and local files require the adjacent signature too.
+    static func censusInput(from source: String) async throws -> CensusInput {
+        let data = try await censusData(from: source)
+        let signatureSource: String
+        if let url = URL(string: source), let scheme = url.scheme, ["http", "https"].contains(scheme) {
+            signatureSource = CensusSignature.endpoint(for: url).absoluteString
+        } else {
+            signatureSource = source + ".sig"
+        }
+        let signature = try await censusData(from: signatureSource, maximumBytes: CensusSignature.maximumBytes)
+        return CensusInput(data: data, signature: signature, source: source, commit: nil)
+    }
+
+    static func censusData(from source: String, maximumBytes: Int = CensusCatalog.maximumBytes) async throws -> Data {
         if let url = URL(string: source), let scheme = url.scheme, ["http", "https"].contains(scheme) {
             let client = RoutedHTTPClient()
             defer { client.cancel() }
-            return try await client.get(url, maximumBytes: CensusCatalog.maximumBytes)
+            return try await client.get(url, maximumBytes: maximumBytes)
         }
         let url = URL(fileURLWithPath: (source as NSString).expandingTildeInPath)
         let file = try FileHandle(forReadingFrom: url)
         defer { try? file.close() }
-        let data = try file.read(upToCount: CensusCatalog.maximumBytes + 1) ?? Data()
-        guard data.count <= CensusCatalog.maximumBytes else { throw CensusCatalog.Invalid.size }
+        let data = try file.read(upToCount: maximumBytes + 1) ?? Data()
+        guard data.count <= maximumBytes else { throw CensusCatalog.Invalid.size }
         return data
     }
 

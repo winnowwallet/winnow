@@ -1,84 +1,76 @@
 # Census signing
 
-The peer census (`https://census.winnowwallet.com/census/peers.json`, published
-from [winnowwallet/census](https://github.com/winnowwallet/census)) is the
-wallet's discovery input: the bundled fallback peers are generated from it at
-release, and Settings can refresh it by hand. It is untrusted input by design —
-every peer it names is checked against headers and filters like any other — but
-IR-003 of the 2026-09-14 review showed the list reached the wallet on TLS alone,
-and the release generator hashed whatever bytes arrived.
+The [peer census](https://census.winnowwallet.com/census/peers.json) supplies
+release fallback peers and the manual refresh in Settings. Every downloaded
+list must carry an Ed25519 signature from a publisher key compiled into the
+wallet. Peers remain untrusted: the wallet still validates their headers and
+filters independently.
 
-This document is the mechanism that closes that, and the three steps only the
-project owner can take.
+## Publisher and wallet trust
 
-## What ships in the wallet
+The publisher key established on September 18, 2026 is:
 
-- `CensusSignature` (`Sources/WalletCore/Network/Peers/CensusSignature.swift`):
-  an Ed25519 signature over the tag `winnow-census-peers-v1\0` and the exact
-  bytes of `peers.json`, served next to it as `peers.json.sig`:
+```text
+b999d0881c236f3f38dce334bd373c75b936677bbed952685745486131d32b74
+```
 
-  ```json
-  {"algorithm":"ed25519","publicKey":"<32 bytes hex>","signature":"<64 bytes hex>"}
-  ```
+The private key is held in the `winnowwallet/census` repository's
+`CENSUS_SIGNING_KEY` Actions secret. The public key is recorded in that
+repository's `census/signing-public-key.txt` and in the wallet's
+`CensusPublisher.trustedKeysHex`.
 
-- `CensusPublisher.trustedKeysHex`: the public keys the wallet accepts. **It is
-  empty until the owner adds one.** While it is empty the list is accepted
-  unsigned, exactly as before, so nothing breaks ahead of the key. The first key
-  turns the requirement on: the manual refresh fetches `peers.json.sig` and
-  refuses a list without a valid signature, the stored copy keeps its signature
-  and is checked again on every load, and the release generator refuses to
-  bundle an unsigned list.
+The publisher signs the tag `winnow-census-peers-v1\0` followed by the exact
+bytes of `peers.json`. Its adjacent `peers.json.sig` contains:
 
-- `CensusCatalogStore` also refuses a list thinner than any real census (fewer
-  than 50 clearnet entries), and `RoutedHTTPClient` no longer follows a
-  redirect to another host.
+```json
+{"algorithm":"ed25519","publicKey":"<32 bytes hex>","signature":"<64 bytes hex>"}
+```
 
-- `scripts/generate-fallback-peers --census-commit <sha>` takes
-  `census/peers.json` as committed in the census repository at that commit,
-  checks the fetched bytes against the blob id the repository's tree names
-  there, verifies the signature when a key is compiled in, and records the
-  commit in the bundle. `scripts/check-release-policy` requires that line, so a
-  release can no longer ship a list that is not tied to a reviewable commit.
+Both publisher deployment paths require a signature matching the pinned key.
+Missing or mismatched secrets stop daily publication; missing, modified, or
+foreign signatures stop deployment. The previous published list stays in use.
 
-## Owner steps
+The wallet requires the signature on manual refresh and verifies the stored
+bytes again on load. An empty trust configuration rejects every list. Old
+unsigned caches are ignored; bundled fallback peers remain available, and a
+successful manual refresh replaces the cache. Signature checks supplement the
+existing size, age, schema, and minimum-peer checks.
 
-1. **Make the key** (in the census checkout):
+## Release fallback peers
 
-   ```bash
-   swift run WinnowCensus keygen
-   ```
+Generate from a signed, committed census:
 
-   It prints the secret once, as `CENSUS_SIGNING_KEY=<base64>`, and the public
-   key as hex. Store the secret as the census repository's `CENSUS_SIGNING_KEY`
-   Actions secret. The daily census job signs `peers.json` with it after every
-   accepted run; while the secret is absent the job publishes unsigned and says
-   so in its log.
+```bash
+scripts/generate-fallback-peers --census-commit <full census commit sha>
+```
 
-2. **Trust the public key** (in the wallet): add the hex to
-   `CensusPublisher.trustedKeysHex` and commit. From that build on, the wallet
-   and the generator require a signature.
+The generator checks the payload against the repository blob at that commit,
+verifies the signature, and records the source commit, hash, and observation
+date in the generated bundle. `scripts/check-release-policy` requires that
+provenance. The default live URL and explicit `--from-census` file/URL paths
+also load the adjacent signature and enforce the same trust policy.
 
-3. **Regenerate the bundled peers** from a signed census commit before the next
-   release:
+## Key rotation
 
-   ```bash
-   scripts/generate-fallback-peers --census-commit <full sha of a census commit>
-   ```
+1. Generate a replacement key with `WinnowCensus keygen` in a trusted local
+   session. Its output includes the private key; keep it out of logs and git.
+2. Ship the new public key alongside the old key in the wallet. Wait until
+   supported wallet versions trust it before switching the publisher.
+3. Replace the publisher's Actions secret and commit the matching public key
+   and newly signed list together. Verify the deployed bytes and signature.
+4. Remove the old wallet key when it is no longer needed for supported data.
 
-Order matters only in one place: step 2 before step 1 leaves the wallet
-refusing an unsigned census until the job has signed one. Do 1, wait for a
-signed daily run, then 2 and 3.
+Publish signed data before shipping a wallet that requires its key. If the
+secret is lost, use this rotation process; never restore unsigned acceptance.
 
-## Rotation
+## Checks
 
-Add the new key to `trustedKeysHex` alongside the old one, change the secret,
-and remove the old key after every wallet in the field has been updated. A
-signature names its key, so which one signed is visible in the file.
+The publisher's contract tests verify its committed catalog, missing and
+modified signatures, foreign keys, and a known-answer signature shared with
+the wallet. Wallet tests cover signature refusal, empty trust, unsigned legacy
+caches, signed storage/expiry, and bounded signature loading by the generator.
 
-## Tests and E2E
-
-`CensusSignatureTests` and `CensusCatalogStoreTests` cover signing, refusal,
-and storage. The E2E journeys serve a fixture census; once a real key is
-compiled in, a journey must name a test key with
-`WINNOW_E2E_CENSUS_KEYS=<hex>` and sign its fixture with the matching secret,
-or the refresh journey fails as designed. The E2E store has no size floor.
+The single payment journey does not need a separate census-refresh journey.
+Any lower-level or Debug fixture that refreshes a census must sign it with a
+test key and set `WINNOW_E2E_CENSUS_KEYS=<hex>`; production keys and secrets are
+never used by fixtures. An empty override does not disable verification.

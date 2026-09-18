@@ -4,9 +4,9 @@ import Foundation
 /// Stores original, validated source bytes atomically. Expiration changes which
 /// candidates are used; it does not erase the last download or any active peers.
 ///
-/// A download is verified against the publisher's signature when the wallet
-/// trusts any key, and refused when it is thinner than a real census; the
-/// signature is kept next to the list and checked again on every load.
+/// A download requires the publisher's signature and is refused when it is
+/// thinner than a real census. The signature is kept next to the list and
+/// checked again on every load.
 public struct CensusCatalogStore: Sendable {
     public struct Download: Sendable {
         public let catalog: CensusCatalog

@@ -1,5 +1,6 @@
 import WalletCore
 import Foundation
+import CryptoKit
 import Testing
 @testable import WinnowDebug
 
@@ -266,6 +267,31 @@ struct WinnowGenerateTests {
         #expect(try await FallbackPeerGenerator.censusData(from: file.path) == Data("{}".utf8))
         await #expect(throws: (any Error).self) {
             _ = try await FallbackPeerGenerator.censusData(from: file.path + ".missing")
+        }
+    }
+
+    @Test("local census generation reads and bounds the adjacent signature")
+    func censusSignatureFromFile() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("peers.json")
+        let sidecar = CensusSignature.endpoint(for: file)
+        let payload = Data("{}".utf8)
+        let key = Curve25519.Signing.PrivateKey()
+        let signature = try CensusSignature.sign(payload, with: key).encoded()
+        try payload.write(to: file)
+        await #expect(throws: (any Error).self) {
+            _ = try await FallbackPeerGenerator.censusInput(from: file.path)
+        }
+        try signature.write(to: sidecar)
+        let input = try await FallbackPeerGenerator.censusInput(from: file.path)
+        #expect(input.data == payload)
+        #expect(input.signature == signature)
+        try CensusPublisher.verify(input.data, signature: input.signature, trusting: [key.publicKey])
+        try Data(repeating: 0x20, count: CensusSignature.maximumBytes + 1).write(to: sidecar)
+        await #expect(throws: CensusCatalog.Invalid.size) {
+            _ = try await FallbackPeerGenerator.censusInput(from: file.path)
         }
     }
 
