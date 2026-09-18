@@ -3,10 +3,9 @@ import Foundation
 import P256K
 
 /// BIP327 MuSig2 two-round signing protocol, built on the same public P256K
-/// point/scalar operations as the KeyAgg implementation in MuSig.swift (the
-/// P256K MuSig module is behind a disabled package trait). Nonces and partial
-/// signatures travel between cosigners via the BIP373 PSBT fields (see
-/// WalletCore's PSBT extensions).
+/// point/scalar operations as the KeyAgg implementation in MuSig.swift.
+/// Nonces and partial signatures travel between cosigners via the BIP373 PSBT
+/// fields (see WalletCore's PSBT extensions).
 ///
 /// All public byte strings follow the BIP327 serializations: plain public
 /// keys 33-byte compressed, public nonces 66 bytes (two compressed points),

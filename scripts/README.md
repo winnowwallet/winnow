@@ -57,8 +57,8 @@ job deploys the ready same-run artifact without checking out source or rebuildin
 `--validate-media <bundle>` checks cached media before CI decides to skip wallet
 tests. Invalid media falls back to fresh tests and a new recording.
 
-[Python regressions](tests/README.md) cover media reuse, site generation and
-artifact preparation. [report-loc.py](report-loc.py) and its regressions remain
-manual size-reporting tools. Signing/submission commands have external effects;
+[Python regressions](tests/README.md) cover media reuse, site generation,
+artifact preparation, App Store status parsing, and release policy.
+Signing/submission commands have external effects;
 their workflow runbooks identify when they are used.
 Run commands from the repository root unless their help specifies otherwise.

@@ -121,25 +121,3 @@ Website deploys to the existing Cloudflare Pages project `winnow`, using
 selected non-main branches use `preview-<run-id>`;
 the deployment URL appears in the Actions summary and environment. Fork PRs
 validate without deployment credentials. There is no second GitHub Pages site.
-
-## LOC policy
-
-The LOC workflow is removed. `scripts/report-loc.py` remains a manual tool;
-size reports do not add CI jobs or gate merges.
-
-Total source sums nonblank, noncomment lines in app/library/CLI source, tests,
-webpages and tooling. Other text has its own physical nonblank count. Fixtures,
-vectors, documentation and lockfiles are other text. Shared test helpers count
-once per tracked path. Debugging driver code is tooling; its test directory is tests.
-Generated fallback peers, dependencies/build output, binaries, symlinks and LFS
-pointers are excluded with recorded reasons. Counting policy 4 and schema 1 are
-recorded alongside cloc 2.10's verified checksum and commit SHA.
-
-```sh
-python3 scripts/report-loc.py --cloc /path/to/cloc-2.10.pl \
-  --ref HEAD --base-ref origin/main --output-dir /tmp/winnow-loc
-```
-
-Both sides of a comparison use the head policy at their merge base. The tool
-checks the cloc release checksum and fails if counting or validation fails;
-save or share its output explicitly when a size report is useful.
