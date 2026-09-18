@@ -1883,7 +1883,7 @@ final class AppModel {
     /// settings are links only and are never used as a broadcast backend.
     /// `feeRateSatPerVByte` (known from the send preview) enables the
     /// broadcaster's BIP133 fee-floor events.
-    func broadcast(_ transaction: BitcoinTransaction, feeRateSatPerVByte: Double? = nil) async throws -> Data {
+    func broadcast(_ transaction: WalletCore.Transaction, feeRateSatPerVByte: Double? = nil) async throws -> Data {
         guard let broadcaster = stack?.broadcaster else { throw AppError.noStack }
         let raw = transaction.serialized(includeWitness: true)
         let txid = try await broadcaster.broadcast(raw, feeRateSatPerVByte: feeRateSatPerVByte)
@@ -2190,9 +2190,9 @@ final class AppModel {
 
     func loadPaymentDetails(_ entry: HistoryEntry) async throws {
         guard entry.rawTransaction == nil, let wallet, let stack else { return }
-        let transaction: BitcoinTransaction
+        let transaction: WalletCore.Transaction
         if let raw = await stack.broadcaster.rawTransaction(entry.txid) {
-            transaction = try BitcoinTransaction.decode(raw)
+            transaction = try WalletCore.Transaction.decode(raw)
         } else if entry.height > 0, let filters = stack.filters {
             transaction = try await filters.transaction(entry.txid, at: entry.height)
         } else {
@@ -2256,12 +2256,10 @@ final class AppModel {
 
     enum VaultSpendError: LocalizedError {
         case unknownVault
-        case notAvailableCoins
 
         var errorDescription: String? {
             switch self {
             case .unknownVault: "This vault is no longer on this phone."
-            case .notAvailableCoins: "An input of this PSBT is not a known UTXO of the vault."
             }
         }
     }
@@ -2337,7 +2335,7 @@ final class AppModel {
     /// `spending` gate. A commit that fails after the broadcast is reported,
     /// not swallowed: the transaction is out, and a spent coin left in the
     /// record could be selected again by the next spend.
-    func broadcastVaultSpend(_ transaction: BitcoinTransaction, vault: Vault,
+    func broadcastVaultSpend(_ transaction: WalletCore.Transaction, vault: Vault,
                              record: VaultRecord) async throws -> Data {
         try await exclusively(.spending) {
             let txid = try await broadcast(transaction)
@@ -2362,7 +2360,7 @@ final class AppModel {
     /// means there was nothing to record (already recorded, or no known
     /// input); a store failure throws rather than reading as `false`.
     @discardableResult
-    func recordVaultSpend(id: String, transaction: BitcoinTransaction, changeScriptPubKey: Data?,
+    func recordVaultSpend(id: String, transaction: WalletCore.Transaction, changeScriptPubKey: Data?,
                           changeIndex: UInt32) async throws -> Bool {
         let recorded: Bool
         do {

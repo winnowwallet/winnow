@@ -83,11 +83,13 @@ jobs:
             exit 1
           fi
 
-      - name: Check website generation and artifact reuse rules
+      - name: Check website, artifact reuse and release tooling
         run: |
           python3 -m unittest discover -s scripts/tests -p test_ci_journey_cache.py
           python3 -m unittest discover -s scripts/tests -p test_build_site.py
           python3 -m unittest discover -s scripts/tests -p test_prepare_site_artifact.py
+          python3 -m unittest discover -s scripts/tests -p test_appstore_status.py
+          python3 -m unittest discover -s scripts/tests -p test_release_policy.py
 
       - name: Complexity budget and test gates
         if: steps.validate_media.outcome != 'success'
