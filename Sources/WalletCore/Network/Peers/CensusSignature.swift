@@ -6,9 +6,8 @@ import Foundation
 ///
 /// Ed25519 over a domain tag and the file's exact bytes. The wallet's manual
 /// refresh and the release generator verify it against the keys compiled into
-/// `CensusPublisher`; the census tool signs with the matching secret. While
-/// no key is compiled in, the list is accepted unsigned as before, so the
-/// mechanism ships ahead of the key and turns on the day the owner adds one.
+/// `CensusPublisher`; the census tool signs with the matching secret. Missing
+/// signatures and empty trust configurations are refused.
 public struct CensusSignature: Codable, Equatable, Sendable {
     public static let algorithm = "ed25519"
     public static let maximumBytes = 1_024
@@ -76,23 +75,21 @@ public struct CensusSignature: Codable, Equatable, Sendable {
 
 /// The keys the wallet trusts to have published the census.
 public enum CensusPublisher {
-    /// Public keys, hex, made by the census tool's `keygen` and pasted here by
-    /// the project owner (docs/census-signing.md). Empty until then: the
-    /// list is accepted unsigned, exactly as before, and a refresh does not
-    /// break. The first key here turns the requirement on for the wallet
-    /// and the release generator alike.
-    public static let trustedKeysHex: [String] = []
+    /// The publisher key established on 2026-09-18. Rotation requires shipping
+    /// the replacement key before the publisher switches (docs/census-signing.md).
+    public static let trustedKeysHex: [String] = [
+        "b999d0881c236f3f38dce334bd373c75b936677bbed952685745486131d32b74"
+    ]
 
     public static var trustedKeys: [Curve25519.Signing.PublicKey] {
         trustedKeysHex.compactMap { Data(hex: $0) }
             .compactMap { try? Curve25519.Signing.PublicKey(rawRepresentation: $0) }
     }
 
-    /// Verifies `payload` with `signature` when any key is trusted; accepts
-    /// it unsigned when none is.
+    /// Requires a signature from an explicitly trusted publisher.
     public static func verify(_ payload: Data, signature: Data?,
                               trusting keys: [Curve25519.Signing.PublicKey]) throws {
-        guard !keys.isEmpty else { return }
+        guard !keys.isEmpty else { throw CensusSignature.Invalid.unknownKey }
         guard let signature else { throw CensusSignature.Invalid.missing }
         try CensusSignature.decode(signature).verify(payload, trusting: keys)
     }

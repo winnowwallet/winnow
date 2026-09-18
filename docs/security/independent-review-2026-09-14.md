@@ -137,6 +137,14 @@ Filed 2026-09-14 as one public issue per finding, label `security`, at the owner
 
 **Status, 2026-09-18** — the owner chose public GitHub issues for all bug and vulnerability reports. This supersedes the earlier private-reporting recommendation and owner-setup item for IR-009. [SECURITY.md](../../SECURITY.md) is the current reporting policy; the dated review observations above are retained as history.
 
+**Census activation, 2026-09-18** — the publisher signing secret and pinned
+public key are configured in [census#18](https://github.com/winnowwallet/census/pull/18).
+The wallet now requires signed refreshes and caches, rejects an empty trust
+configuration, and loads signatures on every census generator path. Bundled
+peers are regenerated from a signed pinned commit. This supersedes the
+empty-key setup note above; [the signing guide](../census-signing.md) records
+the key and rotation procedure.
+
 | ID | Issue | ID | Issue | ID | Issue |
 |---|---|---|---|---|---|
 | IR-001 | winnow#98 | IR-012 | winnow#109 | IR-023 | winnow#120 |

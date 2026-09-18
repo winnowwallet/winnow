@@ -2604,10 +2604,8 @@ final class AppModel {
         e2e?.censusTrustedKeys ?? CensusPublisher.trustedKeys
     }
 
-    /// The list's signature, fetched only when a key is trusted: an unsigned
-    /// census is accepted until the owner compiles a key in.
-    private func censusSignature(nextTo catalog: URL) async throws -> Data? {
-        guard !censusTrustedKeys.isEmpty else { return nil }
+    /// The required signature beside the downloaded list.
+    private func censusSignature(nextTo catalog: URL) async throws -> Data {
         return try await httpClient.get(CensusSignature.endpoint(for: catalog), maximumBytes: CensusSignature.maximumBytes)
     }
 

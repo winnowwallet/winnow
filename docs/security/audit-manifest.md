@@ -227,7 +227,9 @@ README and lockfile; the census publisher (winnowwallet/census) consumes
   observed to be requested and recorded, never to be honoured — the
   simulator releases the secret to a read that forbids interaction; that is
   Apple's contract and needs real hardware.
-- Current owner setup: the census signing key (IR-003, `docs/census-signing.md`).
+- Census signing (IR-003): the September 18 activation configures the publisher
+  key and requires signatures; see `docs/census-signing.md` for current trust
+  and rotation. Earlier frozen observations above describe the pre-activation tree.
   On 2026-09-18 the owner chose public GitHub issues for bug and vulnerability
   reports (IR-009); enabling private vulnerability reporting is not pending.
   IR-023 (an access-control class on the Keychain item) was fixed on
