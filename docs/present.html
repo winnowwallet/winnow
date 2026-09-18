@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Winnow — walkthrough</title>
+<title>Archived talk — Winnow</title>
 <meta name="description" content="Intro map for a live walkthrough of winnowwallet.com — front page, custody, architecture, and what I learned.">
 <link rel="canonical" href="https://winnowwallet.com/present">
 <meta property="og:type" content="website">
@@ -113,22 +113,16 @@ body.presenting .controls{display:flex}
 .dots button[aria-current="true"]{background:var(--mark)}
 .hint{font-size:.7rem;color:#a8a294}
 @media(max-width:40rem){.hint{display:none}}
+.deck{padding:2rem clamp(1.1rem,4vw,2rem) 3rem;max-width:52rem}.scene{display:block!important}.scene+.scene{border-top:1px solid var(--rule);margin-top:3rem}.archive-note{border-left:3px solid var(--seed);padding:1rem;background:var(--paper-2);margin:2rem 0}body{overflow:auto!important}
 </style>
+<link rel="stylesheet" href="site.css">
 </head>
 <body>
 
-<header class="topbar">
-  <div class="wrap bar">
-    <a class="brand" href="/"><span><b>₿</b> Winnow</span></a>
-    <nav class="links">
-      <a href="/">Front page</a>
-      <a href="/custody">Custody</a>
-      <a href="/architecture" class="hide-sm">Architecture</a>
-    </nav>
-  </div>
-</header>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="topbar"><div class="bar"><a class="mark" href="/" aria-label="Winnow home">winnow</a><nav class="links" aria-label="Main"><a href="/architecture">How it works</a><a href="/vaults">Shared wallets</a><a href="https://github.com/winnowwallet/winnow">GitHub ↗</a></nav></div></header>
 
-<main class="deck wrap" id="deck">
+<main class="deck wrap" id="main"><aside class="archive-note"><h1>Archived talk</h1><p>This historical presentation describes an earlier site and personal experiments. Its timings and comparisons are not current product guarantees. For current behavior, use <a href="/vaults">Shared wallets</a>, <a href="/architecture">How it works</a> and the <a href="/recording">recorded journey</a>.</p></aside>
 
   <!-- Slide 1: intro map -->
   <section class="scene active" data-title="Walkthrough">
@@ -149,7 +143,7 @@ body.presenting .controls{display:flex}
               <div class="meta">Existing page · 2 min</div>
             </div>
           </a>
-          <a class="stop" href="/custody" role="listitem">
+          <a class="stop" href="/vaults" role="listitem">
             <span class="stop-num">02</span>
             <div>
               <h3>How you hold it <span style="color:var(--ink-3);font-weight:400">→ /custody</span></h3>
@@ -184,7 +178,7 @@ body.presenting .controls{display:flex}
         </div>
 
         <div class="cta">
-          <button class="btn" id="presentButton" type="button">Present this map</button>
+
           <a class="btn ghost" href="/">Open the front page →</a>
         </div>
         <p class="note">Flow: <b>present.html (here, 30s)</b> → <b>/</b> → <b>/custody</b> → <b>/architecture</b> → back here for “what I learned” → <b>Roadmap</b> → Q&A.</p>
@@ -238,45 +232,9 @@ body.presenting .controls{display:flex}
 
 </main>
 
-<div class="controls" role="group" aria-label="Presentation controls">
-  <span class="counter" id="counter">1 / 2</span>
-  <div class="dots" id="dots" role="navigation" aria-label="Choose slide"></div>
-  <span class="hint">← → · Esc to exit · <a href="/" style="color:#f5a94b">open front page →</a></span>
-</div>
 
-<script>
-(function(){
-  var scenes=Array.from(document.querySelectorAll('.scene'));
-  var button=document.getElementById('presentButton');
-  var counter=document.getElementById('counter');
-  var dots=document.getElementById('dots');
-  var index=0;
-  scenes.forEach(function(s,i){
-    var d=document.createElement('button');
-    d.type='button';d.setAttribute('aria-label','Slide '+(i+1)+': '+s.dataset.title);
-    d.addEventListener('click',function(){show(i)});dots.appendChild(d);
-  });
-  function show(n){
-    index=Math.max(0,Math.min(scenes.length-1,n));
-    scenes.forEach(function(s,i){s.classList.toggle('active',i===index);s.setAttribute('aria-hidden',document.body.classList.contains('presenting')&&i!==index?'true':'false')});
-    Array.from(dots.children).forEach(function(b,i){b.setAttribute('aria-current',i===index?'true':'false')});
-    counter.textContent=(index+1)+' / '+scenes.length;
-  }
-  function start(){document.body.classList.add('presenting');show(index);if(document.documentElement.requestFullscreen){document.documentElement.requestFullscreen().catch(function(){})}}
-  function stop(){document.body.classList.remove('presenting');scenes.forEach(function(s){s.removeAttribute('aria-hidden')});scenes[index].scrollIntoView({block:'start'});if(document.fullscreenElement&&document.exitFullscreen){document.exitFullscreen().catch(function(){})}}
-  if(button) button.addEventListener('click',start);
-  document.addEventListener('keydown',function(e){
-    if(!document.body.classList.contains('presenting')) return;
-    if(['ArrowRight','ArrowDown','PageDown',' '].includes(e.key)){e.preventDefault();show(index+1)}
-    else if(['ArrowLeft','ArrowUp','PageUp'].includes(e.key)){e.preventDefault();show(index-1)}
-    else if(e.key==='Home'){e.preventDefault();show(0)}
-    else if(e.key==='End'){e.preventDefault();show(scenes.length-1)}
-    else if(e.key==='Escape'){stop()}
-  });
-  document.addEventListener('fullscreenchange',function(){if(!document.fullscreenElement&&document.body.classList.contains('presenting'))stop()});
-  show(0);
-  if(new URLSearchParams(location.search).get('mode')==='present') start();
-})();
-</script>
+
+
+<footer><div class="bar"><nav aria-label="Footer"><a href="/roadmap">Roadmap</a><a href="/privacy">Privacy</a><a href="/recording">Recording</a></nav></div></footer>
 </body>
 </html>

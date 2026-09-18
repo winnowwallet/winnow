@@ -3,91 +3,95 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Shared control or an extra signing device &mdash; Winnow</title>
-<meta name="description" content="Two uses for multiple signing keys: shared control and a second device. What the policies enforce, what metadata cannot prove, and what is tested.">
+<title>Shared wallets &mdash; Winnow</title>
+<meta name="description" content="Choose who signs, set up a shared account, back up every key, and review payments with Bitcoin Core cosigners.">
 <link rel="canonical" href="https://winnowwallet.com/vaults">
 <meta property="og:type" content="article">
 <meta property="og:url" content="https://winnowwallet.com/vaults">
-<meta property="og:title" content="Shared control or an extra signing device &mdash; Winnow">
-<meta property="og:description" content="Two uses for multiple signing keys: shared control and a second device. What the policies enforce, what metadata cannot prove, and what is tested.">
+<meta property="og:title" content="Shared wallets &mdash; Winnow">
+<meta property="og:description" content="Choose who signs, set up a shared account, back up every key, and review payments with Bitcoin Core cosigners.">
 <meta property="og:image" content="https://winnowwallet.com/og.png">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Shared control or an extra signing device &mdash; Winnow">
-<meta name="twitter:description" content="Two uses for multiple signing keys: shared control and a second device. What the policies enforce, what metadata cannot prove, and what is tested.">
+<meta name="twitter:title" content="Shared wallets &mdash; Winnow">
+<meta name="twitter:description" content="Choose who signs, set up a shared account, back up every key, and review payments with Bitcoin Core cosigners.">
 <meta name="twitter:image" content="https://winnowwallet.com/og.png">
 <link rel="stylesheet" href="site.css">
 </head>
 <body>
-<header class="topbar">
-  <div class="bar">
-    <a class="mark" href="/"><b>&#8383;</b> Winnow</a>
-    <nav class="links">
-      <a href="/custody">How you hold it</a>
-      <a href="/present">Talk</a>
-      <a href="/architecture">Architecture</a>
-      <a href="https://github.com/winnowwallet/winnow">Source</a>
-    </nav>
-  </div>
-</header>
-<main>
-<h1>Who must approve a payment?</h1>
-<p class="lede">Winnow supports two signing policies for two useful stories: share control with other people, or require an additional signing device. Both use the wallet’s existing Bitcoin peer connection.</p>
-<p>These are product choices, not restrictions of the cryptography: a threshold can also protect one person’s devices, and MuSig2 can also be shared between people.</p>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="topbar"><div class="bar"><a class="mark" href="/" aria-label="Winnow home">winnow</a><nav class="links" aria-label="Main"><a href="/architecture">How it works</a><a href="/vaults">Shared wallets</a><a href="https://github.com/winnowwallet/winnow">GitHub ↗</a></nav></div></header>
+<main id="main">
+<h1>Shared wallets</h1>
+<p class="lede">Choose who must approve, back up every key, then fund the account.</p>
+<nav class="contents" aria-label="On this page"><a href="#choose-policy">Choose</a><a href="#setup">Set up</a><a href="#backups">Back up</a><a href="#receive">Receive</a><a href="#approve">Approve</a></nav>
 
-<section id="shared-control">
-<h2>Share control: any two of three</h2>
-<p>For a family reserve or shared treasury, three independent keys can require any two approvals. One signer can be unavailable and the other two can still spend. Any two can also spend without the third person’s agreement.</p>
-<p>Start with <strong>Wallet → Save with other people</strong>. Choose co-owners and the threshold, then share the savings card before funding so each wallet starts watching. The account shows its actual signing policy and its confirmed balance.</p>
-<p>To approve or continue a shared payment, open the account and choose <strong>Approve a request</strong>. It accepts a Winnow request or a raw PSBT from another wallet. In Advanced mode, expand <strong>Raw PSBT</strong> to copy or share a reply that another wallet can read.</p>
-<p>The threshold is configurable. <strong>1-of-n permits one key to spend.</strong> A name or “shared savings” label does not change that rule. Distinct public keys also do not prove that different people hold their secrets.</p>
-<p>Winnow uses Taproot script-path multisig with an unspendable internal key: there is no secret key that bypasses the threshold. The receiving output alone does not reveal the threshold. Spending reveals the executed script, its keys, and the threshold. <a href="https://github.com/bitcoin/bips/blob/master/bip-0341.mediawiki">Taproot rules</a>.</p>
-<p><a href="/#savings">Shared-savings guide</a></p>
+<section id="choose-policy">
+<h2>Choose who signs</h2>
+<div class="table-wrap" role="region" tabindex="0" aria-label="Scrollable table"><table>
+<caption>Three ways to control a payment</caption>
+<thead><tr><th scope="col">Policy</th><th scope="col">Who can spend</th><th scope="col">What to plan for</th></tr></thead>
+<tbody>
+<tr><th scope="row">Everyday · one key</th><td>Your phone signs.</td><td>A stolen key can spend. Losing the key and its backups loses access.</td></tr>
+<tr><th scope="row">Both keys · 2-of-2</th><td>Your phone and a second signer must both approve.</td><td>Neither can spend alone. Losing either key and all its backups locks the funds.</td></tr>
+<tr><th scope="row">Any two · 2-of-3</th><td>Any two of the three keys can sign.</td><td>One signer can be unavailable. The other two can also spend without that person's agreement.</td></tr>
+</tbody></table></div>
+<p>Independent keys need independent protection. Different public keys do not prove different owners, devices, or backups. These are examples: MuSig2 can be shared between people, and a threshold can protect one person's devices.</p>
 </section>
 
-<section id="extra-device">
-<h2>Add a factor: the phone and another signer</h2>
-<p>For personal savings, keep one key on the phone and another on an independent signing device. A 2-of-2 MuSig2 policy requires both keys for every payment. Two keys on the same compromised device do not provide the intended separation.</p>
-<p>In <strong>Advanced mode → Wallet → Require another signing device</strong>, add the phone’s key and a compatible participant’s public account key. Review the policy before funding. MuSig2 exchanges public nonces and then partial signatures; the final payment has one Taproot key-path signature.</p>
-<p>The signature alone does not reveal the number of signers. This does not hide balances, transaction history, or signing coordination from everyone. Every participant remains required: losing a key and all its backups can lock the funds permanently. Winnow’s MuSig2 policy has no alternate recovery branch.</p>
-<p><strong>Bitcoin Core 31.1 can be the second signer.</strong> The focused UI journey receives and sends through a phone-plus-Core account, then through a script-path 2-of-3 account. The latter has two Core cosigners available, with the phone and one Core key approving. Focused app tests check account backup rules. A hardware wallet is a separate integration: its secret would stay on the device, with the desktop coordinating the exchange.</p>
-<p><a href="/core-cosigner">Setup with Bitcoin Core</a> · <a href="/recording">Recorded payment and evidence</a> · <a href="https://github.com/bitcoin/bips/blob/master/bip-0327.mediawiki">MuSig2 specification</a></p>
+<section id="setup">
+<h2>Set up the account</h2>
+<h3 id="shared-control">Any two of three</h3>
+<p>In <strong>Wallet → Save with other people</strong>, choose the co-owners and threshold. Share the savings card so every wallet starts watching before funds arrive. Check the actual policy shown in the account: <strong>1-of-n allows one key to spend</strong>, regardless of the account's name.</p>
+<h3 id="extra-device">Both keys required</h3>
+<p>In <strong>Advanced mode → Wallet → Require another signing device</strong>, add the phone's key and a compatible participant's public account key. Review the policy together. <strong>Winnow's MuSig2 policy has no alternate recovery branch:</strong> both keys remain necessary for every payment.</p>
+<p><strong>Bitcoin Core 31.1 is the demonstrated cosigner.</strong> The <a href="/recording">recorded journey</a> receives and sends with phone-plus-Core MuSig2, then script-path 2-of-3 with Core co-owners. Hardware-wallet compatibility requires a separate verified integration. <a href="/core-cosigner">Set up with Bitcoin Core →</a></p>
 </section>
 
-<section id="policy-metadata">
-<h2>What can metadata prove?</h2>
-<p>The app derives the required key count from the spending descriptor. Names, contact cards, notes, and imported transaction labels cannot lower that requirement or establish who controls a key.</p>
-<p>A signed policy statement could authenticate who made the statement and bind it to a descriptor. It still could not prove that no key copies exist, where they are kept, or how an attacker will behave. Winnow does not issue a “wrench-proof” certificate or add that claim to the blockchain.</p>
-<p>Separating keys across independently controlled devices or people can make compromising one key insufficient. Physical coercion remains possible. A genuinely mandatory delay or independent approval would need to constrain every valid spending path; descriptive metadata cannot enforce either. Such additional policies are not implemented here.</p>
+<section id="backups">
+<h2>Back up before funding</h2>
+<ol>
+<li>Open the account and choose <strong>Back up this wallet</strong>. Keep the file: it includes account setup, address positions, and tracked funds.</li>
+<li>Keep the phone's recovery words separately. Every other signer needs its own key backup.</li>
+<li>Make a fresh wallet backup after setting up an account and keep it current. Older files may omit shared accounts.</li>
+</ol>
+<p>The default wallet export excludes recovery words. An export made with <strong>Include recovery phrase</strong> contains the phone's signing secret; protect it accordingly.</p>
+<p>On a replacement phone, a file without recovery words restores watch-only access. The current import screen requires a file containing the words to restore this phone’s signing key; it has no separate word-entry field.</p>
+<p>Recovery uses the file's saved history and scans forward for later payments. Recovery words or a public policy alone do not restore past payments. Signing exchanges are not restored; start a new exchange after recovery. <a href="/import">Recovery requirements and limits →</a></p>
 </section>
 
-<section id="professional-cosigners">
-<h2>Professional co-signers and trusts: an investigation</h2>
-<p>Unchained’s published standard custody model gives the client two of three keys, so the provider’s participation is optional. Its published Partner model describes clients holding a single key alongside other key agents. <a href="https://www.unchained.com/features/bitcoin-network-of-keys">Unchained’s custody models</a>.</p>
-<p>That distinction matters: a backup co-signer and a required independent approver serve different purposes. In a 2-of-3 where the client holds one key, the two other holders can also spend together without the client.</p>
-<p>Trust arrangements also need legal authority and key access to agree. Unchained describes trust and inheritance services, but Winnow has no partnership or verified integration with Unchained. A trust label in this app does not create a trust or a signing obligation. <a href="https://www.unchained.com/inheritance">Unchained inheritance services</a>.</p>
-<p><a href="/roadmap#signing-partners">Compatibility, recovery, and partner acceptance criteria</a></p>
+<section id="receive">
+<h2>Receive into the right account</h2>
+<p>Use the receiving address for the account whose policy you reviewed. Confirm the other wallets are watching, then fund it. The account shows its signing requirement and confirmed balance.</p>
+<p>Importing an account later does not automatically find payments from before that wallet started watching. Keep its policy and wallet-history backup.</p>
 </section>
+
+<section id="approve">
+<h2>Review and approve</h2>
+<p>Select the account when sending, then check the recipients, amounts, fee, and policy before authorizing.</p>
+<ul>
+<li><strong>2-of-3:</strong> open the account and choose <strong>Approve a request</strong>. It accepts a Winnow request or a raw PSBT. In Advanced mode, expand <strong>Raw PSBT</strong> to copy or share a reply.</li>
+<li><strong>MuSig2:</strong> use <strong>Continue signing</strong> to exchange public nonces and partial signatures with the other signer. After an interruption, choose <strong>Start again</strong> and begin a fresh exchange on both sides.</li>
+</ul>
+<p>Private signing keys stay with their holders during signing. The exchange carries payment details, public nonces, and signatures. When the required signatures are complete, the payment can be broadcast over the wallet's existing Bitcoin peer connection.</p>
+</section>
+
+<details id="policy-metadata">
+<summary>What labels and policies can prove</summary>
+<p>The spending descriptor determines the required keys. Names, contact cards, notes, and imported labels cannot lower that requirement or prove who controls a key.</p>
+<p>A signed policy statement could authenticate its author and descriptor, but not the location of keys, absence of copies, or protection from coercion. Metadata cannot enforce a delay or independent approval; such a rule would need to constrain every valid spending path. Winnow does not implement those additional policies or certify protection against coercion.</p>
+<p id="professional-cosigners">A signing key does not establish inheritance rights, a trust, or a provider's obligations. Winnow has no verified professional-cosigner or lending integration. <a href="/roadmap#signing-partners">Provider and recovery research →</a></p>
+</details>
 
 <details id="the-two-policies">
-<summary>Advanced: descriptors and signing</summary>
-<p>Threshold accounts use <code>tr(NUMS, sortedmulti_a(k, …))</code>; imported <code>multi_a</code> orderings are also supported. MuSig2 accounts use <code>tr(musig(k1, k2, …)/…)</code> with BIP328 derivation. Winnow does not combine the two into a hidden alternate spending path.</p>
-<p>The app reads PSBTv0 and v2 and shares v0 files with Core. Both carry the payment details and signing data. The app checks known inputs and derives its own output scripts to recognize change; it does not trust a proposer’s change label or derivation metadata. It displays recipients, amounts, fees, and the signing policy before authorization.</p>
-<p>MuSig2 secret nonces stay in the active signing screen’s memory. Leaving the screen abandons the session; completing a signature consumes its nonce. Choose <strong>Start again</strong> after an interrupted exchange, and start fresh on the other signer too.</p>
-<p>Each account is watched through the same compact-filter flow as the everyday wallet. Creation height matters: importing a public policy does not automatically recover funds sent before this phone started watching it. Keep the policy and the required wallet history for recovery. <a href="/import">Recovery behavior</a>.</p>
-<p>Current signing support is Taproot. Support for a different provider’s P2SH/P2WSH policies or PSBT conventions cannot be inferred from the shared word “multisig.” The planned <a href="/roadmap#safe">P2WSH Safe</a> is a separate proposal, not proof of that compatibility.</p>
+<summary>Technical details: descriptors, privacy, and signing</summary>
+<p>Threshold accounts use <code>tr(NUMS, sortedmulti_a(k, …))</code>; imported <code>multi_a</code> orderings are supported. The unspendable internal key provides no secret-key bypass of the threshold. Receiving does not reveal the threshold; a script-path spend reveals the executed script, keys, and threshold.</p>
+<p>MuSig2 accounts use <code>tr(musig(k1, k2, …)/…)</code> with BIP328 derivation and one Taproot key-path signature per input. The signature alone does not reveal how many keys signed. Transaction history and signing coordination can still reveal information. These policies do not combine into a hidden alternate spending path.</p>
+<p>The app reads PSBTv0 and v2 and shares v0 files with Core. It checks known inputs and derives its own output scripts to recognize change; it does not trust the proposer's change labels or derivation metadata.</p>
+<p>MuSig2 secret nonces stay in the active signing screen's memory. Leaving abandons the session; completing a signature consumes its nonce.</p>
+<p>Accounts use the everyday wallet's compact-filter flow. Current signing support is Taproot; another provider's P2SH/P2WSH policies or PSBT conventions require separate verification. The proposed <a href="/roadmap#safe">P2WSH Safe</a> is not shipped support.</p>
+<p><a href="https://github.com/bitcoin/bips/blob/master/bip-0341.mediawiki">Taproot rules</a> · <a href="https://github.com/bitcoin/bips/blob/master/bip-0327.mediawiki">MuSig2 specification</a> · <a href="https://github.com/winnowwallet/winnow/actions">Current test runs</a></p>
 </details>
-<p><a href="https://github.com/winnowwallet/winnow/actions">Current test runs and artifacts</a> · <a href="/recording">Recorded payments and their provenance</a></p>
-<h2 id="backups">Back up both sides</h2>
-<p>Open the account and choose <strong>Back up this wallet</strong>. The file includes the account’s setup, address positions, and tracked funds. Keep the phone’s recovery words separately. The other signer needs its own key backup.</p>
-<p>Restoring a recent file checks forward for later payments, including payments from these accounts. Older Winnow files may not include shared accounts; create a fresh backup after setting one up. Signing exchanges are never restored: start a new exchange after restoring the wallet.</p>
 </main>
-<footer>
-  <div class="bar">
-    Winnow &mdash; <a href="/">the wallet</a> &middot; <a href="/custody">how you hold it</a>
-    &middot; <a href="/present">the talk</a> &middot; <a href="/roadmap">the roadmap</a>
-    &middot; <a href="/evidence">the evidence</a> &middot; <a href="/privacy">privacy</a>
-    &middot; <a href="https://github.com/winnowwallet/winnow">source</a>
-  </div>
-</footer>
+<footer><div class="bar"><nav aria-label="Footer"><a href="/roadmap">Roadmap</a><a href="/privacy">Privacy</a><a href="/recording">Recording</a></nav></div></footer>
 </body>
 </html>

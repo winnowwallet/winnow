@@ -8,24 +8,19 @@ technical guides and site.css so those explanations are available offline.
 
 [The journey inventory](journeys.json) and
 [app test source](../UITests/README.md) feed [build-site](../scripts/build-site),
-which generates home and recording pages. The homepage gives an overview,
-illustrates the signing choices, and then shows the journey itself: the sixteen
-checkpoint screenshots the UI run captures, in three acts, each linking to the
-full-size image. Generation refuses any checkpoint the journey does not capture,
-so the page cannot show a screen no test produced. A link opens the full
-recording; detailed feature descriptions stay off the homepage. Filmstrip styles
-stay inline on the homepage, so site.css is unaffected.
-The [signing guide](vaults.html) explains
-the policies, and the [recording page](https://winnowwallet.com/recording) presents
-the continuous payment journey with playback controls and source provenance.
-Other pages are authored directly. Older guide illustrations keep their dated provenance.
-[signing.js](signing.js) runs the homepage’s signing examples: a stolen hardware
-key, a separate approved payment, shared savings, and a possible future loan.
-Each scene plays once, has replay controls, and shows a still version for reduced
-motion. Approvals travel to the payment; MuSig2 approvals merge into one on-chain
-signature, while shared spending reveals its three keys and two-approval rule.
-Without JavaScript, the signing scenes remain readable. The drawings come from
-the page generator and use [site.css](site.css); no animation library is needed.
+which generates home and recording pages. The homepage pairs three signing
+choices with real wallet screens: one key, both keys, or any two of three.
+An expandable gallery keeps all sixteen checkpoint screenshots in journey order,
+each linking to the full-size image. Generation refuses any checkpoint the
+journey does not capture, so the page cannot show a screen no test produced.
+
+[home.css](home.css) styles only the homepage; app-bundled [site.css](site.css)
+is unaffected. Native radio controls and the gallery work without JavaScript.
+[home.js](home.js) enhances recording links with a dialog containing the full
+video. It does not autoplay or preload the recording. Without JavaScript, those
+links open the [recording page](https://winnowwallet.com/recording), which retains
+playback controls and source provenance. The [signing guide](vaults.html)
+explains the policies. Other pages are authored directly. Shared wallets combines the former custody overview with setup and backup instructions. Technical guides begin with summaries and contents links; deeper reference material uses native disclosures. The archive keeps old talk notes and public-signet evidence separate from the current recording. Older illustrations retain their dated provenance.
 [The roadmap](roadmap.html) separates planned work from current behavior.
 [Architecture](architecture.html) links directly to the focused technical guides.
 Those HTML files are the maintained explanations; no separate paper or paper
@@ -35,7 +30,7 @@ Run `scripts/build-site --check` and, with real LFS images downloaded,
 `scripts/check-site` from the root. Both accept `--root` for a staged repository.
 [prepare-site-artifact](../scripts/prepare-site-artifact) builds the deployable
 directory; [Website CI](../.github/workflows/site.yml) consumes that artifact.
-The checks cover generation, local links, media objects, and the 25 MiB per-file
+The checks cover generation, local links and section targets, media objects, and the 25 MiB per-file
 hosting limit, not rendered-browser layout or the truth of every prose claim.
 
 For a successful CI journey, run `scripts/prepare-site-artifact OUTPUT --journey

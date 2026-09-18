@@ -15,21 +15,13 @@
 <link rel="stylesheet" href="site.css">
 </head>
 <body>
-<header class="topbar">
-  <div class="bar">
-    <a class="mark" href="/"><b>&#8383;</b> Winnow</a>
-    <nav class="links">
-      <a href="/custody">How you hold it</a>
-      <a href="/present">Talk</a>
-      <a href="/architecture">Architecture</a>
-      <a href="https://github.com/winnowwallet/winnow">Source</a>
-    </nav>
-  </div>
-</header>
-<main>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="topbar"><div class="bar"><a class="mark" href="/" aria-label="Winnow home">winnow</a><nav class="links" aria-label="Main"><a href="/architecture">How it works</a><a href="/vaults">Shared wallets</a><a href="https://github.com/winnowwallet/winnow">GitHub ↗</a></nav></div></header>
+<main id="main">
 <h1>Sign with Bitcoin Core</h1>
 <p>Your phone holds one key. Bitcoin Core on your desktop holds another. Winnow and Core 31.1 can exchange signing requests and complete a payment together.</p>
-<p>The <a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift">one integration journey</a> makes an ordinary payment, receives and sends with one Core MuSig2 cosigner, then receives and sends from a script-path 2-of-3 account with two Core cosigners available. The private signet fixture mines blocks automatically. <a href="https://github.com/winnowwallet/winnow/blob/main/AppTests/VaultBackupTests.swift">Focused app tests</a> check account backup rules.</p>
+<aside class="guide-summary"><p><strong>Before you start:</strong> use a signet wallet in Winnow and a synced Bitcoin Core 31.1 node with wallet RPC access. These commands use test coins and Core’s software key; they do not establish hardware-wallet compatibility.</p></aside>
+<nav class="contents" aria-label="On this page"><a href="#get-cores-key">Get a key</a><a href="#build-the-vault-in-winnow">Set up</a><a href="#backups">Back up</a><a href="#spend">Approve</a><a href="#a-2-of-3-with-bitcoin-core">Two of three</a></nav>
 
 <h2 id="phone-and-core">Your phone plus Core</h2>
 <p>Use a 2-of-2 MuSig2 account when you want both devices to approve every payment. Neither key can spend alone. On Bitcoin, the payment has one ordinary Taproot signature.</p>
@@ -53,9 +45,15 @@ bitcoin-cli -signet -rpcwallet=winnow-signer listdescriptors</code></pre>
 bitcoin-cli -signet getdescriptorinfo "&lt;descriptor containing Core’s private expression&gt;"
 bitcoin-cli -signet -rpcwallet=winnow-signer importdescriptors \
   '[{"desc":"&lt;private descriptor&gt;#&lt;new checksum&gt;","timestamp":"now","active":true,"range":[0,1000]}]'</code></pre>
-<p>Use the new checksum returned by <code>getdescriptorinfo</code>. Back up Core’s wallet separately. Then receive some test bitcoin into the account.</p>
+<p>Use the new checksum returned by <code>getdescriptorinfo</code>. Complete the backups below before receiving test bitcoin into the account.</p>
 
-<h2 id="spend">4. Approve a payment on both sides</h2>
+<h2 id="backups">4. Back up before funding</h2>
+<p>In the account, choose <strong>Back up this wallet</strong>. Save that file and the phone’s recovery words. Back up Core’s wallet on the desktop as well. Wait for pending payments to confirm before exporting.</p>
+<p>On a replacement phone, the default file restores watch-only access. To restore signing through the current import screen, use an export made with <strong>Include recovery phrase</strong>. That file contains the phone’s signing secret; keep it private. There is no separate recovery-word field during import.</p>
+<p>The phone’s file includes the account and its tracked funds. Restoring an older file checks for later payments, and removes spends observed in the scanned window. The file’s earlier history remains a trusted starting claim. The file does not contain Core’s private key or a live signing exchange. Losing either required key and all its backups leaves this account unable to spend.</p>
+
+
+<h2 id="spend">5. Approve a payment on both sides</h2>
 <ol>
 <li>In Winnow, open the account and tap <strong>Send</strong>, or choose the account from the Send tab. Enter the recipient and amount.</li>
 <li>Tap <strong>Review payment</strong> and check the account, address, amount, and fee. Choose <strong>Continue to approvals</strong>, then tap <strong>Prepare this phone</strong>.</li>
@@ -77,14 +75,6 @@ bitcoin-cli -signet -rpcwallet=winnow-signer \
 <figcaption>The recorded journey shows payment review, the signing exchange, and the sent receipt. See the <a href="/recording">recording provenance</a> for the app revision and test evidence.</figcaption>
 </figure>
 
-<h2 id="backups">5. Keep a backup of both sides</h2>
-<p>In the account, choose <strong>Back up this wallet</strong>. Save that file and the phone’s recovery words. Back up Core’s wallet on the desktop as well. Wait for pending payments to confirm before exporting.</p>
-<p>The phone’s file includes the account and its tracked funds. Restoring an older file checks for later payments, so an already-spent coin does not come back as available. The file does not contain Core’s private key or a live signing exchange. Losing either required key and all its backups leaves this account unable to spend.</p>
-<figure>
-<img src="screenshots/38-extra-device-restored.png" width="1206" height="2622" loading="lazy" alt="The restored two-key account showing the balance left after the payment.">
-<figcaption>An earlier UI run restored a backup saved before payment and checked the remaining balance. See the capture notes for that run’s provenance.</figcaption>
-</figure>
-
 <h2 id="a-2-of-3-with-bitcoin-core">A shared 2-of-3 account</h2>
 <p>For shared decisions, create a three-key account and require two approvals. One or two of those keys can belong to Core wallets. Get each public expression as above; for this setup, keep the <code>/&lt;0;1&gt;/*</code> suffix on each participant.</p>
 <p>The account uses <code>tr(NUMS, sortedmulti_a(2, …))</code>. Import it into each Core signer with only that signer’s private expression. Each signer runs <code>walletprocesspsbt</code>; combine the replies in Winnow. It needs two signatures, with no MuSig2 preparation round for ordinary individual keys.</p>
@@ -92,16 +82,10 @@ bitcoin-cli -signet -rpcwallet=winnow-signer \
 <h2 id="two-core-signers">Two Core signers</h2>
 <p>The integration journey imports the 2-of-3 descriptor into two Core wallets. The phone and one Core wallet approve the payment; the other Core key stays available but unused. It exercises this one combination, not every possible pair or signing order.</p>
 <h2 id="group-as-cosigner">Use a group as one signer</h2>
-<p>A phone-and-second-key MuSig2 group can fill one slot in a larger shared account. Both group members must participate to fill that slot. The other two outer signers can still spend together without the group. See <a href="/vaults#the-two-policies">the group setup</a>.</p>
+<p>A phone-and-second-key MuSig2 group can fill one slot in a larger shared account. Both group members must participate to fill that slot. The other two outer signers can still spend together without the group. See <a href="/vaults#the-two-policies">descriptor details</a>.</p>
 <p><a href="/recording">Watch the recorded payments</a> · <a href="https://github.com/winnowwallet/winnow/actions">Current test runs and artifacts</a> · <a href="/vaults">Signing accounts explained</a> · <a href="/roadmap#signing-partners">Hardware wallets and future partners</a></p>
+<h2 id="evidence">Recorded evidence</h2><p>The <a href="https://github.com/winnowwallet/winnow/blob/main/UITests/WinnowAppUITests.swift">one integration journey</a> makes an ordinary payment, receives and sends with one Core MuSig2 cosigner, then receives and sends from a script-path 2-of-3 account with two Core cosigners available. The private signet fixture mines blocks automatically. <a href="https://github.com/winnowwallet/winnow/blob/main/AppTests/VaultBackupTests.swift">Focused app tests</a> check account backup rules.</p><p><a href="/recording">Watch the journey and inspect its source</a>.</p>
 </main>
-<footer>
-  <div class="bar">
-    Winnow &mdash; <a href="/">the wallet</a> &middot; <a href="/custody">how you hold it</a>
-    &middot; <a href="/present">the talk</a> &middot; <a href="/roadmap">the roadmap</a>
-    &middot; <a href="/evidence">the evidence</a> &middot; <a href="/privacy">privacy</a>
-    &middot; <a href="https://github.com/winnowwallet/winnow">source</a>
-  </div>
-</footer>
+<footer><div class="bar"><nav aria-label="Footer"><a href="/roadmap">Roadmap</a><a href="/privacy">Privacy</a><a href="/recording">Recording</a></nav></div></footer>
 </body>
 </html>

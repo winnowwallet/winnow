@@ -10,7 +10,6 @@ ROOT = Path(__file__).resolve().parent.parent
 TEST_PATH = "UITests/WinnowAppUITests.swift"
 SOURCE = "https://github.com/winnowwallet/winnow/blob/main/"
 VIDEO_PATH = "videos/wallet-journey.mp4"
-RESULTS = "https://github.com/winnowwallet/winnow/actions/workflows/ci.yml"
 # The recorded journey's checkpoints, in the order the run tells its story.
 # load_journeys refuses any name here that the UI journey does not capture, so
 # the homepage cannot show a screen no test produced.
@@ -95,7 +94,7 @@ def escape(value):
     return html.escape(value, quote=True)
 
 def recorded_run():
-    """The journey's own checkpoints, shown in order: the app, not a description of it."""
+    """Keep every proven capture available without making it the landing page."""
     acts = []
     for heading, shots in ACTS:
         frames = "".join(
@@ -104,167 +103,69 @@ def recorded_run():
             f'loading="lazy" decoding="async" alt="Winnow on iPhone: {escape(caption.lower())}."></a>'
             f'<figcaption>{escape(caption)}</figcaption></figure></li>'
             for name, caption in shots)
-        acts.append(f'<h3 class="act-name">{escape(heading)}</h3>\n<ol class="filmstrip">{frames}</ol>')
+        acts.append(f'<h3>{escape(heading)}</h3>\n<ol class="filmstrip">{frames}</ol>')
     total = sum(len(shots) for _, shots in ACTS)
-    return f'''<section id="run"><h2>See it work</h2>
-<p class="run-lede">{total} screens from one recorded run against a real Bitcoin node: an ordinary payment, then two shared accounts. Nothing here is a mockup. <a href="/recording">Watch the recording →</a></p>
-{"".join(acts)}</section>'''
+    return f'''<details class="screen-gallery" id="screens">
+<summary><span>Explore all {total} screens</span><span class="disclosure-mark" aria-hidden="true">+</span></summary>
+<div class="gallery-content">{"".join(acts)}</div></details>'''
 
-def signing_animation(scene):
-    shared = scene in {"shared", "borrowing"}
-    attack = scene == "attack"
-    title, explanation = {
-        "attack": ("Stolen hardware-wallet key", "An attacker gets the hardware wallet’s key and tries to spend. The iPhone has not approved, so the payment stays blocked and nothing is sent to Bitcoin."),
-        "payment": ("A payment you approve", "For a separate, normal payment, you check the address, amount, and fee on your iPhone. The iPhone and hardware wallet both sign. Bitcoin sees one ordinary signature, without revealing the two devices."),
-        "shared": ("One person is away", "You and Alex approve while a third person is away. Any two of the three keys can approve. Spending reveals three public keys, the two-approval rule, and two signatures, but no names."),
-        "borrowing": ("Returning loan collateral", "A possible future lending arrangement. After repayment, you and the lender approve returning your bitcoin. The independent key agent does not need to participate. The lender and key agent could also move the bitcoin together."),
-    }[scene]
-    people = '<circle cy="-9" r="9"/><path d="M-17 17v-5a17 17 0 0 1 34 0v5"/>'
-    phone = '<rect x="-17" y="-28" width="34" height="56" rx="6"/><path d="M-5 19h10"/>'
-    hardware = '<rect x="-13" y="-26" width="26" height="52" rx="7"/><path d="M-7-17H7V0H-7z"/><circle cy="14" r="3"/>'
-    if shared:
-        signers = [(60, "You", people, "first"), (180, "Lender" if scene == "borrowing" else "Alex", people, "second"), (300, "Key agent" if scene == "borrowing" else "Away", people, "absent")]
-    else:
-        signers = [(90, "iPhone", phone, "waiting" if attack else "first"), (270, "Hardware wallet", hardware, "stolen" if attack else "second")]
-    drawing = []
-    for x, label, icon, role in signers:
-        drawing.append(f'<path class="signing-wire" d="M{x} 111V120L180 155"/>')
-        if role not in {"absent", "waiting"}:
-            drawing.append(f'<path class="signing-flow {role}" pathLength="1" d="M{x} 111V120L180 155"/>')
-            drawing.append(f'<path class="signing-signal {role}" pathLength="1" d="M{x} 111V120L180 155"/>')
-        drawing.append(f'<g class="signing-person {role}" transform="translate({x} 49)"><circle class="signing-node" r="35"/><g class="signing-icon">{icon}</g><text class="signing-label device-label" y="52">{label}</text>')
-        if role == "stolen":
-            drawing.append('<text class="signing-label stolen-label" y="52">Key stolen</text>')
-            drawing.append('<g class="signing-warning"><circle cx="27" cy="-23" r="12"/><text x="27" y="-18">!</text></g>')
-        elif role != "waiting" and role != "absent":
-            drawing.append('<g class="signing-check"><circle cx="27" cy="-23" r="12"/><path pathLength="1" d="m21-23 4 4 8-8"/></g>')
-        drawing.append('</g>')
-    final_label = "Blocked" if attack else "Returned" if scene == "borrowing" else "Approved"
-    final_icon = 'M126 173l13 13m0-13-13 13' if attack else 'm126 179 6 6 11-12'
-    if attack:
-        chain = '<span class="chain-token">No payment sent</span>'
-    elif shared:
-        chain = '<div class="chain-keys"><span>Key 1</span><span>Key 2</span><span>Key 3</span></div><span class="chain-rule">2 required · 2 signatures</span>'
-    else:
-        chain = '<span class="chain-merge" aria-hidden="true"><span>✓</span><span>✓</span></span><span class="chain-token">One ordinary signature</span>'
-    beats = {
-        "attack": ["Both keys are needed.", "The hardware-wallet key is stolen.", "The phone hasn’t approved.", "Blocked. Nothing sent."],
-        "payment": ["A new payment. Both keys needed.", "You check and approve on your phone.", "The hardware wallet signs too.", "Two devices. One signature."],
-        "shared": ["Three people. Two approvals needed.", "You approve.", "Alex approves. One person stays away.", "Two approve. The payment can go."],
-        "borrowing": ["The loan has been repaid.", "You approve the return.", "The lender approves too.", "Your bitcoin is returned."],
-    }[scene]
-    caption = ''.join(f'<span class="signing-beat" data-beat="{index}">{beat}</span>' for index, beat in enumerate(beats))
-    note = '<p class="signing-note"><strong>Possible future use.</strong> A lender could provide stablecoins against this bitcoin. We have no lending partner yet. The lender and key agent could also move the funds together. <a href="/roadmap#signing-partners">About lending partners</a></p>' if scene == "borrowing" else ''
-    return f'''<div class="signing-scene" id="{scene}-scene" data-scene="{scene}" data-step="3">
-<h4 class="signing-scene-title">{title}</h4>
-<div class="signing-demo">
-<svg viewBox="0 0 360 220" role="img" aria-labelledby="{scene}-animation-title {scene}-animation-description">
-<title id="{scene}-animation-title">{title}</title><desc id="{scene}-animation-description">{explanation}</desc>
-{"".join(drawing)}
-<g class="signing-payment"><rect x="109" y="155" width="142" height="49" rx="24"/>
-<g class="signing-locked"><path d="M128 175v-5a6 6 0 0 1 12 0v5m-14 0h16v14h-16z"/><text x="186" y="185">Waiting</text></g>
-<g class="signing-finished"><path d="{final_icon}"/><text x="193" y="185">{final_label}</text></g></g>
-</svg>
-<div class="signing-chain"><span class="chain-label">On Bitcoin</span>{chain}</div>
-</div>
-<p class="signing-caption">{caption}</p>{note}
-</div>'''
-
-def signing_choices():
-    options = []
-    for name, heading, scenes, links in [
-        ("devices", "Protect your key.", [("attack", "Stolen key"), ("payment", "Your payment")], '<a href="/vaults#extra-device">About two-device signing →</a>'),
-        ("shared", "Share control.", [("shared", "Savings"), ("borrowing", "Borrowing")], '<a href="/vaults#shared-control">About shared signing →</a>'),
-    ]:
-        switches = ''.join(f'<label><input type="radio" name="{name}-example" value="{scene}" aria-controls="{scene}-scene"{" checked" if index == 0 else ""}>{label}</label>' for index, (scene, label) in enumerate(scenes))
-        drawings = ''.join(signing_animation(scene) for scene, _ in scenes)
-        anchor = ' id="savings"' if name == "shared" else ""
-        options.append(f'<article class="signing-story"{anchor}><h3>{heading}</h3><fieldset class="signing-switch" hidden><legend>Choose an example</legend>{switches}</fieldset>{drawings}<div class="signing-footer"><button class="signing-replay" type="button" aria-label="Replay {heading}" hidden>Replay ↻</button><p class="signing-links">{links}</p></div></article>')
-    return '''<section id="signing-choices"><h2>Two ways to protect your bitcoin</h2><div class="signing-choices">''' + ''.join(options) + '''</div>
-<button class="test-link" type="button" data-dialog="combined-signing" aria-controls="combined-signing" aria-haspopup="dialog">Use both together</button>
-<dialog id="combined-signing" aria-labelledby="combined-signing-title">
-<div class="dialog-heading"><h2 id="combined-signing-title">Protect your key in a shared wallet</h2><form method="dialog"><button class="dialog-close" autofocus>Close</button></form></div>
-<div class="combined-signers">
-<div class="combined-you"><span>iPhone + hardware wallet</span><b>↓</b><strong>Your approval</strong></div>
-<div><span>Partner’s key</span><b>↓</b><strong>Partner’s approval</strong></div>
-<div><span>Third person’s key</span><b>↓</b><strong>Their approval</strong></div>
-</div>
-<p><strong>Any two columns can approve.</strong> Your column needs both your devices. The other two people can also approve together without you.</p>
-<p>On Bitcoin, your two devices appear as one key and one signature within the shared wallet’s three-key rule.</p>
-<p><a href="/vaults">How the two signing methods fit together</a></p>
-</dialog></section>'''
 
 def homepage(journeys, cases):
-    title = "A Bitcoin wallet for your iPhone."
-    intro = "Send and receive bitcoin, keep track of payments, and save with other people."
-    return f"""<!doctype html>
+    title = "Winnow — Bitcoin, on your terms"
+    intro = "A Bitcoin wallet for your iPhone. Pay from your phone, add a second key, or share a wallet."
+    modes = [
+        ("everyday", "Everyday", "You approve", "56-home-beginner", "Your everyday wallet", "One key. One decision.", "Receive, review, send. All from your phone.", "1 key · 1 signature", 1, 1),
+        ("both", "Both keys", "2 of 2", "40-extra-device-confirmed", "Two keys, both required", "Two keys. One signature.", "Your phone and a second signer both approve.", "MuSig2 · 1 signature", 2, 2),
+        ("shared", "Any two", "2 of 3", "28-savings-confirmed", "Shared savings", "Two approve. One can be away.", "Any two owners can approve a payment.", "2-of-3 · 2 signatures", 3, 2),
+    ]
+    choices, policies, screens = [], [], []
+    for index, (key, name, rule, shot, caption, heading, description, technical, keys, needed) in enumerate(modes):
+        choices.append(f'''<label class="mode-choice"><input type="radio" name="wallet-mode" id="mode-{key}" value="{key}" aria-controls="policy-{key} screen-{key}"{' checked' if index == 0 else ''}>
+<span><b>{name}</b><small>{rule}</small></span></label>''')
+        dots = ''.join(f'<i class="key-dot{" absent" if n >= needed else ""}">{"✓" if n < needed else "–"}</i>' for n in range(keys))
+        policies.append(f'''<div class="policy mode-{key}" id="policy-{key}">
+<div class="policy-diagram" aria-hidden="true">{dots}<span class="policy-line"></span><span class="policy-result">{needed}/{keys}</span></div>
+<h2>{heading}</h2><p>{description}</p><a class="technical" href="/vaults">{technical} <span aria-hidden="true">↗</span></a></div>''')
+        screens.append(f'''<figure class="wallet-screen mode-{key}" id="screen-{key}">
+<a href="screenshots/{shot}.png" aria-label="Enlarge {caption.lower()}"><img src="screenshots/{shot}.png" width="{SHOT_WIDTH}" height="{SHOT_HEIGHT}" loading="{'eager' if index == 0 else 'lazy'}" {'fetchpriority="high"' if index == 0 else ''} decoding="async" alt="{caption} in the real Winnow app."></a>
+<figcaption><span class="screen-number">0{index + 1} / 03</span>{caption}</figcaption></figure>''')
+    return f'''<!doctype html>
 <!-- Generated by scripts/build-site. -->
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{escape(title)} — Winnow</title>
-<meta name="description" content="{escape(intro)}">
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{escape(title)}</title><meta name="description" content="{escape(intro)}">
 <link rel="canonical" href="https://winnowwallet.com/">
-<link rel="stylesheet" href="site.css"><script src="signing.js" defer></script>
-<style>
-main{{max-width:64rem}}
-.test-link,.dialog-close{{font:inherit;cursor:pointer;color:var(--seed);background:none;border:0;min-height:44px}}
-.test-link{{margin:.5rem 0;font-size:.95rem;font-weight:600;text-decoration:underline;text-underline-offset:3px}}
-.dialog-close{{padding:.4rem .7rem;border:1px solid var(--rule-2);border-radius:.5rem}}
-dialog{{margin:auto;width:min(42rem,calc(100% - 2rem));max-height:calc(100% - 2rem);overflow:auto;padding:clamp(1rem,4vw,2rem);border:1px solid var(--rule-2);border-radius:1rem;background:var(--paper);color:var(--ink)}}
-dialog::backdrop{{background:rgb(0 0 0 / .55)}} html:has(dialog[open]){{overflow:hidden}}
-.dialog-heading{{display:flex;align-items:flex-start;gap:1rem;justify-content:space-between}}
-.dialog-heading h2{{margin:0;padding:0;border:0}} .dialog-heading form{{flex-shrink:0}}
-dialog a{{overflow-wrap:anywhere}}
-.action{{display:inline-block;background:var(--seed);color:var(--paper);padding:.7rem 1rem;border-radius:.6rem;font-weight:650}}
-.cta-note{{margin-top:-.4rem;font-size:.9rem}}
-.signing-choices{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2rem}}
-.signing-choices article{{border-top:3px solid var(--seed);padding-top:1rem}}
-.signing-choices .lede{{font-size:.95rem}}
-.run-lede{{margin:0 0 .5rem}}
-.act-name{{margin:1.9rem 0 .8rem;font-size:1rem;color:var(--ink-2)}}
-.filmstrip{{display:flex;gap:1rem;margin:0;padding:0 0 .6rem;list-style:none;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x proximity}}
-.filmstrip li{{flex:0 0 auto;margin:0;scroll-snap-align:start}}
-.filmstrip figure{{margin:0;width:8.75rem}}
-.filmstrip a{{display:block}}
-.filmstrip img{{display:block;width:100%;height:auto;border:1px solid var(--rule-2);border-radius:.9rem;background:var(--paper-2)}}
-.filmstrip figcaption{{margin-top:.5rem;font-size:.82rem;line-height:1.35;color:var(--ink-2)}}
-@media(max-width:34rem){{.filmstrip figure{{width:8rem}}}}
-@media(max-width:40rem){{.signing-choices{{grid-template-columns:1fr}}}}
-</style>
-</head>
-<body class="home">
-<header class="topbar"><div class="bar">
-<a class="mark" href="/"><b>&#8383;</b> Winnow</a>
-<nav class="links" aria-label="Main"><a href="/">Home</a><a href="/roadmap">Roadmap</a><a href="https://github.com/winnowwallet/winnow">GitHub</a></nav>
-</div></header>
-<main>
-<p class="lede">Early access · open source</p>
-<h1>{escape(title)}</h1>
-<p class="lede">{escape(intro)}</p>
-<p><a class="action" href="https://apps.apple.com/app/id6801502501">Download on the App Store</a></p>
-<p class="cta-note">Pre-release builds ship through <a href="https://testflight.apple.com/join/83djpNE7">TestFlight</a>.</p>
-<p class="connection-note">Your phone connects directly to Bitcoin.</p>
-{signing_choices()}
-{recorded_run()}
+<meta property="og:title" content="{escape(title)}"><meta property="og:description" content="{escape(intro)}">
+<meta property="og:type" content="website"><meta property="og:image" content="https://winnowwallet.com/og.png">
+<link rel="stylesheet" href="home.css"><script src="home.js" defer></script>
+</head><body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header wrap"><a class="brand" href="/" aria-label="Winnow home"><span class="brand-icon" aria-hidden="true">₿</span> winnow</a>
+<nav aria-label="Main"><a href="/architecture">How it works</a><a href="https://github.com/winnowwallet/winnow">GitHub <span aria-hidden="true">↗</span></a></nav></header>
+<main id="main" class="wrap">
+<section class="hero" aria-labelledby="hero-title">
+<div class="hero-copy"><p class="eyebrow"><span></span> A BITCOIN WALLET FOR IPHONE</p>
+<h1 id="hero-title">Your bitcoin.<br>Your choice<br><em>of control.</em></h1>
+<p class="intro">Pay from your phone, add a second key,<br class="desktop-break"> or share a wallet.</p>
+<div class="actions"><a class="download" href="https://apps.apple.com/app/id6801502501">Download for iPhone <span aria-hidden="true">↗</span></a><a class="watch" href="/recording" data-watch><span class="play-icon" aria-hidden="true">▶</span> Watch it work</a></div>
+<p class="availability">Open source <span>·</span> Early access <span>·</span> <a href="https://testflight.apple.com/join/83djpNE7">TestFlight</a></p>
+<fieldset class="mode-picker"><legend>Choose who signs</legend><div class="mode-options">{"".join(choices)}</div></fieldset>
+<div class="policies" aria-live="polite">{"".join(policies)}</div></div>
+<div class="product-stage"><div class="stage-heading"><span>THE ACTUAL APP</span><span class="stage-dot" aria-hidden="true"></span><span>RECORDED ON SIGNET</span></div>
+<div class="wallet-screens">{"".join(screens)}</div>
+<a class="stage-link" href="/recording" data-watch><span class="play-icon" aria-hidden="true">▶</span> See the full journey <span aria-hidden="true">↗</span></a></div>
+</section>
+<section class="proof" aria-labelledby="proof-title"><div class="proof-heading"><p class="eyebrow">SEE FOR YOURSELF</p><h2 id="proof-title">One wallet. Three ways to pay.</h2></div>
+<div class="journey-path" aria-label="Recorded journey: ordinary send, MuSig2 receive and send, then 2-of-3 receive and send"><span><b>01</b> Everyday</span><i aria-hidden="true">→</i><span><b>02</b> Both keys</span><i aria-hidden="true">→</i><span><b>03</b> Any two</span></div>
+<p class="provenance-note">Real payments on private signet. Shared accounts use Bitcoin Core cosigners. <a href="/recording">Recording &amp; source ↗</a></p>
+{recorded_run()}</section>
 </main>
-<footer><div class="bar"><a href="/">Winnow</a> · <a href="/roadmap">Roadmap</a> · <a href="/privacy">Privacy</a> · <a href="/architecture">How it works</a></div></footer>
-<script>
-document.querySelectorAll('[data-dialog]').forEach(button => {{
-  const dialog = document.getElementById(button.dataset.dialog);
-  button.addEventListener('click', () => dialog.showModal());
-  dialog.addEventListener('click', event => {{
-    if (event.target !== dialog) return;
-    const bounds = dialog.getBoundingClientRect();
-    if (event.clientX < bounds.left || event.clientX > bounds.right ||
-        event.clientY < bounds.top || event.clientY > bounds.bottom) dialog.close();
-  }});
-}});
-</script>
-</body>
-</html>
-"""
+<footer class="wrap"><p class="footer-brand">winnow<span>Your phone connects directly to Bitcoin.</span></p><nav aria-label="Footer"><a href="/vaults">Shared wallets</a><a href="/roadmap">Roadmap</a><a href="/privacy">Privacy</a></nav></footer>
+<dialog id="journey-dialog" aria-labelledby="video-title"><div class="dialog-bar"><h2 id="video-title">The wallet, in action.</h2><form method="dialog"><button autofocus aria-label="Close recording">Close <span aria-hidden="true">×</span></button></form></div>
+<video controls playsinline preload="none" poster="/screenshots/56-home-beginner.png" aria-label="Ordinary, MuSig2, and 2-of-3 payments in Winnow"><source src="/{VIDEO_PATH}" type="video/mp4"><a href="/{VIDEO_PATH}">Download the wallet journey recording</a>.</video>
+<p>Private signet · Bitcoin Core cosigners · <a href="/recording">Recording provenance</a></p></dialog>
+</body></html>
+'''
 
 def recording_page(root):
     manifest = root / "docs/journey-provenance.json"
@@ -284,12 +185,13 @@ def recording_page(root):
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Wallet journey — Winnow</title><link rel="stylesheet" href="/site.css">
 <style>video{{display:block;width:min(100%,26rem);max-height:75vh;margin:1.5rem auto;border:1px solid var(--rule);border-radius:1rem;background:#111}}</style></head>
-<body><main><p><a href="/">Winnow</a></p><h1>Wallet journey</h1>
+<body><a class="skip-link" href="#main">Skip to content</a>
+<header class="topbar"><div class="bar"><a class="mark" href="/" aria-label="Winnow home">winnow</a><nav class="links" aria-label="Main"><a href="/architecture">How it works</a><a href="/vaults">Shared wallets</a><a href="https://github.com/winnowwallet/winnow">GitHub ↗</a></nav></div></header><main id="main"><p class="page-kicker">Recorded in the real app</p><h1>Wallet journey</h1>
 <video controls playsinline preload="metadata" poster="/screenshots/56-home-beginner.png" aria-label="Ordinary and shared-account payments in Winnow">
 <source src="/{VIDEO_PATH}" type="video/mp4">
 <a href="/{VIDEO_PATH}">Download the wallet journey recording</a>.
 </video>
-<h2>Recording provenance</h2>{details}</main></body></html>
+<h2>Recording provenance</h2>{details}<p><a href="/archive">Historical recordings and notes</a></p></main><footer><div class="bar"><nav aria-label="Footer"><a href="/roadmap">Roadmap</a><a href="/privacy">Privacy</a><a href="/recording">Recording</a></nav></div></footer></body></html>
 '''
 
 def main():

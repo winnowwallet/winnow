@@ -113,33 +113,32 @@ class JourneyOwnershipTests(unittest.TestCase):
         (self.root / "docs/vaults.html").write_text("<p>the signing guide</p>")
         return site.load_journeys(self.root)
 
-    def test_homepage_keeps_opening_material_and_video_lives_on_recording_page(self):
+    def test_homepage_modes_keep_the_complete_journey_available(self):
         journeys, cases = self.documented_inventory()
         homepage = site.homepage(journeys, cases)
         recording = site.recording_page(self.root)
-        main = homepage.split("<main>", 1)[1].split("</main>", 1)[0]
-        self.assertIn("A Bitcoin wallet for your iPhone.", main)
-        self.assertIn("Download on the App Store", main)
-        self.assertIn("TestFlight", main)
-        self.assertIn('id="signing-choices"', main)
-        self.assertIn("<svg", main)
-        self.assertNotIn('<video', homepage)
-        self.assertNotIn('class="journey"', main)
-        self.assertNotIn('class="jump-links"', main)
-        self.assertNotIn('id="evidence"', main)
-        self.assertNotIn("What the wallet does today", main)
-        self.assertNotIn('class="snippet"', main)
-        self.assertNotIn('id="journeys"', main)
-        self.assertNotIn("Advanced features", main)
-        self.assertNotIn("What’s next", main)
+        self.assertIn("Download for iPhone", homepage)
+        self.assertIn("TestFlight", homepage)
+        for mode in ("everyday", "both", "shared"):
+            self.assertIn(f'id="mode-{mode}"', homepage)
+            self.assertIn(f'aria-controls="policy-{mode} screen-{mode}"', homepage)
+            self.assertIn(f'id="policy-{mode}"', homepage)
+            self.assertIn(f'id="screen-{mode}"', homepage)
+        self.assertIn('href="/recording" data-watch', homepage)
+        self.assertIn('<video controls playsinline preload="none"', homepage)
+        self.assertNotIn("autoplay", homepage)
         self.assertNotIn('href="/advanced', homepage)
         self.assertNotIn('href="/testing', homepage)
         self.assertEqual(recording.count("<video "), 1)
-        self.assertIn('<video controls playsinline preload="metadata"', recording)
         self.assertIn(f'<source src="/{site.VIDEO_PATH}" type="video/mp4">', recording)
         self.assertNotIn("autoplay", recording)
-        shown = re.findall(r'<img src="screenshots/([a-z0-9-]+)\.png"', homepage)
-        self.assertEqual(shown, self.checkpoints)  # every checkpoint, in the run's order, and nothing else
+        gallery = homepage.split('id="screens"', 1)[1].split('</details>', 1)[0]
+        shown = re.findall(r'<img src="screenshots/([a-z0-9-]+)\.png"', gallery)
+        self.assertEqual(shown, self.checkpoints)
+        hero = homepage.split('class="wallet-screens"', 1)[1].split('</section>', 1)[0]
+        featured = re.findall(r'<img src="screenshots/([a-z0-9-]+)\.png"', hero)
+        self.assertEqual(len(featured), 3)
+        self.assertTrue(set(featured).issubset(self.checkpoints))
 
     def test_homepage_cannot_show_a_screen_the_journey_never_captured(self):
         (self.root / "UITests/Checkpoints.swift").write_text("")
