@@ -1,4 +1,4 @@
-• The opt-in Tor connection is removed. Winnow now always connects to the Bitcoin network directly; if you had Tor on, the app tells you once at launch.
-• Fewer moving parts: the embedded Tor client and its several hundred third-party components are gone, leaving one pinned cryptography library.
-• Peer-list and explorer messages say plainly what each service learns.
-• The wallet key sits behind your phone's own passcode or Face ID check inside the Keychain, not only the app's; an existing wallet gets the stronger protection the next time it opens.
+• Winnow verifies the publisher's signature before accepting an updated peer list. The bundled peer list has also been refreshed.
+• Your wallet key is protected by your phone's passcode or Face ID inside the Keychain. Existing wallets receive this protection when opened.
+• Winnow connects directly to the Bitcoin network. The optional Tor connection has been removed; previous Tor users see a notice on first launch.
+• Updated wallet guides explain shared accounts, backups, and what peer-list and explorer services learn.
