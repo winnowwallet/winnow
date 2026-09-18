@@ -3,18 +3,8 @@ import Testing
 import TestSupport
 @testable import WalletCore
 
-/// How the pool decides *which* peers to reach for, before any of them are
-/// dialled: the diversity ceilings, where seed addresses come from and which
-/// of them are usable, and the committed fallback list of last resort.
-///
-/// Merged from `PeerDiversityTests`, `SeedResolverTests` and
-/// `FallbackPeerListTests`; each `// MARK:` below is one of those suites, in
-/// that order. None of the three carried a trait, so this one carries none.
-///
-/// Almost all of it is pure policy against fixtures. The two exceptions are
-/// the last cases in the seed-resolver section, which prove the pool actually
-/// consults (or skips) a resolver and so dial a loopback node — as they did
-/// before the merge.
+/// Peer admission, persisted provenance and DNS bootstrap behavior.
+/// Policy tests use fixtures; connection tests use local mock peers.
 @Suite("Peer policy")
 struct PeerPolicyTests {
 
@@ -71,7 +61,7 @@ struct PeerPolicyTests {
 
     @Test("a second peer from the same block is refused")
     func sameBlockRefused() {
-        let seated = [candidate("47.206.253.100", .fallback)]
+        let seated = [candidate("47.206.253.100", .census)]
         #expect(policy().admits(candidate("47.206.1.1", .dnsSeed), given: seated) == false,
                 "one operator's neighbouring addresses are close to one peer")
         #expect(policy().admits(candidate("74.209.75.75", .dnsSeed), given: seated))
@@ -98,7 +88,7 @@ struct PeerPolicyTests {
         let seated = [candidate("1.1.1.1", .persisted), candidate("2.2.2.2", .persisted)]
         #expect(policy().admits(candidate("3.3.3.3", .persisted), given: seated) == false,
                 "the third slot must come from somewhere else")
-        #expect(policy().admits(candidate("3.3.3.3", .fallback), given: seated))
+        #expect(policy().admits(candidate("3.3.3.3", .census), given: seated))
         #expect(policy().admits(candidate("3.3.3.3", .dnsSeed), given: seated))
     }
 
@@ -213,7 +203,7 @@ struct PeerPolicyTests {
     @Test("the source class round-trips through the peers file")
     func sourceSurvivesARestart() throws {
         let candidates = [candidate("47.206.253.100", .dnsSeed),
-                          candidate("74.209.75.75", .fallback),
+                          candidate("74.209.75.75", .census),
                           candidate("65.109.145.24", .manual)]
         let data = try JSONEncoder().encode(PersistedPeers(candidates))
         let decoded = try #require(PersistedPeers.decode(data))
@@ -340,50 +330,41 @@ struct PeerPolicyTests {
         await pool.stop()
     }
 
-    @Test("PeerPool dials DoH-resolved seed endpoints")
-    func poolUsesResolver() async throws {
+    @Test("fresh and expired-census installs bootstrap through DNS", arguments: [false, true])
+    func poolUsesResolver(expiredCensus: Bool) async throws {
+        #expect(await PeerPool(params: .mainnet).candidateEndpointsForTest().isEmpty)
         let params = seededCustomParams(dnsSeeds: ["seed.example.test"])
-        let node = LoopbackNode(params: params)
-        try await node.start()
-        defer { Task { await node.stop() } }
-        let endpoint = await node.endpoint
-        let resolver = SeedResolver { _, _, _ in [endpoint] }
-        let pool = PeerPool(params: params, peerCount: 1,
-                            dialTimeout: .milliseconds(500), seedResolver: resolver)
+        let nodes = (0..<3).map { _ in LoopbackNode(params: params) }
+        var endpoints: [PeerEndpoint] = []
+        for node in nodes {
+            try await node.start()
+            endpoints.append(await node.endpoint)
+        }
+        defer { for node in nodes { Task { await node.stop() } } }
+        let seedEndpoints = endpoints
+        let resolver = SeedResolver { _, _, _ in seedEndpoints }
+        let fixture = CensusCatalogTests()
+        let pool = PeerPool(params: params,
+                            dialTimeout: .milliseconds(500), seedResolver: resolver,
+                            censusCatalog: expiredCensus ? fixture.catalog() : nil,
+                            catalogNow: { fixture.now.addingTimeInterval(8 * 86_400) })
+        #expect(await pool.candidateEndpointsForTest().isEmpty)
         await pool.start()
         let status = await pool.connectionStatus
-        #expect(status.connected == 1)
-        #expect(!status.exhausted)
+        #expect(status.connected == 2)
+        #expect(status.target == 3)
+        #expect(status.exhausted, "DNS alone must not bypass the source ceiling")
+        for peer in await pool.connectedPeers() {
+            #expect(await pool.source(of: peer.endpoint) == .dnsSeed)
+        }
         await pool.stop()
     }
 
-    // MARK: - Fallback peer list
-
-    /// Always-on validation of the committed fallback list (#161).
-    ///
-    /// The generator, `winnow-generate fallback-peers`, runs only on the release
-    /// path; this runs on every CI pass, so a hand edit that breaks the list's invariants fails immediately
-    /// rather than at the next release.
-    @Test("the committed mainnet list holds the generator's own invariants")
-    func committedListIsValid() throws {
-        let peers = NetworkParams.mainnet.fallbackPeers
-        #expect(peers.count >= 8, "shorter than the hand-curated list it replaced")
-
-        var seenBlocks: Set<String> = []
-        var seenHosts: Set<String> = []
-        for peer in peers {
-            // IP literals only: a hostname would add a resolver to the trust
-            // story, and `netblock` is nil for hostnames — which doubles as
-            // the literal check.
-            let block = try #require(peer.netblock,
-                                     "\(peer.host) is not a public IP literal")
-            #expect(!seenBlocks.contains(block),
-                    "\(peer.host) shares a netblock with an earlier entry")
-            #expect(!seenHosts.contains(peer.host), "\(peer.host) is listed twice")
-            seenBlocks.insert(block)
-            seenHosts.insert(peer.host)
-            #expect(peer.port == 8_333)
-        }
+    @Test("legacy census and bundled peer provenance survives an upgrade")
+    func legacyCensusSourceLoads() throws {
+        let data = Data(#"{"version":2,"peers":[{"host":"8.8.8.8","port":8333,"source":"fallback"}]}"#.utf8)
+        let peers = try #require(PersistedPeers.decode(data))
+        #expect(peers == [candidate("8.8.8.8", .census)])
     }
 }
 

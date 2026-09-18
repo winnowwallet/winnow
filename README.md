@@ -2,21 +2,20 @@
 
 A Bitcoin wallet for iOS with on-device compact-filter matching, written in Swift.
 
-**[Download on the App Store](https://apps.apple.com/app/id6801502501)** — pre-release builds ship through [TestFlight](https://testflight.apple.com/join/83djpNE7). Mainnet by default; signet is one Advanced-mode toggle away. The broader beta is planned for 0.9; see the [release roadmap](https://winnowwallet.com/roadmap).
+**[Download on the App Store](https://apps.apple.com/app/id6801502501)** — pre-release builds ship through [TestFlight](https://testflight.apple.com/join/83djpNE7). Mainnet by default; signet is one Advanced-mode toggle away. See the [roadmap](https://winnowwallet.com/roadmap) for the status of earlier proposals.
 
 - **Pure P2P by default.** The read side is BIP157/158 compact block filters served by full-node peers — the wallet does not send its watch list to a wallet-history server. Peers still observe requests, relay traffic and connection metadata. Bounded **mempool windows** (short full-relay subscriptions while the Receive or Send screen is open) give 0-conf payment detection and propagation tracking without any server. Read [how it works](docs/architecture.html).
-- **Taproot today.** Current receiving uses P2TR (BIP86), with no ECDSA signing path. The planned 0.7 P2WSH Safe is a separate, opt-in addition.
+- **Taproot today.** Ordinary receiving uses P2TR (BIP86); shared accounts use MuSig2 key-path or threshold script-path signing. There is no ECDSA signing path or P2WSH Safe.
 - **Pay people and share control.** Save a public payment card or Bitcoin address. From Wallet, create shared savings with a threshold such as 2-of-3: any two keys can spend while one is unavailable. A 1-of-n policy permits one key to spend. Cards carry public keys only.
 - **Require another signing device.** Advanced mode offers MuSig2 accounts where every key must participate. The single integration journey receives and sends with a phone-plus-Core account, followed by a script-path 2-of-3 account. Focused tests check wallet and account rules. Hardware-wallet compatibility needs its own test. Read about [shared signing and its limits](docs/vaults.html).
-- **Bitcoin cryptography:** [`swift-secp256k1`](https://github.com/21-DOT-DEV/swift-secp256k1) (Bitcoin Core's libsecp256k1), pinned; the only third-party dependency. The embedded Tor client shipped in 0.6 through 0.7.0 was removed in 0.7.1 (its source is kept on the `archive/tor-0.7.0` branch); Tor and I2P are on the [roadmap](https://winnowwallet.com/roadmap#private-transports).
+- **Bitcoin cryptography:** [`swift-secp256k1`](https://github.com/21-DOT-DEV/swift-secp256k1) (Bitcoin Core's libsecp256k1), pinned; the only third-party dependency. The embedded Tor client shipped in 0.6 through 0.7.0 was removed in 0.7.1 (its source is kept on the `archive/tor-0.7.0` branch); Tor and I2P are historical proposals, not current features or scheduled work.
 - **Warned explorer links** — choose mempool.space or a custom Esplora website; Winnow opens it only after a tap and privacy warning, never as a wallet backend.
 
 ## Release roadmap
 
-The [public roadmap](https://winnowwallet.com/roadmap) keeps planned work
-separate from current features. Each milestone describes the user outcome,
-the journeys that must pass, and unresolved work. Milestones are targets,
-not shipped capabilities or promised dates.
+The [public roadmap](https://winnowwallet.com/roadmap) separates current behavior
+from proposals that are not scheduled. It does not promise a release date or
+make the historical audit follow-ups into current requirements.
 
 ## Layout
 
@@ -36,7 +35,8 @@ private signet fixture mines blocks automatically for prompt confirmation.
 App, wallet, and protocol tests cover detailed rules; there is no separate
 DifferentialTests target or broad interoperability matrix. One continuous
 video presents the journey on the [recording page](https://winnowwallet.com/recording).
-iPad UI runs follow separately. The homepage gives an overview, illustrates
+The automated UI journey currently runs only on iPhone; it does not establish
+iPad UI coverage. The homepage gives an overview, illustrates
 the signing choices, shows the run's sixteen checkpoint screenshots in order,
 and links to the full recording. Detailed guidance and test evidence live on
 separate pages.
@@ -70,6 +70,7 @@ asset catalogs are documented by their owner, outside the bundle.
 
 ### Debugging and fuzzing
 
+- Integration fixture: [native bank preparation](Tools/Fixture/README.md).
 - GUI/network debugging: [runbook](Tools/Debug/README.md), [implementation](Tools/Debug/Sources/WinnowDebug/README.md), [release-data generators](Tools/Generate/README.md).
 - Fuzzing: [runbook](Tools/Fuzz/README.md), [executable](Tools/Fuzz/Sources/WinnowFuzz/README.md), [shared invariants](Tools/Fuzz/Sources/WinnowFuzzCore/README.md).
 

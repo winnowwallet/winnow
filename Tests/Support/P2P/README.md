@@ -8,7 +8,10 @@ responses, forks, and relay behavior without depending on public-network timing.
 
 [Network tests](../../WalletCoreTests/Network/README.md) consume these helpers
 through [TestSupport](../README.md). They return data and events;
-the consuming test makes the assertion.
+the consuming test makes the assertion. Configure HTTP responses by host and,
+when needed, path using `respond(to:path:with:)` before starting a request.
+Redirect tests must not swap responses on a timer: runner load can otherwise
+change which request receives the redirect.
 
 Run `swift test --filter WalletCoreTests` from the repository root.
 [Adversarial filter tests](../../WalletCoreTests/Network/FilterSyncAdversaryTests.swift)

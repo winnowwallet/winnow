@@ -2,7 +2,7 @@
 # No test may be a silent no-op. Every environment gate a test reads must be
 # set by some workflow or script that CI runs. Conditional suites need an
 # explicit platform exception, and retired gates must not hide never-run
-# suites. Runs in CI's complexity job.
+# suites. Runs in CI's combined build job.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

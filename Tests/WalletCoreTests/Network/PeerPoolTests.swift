@@ -16,7 +16,7 @@ import TestSupport
 /// a hang guard rather than a performance claim (see `pollUntil`).
 @Suite("PeerPool", .timeLimit(.minutes(2)))
 struct PeerPoolTests {
-    /// No DNS seeds, no fallback peers: the pool dials exactly the manual
+    /// No DNS seeds or census: the pool dials exactly the manual
     /// peers the test gives it.
     private let params = NetworkParams.customSignet(challenge: Data([0x51]))
 

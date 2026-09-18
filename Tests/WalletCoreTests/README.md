@@ -12,5 +12,5 @@ and loads [reference vectors](Vectors/README.md) through
 
 Run `swift test --filter WalletCoreTests` from the repository root.
 [App tests](../../AppTests/README.md) add persistence and authorization checks at the
-presentation boundary; [UI journeys](../../UITests/README.md) verify the complete
-experience. Package tests alone do not prove that the screen communicates the result.
+presentation boundary; [UI journey](../../UITests/README.md) checks ordinary and shared-account
+payments through the app. Package tests alone do not prove that the screen communicates the result.

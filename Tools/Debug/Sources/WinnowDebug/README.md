@@ -3,12 +3,12 @@
 # Debugging implementation
 
 This executable implements offline transaction/PSBT/descriptor inspection, environment checks, simulator diagnostics, network
-soaks, and generation of the app's fallback peers and header checkpoint.
+soaks, and derivation of the app's header checkpoint.
 It helps investigate the actual GUI and networking code while staying outside
 the shipping app.
 
 [The debug runbook](../../README.md) is the command reference;
-[the generator runbook](../../../Generate/README.md) explains live-data provenance.
+[the generator runbook](../../../Generate/README.md) explains the validated header input and checkpoint provenance.
 Both the wrapper and `swift run winnow-debug` use this implementation.
 
 [ToolsTests](../../../../Tests/ToolsTests/README.md) checks command dispatch, subprocesses,

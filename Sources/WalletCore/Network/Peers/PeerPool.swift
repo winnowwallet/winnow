@@ -20,10 +20,10 @@ public enum PeerPoolHeaderSyncError: LocalizedError, Equatable {
 }
 
 /// A small pool of outbound peers (default 3). Candidates come from manually
-/// supplied endpoints, a persisted good-peers JSON file, the network's
-/// hardcoded fallback peers, and DNS seeds resolved over DoH (dns-json)
+/// supplied endpoints, a persisted good-peers JSON file, a fresh
+/// signed downloaded census, and DNS seeds resolved over DoH (dns-json)
 /// with getaddrinfo as fallback. Dials race a batch of candidates at once
-/// (short per-attempt timeout) so a fresh launch fills the pool in seconds;
+/// (short per-attempt timeout);
 /// a round that runs out of candidates below target is reported as
 /// `exhausted` in `connectionStatus`. A monitor task prunes dead connections
 /// and connects replacements. Deliberately simple: no scoring buckets, no
@@ -620,7 +620,7 @@ public actor PeerPool {
         exhausted = false
         defer { replenishing = false }
 
-        // Dial manual / persisted / fallback first. Resolve DNS seeds only
+        // Dial manual / persisted / census first. Resolve DNS seeds only
         // if those sources cannot fill the pool — a working manual peer
         // must not wait on DoH.
         // Cooling endpoints are skipped, not rejected: they come back into the
@@ -708,7 +708,7 @@ public actor PeerPool {
         }
     }
 
-    /// Manual peers, then persisted good peers, then hardcoded fallbacks.
+    /// Manual peers, then persisted good peers, then a fresh downloaded census.
     ///
     /// A persisted peer keeps the class it was first found under, so a peer
     /// originally discovered through a DNS seed still counts as one for
@@ -727,10 +727,10 @@ public actor PeerPool {
                   (0...CensusCatalog.maximumAgeDays).contains(Int(floor(catalogNow().timeIntervalSince1970 / 86_400)) - day) else { return nil }
             return catalog
         }
-        let automatic = (freshCatalog?.networks["clearnet"]?.map(\.endpoint) ?? params.fallbackPeers).shuffled()
+        let automatic = (freshCatalog?.networks["clearnet"]?.map(\.endpoint) ?? []).shuffled()
         let preferred = automatic.filter { !avoidOnReset.contains($0) }
         let previous = automatic.filter { avoidOnReset.contains($0) }
-        ordered += (preferred + previous).map { PeerCandidate(endpoint: $0, source: .fallback) }
+        ordered += (preferred + previous).map { PeerCandidate(endpoint: $0, source: .census) }
         var seen = connected
         return ordered.filter { seen.insert($0.endpoint).inserted }
     }

@@ -68,15 +68,13 @@ struct RoutingTests {
         try await server.start()
         let port = await server.port
         let client = RoutedHTTPClient()
-        // Same name, another path: the first request is answered with the
-        // redirect, the second with the body. One canned answer per
-        // connection would not tell them apart, so key on the path instead.
-        await server.respond(to: "127.0.0.1", with: Data(
+        // Route both replies before requesting: no scheduler-dependent response swap.
+        await server.respond(to: "127.0.0.1", path: "/start", with: Data(
             "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:\(port)/moved\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8))
-        let first = Task { try await client.get(await server.url("/start"), maximumBytes: 8) }
-        for _ in 0..<100 where await server.httpRequests.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
-        await server.respond(to: "127.0.0.1", with: ok("OK"))
-        #expect(try await first.value == Data("OK".utf8))
+        await server.respond(to: "127.0.0.1", path: "/moved", with: ok("OK"))
+        do {
+            #expect(try await client.get(await server.url("/start"), maximumBytes: 8) == Data("OK".utf8))
+        } catch { client.cancel(); await server.stop(); throw error }
         #expect(await server.httpRequests.map { $0.split(separator: " ")[1] } == ["/start", "/moved"])
         client.cancel(); await server.stop()
     }

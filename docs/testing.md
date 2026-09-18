@@ -4,11 +4,13 @@ This developer policy explains the test suites and evidence requirements.
 The [CI runbook](../.github/internal/ci-release.md) describes how to run checks
 and inspect their artifacts.
 
-The supported product is the real iPhone app plus explicit debugging tools.
+The product is the wallet app for iPhone, iPad, and Apple silicon Mac, plus
+explicit debugging tools. Automated UI coverage is limited to iPhone.
 Everyday and advanced features are documented in docs/journeys.json.
-scripts/build-site generates the homepage overview, signing illustrations, the
-run's checkpoint screenshots, and the separate recording page. Generation
-refuses a checkpoint the UI journey does not capture. Recording evidence identifies the steps
+scripts/build-site generates the homepage and recording page, referencing
+captures named by the UI journey. XCTest takes the checkpoint screenshots;
+scripts/prepare-site-artifact copies them and normalizes the host recording.
+Generation refuses a checkpoint the UI journey does not capture. Recording evidence identifies the steps
 exercised by the current focused UI journey. The
 public roadmap owns future work; it is not evidence that a feature ships.
 
@@ -53,8 +55,8 @@ and one Core cosigner. Finally it receives and sends through a script-path
 wallets know that account, but only the phone and one Core key approve its
 payment. The test checks the funded destinations, accepted transactions, and
 confirmation through the app. The private signet fixture mines blocks
-automatically so confirmations follow promptly. Start validation on an iPhone
-simulator; iPad validation follows separately.
+automatically so confirmations follow promptly. The automated journey runs on an iPhone simulator; there is no iPad UI
+job currently.
 
 This is one continuous UI/video journey, not a broad interoperability matrix.
 There is no separate DifferentialTests target or node comparison job. Other
@@ -78,8 +80,8 @@ inputs allow build and wallet test steps to skip while the current website is
 generated and checked. App-bundled HTML/CSS stays in the fingerprint; changed
 inputs, missing media or API errors require fresh tests. Reused media retains
 its original source and result, rather than claiming a new test execution.
-There are no separate architecture, complexity, selector or LOC jobs. The LOC
-reporter remains available for manual size comparisons.
+There are no separate architecture, complexity, selector or LOC jobs. The
+legacy LOC reporter and its tests were removed.
 
 The detailed rules stay in smaller suites. `AppTests/PeoplePaymentTests.swift`
 and `AppTests/SenderLabelTests.swift` cover people, payment decisions, and sender

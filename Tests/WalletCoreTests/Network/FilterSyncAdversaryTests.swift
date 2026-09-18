@@ -771,7 +771,7 @@ struct FilterSyncAdversaryTests {
     func threeClassesEachGetASeat() {
         let a = connection(1), b = connection(2), c = connection(3), d = connection(4)
         let picked = FilterSync.crossSourceSet(
-            [(a, .dnsSeed), (b, .dnsSeed), (c, .persisted), (d, .fallback)])
+            [(a, .dnsSeed), (b, .dnsSeed), (c, .persisted), (d, .census)])
         #expect(picked.count == 3)
         #expect(picked[0] === a && picked[1] === c && picked[2] === d,
                 "a third class outranks a second seat for the anchor's class")
@@ -788,7 +788,7 @@ struct FilterSyncAdversaryTests {
     @Test("an unknown source counts as its own channel")
     func unknownIsItsOwnClass() {
         let a = connection(1), b = connection(2), c = connection(3)
-        let picked = FilterSync.crossSourceSet([(a, nil), (b, nil), (c, .fallback)])
+        let picked = FilterSync.crossSourceSet([(a, nil), (b, nil), (c, .census)])
         #expect(picked[1] === c, "known-vs-unknown is more diverse than unknown-vs-unknown")
     }
 

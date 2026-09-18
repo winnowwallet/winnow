@@ -13,9 +13,9 @@
 #   scripts/signet-fixture snapshot DIR  copy the stopped node's data to DIR (a template)
 #
 # With WINNOW_FIXTURE_TEMPLATE set to such a snapshot, `up` starts a new datadir
-# from it instead of from genesis: the UI lane keeps one with its "bank"
-# wallet already mined to maturity, so no job spends minutes mining 101 blocks
-# through the simulator's host-process bridge.
+# from it instead of from genesis for local development. Hosted CI does not
+# use a template: winnow-fixture prepares a fresh bank natively before the UI
+# journey, outside the simulator's host-process bridge.
 #
 # The challenge key below is a published dev constant for a chain that holds
 # nothing. It is deliberately in the repo: a key only one machine has is how the

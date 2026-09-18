@@ -14,8 +14,8 @@
 <main id="main">
 <h1>Roadmap</h1>
 <p class="lede">A smaller wallet, clearer recovery, and evidence before new claims.</p>
-<p>The <a href="/">homepage</a> shows current behavior. The proposals below have no promised dates. <a href="https://github.com/winnowwallet/winnow/issues/164">Issue #164 tracks the current plan, decisions, and acceptance criteria.</a></p>
-<nav class="contents" aria-label="On this page"><a href="#now">Now</a><a href="#next">Next</a><a href="#research">Research</a></nav>
+<p>The <a href="/">homepage</a> shows current behavior. <a href="https://github.com/winnowwallet/winnow/issues/164">Issue #164 is closed</a>: census signing and tooling cleanup were completed; the remaining proposals were declined. The ideas below are retained for context, not scheduled work or release requirements.</p>
+<nav class="contents" aria-label="On this page"><a href="#now">Now</a><a href="#next">Earlier proposals</a><a href="#research">Research</a></nav>
 
 <section id="now">
 <h2>Now · Make the core easier to use and maintain</h2>
@@ -24,7 +24,7 @@
 </section>
 
 <section id="next">
-<h2>Next · Recovery and review</h2>
+<h2>Earlier proposals · Not scheduled</h2>
 <h3 id="reliability">Recover through interruptions</h3>
 <p><strong>Outcome:</strong> understandable recovery after an interrupted sync or payment. <strong>Ready when:</strong> restart, disconnect, fee replacement, stale backup, network switching, and chain-reorganization cases leave the screen, stored wallet, and peer-observed payment in agreement. Measure bandwidth, memory, and battery use on supported iPhones.</p>
 <h3 id="beta">Broader beta</h3>
@@ -34,7 +34,7 @@
 </section>
 
 <section id="research">
-<h2>Research · Separate proposals</h2>
+<h2>Research · Not planned</h2>
 <p>These are not supported features or automatic upgrades. Each needs its own implementation, review, and recovery evidence.</p>
 <h3 id="safe">An optional P2WSH Safe</h3>
 <p>A separate, opt-in storage choice. It must demonstrate creation, receiving, backup, restoration on another installation, and withdrawal, including fresh change, exposure tracking, and refusal of damaged or incomplete backups. Limitations must be clear before funding. This proposal does not provide full post-quantum signing.</p>
@@ -43,7 +43,7 @@
 <p>Winnow has no verified professional-cosigner or lending integration. Trusts, inheritance, and collateral arrangements need legal authority and key access to agree; Bitcoin only checks signatures. In a borrower–lender–key-agent 2-of-3, the lender and key agent could spend without the borrower. A label or signed statement cannot enforce repayment, succession, delay, or protection from coercion.</p>
 <h3 id="private-transports">Tor and I2P</h3>
 <p>The app currently makes direct connections. Embedded Tor was removed in 0.7.1; its code and license inventory remain on the <a href="https://github.com/winnowwallet/winnow/tree/archive/tor-0.7.0">archive branch</a>. Returning it requires review of the integration and dependencies, no silent direct fallback, and physical-iPhone checks across foreground, background, failure, and explicit off states.</p>
-<p>I2P remains a feasibility study: measure reliable tunnel startup, cold and warm starts, battery, bandwidth, and app-size cost for a foreground-only wallet. A user-controlled external router is another design to evaluate. The <a href="https://github.com/winnowwallet/winnow/issues/90">archived decision record</a> supplies background; <a href="https://github.com/winnowwallet/winnow/issues/164">#164 tracks current work</a>.</p>
+<p>The earlier I2P proposal called for a feasibility study: measure reliable tunnel startup, cold and warm starts, battery, bandwidth, and app-size cost for a foreground-only wallet. A user-controlled external router is another design to evaluate. The <a href="https://github.com/winnowwallet/winnow/issues/90">archived decision record</a> supplies background; <a href="https://github.com/winnowwallet/winnow/issues/164">#164 records the decision not to pursue it</a>.</p>
 <h3 id="future-network-rules">Future network rules</h3>
 <p>P2MR research needs actual network enforcement, interoperability, recovery behavior, and a complete opt-in migration path before it becomes a release plan. A patched test network or prototype is not evidence of deployment on Bitcoin. No activation date is implied.</p>
 </section>

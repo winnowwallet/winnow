@@ -7,8 +7,8 @@ name: App Store submission
 #
 # Inputs: the version string of the build to attach (required) and either its
 # App Store Connect build id or its build number; `submit` is off by default,
-# so the first dispatch is a dry pass that attaches, writes the notes, and
-# reports without submitting. `status_only` skips everything but the report:
+# so a dispatch with submit=false still attaches the build and writes notes;
+# it is not a dry run. `status_only` skips everything but the report:
 # the way to check the metadata before any build exists to attach.
 on:
   workflow_dispatch:

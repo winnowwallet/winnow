@@ -12,6 +12,6 @@ expected values; [TestSupport](../Support/README.md) supplies shared loaders.
 The test target keeps its primitive-focused name; production has one WalletCore target.
 
 Run `swift test --filter BitcoinCoreTests` from the repository root.
-[CI](../../.github/workflows/ci.yml) runs the package suite on both architectures.
+[CI](../../.github/workflows/ci.yml) runs the package suite on hosted Apple silicon.
 Passing vectors demonstrate agreement on their cases, not exhaustive correctness
 or completion of an independent security review.

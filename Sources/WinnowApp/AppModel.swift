@@ -310,6 +310,7 @@ final class AppModel {
     let keychainAuthentication = KeychainAuthentication()
     let vaultStore: VaultStore
     let peopleStore: PeopleStore
+    let cloudBackups = CloudBackupController()
     private let defaults: UserDefaults
     /// The HTTP client behind census refresh, seed lookups and the consented
     /// explorer lookup. Suspending networking cancels it, so a request that
@@ -558,6 +559,7 @@ final class AppModel {
             await activate()
         case .background:
             isActive = false
+            cloudBackups.suspend()
             keychainAuthentication.revoke()
             suspendNetworking()
             await stopNetworking()
@@ -1064,6 +1066,7 @@ final class AppModel {
         senderByTxid = await peopleStore.senderLabels
         configureReceiveAddressLabels()
         journalSnapshotIfChanged()
+        scheduleCloudBackup()
     }
 
     // MARK: - Wallet creation / import (onboarding)
@@ -1147,9 +1150,13 @@ final class AppModel {
     @discardableResult
     func importWallet(bundleJSON: String) async throws -> ImportReport? {
         let bundle = try ImportBundle.decode(json: bundleJSON)
+        return try await importWallet(bundle: bundle, authenticate: true)
+    }
+
+    private func importWallet(bundle: ImportBundle, authenticate: Bool) async throws -> ImportReport? {
         try VaultStore.validate(bundle.vaults ?? [], network: network)
         guard bundle.network == network.rawValue else { throw AppError.wrongNetwork(bundle.network) }
-        if bundle.mnemonic != nil {
+        if authenticate, bundle.mnemonic != nil {
             try await authenticateSensitiveAction(
                 reason: "Import this wallet's recovery phrase")
         }
@@ -1218,7 +1225,7 @@ final class AppModel {
             try await authenticateSensitiveAction(
                 reason: "Export this wallet with its recovery phrase")
         }
-        defer { keychainAuthentication.revoke() }
+        defer { if includeMnemonic { keychainAuthentication.revoke() } }
         try Task.checkCancellation()
         // The UI snapshot already prefers filters.nextScanHeight; export
         // must too, in case the last persist was skipped (failed pass).
@@ -1245,6 +1252,7 @@ final class AppModel {
     /// `finishOnboarding` (the mnemonic backup must be confirmed first).
     /// `startSync: false` defers the sync loop (import verifies first).
     private func adopt(wallet: Wallet, startSync: Bool = true) async throws {
+        cloudBackups.configure(directory: nil, walletID: nil)
         syncTask?.cancel()
         syncTask = nil
         await stack?.broadcaster.shutdown()
@@ -1254,7 +1262,7 @@ final class AppModel {
         // the user's, not one wallet's view of the chain, and holds only
         // public keys.
         if let dir = storageDirectory() {
-            for name in ["filters.json", "broadcast.json", "vaults.json", "receive-labels.json"] {
+            for name in ["filters.json", "broadcast.json", "vaults.json", "receive-labels.json", "cloud-backup.json"] {
                 try? FileManager.default.removeItem(at: dir.appending(path: name))
             }
         }
@@ -1391,6 +1399,7 @@ final class AppModel {
     /// Kept: headers and known peers. Those describe the chain, not the
     /// wallet, so a re-import does not pay for a fresh header sync.
     func destroyWallet() async throws {
+        cloudBackups.suspend()
         guard let walletID else { throw AppError.noWallet }
         try await authenticateSensitiveAction(reason: "Delete this wallet from this device")
         defer { keychainAuthentication.revoke() }
@@ -1413,12 +1422,13 @@ final class AppModel {
         // that is one wallet's view must not survive into the next one.
         // people.json stays, on purpose: see `adopt(wallet:)`.
         if let dir = storageDirectory() {
-            for name in ["wallet.json", "filters.json", "broadcast.json", "vaults.json", "receive-labels.json"] {
+            for name in ["wallet.json", "filters.json", "broadcast.json", "vaults.json", "receive-labels.json", "cloud-backup.json"] {
                 try? FileManager.default.removeItem(at: dir.appending(path: name))
             }
         }
         defaults.removeObject(forKey: DefaultsKey.backupPending(walletID))
 
+        cloudBackups.configure(directory: nil, walletID: nil)
         wallet = nil
         self.walletID = nil
         walletDescriptor = nil
@@ -2505,6 +2515,7 @@ final class AppModel {
     }
 
     func switchNetwork(to newNetwork: BitcoinNetwork) async {
+        cloudBackups.suspend()
         guard e2e?.forcedNetwork == nil || e2e?.forcedNetwork == newNetwork else { return }
         guard newNetwork != network else { return }
         suspendNetworking()
@@ -2815,5 +2826,43 @@ final class AppModel {
 
     private func parsedManualPeers() -> [PeerEndpoint] {
         manualPeers.compactMap { try? Self.parsePeer($0) }
+    }
+}
+
+
+extension AppModel {
+    func enableCloudBackup() async throws {
+        guard let walletID, e2e == nil else { throw AppError.noWallet }
+        cloudBackups.configure(directory: storageDirectory(), walletID: walletID)
+        let selectedNetwork = network
+        let bundle = try ImportBundle.decode(json: await exportWalletBundle(includeMnemonic: true))
+        try Task.checkCancellation()
+        guard self.walletID == walletID, network == selectedNetwork else { throw CancellationError() }
+        try await cloudBackups.enable(bundle: bundle, walletID: walletID)
+    }
+
+    func restoreCloudBackup(_ id: UUID) async throws -> ImportReport? {
+        guard walletID == nil, e2e == nil else { throw AppError.noWallet }
+        let selectedNetwork = network
+        try await authenticateSensitiveAction(reason: "Restore your wallet and signing key from iCloud")
+        defer { keychainAuthentication.revoke() }
+        try Task.checkCancellation()
+        let bundle = try await cloudBackups.restore(id)
+        try Task.checkCancellation()
+        guard walletID == nil, network == selectedNetwork else { throw CancellationError() }
+        return try await importWallet(bundle: bundle, authenticate: false)
+    }
+
+    private func scheduleCloudBackup() {
+        guard e2e == nil else { return }
+        cloudBackups.configure(directory: storageDirectory(), walletID: walletID)
+        guard isActive, let walletID else { return }
+        let selectedNetwork = network
+        cloudBackups.schedule { [weak self] in
+            guard let self, self.walletID == walletID, self.network == selectedNetwork else {
+                throw CancellationError()
+            }
+            return try ImportBundle.decode(json: await self.exportWalletBundle(includeMnemonic: false))
+        }
     }
 }

@@ -114,13 +114,14 @@
     "id": "recovery",
     "section": "everyday",
     "title": "Back up and restore",
-    "description": "Save a backup file with your payment history and shared accounts. Keep your recovery words too. You need both to restore the wallet and sign again.",
+    "description": "Enable encrypted iCloud backup to recover this phone’s signing key, history and shared accounts on a replacement device. You can also save a manual backup file.",
     "journey": [
-      "Save a backup file and keep the recovery words securely.",
-      "To restore, paste the backup, read its verification report, and continue once verification finishes."
+      "Enable iCloud backup, confirm that it includes your signing key, and authenticate. Wait for the saved date.",
+      "On a replacement device, choose Restore from iCloud with the same Apple Account and iCloud Keychain enabled. Select a backup and authenticate.",
+      "Keep recovery words and a manual backup separately. Manual JSON import remains available."
     ],
     "tests": [],
-    "limitations": "Keep both your recovery words and your backup file. The words alone won’t restore your payment history."
+    "limitations": "Automatic updates wait for pending payments to confirm. Cloud and Keychain synchronization can be delayed. Other owners’ keys and local payment labels are not included."
   },
   {
     "id": "controls",
@@ -184,6 +185,6 @@
       "Reset and shuffle remains a separate choice."
     ],
     "tests": [],
-    "limitations": "Downloads expire after seven days, then automatic selection falls back to bundled candidates. Bundled and downloaded census entries count as the same trust source. Every selected peer still undergoes normal wallet checks."
+    "limitations": "Downloads expire after seven days; saved peers and DNS discovery remain available. Downloaded census entries count as one trust source. Every selected peer still undergoes normal wallet checks."
   }
 ]

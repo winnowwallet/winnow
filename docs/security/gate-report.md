@@ -16,9 +16,10 @@ throughout this register as the strongest remaining confidence artifact is
 still outstanding. The agent-driven
 [independent review of 2026-09-14](independent-review-2026-09-14.md) — one
 High, seven Medium, twenty-two Low, three informational, none Critical — is
-tracked as issues #98–#130 with bounded fix PRs in flight, and its findings
-were made against the tree that shipped. The GO is the owner's acceptance of
-that residual on the record, not a claim that it has been closed.
+tracked as issues #98–#130. Its [dated tracker](independent-review-2026-09-14.md#tracker)
+records subsequent fixes and decisions; the observations concern the reviewed
+revision. The GO is the owner’s decision, not a claim of a completed human audit.
+For current automated release checks, use the [CI runbook](../../.github/internal/ci-release.md).
 
 ---
 

@@ -9,9 +9,11 @@ Headers and cumulative work remain in memory. Normal sync appends at the tip;
 an older parent is found by searching the headers backwards once per batch.
 This avoids a second full-chain hash index, at the cost of slower lookups for
 old or unknown parents. Memory still grows with the retained history.
-Difficulty adjustments are calculated during sync, reorgs, and reloads. A start
-at the mainnet checkpoint (900,000) lacks the beginning of the preceding period,
-so the first adjustment at 901,152 cannot be calculated; 903,168 onward can.
+Difficulty adjustments are calculated during sync, reorgs, and reloads. The
+mainnet checkpoint is at 959,616, a difficulty-period boundary, so the first
+adjustment at 961,632 and every later one can be checked exactly. Headers more
+than two hours ahead of the device clock are refused. This light client does
+not check median-time-past or full block consensus rules.
 
 [Filter scanning](../Filters/README.md) uses this
 history. [Checkpoint generation](../../../../Tools/Generate/README.md) uses the same

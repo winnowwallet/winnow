@@ -62,3 +62,81 @@ artifact preparation, App Store status parsing, and release policy.
 Signing/submission commands have external effects;
 their workflow runbooks identify when they are used.
 Run commands from the repository root unless their help specifies otherwise.
+
+## Tool index
+
+Run shell/Python entry points as `scripts/<name>` from the repository root.
+The two `.swift` scripts below require `swift scripts/<name>.swift`. Build
+outputs, signing material and diagnostic captures stay outside committed source.
+The [debug CLI](../Tools/Debug/README.md), [fuzz harness](../Tools/Fuzz/README.md),
+and [native fixture](../Tools/Fixture/README.md) are the three Swift executables.
+
+### Build and validation
+
+| Entry point | Inputs and purpose | Effects / caller |
+| --- | --- | --- |
+| [check-dependencies](check-dependencies) | Optional `--xcode DERIVED_DATA`; compare package and Xcode resolutions with the root lockfile. | Reads manifests/build state; CI and release. |
+| [check-test-gates](check-test-gates) | No arguments; check environment gates, deliberate skips, and retired flags. | Source check in CI’s build job; does not execute tests. |
+| [check-swift-warnings](check-swift-warnings) | `BUILD_LOG`; reject compiler warnings under `Sources/` and `SoakCommand.swift`. | Reads a log; it does not compile or prove a build succeeded. |
+| [ci-production-warnings](ci-production-warnings) | Optional `SCRATCH_PATH [LOG_PATH]`; Release-build `winnow-debug`, check warnings and lockfile drift. | Compiles package code. Use a fresh scratch path for meaningful warning evidence. |
+| [ci-debug](ci-debug) | No arguments; exercise wrapper help and environment checks from outside the checkout. | Builds/runs the debug CLI; lists simulators without launching one. |
+| [ci-app-tests](ci-app-tests) | `FRESH_RESULTS_DIR [--skip-build]`; app tests in the iOS host. | Builds/uses a simulator; see shared-build setup above. |
+| [ci-ui-journey](ci-ui-journey) | `FRESH_RESULTS_DIR [--skip-build]`; the one recorded payment journey. | Uses the fixture and simulator, mines blocks, and writes test/media artifacts. |
+| [install-xcodegen](install-xcodegen) | No arguments; fetch checksum-pinned XcodeGen. | Installs under runner/temp storage; sets CI’s path or prints the local executable path. |
+| [ios-simulator](ios-simulator) | Optional `iPhone` or `iPad`; print an available device ID from the newest installed iOS runtime. | Selection only; does not boot, create, or erase a simulator. |
+| [verify-release-e2e-exclusion](verify-release-e2e-exclusion) | `APP_BUNDLE_OR_EXECUTABLE`; reject known test-activation markers. | Inspects an already-built binary; CI and release. |
+
+### Website and local development
+
+| Entry point | Inputs and purpose | Effects / caller |
+| --- | --- | --- |
+| [build-site](build-site) | `--check` verifies generated pages; optional `--root DIR`. | Without `--check`, rewrites the homepage and recording HTML from the journey inventory. |
+| [check-site](check-site) | Optional `--root DIR`; check generation, local links, media, and hosting size limits. | Reads website assets; requires real LFS objects. |
+| [ci-journey-cache](ci-journey-cache) | CI environment identifies the event, revision and repository. | Queries GitHub for matching successful media; writes CI outputs. See the reuse policy above. |
+| [prepare-site-artifact](prepare-site-artifact) | `OUTPUT` with `--journey DIR` or `--media DIR`; optional `--media-output DIR`. | Writes a new site/media artifact; does not deploy it. No media option uses repository reference assets. |
+| [winnow-debug](winnow-debug) | `inspect`, `doctor`, `diagnostics`, `generate checkpoint`, `soak`; see its [runbook](../Tools/Debug/README.md). | Inspection is offline; diagnostics writes captures; soak contacts peers. |
+| [refresh-checkpoint](refresh-checkpoint) | `HEADERS_FILE [HEIGHT]`; derive and validate a boundary checkpoint. | Writes a test vector and prints a source literal for review; does not automatically edit app constants. See the [runbook](../Tools/Generate/README.md). |
+| [signet-fixture](signet-fixture) | `up`, `down`, `status`, `snapshot DIR`, `destroy`. | Manages the configured local node; `destroy` deletes its data. No argument defaults to `up`. See the [UI setup](../UITests/README.md#run-locally). |
+| [make-icon.swift](make-icon.swift) | `OUTPUT.png` (default `icon.png`); render the icon with macOS graphics APIs. | Writes the requested PNG; inspect it before replacing the app asset. Not a CI generator. |
+
+### Release helpers
+
+Prefer the [hosted workflows](../.github/internal/ci-release.md#release) for
+publishing. The helper names below are not additional release pipelines.
+
+| Entry point | Inputs and purpose | Effects / caller |
+| --- | --- | --- |
+| [check-release-policy](check-release-policy) | `RELEASE_TAG=vMAJOR.MINOR.PATCH`; validate stable tag syntax. An unset value supports manual validation. | No network or source generation; release workflow. |
+| [generate-supply-chain-metadata](generate-supply-chain-metadata) | `--output-dir DIR`, optional `--subject PATH`, `--subject-name NAME`, `--builder-id ID`. | Writes SPDX/provenance JSON for a Git tree or built artifact; no upload or signing. CI and release retain it as artifacts. |
+| [ci-sign.sh](ci-sign.sh) | `ASC_PRIVATE_KEY`; write the API key file under runner/temp storage. | Writes sensitive signing material; release/recovery workflows provide and clean it up. Certificate import is a separate release step. |
+| [asc-jwt.swift](asc-jwt.swift) | `KEY_PATH KEY_ID ISSUER_ID`; create a short-lived App Store Connect token. | Reads a private key and prints a bearer token. Internal helper of `testflight.sh`; do not log its output. |
+| [testflight.sh](testflight.sh) | Explicit operation plus ASC credentials and build/version selectors; see below. | Reads or changes App Store Connect according to the operation. |
+
+`testflight.sh` requires `ASC_KEY_ID`, `ASC_ISSUER_ID`, and the key at
+`ASC_KEY_PATH` (default `~/.appstoreconnect/private_keys/AuthKey_<id>.p8`).
+Select an existing build with `TESTFLIGHT_BUILD_ID`, or both
+`TESTFLIGHT_MARKETING_VERSION` and `TESTFLIGHT_BUILD_NUMBER`. With neither,
+its legacy fallback selects the latest upload; release/recovery workflows pass
+an exact version and build number.
+
+- `status` and `appstore-status` read remote state; the latter also validates
+  metadata and may exit nonzero for missing fields.
+- `wait-processing` waits for processing; `notes`, `internal`, and `external`
+  update TestFlight notes/groups. External distribution can require beta review.
+- `upload` sends `build/WinnowApp.ipa`. `register-bundle-id` and `create-app`
+  are initial account setup operations. `all` runs those setup steps, upload,
+  processing, notes and group assignment. **No argument defaults to `all`.**
+- `appstore-attach` and `appstore-notes` change an existing editable App Store
+  version, selected by `APPSTORE_VERSION_ID` or `APPSTORE_VERSION_STRING`.
+  They do not create a version record or withdraw an approved submission.
+  Notes default to `docs/appstore-whats-new.txt`; TestFlight notes default to
+  `docs/testflight-what-to-test.txt`.
+- `appstore-submit` requires `APPSTORE_CONFIRM_SUBMIT=yes` and submits that
+  version for review. Submission is not approval or publication. In the hosted
+  submission workflow, `submit=false` still attaches a build and writes notes;
+  only `status_only=true` is read-only.
+
+The old story/demo publisher, standalone differential launcher, LOC reporter,
+and bundled-peer generator/crawler are retired. Their replacement or historical
+status is documented in the [debug runbook](../Tools/Debug/README.md#removed-commands)
+and [test-suite map](../docs/security/test-suite-map.md).

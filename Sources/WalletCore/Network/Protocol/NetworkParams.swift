@@ -33,11 +33,6 @@ public struct NetworkParams: Sendable, Equatable {
     public let powTargetSpacing: UInt32
     public var difficultyAdjustmentInterval: UInt32 { powTargetTimespan / powTargetSpacing }
     public let dnsSeeds: [String]
-    /// Hardcoded last-resort clearnet peers (IP literals, verified
-    /// filter-serving — see the per-network value's comment). Dialed
-    /// alongside the DNS-seed results so a fresh launch works even when
-    /// seed results are dead.
-    public let fallbackPeers: [PeerEndpoint]
     /// Optional trusted start for header sync (#89). Present only where
     /// syncing from genesis is slow enough to matter, which today is mainnet.
     public let checkpoint: Checkpoint?
@@ -69,7 +64,7 @@ public struct NetworkParams: Sendable, Equatable {
     public init(network: BitcoinNetwork, magic: Data, defaultPort: UInt16,
                 genesisTime: UInt32, genesisBits: UInt32, genesisNonce: UInt32,
                 genesisMerkleRoot: Data, genesisHash: Data, powLimit: Data,
-                dnsSeeds: [String], fallbackPeers: [PeerEndpoint] = [],
+                dnsSeeds: [String],
                 checkpoint: Checkpoint? = nil,
                 powTargetTimespan: UInt32 = 14 * 24 * 60 * 60,
                 powTargetSpacing: UInt32 = 600, noRetargeting: Bool = false) {
@@ -89,7 +84,6 @@ public struct NetworkParams: Sendable, Equatable {
         self.powTargetSpacing = powTargetSpacing
         self.dnsSeeds = dnsSeeds
         self.checkpoint = checkpoint
-        self.fallbackPeers = fallbackPeers
     }
 
     /// Custom BIP325 signets (magic ≠ public signet) may keep RFC1918 /
@@ -182,12 +176,6 @@ public struct NetworkParams: Sendable, Equatable {
             "seed.bitcoin.wiz.biz",
             "seed.mainnet.achownodes.xyz",
         ],
-        // Generated at release time rather than curated by hand (#161): a
-        // static public list ages from the day it is written, and #159's
-        // source ceiling made the bundled class what fills a pool slot on an
-        // ordinary launch. See FallbackPeersGenerated.swift for provenance
-        // and for what generation deliberately does not claim.
-        fallbackPeers: generatedMainnetFallbackPeers,
         // Derived, not asserted. Winnow synced mainnet from genesis on
         // 2026-08-19, proof-of-work-checking every header, and on 2026-09-14
         // `winnow-debug generate checkpoint` re-derived the three values below

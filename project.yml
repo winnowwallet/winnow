@@ -19,6 +19,13 @@ targets:
     type: application
     platform: iOS
     deploymentTarget: "17.0"
+    entitlements:
+      path: build/WinnowApp.entitlements
+      properties:
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.com.btcswift.app
+        com.apple.developer.icloud-services:
+          - CloudKit
     info:
       path: build/WinnowApp-Info.plist
       properties:

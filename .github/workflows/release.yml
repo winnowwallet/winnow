@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - name: Validate version and bundled fallback-peer generation date
+      - name: Validate stable release version
         env:
           RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: scripts/check-release-policy

@@ -1,5 +1,10 @@
 # Review of loperanger7’s Winnow patches
 
+> Historical integration report for the revisions named below. Tor, the
+> differential suite, Intel CI, and the broad UI suite described here were
+> subsequently retired. See the [current testing policy](../testing.md) and
+> [test-suite map](test-suite-map.md); the measurements below remain unchanged.
+
 Reviewed and merged 2026-09-14 in [PR #87](https://github.com/winnowwallet/winnow/pull/87). The inventory covers all ten PRs authored by loperanger7 in `winnowwallet/winnow`; none were found in `winnowwallet/census`. Several PR branches included unrelated shared history. Integration preserves the individual authored commits instead of importing their entire branch diffs.
 
 | Patch | Disposition | Implementation and evidence |
@@ -37,7 +42,7 @@ Earlier hosted runs exposed two header fixtures that stopped replying after 2-se
 
 ## Other superseded work
 
-The remaining preparatory [#91](https://github.com/winnowwallet/winnow/pull/91) and [#92](https://github.com/winnowwallet/winnow/pull/92) were checked against current code. Their bounded `getaddr` crawl, endpoint filtering, overlay catalog, and census-driven generation are already incorporated through reviewed ports. The original branch heads are not ancestors of main; this conclusion comes from comparing their individual changes with the implementation and fixtures. The [generator runbook](https://github.com/winnowwallet/winnow/blob/main/Tools/Generate/README.md) now describes the shared census validator, provenance, Tor candidates, and the separate census/crawl limits. These PRs require no additional production-code merge.
+The remaining preparatory [#91](https://github.com/winnowwallet/winnow/pull/91) and [#92](https://github.com/winnowwallet/winnow/pull/92) were checked against current code. Their bounded `getaddr` crawl, endpoint filtering, overlay catalog, and census-driven generation are already incorporated through reviewed ports. The original branch heads are not ancestors of main; this conclusion comes from comparing their individual changes with the implementation and fixtures. The [generator runbook](https://github.com/winnowwallet/winnow/blob/966fa93947b5038733f035b317053edddcea508c/Tools/Generate/README.md) now describes the shared census validator, provenance, Tor candidates, and the separate census/crawl limits. These PRs require no additional production-code merge.
 
 ## Primary references
 

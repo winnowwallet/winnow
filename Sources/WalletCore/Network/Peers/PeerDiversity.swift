@@ -14,8 +14,9 @@ public enum PeerSource: String, Codable, Sendable, CaseIterable {
     case manual
     /// Learned by connecting successfully on an earlier run.
     case persisted
-    /// Compiled into the binary.
-    case fallback
+    /// Downloaded census. The legacy raw value preserves saved-peer provenance;
+    /// earlier versions used the same class for their census-derived bundle.
+    case census = "fallback"
     /// Resolved from a DNS seed, over DoH where possible.
     case dnsSeed
 }

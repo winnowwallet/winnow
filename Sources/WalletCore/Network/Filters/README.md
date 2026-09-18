@@ -5,12 +5,15 @@
 FilterSync asks peers for compact filters and retrieves matching blocks.
 It lets the wallet find its confirmed payments without sending its addresses
 to a remote indexer. Persisted progress and reorg rollback keep recovery usable.
-A batch's matches and progress are committed only after the checkpoint headers
-that batch pins agree with the peers' cfcheckpt answer, so a refused batch
-leaves every store where it was.
+A batch's filter headers must agree with the adopted cfcheckpt answer before
+any matches are delivered. A checkpoint rejection therefore has no payment
+callbacks or saved progress from that batch. A later filter, network, or
+callback error can follow earlier delivered matches; the scan frontier is
+saved only after all chunks finish.
 
-Progress does not grow with the chain. Each batch persists only the pinned
-filter headers a later check can still ask for: every checkpoint boundary, which
+Saved progress keeps sparse checkpoint boundaries plus recent filter headers,
+rather than every block’s filter header. Boundary storage still grows with the
+chain. Each batch persists the pinned headers a later check can ask for: every checkpoint boundary, which
 the cfcheckpt comparison reads on every sync, and the recent run a reorg could
 rewind into, which ends at the anchor the next batch checks a peer's answer
 against. Keeping that anchor is the condition, not the goal — with no anchor to
