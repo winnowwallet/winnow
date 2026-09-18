@@ -1,15 +1,13 @@
-# Security
+# Bug and security reports
 
-Report a vulnerability privately through GitHub's
-[private vulnerability reporting](https://github.com/winnowwallet/winnow/security/advisories/new)
-(Security → Report a vulnerability). Exploit detail belongs there, not in a
-public issue; the [findings register](docs/security/findings.md) is published
-only once a fix has landed.
+Report bugs, including security vulnerabilities, in a
+[public GitHub issue](https://github.com/winnowwallet/winnow/issues/new).
+Include the affected version, steps to reproduce, expected and actual behavior,
+and relevant logs or a minimal example.
 
-If the private form is unavailable, open a
-[GitHub issue](https://github.com/winnowwallet/winnow/issues/new) that names
-the area and the impact without the steps, and the owner will move the
-conversation to a private advisory.
+Do not include recovery words, private keys, credentials, or personal wallet data.
 
-What the wallet claims, and what it does not, is in
+Reports and fixes are tracked publicly. The
+[findings register](docs/security/findings.md) records security findings and
+their disposition. What the wallet claims, and what it does not, is in
 [docs/security](docs/security/README.md).

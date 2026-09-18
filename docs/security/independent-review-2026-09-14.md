@@ -135,6 +135,8 @@ Filed 2026-09-14 as one public issue per finding, label `security`, at the owner
 
 **Status, 2026-09-15** — IR-023 fixed (winnow#120): the wallet's Keychain item now carries `SecAccessControlCreateWithFlags(.userPresence)` over `WhenUnlockedThisDeviceOnly`; the `LAContext` the app's own check evaluates is handed to the read that follows, so the user is asked once; an item stored by 0.7.1 or earlier gets the access control in place on its next open. `AppTests/KeychainAttributeTests` reads the recorded constraint back and exercises the in-place upgrade; the simulator records the constraint but does not enforce it, so enforcement stays with the device-evidence item. Owner-gated and still open: IR-009.
 
+**Status, 2026-09-18** — the owner chose public GitHub issues for all bug and vulnerability reports. This supersedes the earlier private-reporting recommendation and owner-setup item for IR-009. [SECURITY.md](../../SECURITY.md) is the current reporting policy; the dated review observations above are retained as history.
+
 | ID | Issue | ID | Issue | ID | Issue |
 |---|---|---|---|---|---|
 | IR-001 | winnow#98 | IR-012 | winnow#109 | IR-023 | winnow#120 |
