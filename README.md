@@ -111,8 +111,6 @@ Website-only edits reuse normalized journey media from a successful run with
 matching test and build inputs, then generate and check a fresh website.
 App-bundled HTML/CSS changes still require fresh tests. Missing evidence runs
 the full checks; manual, nightly, and release runs always run fresh.
-The [LOC reporter](scripts/report-loc.py) remains available manually for JSON,
-CSV, and Markdown size reports.
 
 Mainnet is the default network, and the app starts in beginner mode: one
 screen with the balance, Receive, Send, your activity, shared savings once you

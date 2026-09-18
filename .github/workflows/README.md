@@ -50,5 +50,4 @@ current website with a new journey or cached video and all 16 checkpoints,
 preserving the recording's source provenance. It also writes a dedicated
 reusable media bundle. [site.yml](site.yml) downloads the ready website artifact
 from the same run and deploys it without checkout, rebuilding, or testing.
-Trusted PRs use `pr-<number>` previews; `main` is production. The retained
-[LOC reporter](../../scripts/report-loc.py) is a manual tool.
+Trusted PRs use `pr-<number>` previews; `main` is production.

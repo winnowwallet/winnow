@@ -7,9 +7,9 @@ public enum MuSigError: Error, Equatable {
 }
 
 /// BIP327 MuSig2 key aggregation over plain (33-byte compressed) public keys,
-/// as required by the BIP390 `musig()` key expression. P256K's MuSig module is
-/// behind a disabled package trait, so KeyAgg is implemented from its public
-/// point operations (`multiply` / `combine`).
+/// as required by the BIP390 `musig()` key expression. This implementation uses
+/// P256K's public point operations (`multiply` / `combine`). The pinned
+/// dependency also provides MuSig APIs through its enabled-by-default trait.
 public enum MuSig {
     /// secp256k1 curve order n.
     static let groupOrder = Data([
