@@ -6,8 +6,9 @@ and inspect their artifacts.
 
 The supported product is the real iPhone app plus explicit debugging tools.
 Everyday and advanced features are documented in docs/journeys.json.
-scripts/build-site generates the homepage overview and signing illustrations
-and the separate recording page. Recording evidence identifies the steps
+scripts/build-site generates the homepage overview, signing illustrations, the
+run's checkpoint screenshots, and the separate recording page. Generation
+refuses a checkpoint the UI journey does not capture. Recording evidence identifies the steps
 exercised by the current focused UI journey. The
 public roadmap owns future work; it is not evidence that a feature ships.
 

@@ -15,6 +15,13 @@ spec = importlib.util.spec_from_loader(loader.name, loader)
 site = importlib.util.module_from_spec(spec)
 loader.exec_module(site)
 
+# the generator owns the checkpoint list the packaged site must carry
+builder_loader = importlib.machinery.SourceFileLoader(
+    "build_site", str(Path(__file__).parents[1] / "build-site"))
+builder = importlib.util.module_from_spec(importlib.util.spec_from_loader(builder_loader.name, builder_loader))
+builder_loader.exec_module(builder)
+CHECKPOINTS = [name for _, shots in builder.ACTS for name, _ in shots]
+
 
 class SiteArtifactTests(unittest.TestCase):
     def setUp(self):
@@ -25,8 +32,7 @@ class SiteArtifactTests(unittest.TestCase):
         self.docs = self.root / "docs"
         self.docs.mkdir(parents=True)
         (self.root / "UITests").mkdir()
-        self.names = ["56-home-beginner.png", *(f"capture-{n:02}.png" for n in range(15))]
-        self.names.sort()
+        self.names = sorted(f"{name}.png" for name in CHECKPOINTS)
         calls = "\n".join(f'        Screenshots.capture(app, "{Path(name).stem}", testCase: self)'
                           for name in self.names)
         (self.root / "UITests/WinnowAppUITests.swift").write_text(
@@ -41,7 +47,8 @@ class SiteArtifactTests(unittest.TestCase):
         (self.docs / "videos").mkdir()
         (self.docs / site.VIDEO).write_bytes(b"reviewed reference video")
         (self.docs / "screenshots").mkdir()
-        (self.docs / "screenshots/56-home-beginner.png").write_bytes(b"reviewed reference screenshot")
+        for name in self.names:
+            (self.docs / "screenshots" / name).write_bytes(b"reviewed reference screenshot")
         (self.docs / "screenshots/historical.png").write_bytes(b"historical illustration")
         self.media = self.base / "media"
         (self.media / "videos").mkdir(parents=True)
@@ -84,7 +91,7 @@ class SiteArtifactTests(unittest.TestCase):
 
     def test_validate_media_cli_checks_current_capture_names(self):
         source = self.root / "UITests/WinnowAppUITests.swift"
-        source.write_text(source.read_text().replace("capture-00", "changed-capture"))
+        source.write_text(source.read_text().replace(CHECKPOINTS[0], "changed-capture"))
         with self.assertRaisesRegex(SystemExit, "does not describe this focused journey"):
             self.validate_cli()
 

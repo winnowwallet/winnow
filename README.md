@@ -36,8 +36,10 @@ private signet fixture mines blocks automatically for prompt confirmation.
 App, wallet, and protocol tests cover detailed rules; there is no separate
 DifferentialTests target or broad interoperability matrix. One continuous
 video presents the journey on the [recording page](https://winnowwallet.com/recording).
-iPad UI runs follow separately. The homepage gives an overview and illustrates
-the signing choices; detailed guidance and test evidence live on separate pages.
+iPad UI runs follow separately. The homepage gives an overview, illustrates
+the signing choices, shows the run's sixteen checkpoint screenshots in order,
+and links to the full recording. Detailed guidance and test evidence live on
+separate pages.
 `scripts/build-site` generates home and the recording page.
 Run it after changing docs/journeys.json or the app test
 source. CI rejects missing or undocumented app scenarios.
