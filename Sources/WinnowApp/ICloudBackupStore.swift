@@ -23,19 +23,20 @@ protocol ICloudBackupKeyStoring: Sendable {
 }
 
 enum ICloudBackupError: LocalizedError {
-    case unavailable, keyUnavailable, accountChanged, invalidBackup
+    case unavailable, keyUnavailable, accountChanged, invalidBackup, unsupportedWallet
 
     var errorDescription: String? {
         switch self {
         case .unavailable: "Sign in to iCloud and enable iCloud Drive and Passwords & Keychain in Settings."
         case .keyUnavailable: "The backup key hasn’t arrived from iCloud Keychain. Check Passwords & Keychain in Settings and try again. Keep your recovery words and manual backup."
-        case .accountChanged: "Your iCloud account changed. Reopen the backup screen before continuing."
+        case .accountChanged: "Your Apple Account changed. Sign back into the original account, or turn automatic backup off and on in Advanced to use this account."
+        case .unsupportedWallet: "Automatic iCloud recovery requires this wallet’s recovery words. This wallet needs a manual backup instead."
         case .invalidBackup: "This iCloud backup could not be read safely. Your existing wallet was not replaced."
         }
     }
 }
 
-/// Kept separate from KeychainStore: opting into cloud recovery must never
+/// Kept separate from KeychainStore: automatic cloud recovery must never
 /// change the local signing key's ThisDeviceOnly/userPresence protection.
 struct ICloudBackupKeys: ICloudBackupKeyStoring {
     let service = "com.btcswift.app.cloud-backup-key.v1"
@@ -68,7 +69,7 @@ struct ICloudBackupKeys: ICloudBackupKeyStoring {
     }
 }
 
-/// One independent record per device's opt-in, so another device or a new
+/// One independent record per device's backup, so another device or a new
 /// wallet cannot overwrite the only usable backup. No public database access.
 actor ICloudBackupStore: ICloudBackupStoring {
     static let containerIdentifier = "iCloud.com.btcswift.app"

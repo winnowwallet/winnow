@@ -1,10 +1,10 @@
-Winnow 0.7.4: encrypted iCloud recovery and peer discovery
+Winnow 0.7.5: automatic complete iCloud recovery and mainnet startup
 
-Peer-list updates now require a valid signature from the pinned census publisher. The bundled address list has been removed. Fresh installs use DNS discovery; existing wallets also retain their saved peers and valid signed census downloads. Older unsigned or expired census caches are ignored.
+Peer-list updates now require a valid signature from the pinned census publisher. The bundled address list has been removed. Mainnet automatically refreshes a missing or expired signed census alongside DNS discovery and remembered peers. Older unsigned or expired census caches are ignored.
 
 iCloud recovery
 
-Using a disposable signet wallet, enable iCloud backup and check the authentication prompt and saved date. On a second device with the same Apple Account and iCloud Keychain enabled, choose Restore from iCloud. Verify addresses, history, shared accounts and the ability to sign. Check a missing Keychain key, offline recovery and cancellation. Keep the original wallet and manual backup until verified; never erase your only funded wallet for this test.
+Using a disposable signet wallet, create the wallet without enabling backup or completing a recovery-word checklist. Check the saved date after the automatic upload. On a second device with the same Apple Account and iCloud Keychain enabled, choose Restore from iCloud. Verify addresses, history, shared accounts, saved people, labels and the ability to sign. Confirm automatic backup resumes on the replacement device. Check that Advanced opt-out persists across mode changes and restart. Check a missing Keychain key, offline recovery and cancellation. Keep the original wallet and manual backup until verified; never erase your only funded wallet for this test.
 
 Connections
 

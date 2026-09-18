@@ -24,12 +24,12 @@
 <h1 id="winnow-privacy-policy">Privacy</h1>
 <p class="lede">Your wallet is local. Network connections still disclose information.</p>
 <p>Winnow requires no account or wallet-history service and includes no analytics, advertising SDK, or app-managed crash reporting. Websites, discovery services, and the census endpoint receive ordinary request metadata; this policy does not claim their hosting providers keep no logs.</p>
-<nav class="contents" aria-label="On this page"><a href="#what-the-app-does-with-your-data">On your device</a><a href="#network-disclosures">Network requests</a><a href="#optional-requests">Optional requests</a><a href="#exports">Exports</a></nav>
+<nav class="contents" aria-label="On this page"><a href="#what-the-app-does-with-your-data">On your device</a><a href="#network-disclosures">Network requests</a><a href="#optional-requests">Cloud and optional services</a><a href="#exports">Exports</a></nav>
 
 <section id="what-the-app-does-with-your-data">
 <h2>On your device</h2>
-<p><strong>Keys.</strong> Seed material is generated on-device and stored in the iOS Keychain with this-device-only protection. The Keychain checks user presence before releasing it. It stays on this device unless you explicitly export it or enable encrypted iCloud backup.</p>
-<p><strong>Receive labels.</strong> You can label an address before sharing it or skip. The note matches outputs locally and stays with that address when you request a new one. It does not verify a sender or create a return-payment destination. It is excluded from QR codes, copied or shared addresses, payment cards, and wallet backups. Deleting or replacing the wallet removes these labels.</p>
+<p><strong>Keys.</strong> Seed material is generated on-device and stored in the iOS Keychain with this-device-only protection. The Keychain checks user presence before releasing it. Automatic iCloud backup creates a separate encrypted recovery copy when available. You can turn it off in Advanced; the normal signing key remains device-only.</p>
+<p><strong>Receive labels.</strong> You can label an address before sharing it or skip. The note matches outputs locally and stays with that address when you request a new one. It does not verify a sender or create a return-payment destination. It is excluded from QR codes, copied or shared addresses, payment cards, and manual wallet backups. Encrypted iCloud recovery includes the labels. Deleting or replacing the wallet removes these labels.</p>
 <p><strong>Payment names.</strong> A received payment can keep a local name without an address. You can later attach an address you supplied or explicitly select a local or explorer suggestion. Funding-address suggestions are unverified; they do not identify senders, and reuse can reduce privacy.</p>
 </section>
 
@@ -49,15 +49,15 @@
 </section>
 
 <section id="optional-requests">
-<h2>Optional requests</h2>
+<h2>Cloud and optional services</h2>
 <p><strong>Explorer lookups</strong> require consent explaining the transaction-ID and IP disclosures. You must choose a returned destination; even a sole result is never selected automatically. Opening an external browser has a separate disclosure warning.</p>
-<p><strong>iCloud backup</strong> is off until you enable it and authenticate. It uploads encrypted copies of this phone’s signing key, wallet history and shared accounts to your private iCloud database. A separate encryption key synchronizes through iCloud Keychain. Apple receives the backup size, network, save date and ordinary account/connection metadata. Access to the backup and that key allows wallet recovery. Automatic updates run while Winnow is open and wait for pending payments to confirm. Stopping updates or deleting the local wallet leaves the saved cloud copy available for recovery. Local recipient names and receive labels are not included.</p>
+<p><strong>iCloud backup</strong> is on by default, with a persistent switch in Advanced to turn it off. Creation and restoration reuse their device authentication; existing wallets may ask once on foreground initialization. It uploads encrypted copies of this phone’s signing key, wallet history, shared accounts, saved people and payment cards, sender names, receive labels, display name and interface mode to your private iCloud database. A separate encryption key synchronizes through iCloud Keychain. Apple receives the backup size, network, save date and ordinary account/connection metadata. Access to the backup and that key allows wallet recovery. Automatic updates run while Winnow is open and wait for pending payments to confirm. Stopping updates or deleting the local wallet leaves the saved cloud copy available for recovery. Restoring resumes automatic backups using a new independent record. The app reports a successful save only after that record reaches iCloud. Manual file backups remain unchanged; peer and explorer endpoints remain device-local.</p>
 <p><strong>Census refresh</strong> downloads the public candidate catalog from <code>census.winnowwallet.com</code> automatically on mainnet when the saved catalog is missing or expired, and when requested in Advanced settings. Failed automatic attempts are retried while the app is open, at most once per minute. Invalid data does not replace good data, and a refresh does not disconnect active peers. <strong>Reset and shuffle peers</strong> is a separate action that preserves manual settings and the downloaded catalog.</p>
 </section>
 
 <section id="exports">
 <h2>Exports and recovery words</h2>
-<p>Recovery displays and exports you request can disclose sensitive wallet material. A default backup excludes recovery words. Choosing <strong>Include recovery phrase</strong> adds the phone's signing secret. Protect that file as you would the recovery words; even a file without them contains private wallet history.</p>
+<p>Recovery displays and exports you request can disclose sensitive wallet material. A default manual file backup excludes recovery words. Choosing <strong>Include recovery phrase</strong> adds the phone's signing secret. Protect that file as you would the recovery words; even a file without them contains private wallet history.</p>
 </section>
 
 <h2 id="third-party-code">Third-party code</h2>

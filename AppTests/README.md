@@ -22,6 +22,10 @@ actual locked-device behavior still needs [device evidence](../docs/security/REA
 isolation, atomic persistence, address rotation and relaunch, bounded metadata,
 and exact output matching without creating a sender contact.
 
-`CloudBackupTests` checks opt-in, failed uploads, cancellation and wallet/account
+`CloudBackupTests` checks automatic defaults, persistent opt-out, failed uploads, cancellation and wallet/account
 changes with in-memory cloud and key stores. It does not establish actual iCloud
 or iCloud Keychain synchronization; see [cloud recovery validation](../CloudKit/README.md#validation).
+
+`AutomaticCloudBackupTests` checks cancelled initialization authentication and mode
+changes; `CloudAppStateTests` checks complete context recovery and safe contact merges.
+`WalletStartupTests` covers automatic creation and migration from the old phrase checklist.

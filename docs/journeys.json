@@ -3,15 +3,15 @@
     "id": "setup",
     "section": "everyday",
     "title": "Set up your wallet",
-    "description": "Create a wallet and write down your recovery words. If you stop partway through, you can finish the backup when you return.",
+    "description": "Create a wallet and go straight to receiving and sending. Winnow starts encrypted iCloud backup automatically when available.",
     "journey": [
-      "Create a wallet and open its recovery-word backup.",
-      "Confirm that the words are written down, then reach the wallet home screen."
+      "Create a wallet without a recovery-word checklist.",
+      "Reach the wallet home screen and see its backup status."
     ],
     "tests": [
       "test01CreateReceiveSendConfirm"
     ],
-    "limitations": "Save a backup file too. Winnow needs it to find your past payments when you restore the wallet."
+    "limitations": "Without iCloud the wallet still works and shows Not backed up. Save a manual backup; recovery words and backup controls are in Advanced. The recorded simulator journey does not validate live iCloud."
   },
   {
     "id": "receive",
@@ -26,7 +26,7 @@
     "tests": [
       "test01CreateReceiveSendConfirm"
     ],
-    "limitations": "An address label does not verify the sender or create a payment destination. Labels stay on this device and are not included in wallet backups."
+    "limitations": "An address label does not verify the sender or create a payment destination. Labels are included in encrypted iCloud recovery, but not in manual wallet files."
   },
   {
     "id": "send",
@@ -114,14 +114,14 @@
     "id": "recovery",
     "section": "everyday",
     "title": "Back up and restore",
-    "description": "Enable encrypted iCloud backup to recover this phone’s signing key, history and shared accounts on a replacement device. You can also save a manual backup file.",
+    "description": "Automatic encrypted iCloud backup restores this phone’s signing key, history, shared accounts, saved people and labels. Manual files remain available.",
     "journey": [
-      "Enable iCloud backup, confirm that it includes your signing key, and authenticate. Wait for the saved date.",
-      "On a replacement device, choose Restore from iCloud with the same Apple Account and iCloud Keychain enabled. Select a backup and authenticate.",
-      "Keep recovery words and a manual backup separately. Manual JSON import remains available."
+      "Create a wallet; backup begins without an Enable step. A successful save appears only after iCloud acknowledges it.",
+      "On a replacement device, Winnow discovers backups automatically. Select one and authenticate; automatic updates resume using a separate record.",
+      "Use Advanced for recovery words, manual exports or disabling cloud backup. Without iCloud, keep a combined manual history-and-key file for spending recovery."
     ],
     "tests": [],
-    "limitations": "Automatic updates wait for pending payments to confirm. Cloud and Keychain synchronization can be delayed. Other owners’ keys and local payment labels are not included."
+    "limitations": "Automatic updates wait for pending payments to confirm. Cloud and Keychain synchronization can be delayed. Other owners’ signing keys are not included. Older cloud copies may lack names and labels."
   },
   {
     "id": "controls",

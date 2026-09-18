@@ -1,72 +1,36 @@
 import SwiftUI
 
+/// Advanced controls; beginner mode only displays the backup status.
 struct CloudBackupView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.scenePhase) private var scenePhase
-    @State private var confirmEnable = false
-    @State private var error: String?
-    @State private var working = false
-    @State private var operation: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    if model.cloudBackups.enabled {
-                        Label("Automatic backup is on", systemImage: "checkmark.icloud")
-                        if let saved = model.cloudBackups.lastSaved {
-                            LabeledContent("Saved to iCloud", value: saved.formatted())
-                        }
-                        Button("Stop automatic backups", role: .destructive) {
-                            do { try model.cloudBackups.stop() } catch { self.error = error.localizedDescription }
-                        }
-                        .disabled(working || model.cloudBackups.busy)
-                    } else {
-                        Button("Enable iCloud backup") { confirmEnable = true }
-                            .disabled(working || model.cloudBackups.busy || model.walletID == nil)
-                            .accessibilityIdentifier("enableCloudBackupButton")
+                    Toggle("Automatic iCloud backup", isOn: Binding(
+                        get: { model.cloudBackups.automaticEnabled },
+                        set: { enabled in Task { await model.setAutomaticCloudBackup(enabled) } }
+                    ))
+                    .accessibilityIdentifier("automaticCloudBackupToggle")
+                    Text(model.cloudBackups.statusTitle)
+                        .accessibilityIdentifier("cloudBackupStatus")
+                    if let saved = model.cloudBackups.lastSaved {
+                        LabeledContent("Last saved to iCloud", value: saved.formatted())
                     }
+                    if let message = model.cloudBackups.message { Text(message).foregroundStyle(.secondary) }
                 } footer: {
-                    Text("Saves this phone’s signing key, wallet history and shared accounts. Winnow updates the backup while open, once pending payments confirm. Other owners still need their own key backups.")
+                    Text("Includes this phone’s signing key, wallet history, shared accounts, saved people and labels. Updates while Winnow is open, after pending payments confirm. Other owners need their own key backups.")
                 }
                 Section {
-                    Text("To restore on a new device, use the same Apple Account with iCloud and Passwords & Keychain enabled. Keep your recovery words and a manual backup too.")
-                    Text("Stopping automatic backups leaves the saved copy in iCloud.")
-                }
-                if working || model.cloudBackups.busy { ProgressView("Saving backup…") }
-                if let message = error ?? model.cloudBackups.message {
-                    Text(message).foregroundStyle(.secondary)
+                    Text("Restore using the same Apple Account with iCloud and Passwords & Keychain enabled. Access to the cloud backup and its synchronized key can restore spending access.")
+                    Text("Turning this off leaves existing copies in iCloud. Keep a manual backup too.")
                 }
             }
             .navigationTitle("iCloud backup")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
-            .confirmationDialog("Back up your signing key to iCloud?", isPresented: $confirmEnable,
-                                titleVisibility: .visible) {
-                Button("Enable encrypted backup") { enable() }
-            } message: {
-                Text("Someone who can recover your iCloud backup and its iCloud Keychain key can spend from this wallet. Device authentication is required to enable backup and restore it.")
-            }
-            .onDisappear { cancel() }
-            .onChange(of: scenePhase) { _, phase in if phase == .background { cancel() } }
         }
-    }
-
-    private func enable() {
-        working = true
-        error = nil
-        operation = Task { @MainActor in
-            defer { working = false }
-            do { try await model.enableCloudBackup() }
-            catch is CancellationError { }
-            catch { if !Task.isCancelled { self.error = error.localizedDescription } }
-        }
-    }
-
-    private func cancel() {
-        operation?.cancel()
-        operation = nil
-        working = false
     }
 }
 
@@ -84,7 +48,8 @@ struct CloudRestoreView: View {
             Form {
                 if restored || model.walletID != nil {
                     Section {
-                        Text("Your wallet is restored. Keep Winnow open to check for newer payments.")
+                        Text("Your wallet is restored. Keep Winnow open to check for newer payments and finish this device’s automatic backup.")
+                        if let notice = model.cloudRestoreNotice { Text(notice) }
                         Button("Continue") { model.finishOnboarding(); dismiss() }
                     }
                 } else {
@@ -101,7 +66,7 @@ struct CloudRestoreView: View {
                             Text("No backup found for this network yet.")
                         }
                         Button("Check again") {
-                            operation = Task { await model.cloudBackups.discover(network: model.network.rawValue) }
+                            operation = Task { await model.discoverCloudBackups() }
                         }.disabled(restoring || model.cloudBackups.busy)
                     } header: {
                         Text("Choose a saved backup")
@@ -110,11 +75,12 @@ struct CloudRestoreView: View {
                     }
                 }
                 if restoring || model.cloudBackups.busy { ProgressView(restoring ? "Restoring wallet…" : "Checking iCloud…") }
-                if let message = error ?? model.cloudBackups.message { Text(message).foregroundStyle(.secondary) }
+                if let error { Text(error).foregroundStyle(.secondary) }
+                if let message = model.cloudBackups.message { Text(message).foregroundStyle(.secondary) }
             }
             .navigationTitle("Restore from iCloud")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
-            .task { await model.cloudBackups.discover(network: model.network.rawValue) }
+            .task { await model.discoverCloudBackups() }
             .onDisappear { cancel() }
             .onChange(of: scenePhase) { _, phase in if phase == .background { cancel() } }
         }

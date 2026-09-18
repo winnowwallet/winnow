@@ -310,7 +310,12 @@ final class AppModel {
     let keychainAuthentication = KeychainAuthentication()
     let vaultStore: VaultStore
     let peopleStore: PeopleStore
-    let cloudBackups = CloudBackupController()
+    let cloudBackups: CloudBackupController
+    private let allowsCloudBackup: Bool
+    private var cloudPreparationTask: Task<Void, Never>?
+    private var cloudPreparationEpoch = UUID()
+    private var attemptedCloudPreparation: Set<String> = []
+    private(set) var cloudRestoreNotice: String?
     private let defaults: UserDefaults
     /// The HTTP client behind census refresh, seed lookups and the consented
     /// explorer lookup. Suspending networking cancels it, so a request that
@@ -395,14 +400,16 @@ final class AppModel {
         static let advancedMode = "advancedMode"
         /// The name on the card this wallet shares. Global: it is the user's.
         static let ownDisplayName = "ownDisplayName"
-        /// Set at wallet creation, cleared only by the backup sheet's
-        /// confirmed Done — a relaunch in between resumes the backup.
+        /// Legacy phrase-checklist flag, cleared when opening an existing wallet.
         static func backupPending(_ walletID: String) -> String { "backupPending.\(walletID)" }
     }
 
     init(deviceAuthenticator: (any DeviceAuthenticating)? = nil,
          e2e: E2EMode? = E2EMode.current, defaults: UserDefaults = .standard,
-         storeKeys: (any StoreKeyVault)? = nil, keyStore: (any KeyStore)? = nil) {
+         storeKeys: (any StoreKeyVault)? = nil, keyStore: (any KeyStore)? = nil,
+         cloudBackups: CloudBackupController? = nil) {
+        self.cloudBackups = cloudBackups ?? CloudBackupController()
+        allowsCloudBackup = e2e == nil || cloudBackups != nil
         self.deviceAuthenticator = deviceAuthenticator
             ?? LocalDeviceAuthenticator(keychain: keychainAuthentication)
         self.e2e = e2e
@@ -496,13 +503,8 @@ final class AppModel {
             walletID = await wallet.id
             walletDescriptor = await wallet.descriptor
             upgradeKeyProtection()
-            // A wallet whose backup was never confirmed re-enters onboarding:
-            // the backup sheet resumes from the Keychain (#5).
-            let backupPending = hasPendingBackup
-            stage = backupPending ? .onboarding : .ready
-            if backupPending {
-                e2e?.journal("backup.pendingResumed", fields: ["walletID": walletID ?? ""])
-            }
+            defaults.removeObject(forKey: DefaultsKey.backupPending(walletID ?? ""))
+            stage = .ready
         case .missing:
             stage = .onboarding
         case let .damaged(details):
@@ -557,10 +559,13 @@ final class AppModel {
         e2e?.journal("app.scenePhase", fields: ["phase": String(describing: phase)])
         switch phase {
         case .active:
+            if !isActive { attemptedCloudPreparation.removeAll() }
             isActive = true
             await activate()
         case .background:
             isActive = false
+            cloudPreparationTask?.cancel()
+            cloudPreparationTask = nil
             cloudBackups.suspend()
             keychainAuthentication.revoke()
             suspendNetworking()
@@ -574,6 +579,7 @@ final class AppModel {
         // Boot must attach the saved wallet before a stack chooses its filters.
         guard stage != .loading, isActive, !changingNetwork, storageDirectory() != nil else { return }
         if case .storageDamaged = stage { return }
+        scheduleAutomaticCloudPreparation()
         let epoch = networkGeneration
         if httpClient.isCancelled { httpClient = RoutedHTTPClient() }
         await buildStackIfNeeded()
@@ -1075,6 +1081,7 @@ final class AppModel {
         journalSnapshotIfChanged()
         scheduleCloudBackup()
         schedulePeerCatalogRefresh()
+        scheduleAutomaticCloudPreparation()
     }
 
     // MARK: - Wallet creation / import (onboarding)
@@ -1123,8 +1130,8 @@ final class AppModel {
     /// Creates a fresh wallet immediately, dated at the current chain tip.
     /// Peer/header catch-up continues through the regular sync loop while the
     /// user backs up the phrase.
-    func createWallet() async throws -> String {
-        try await authenticateSensitiveAction(reason: "Create and reveal a new wallet recovery phrase")
+    func createWallet() async throws {
+        try await authenticateSensitiveAction(reason: "Create and protect your wallet")
         defer { keychainAuthentication.revoke() }
         try Task.checkCancellation()
         await buildStackIfNeeded()
@@ -1134,11 +1141,6 @@ final class AppModel {
         let wallet = try Wallet.create(network: network, keyStore: keyStore,
                                        storageURL: walletURL, entropy: e2e?.entropy,
                                        creationHeight: knownHeight)
-        // Flag BEFORE adopt(): the wallet is already in the Keychain, so a
-        // throw below must not leave it unflagged — the next boot would land
-        // on .ready with the backup silently skipped, the exact bug class #5
-        // kills. A stuck-true flag merely re-presents the sheet: fail-safe.
-        defaults.set(true, forKey: DefaultsKey.backupPending(await wallet.id))
         try await adopt(wallet: wallet)
         guard let walletID, case let .mnemonic(words) = try keyStore.load(walletID: walletID) else {
             throw AppError.mnemonicUnavailable
@@ -1148,7 +1150,8 @@ final class AppModel {
             "height": String(knownHeight),
             "headersContinueInBackground": "true",
         ])
-        return words
+        await prepareCloudBackup(words: words)
+        finishOnboarding()
     }
 
     /// Imports a wallet bundle (docs/import.md): the state starts as
@@ -1161,7 +1164,8 @@ final class AppModel {
         return try await importWallet(bundle: bundle, authenticate: true)
     }
 
-    private func importWallet(bundle: ImportBundle, authenticate: Bool) async throws -> ImportReport? {
+    private func importWallet(bundle: ImportBundle, authenticate: Bool,
+                              afterCommit: (@MainActor (String) async throws -> Void)? = nil) async throws -> ImportReport? {
         try VaultStore.validate(bundle.vaults ?? [], network: network)
         guard bundle.network == network.rawValue else { throw AppError.wrongNetwork(bundle.network) }
         if authenticate, bundle.mnemonic != nil {
@@ -1189,6 +1193,8 @@ final class AppModel {
         try await vaultStore.restore(bundle.vaults ?? [])
         vaults = await vaultStore.all
         defer { if isActive { startSyncLoop() } }
+        if let afterCommit { try await afterCommit(wallet.id) }
+        else { await prepareImportedCloudBackup(bundle) }
         await buildStackIfNeeded()
         guard let filters = stack?.filters else {
             e2e?.journal("import.verificationWaiting", fields: ["reason": "sync stack unavailable"])
@@ -1257,9 +1263,11 @@ final class AppModel {
     /// a previous wallet (filter progress, pending broadcasts, vault records)
     /// is that wallet's view and is reset; the new wallet's scan starts from
     /// its own scan height. The stage stays `.onboarding` until the UI calls
-    /// `finishOnboarding` (the mnemonic backup must be confirmed first).
+    /// `finishOnboarding` completes creation independently of backup availability.
     /// `startSync: false` defers the sync loop (import verifies first).
     private func adopt(wallet: Wallet, startSync: Bool = true) async throws {
+        cloudPreparationTask?.cancel()
+        cloudPreparationTask = nil
         cloudBackups.configure(directory: nil, walletID: nil)
         syncTask?.cancel()
         syncTask = nil
@@ -1331,7 +1339,7 @@ final class AppModel {
         self.stack = stack
     }
 
-    /// Leaves onboarding once the backup flow (or import report) is done.
+    /// Wallet usability is independent of cloud availability or manual backup.
     func finishOnboarding() {
         if let walletID {
             let wasBackupPending = defaults.bool(forKey: DefaultsKey.backupPending(walletID))
@@ -1349,29 +1357,6 @@ final class AppModel {
                 "nextScanHeight": String(status.nextScanHeight),
             ])
         }
-    }
-
-    /// The mnemonic of a wallet created but never backup-confirmed — non-nil
-    /// only between `createWallet()` and the backup sheet's Done. Read from
-    /// the Keychain on demand so a relaunch mid-backup resumes the sheet with
-    /// the same words.
-    /// UI-readable without touching the Keychain. The phrase itself remains
-    /// behind `pendingBackupMnemonic()` and device-owner authentication.
-    var hasPendingBackup: Bool {
-        guard let walletID else { return false }
-        return defaults.bool(forKey: DefaultsKey.backupPending(walletID))
-    }
-
-    func pendingBackupMnemonic() async throws -> String? {
-        guard let walletID, hasPendingBackup else { return nil }
-        try await authenticateSensitiveAction(
-            reason: "Resume this wallet's recovery-phrase backup")
-        defer { keychainAuthentication.revoke() }
-        try Task.checkCancellation()
-        guard case let .mnemonic(words) = try keyStore.load(walletID: walletID) else {
-            throw AppError.mnemonicUnavailable
-        }
-        return words
     }
 
     /// Settings → Backup → Show recovery phrase: the words, behind
@@ -2558,9 +2543,8 @@ final class AppModel {
             walletID = await wallet.id
             walletDescriptor = await wallet.descriptor
             upgradeKeyProtection()
-            // A wallet whose backup was never confirmed re-enters onboarding:
-            // the backup sheet resumes from the Keychain (#5).
-            stage = hasPendingBackup ? .onboarding : .ready
+            defaults.removeObject(forKey: DefaultsKey.backupPending(walletID ?? ""))
+            stage = .ready
         case .missing:
             stage = .onboarding
         case let .damaged(details):
@@ -2856,26 +2840,128 @@ final class AppModel {
 
 
 extension AppModel {
-    func enableCloudBackup() async throws {
-        guard let walletID, e2e == nil else { throw AppError.noWallet }
+    func discoverCloudBackups() async {
+        guard allowsCloudBackup, walletID == nil else { return }
+        await cloudBackups.discover(network: network.rawValue)
+    }
+
+    func setAutomaticCloudBackup(_ enabled: Bool) async {
+        guard let walletID else { return }
         cloudBackups.configure(directory: storageDirectory(), walletID: walletID)
+        do {
+            try cloudBackups.setAutomatic(enabled)
+            if enabled {
+                attemptedCloudPreparation.remove(walletID)
+                scheduleAutomaticCloudPreparation()
+                scheduleCloudBackup()
+            }
+        } catch { cloudBackups.reportPreparationFailure(error) }
+    }
+
+    private func prepareImportedCloudBackup(_ bundle: ImportBundle) async {
+        if let words = bundle.mnemonic { await prepareCloudBackup(words: words) }
+    }
+
+    private func cloudContents(words: String, walletID: String) async throws -> CloudBackupContents {
         let selectedNetwork = network
-        let bundle = try ImportBundle.decode(json: await exportWalletBundle(includeMnemonic: true))
+        var bundle = try ImportBundle.decode(json: await exportWalletBundle(includeMnemonic: false))
+        bundle.mnemonic = words
+        let state = try await cloudAppState(for: bundle)
         try Task.checkCancellation()
         guard self.walletID == walletID, network == selectedNetwork else { throw CancellationError() }
-        try await cloudBackups.enable(bundle: bundle, walletID: walletID)
+        return try CloudBackupContents(bundle: bundle, appState: state.encoded())
+    }
+
+    /// Stage only ciphertext while creation/import authentication is valid.
+    /// Network availability never determines whether onboarding finishes.
+    private func prepareCloudBackup(words: String, account: String? = nil) async {
+        guard allowsCloudBackup, let walletID else { return }
+        attemptedCloudPreparation.insert(walletID)
+        cloudBackups.configure(directory: storageDirectory(), walletID: walletID)
+        guard cloudBackups.needsPreparation else { return }
+        do {
+            let contents = try await cloudContents(words: words, walletID: walletID)
+            try cloudBackups.prepare(contents: contents, walletID: walletID, account: account)
+            scheduleCloudBackup()
+        } catch is CancellationError { }
+        catch { cloudBackups.reportPreparationFailure(error) }
+    }
+
+    private func scheduleAutomaticCloudPreparation() {
+        guard allowsCloudBackup, isActive, stage == .ready, let walletID, cloudPreparationTask == nil else { return }
+        cloudBackups.configure(directory: storageDirectory(), walletID: walletID)
+        guard cloudBackups.needsPreparation, !attemptedCloudPreparation.contains(walletID) else { return }
+        attemptedCloudPreparation.insert(walletID)
+        let selectedNetwork = network
+        let epoch = UUID()
+        cloudPreparationEpoch = epoch
+        cloudPreparationTask = Task { [weak self] in
+            guard let self else { return }
+            await self.prepareExistingCloudBackup(walletID: walletID, network: selectedNetwork)
+            if self.cloudPreparationEpoch == epoch { self.cloudPreparationTask = nil }
+        }
+    }
+
+    private func acceptsCloudPreparation(_ walletID: String, network: BitcoinNetwork) -> Bool {
+        self.walletID == walletID && self.network == network && isActive && cloudBackups.needsPreparation
+    }
+
+    private func cloudRecoveryWords(walletID: String) throws -> String {
+        do {
+            guard case let .mnemonic(words) = try keyStore.load(walletID: walletID) else {
+                throw ICloudBackupError.unsupportedWallet
+            }
+            return words
+        } catch KeyStoreError.notFound { throw ICloudBackupError.unsupportedWallet }
+    }
+
+    private func prepareExistingCloudBackup(walletID: String, network: BitcoinNetwork) async {
+        do {
+            let account = try await cloudBackups.accountForPreparation()
+            try Task.checkCancellation()
+            guard acceptsCloudPreparation(walletID, network: network) else { return }
+            try await authenticateSensitiveAction(reason: "Protect your wallet with automatic iCloud backup")
+            defer { keychainAuthentication.revoke() }
+            try Task.checkCancellation()
+            guard acceptsCloudPreparation(walletID, network: network) else { return }
+            let words = try cloudRecoveryWords(walletID: walletID)
+            await prepareCloudBackup(words: words, account: account)
+        } catch is CancellationError { }
+        catch {
+            guard acceptsCloudPreparation(walletID, network: network) else { return }
+            cloudBackups.reportPreparationFailure(error)
+        }
     }
 
     func restoreCloudBackup(_ id: UUID) async throws -> ImportReport? {
-        guard walletID == nil, e2e == nil else { throw AppError.noWallet }
+        guard walletID == nil, allowsCloudBackup else { throw AppError.noWallet }
         let selectedNetwork = network
+        cloudRestoreNotice = nil
         try await authenticateSensitiveAction(reason: "Restore your wallet and signing key from iCloud")
         defer { keychainAuthentication.revoke() }
         try Task.checkCancellation()
-        let bundle = try await cloudBackups.restore(id)
+        let restoration = try await cloudBackups.restoreContents(id)
+        let bundle = restoration.contents.bundle
+        var appState = try CloudAppState.decode(restoration.contents.appState, for: bundle)
+        if let saved = appState { appState?.people = try await peopleStore.planRestore(saved.people) }
         try Task.checkCancellation()
         guard walletID == nil, network == selectedNetwork else { throw CancellationError() }
-        return try await importWallet(bundle: bundle, authenticate: false)
+        let validatedState = appState
+        return try await importWallet(bundle: bundle, authenticate: false) { restoredID in
+            try Task.checkCancellation()
+            guard self.walletID == restoredID, self.network == selectedNetwork else { throw CancellationError() }
+            if let validatedState { try await self.applyCloudAppState(validatedState) }
+            else {
+                self.cloudRestoreNotice = "This older backup restores your wallet and key, but does not contain saved people or address labels."
+            }
+            self.cloudBackups.configure(directory: self.storageDirectory(), walletID: restoredID)
+            do {
+                let current = try await self.cloudAppState(for: bundle)
+                try self.cloudBackups.resume(contents: CloudBackupContents(bundle: bundle, appState: current.encoded()),
+                                             walletID: restoredID, account: restoration.account)
+            } catch { self.cloudBackups.reportResumeFailure(error) }
+            await self.refresh()
+        }
     }
 
     private func scheduleCloudBackup() {
@@ -2887,7 +2973,29 @@ extension AppModel {
             guard let self, self.walletID == walletID, self.network == selectedNetwork else {
                 throw CancellationError()
             }
-            return try ImportBundle.decode(json: await self.exportWalletBundle(includeMnemonic: false))
+            let bundle = try ImportBundle.decode(json: await self.exportWalletBundle(includeMnemonic: false))
+            let state = try await self.cloudAppState(for: bundle)
+            guard self.walletID == walletID, self.network == selectedNetwork else { throw CancellationError() }
+            return try CloudBackupContents(bundle: bundle, appState: state.encoded())
         }
+    }
+
+    private func cloudAppState(for bundle: ImportBundle) async throws -> CloudAppState {
+        configureReceiveAddressLabels()
+        guard let receiveLabelStore else { throw AppError.noWallet }
+        let state = try await CloudAppState(network: bundle.network, descriptor: bundle.descriptor,
+                                           people: peopleStore.backup(), receiveLabels: receiveLabelStore.backup(),
+                                           ownDisplayName: ownDisplayName, advancedMode: advancedMode)
+        try state.validate(for: bundle)
+        return state
+    }
+
+    private func applyCloudAppState(_ state: CloudAppState) async throws {
+        try await peopleStore.restore(state.people)
+        configureReceiveAddressLabels()
+        guard let receiveLabelStore else { throw AppError.noWallet }
+        try receiveLabelStore.restore(state.receiveLabels)
+        setOwnDisplayName(state.ownDisplayName)
+        setAdvancedMode(state.advancedMode)
     }
 }

@@ -43,59 +43,36 @@ final class WalletStartupTests: XCTestCase {
         await late.scenePhaseChanged(.background)
     }
 
-    /// A wallet created but never backup-confirmed re-enters onboarding on
-    /// the next launch, with the same words: the flag is set at creation and
-    /// cleared only by the backup sheet's Done (#5).
-    func testAPendingBackupSurvivesAReboot() async throws {
-        let environment = [
-            "WINNOW_E2E": "1",
-            "WINNOW_E2E_RUN": "backup-\(UUID().uuidString)",
-            "WINNOW_E2E_ENTROPY": "000102030405060708090a0b0c0d0e0f",
-            "WINNOW_E2E_PEER": "127.0.0.1:1",
-            "WINNOW_E2E_CHALLENGE": "51",
-        ]
+    func testNewAndLegacyUnfinishedWalletsOpenWithoutPhraseChecklist() async throws {
+        let environment = ["WINNOW_E2E": "1", "WINNOW_E2E_RUN": "backup-\(UUID().uuidString)",
+                           "WINNOW_E2E_ENTROPY": "000102030405060708090a0b0c0d0e0f",
+                           "WINNOW_E2E_PEER": "127.0.0.1:1", "WINNOW_E2E_CHALLENGE": "51"]
         guard case let .active(mode) = E2EMode.resolve(environment: environment),
               case let .active(cleanup) = E2EMode.resolve(
                 environment: environment.merging(["WINNOW_E2E_RESET": "1"]) { _, reset in reset })
         else { return XCTFail("could not create isolated backup fixture") }
-        // What a relaunch of one installation keeps: the run's defaults
-        // suite, one seal-key vault and one key store, shared by every model.
         let storeKeys = InMemoryStoreKeyVault()
         let keyStore = InMemoryKeyStore()
-        func launch() -> AppModel { AppModel(e2e: mode, storeKeys: storeKeys, keyStore: keyStore) }
-
-        let creating = launch()
-        addTeardownBlock {
-            await creating.scenePhaseChanged(.background)
-            cleanup.wipeIfRequested()
-        }
+        let cloud = MemoryCloudBackups()
+        await cloud.setFailing(true)
+        let controller = CloudBackupController(store: cloud, keys: MemoryCloudKeys())
+        let creating = AppModel(e2e: mode, storeKeys: storeKeys, keyStore: keyStore, cloudBackups: controller)
+        defer { cleanup.wipeIfRequested() }
         await creating.boot()
-        XCTAssertEqual(creating.stage, .onboarding)
         await creating.scenePhaseChanged(.active)
-        let words = try await creating.createWallet()
-        XCTAssertTrue(creating.hasPendingBackup)
-        XCTAssertEqual(creating.stage, .onboarding, "creation must not skip the backup")
-        await creating.scenePhaseChanged(.background)
-
-        // Killed before Done: the next boot resumes the backup, same words.
-        let rebooted = launch()
+        try await creating.createWallet()
+        XCTAssertEqual(creating.stage, .ready, "creation must not require a phrase or cloud acknowledgement")
+        XCTAssertTrue(controller.enabled, "creation should prepare automatic backup without an Enable action")
+        XCTAssertNil(controller.lastSaved, "local ciphertext is not cloud acknowledgement")
+        let walletID = try XCTUnwrap(creating.walletID)
+        let originalWords = try keyStore.load(walletID: walletID)
+        mode.defaults.set(true, forKey: "backupPending.\(walletID)")
+        let rebooted = AppModel(e2e: mode, storeKeys: storeKeys, keyStore: keyStore)
         await rebooted.boot()
-        XCTAssertEqual(rebooted.stage, .onboarding)
-        XCTAssertTrue(rebooted.hasPendingBackup, "the pending backup did not survive the reboot")
-        let resumed = try await rebooted.pendingBackupMnemonic()
-        XCTAssertEqual(resumed, words)
-        rebooted.finishOnboarding()
         XCTAssertEqual(rebooted.stage, .ready)
-        XCTAssertFalse(rebooted.hasPendingBackup)
+        XCTAssertFalse(mode.defaults.bool(forKey: "backupPending.\(walletID)"))
+        XCTAssertEqual(try keyStore.load(walletID: walletID).serialized, originalWords.serialized)
+        await creating.scenePhaseChanged(.background)
         await rebooted.scenePhaseChanged(.background)
-
-        // Done is just as durable: a further boot lands on the wallet.
-        let settled = launch()
-        await settled.boot()
-        XCTAssertEqual(settled.stage, .ready)
-        XCTAssertFalse(settled.hasPendingBackup, "a confirmed backup was asked for again")
-        let none = try await settled.pendingBackupMnemonic()
-        XCTAssertNil(none)
-        await settled.scenePhaseChanged(.background)
     }
 }

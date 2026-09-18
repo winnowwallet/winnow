@@ -112,18 +112,21 @@ struct BeginnerHomeView: View {
                     if !model.vaults.isEmpty { Text("Shared savings") }
                 }
 
-                Section {
-                    NavigationLink {
-                        WalletBackupView()
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Back up wallet")
-                            Text("Backup file and recovery words")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                Section("Backup") {
+                    Label(model.cloudBackups.statusTitle, systemImage: model.cloudBackups.statusTitle == "Backed up" ? "checkmark.icloud" : "icloud")
+                        .accessibilityIdentifier("cloudBackupStatus")
+                    if let saved = model.cloudBackups.lastSaved {
+                        Text("Last saved \(saved.formatted())").font(.caption).foregroundStyle(.secondary)
                     }
-                    .accessibilityIdentifier("backupButton")
+                    if let message = model.cloudBackups.message {
+                        Text(message).font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if model.cloudBackups.statusTitle == "Not backed up" {
+                        Text("Your wallet still works. Keep a manual backup until iCloud is available.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                        NavigationLink("Save a manual backup") { WalletBackupView() }
+                            .accessibilityIdentifier("backupButton")
+                    }
                 }
             }
             .navigationTitle("Winnow")
