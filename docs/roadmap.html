@@ -4,79 +4,50 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Roadmap — Winnow</title>
-<meta name="description" content="Winnow's planned milestones, the user journeys each must complete, and the evidence required before release.">
+<meta name="description" content="Current work, next milestones, and research proposals with clear readiness conditions.">
 <link rel="canonical" href="https://winnowwallet.com/roadmap">
 <link rel="stylesheet" href="site.css">
 </head>
 <body>
-<header class="topbar"><div class="bar">
-  <a class="mark" href="/"><b>&#8383;</b> Winnow</a>
-  <nav class="links" aria-label="Main"><a href="/">The wallet</a><a href="/architecture">How it works</a><a href="https://github.com/winnowwallet/winnow">Source</a></nav>
-</div></header>
-<main>
-  <h1>Roadmap</h1>
-  <p class="lede">What we want to make possible, and what must work before we call it ready.</p>
-  <p>These are planned milestones, not shipped features or promised dates. The <a href="/">wallet page</a> describes current behavior. Winnow is <a href="https://apps.apple.com/app/id6801502501">on the App Store</a> while this work continues; pre-release builds ship through <a href="https://testflight.apple.com/join/83djpNE7">TestFlight</a>.</p>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="topbar"><div class="bar"><a class="mark" href="/" aria-label="Winnow home">winnow</a><nav class="links" aria-label="Main"><a href="/architecture">How it works</a><a href="/vaults">Shared wallets</a><a href="https://github.com/winnowwallet/winnow">GitHub ↗</a></nav></div></header>
+<main id="main">
+<h1>Roadmap</h1>
+<p class="lede">A smaller wallet, clearer recovery, and evidence before new claims.</p>
+<p>The <a href="/">homepage</a> shows current behavior. The proposals below have no promised dates. <a href="https://github.com/winnowwallet/winnow/issues/164">Issue #164 tracks the current plan, decisions, and acceptance criteria.</a></p>
+<nav class="contents" aria-label="On this page"><a href="#now">Now</a><a href="#next">Next</a><a href="#research">Research</a></nav>
 
-  <section id="now">
-    <h2>Now · A smaller, testable product</h2>
-    <p><strong>What you gain:</strong> the same supported wallet journeys with fewer alternate paths and clearer documentation.</p>
-    <p><strong>Must pass:</strong> one real-app integration test makes an ordinary payment, then receives and sends through MuSig2 and script-path 2-of-3 accounts with Core cosigners. The private signet fixture mines blocks automatically for prompt confirmation. Focused app, wallet, and protocol tests cover detailed rules and failures. Public pages show one continuous video of this tested flow and distinguish it from feature guidance and older illustrations.</p>
-    <p><strong>Still to resolve:</strong> which boundaries, convenience APIs, duplicate tests, and undocumented features can be removed. Keep focused checks for cryptography, hostile inputs, and recovery failures that a successful screen flow cannot establish.</p>
-  </section>
+<section id="now">
+<h2>Now · Make the core easier to use and maintain</h2>
+<p>Remove redundant code and tests, shorten the guides, and make recovery limits explicit. Keep focused checks for cryptography, hostile inputs, and recovery failures.</p>
+<p>One recorded iPhone journey covers an ordinary send, MuSig2 receive/send, and script-path 2-of-3 receive/send with Bitcoin Core cosigners. The private signet fixture mines automatically for prompt confirmation. That successful flow complements lower-level tests; it does not establish every failure case. <a href="/recording">Inspect the current recording and source →</a></p>
+</section>
 
-  <section id="safe">
-    <h2>0.7 · An optional P2WSH Safe</h2>
-    <p><strong>What you gain:</strong> a separate, opt-in storage choice, explained under Advanced.</p>
-    <p><strong>Must pass:</strong> create → receive → back up → restore on another installation → review and withdraw. The journey must exercise fresh change, exposure tracking, and refusal of damaged or incomplete backups.</p>
-    <p><strong>Still to resolve:</strong> implementation and review of the <a href="https://github.com/winnowwallet/winnow/issues/6">Safe design and release criteria</a>. Its limitations must be visible before funding. This milestone does not promise full post-quantum signing.</p>
-  </section>
+<section id="next">
+<h2>Next · Recovery and review</h2>
+<h3 id="reliability">Recover through interruptions</h3>
+<p><strong>Outcome:</strong> understandable recovery after an interrupted sync or payment. <strong>Ready when:</strong> restart, disconnect, fee replacement, stale backup, network switching, and chain-reorganization cases leave the screen, stored wallet, and peer-observed payment in agreement. Measure bandwidth, memory, and battery use on supported iPhones.</p>
+<h3 id="beta">Broader beta</h3>
+<p><strong>Outcome:</strong> a defined feature set with usable instructions. <strong>Ready when:</strong> new users complete everyday payments and recovery from those instructions, supported devices are defined, and reproducible critical findings have regression coverage. <a href="https://testflight.apple.com/join/83djpNE7">Pre-release builds use TestFlight.</a></p>
+<h3 id="review">Independent security review</h3>
+<p><strong>Outcome:</strong> an inspectable review of a specific release. <strong>Ready when:</strong> blocking findings are fixed and verified, with the reviewed revision, exercised flows, and remaining limits published. A version number is not a security conclusion.</p>
+</section>
 
-  <section id="reliability">
-    <h2>0.8 · Reliability through interruptions</h2>
-    <p><strong>What you gain:</strong> understandable recovery when the connection, app, or device interrupts a payment or sync.</p>
-    <p><strong>Must pass:</strong> restart during sync, disconnect during sending, reopen a pending payment, increase its fee, restore a stale backup, switch networks, and recover after a chain reorganization. The screen, persisted wallet, and peer-observed transaction must agree.</p>
-    <p><strong>Still to resolve:</strong> regressions found by those journeys and measured bandwidth, memory, and battery use on supported iPhones.</p>
-  </section>
-
-  <section id="beta">
-    <h2>0.9 · A broader beta</h2>
-    <p><strong>What you gain:</strong> a defined feature set with usable recovery instructions and clearly stated limitations.</p>
-    <p><strong>Must pass:</strong> new users complete everyday journeys and recovery using the published instructions. Feedback has a reproducible app scenario; critical regressions become tests of that scenario.</p>
-    <p><strong>Still to resolve:</strong> the beta's supported devices, release blockers, and findings from broader use.</p>
-  </section>
-
-  <section id="review">
-    <h2>1.0 · A reviewed release</h2>
-    <p><strong>What you gain:</strong> a release whose review scope, evidence, and remaining limitations you can inspect.</p>
-    <p><strong>Must pass:</strong> an independent security review, resolution of release-blocking findings, and verification of fixes against the intended release. Publish the exact reviewed revision and the journeys exercised.</p>
-    <p><strong>Still to resolve:</strong> review findings and release readiness. A version target is not a security conclusion.</p>
-  </section>
-
-  <section id="signing-partners">
-    <h2>Signing devices, professional co-signers, and trusts</h2>
-    <p><strong>Potential user outcome:</strong> keep the everyday wallet on the phone while another device or an independent party participates in savings withdrawals. Unchained and trust providers are candidates to investigate, not Winnow partners or supported integrations.</p>
-    <p><strong>Must pass before claiming compatibility:</strong> agree on the exact script and key derivation, independently verify receiving addresses, fund a test account, review and complete a real signing exchange, and recover after a device, participant, or coordinator becomes unavailable. Hardware tests must identify the model, firmware, desktop coordinator, and tested revision.</p>
-    <p><strong>Must define before claiming independent approval:</strong> who controls each key and backup, whether any spending path bypasses the provider, who can spend without the owner, and how keys and policies are replaced. Test refusal, delayed or unavailable approval, and recovery. A signed metadata statement authenticates a statement; it cannot enforce these spending rules or certify protection against coercion.</p>
-    <p><strong>Trust arrangements:</strong> qualified legal review must align authority, succession, and key access. Test an authorized successor’s recovery using the agreed process; a trust name in the app is not that process. <a href="/vaults#professional-cosigners">Provider research and current limits</a>.</p>
-    <p><strong>Loans against bitcoin:</strong> a lending partner could provide stablecoins while bitcoin stays in a wallet shared by the borrower, lender, and an independent key agent. Any two could move it. The signers would apply repayment and liquidation terms; Bitcoin would only check their signatures. No lending partner or loan service is in place.</p>
-  </section>
-
-  <section id="private-transports">
-    <h2>Tor and I2P · Private transports</h2>
-    <p><strong>Where this stands:</strong> versions 0.6 through 0.7.0 shipped an opt-in Tor route through an embedded <a href="https://gitlab.torproject.org/tpo/core/arti">Arti</a> client. 0.7.1 removed it: the client brought several hundred Rust crates that nobody outside the project had reviewed, and a wallet that promises fail-closed privacy cannot carry an unaudited transport. The removed code, its tests and its license inventory are kept on the <a href="https://github.com/winnowwallet/winnow/tree/archive/tor-0.7.0"><code>archive/tor-0.7.0</code></a> branch. Every connection the app makes today comes from the device’s own IP address.</p>
-    <p><strong>What you would gain:</strong> peers, peer-list downloads and explorer lookups that do not reveal your connection’s IP address, and the ability to reach nodes that only exist on an overlay network.</p>
-    <p><strong>Must pass before Tor returns:</strong> an independent review of the transport and its dependency tree, or a transport small enough to review in-house; a fail-closed journey on a real iPhone — Tor on, background, foreground, failure, explicit off — with no silent direct fallback; and measured battery and bandwidth cost of a circuit rebuilt on every foreground.</p>
-    <p><strong>I2P:</strong> an embedded router is out of scope until one spike answers whether a router builds tunnels reliably at a foreground-only wallet’s uptime pattern. The <a href="https://github.com/winnowwallet/winnow/issues/90">decision record</a> names emissary as the only candidate that builds for iOS today, what the spike must measure, and why i2pd is not it. A delegated router on hardware the owner controls remains the honest alternative.</p>
-  </section>
-
-  <section id="research">
-    <h2>2.0 direction · Research</h2>
-    <p><strong>Potential user outcome:</strong> an explicit, opt-in migration path when future Bitcoin capabilities are ready.</p>
-    <p><strong>Before this becomes a release plan:</strong> establish the relevant network rules, interoperability, recovery behavior, and a complete migration journey. Research and prototypes do not count as shipping support.</p>
-    <p><strong>Open work:</strong> the <a href="https://github.com/winnowwallet/winnow/issues/10">P2MR investigation</a> and other <a href="https://github.com/winnowwallet/winnow/issues/7">roadmap proposals</a>. No deployment date or automatic upgrade is implied.</p>
-  </section>
+<section id="research">
+<h2>Research · Separate proposals</h2>
+<p>These are not supported features or automatic upgrades. Each needs its own implementation, review, and recovery evidence.</p>
+<h3 id="safe">An optional P2WSH Safe</h3>
+<p>A separate, opt-in storage choice. It must demonstrate creation, receiving, backup, restoration on another installation, and withdrawal, including fresh change, exposure tracking, and refusal of damaged or incomplete backups. Limitations must be clear before funding. This proposal does not provide full post-quantum signing.</p>
+<h3 id="signing-partners">Signing devices and independent cosigners</h3>
+<p>Prove compatibility with the exact script, derivation, receiving address, signing exchange, and recovery process. Hardware evidence must identify the model, firmware, coordinator, and tested revision. Define who controls keys and backups, who can spend without the owner, and what happens when approval is refused or unavailable.</p>
+<p>Winnow has no verified professional-cosigner or lending integration. Trusts, inheritance, and collateral arrangements need legal authority and key access to agree; Bitcoin only checks signatures. In a borrower–lender–key-agent 2-of-3, the lender and key agent could spend without the borrower. A label or signed statement cannot enforce repayment, succession, delay, or protection from coercion.</p>
+<h3 id="private-transports">Tor and I2P</h3>
+<p>The app currently makes direct connections. Embedded Tor was removed in 0.7.1; its code and license inventory remain on the <a href="https://github.com/winnowwallet/winnow/tree/archive/tor-0.7.0">archive branch</a>. Returning it requires review of the integration and dependencies, no silent direct fallback, and physical-iPhone checks across foreground, background, failure, and explicit off states.</p>
+<p>I2P remains a feasibility study: measure reliable tunnel startup, cold and warm starts, battery, bandwidth, and app-size cost for a foreground-only wallet. A user-controlled external router is another design to evaluate. The <a href="https://github.com/winnowwallet/winnow/issues/90">archived decision record</a> supplies background; <a href="https://github.com/winnowwallet/winnow/issues/164">#164 tracks current work</a>.</p>
+<h3 id="future-network-rules">Future network rules</h3>
+<p>P2MR research needs actual network enforcement, interoperability, recovery behavior, and a complete opt-in migration path before it becomes a release plan. A patched test network or prototype is not evidence of deployment on Bitcoin. No activation date is implied.</p>
+</section>
 </main>
-<footer><div class="bar"><a href="/">Winnow</a> · <a href="/privacy">Privacy</a> · <a href="https://github.com/winnowwallet/winnow">Source and issues</a></div></footer>
+<footer><div class="bar"><nav aria-label="Footer"><a href="/roadmap">Roadmap</a><a href="/privacy">Privacy</a><a href="/recording">Recording</a></nav></div></footer>
 </body>
 </html>

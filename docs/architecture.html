@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Winnow — how it actually works</title>
-<meta name="description" content="Five animated explanations of the architectural choices behind Winnow: compact block filters, bounded mempool windows, forward-only scanning, MuSig2 vaults, and cross-peer agreement.">
+<title>How Winnow works</title>
+<meta name="description" content="How Winnow finds payments, restores history, and coordinates shared signing on your phone.">
 <link rel="canonical" href="https://winnowwallet.com/architecture">
-<meta property="og:title" content="Winnow — how it actually works">
-<meta property="og:description" content="Five animated explanations of Winnow's private read path, bounded relay windows, portable recovery, MuSig2 custody, and peer comparison.">
+<meta property="og:title" content="How Winnow works">
+<meta property="og:description" content="How Winnow finds payments, restores history, and coordinates shared signing on your phone.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://winnowwallet.com/architecture">
 <meta property="og:image" content="https://winnowwallet.com/og.png">
@@ -16,8 +16,7 @@
 <style>
   /* ══════════════════════════════════════════════════════════
      Winnow — architecture figures
-     Design tokens are identical to index.html on purpose: these
-     figures are meant to be lifted straight into the site.
+     Page-local styles keep these diagrams independent of app-bundled guides.
      Each figure is self-contained (markup + its own .fig-* rules),
      has no dependencies, and is legible as a FROZEN FRAME — which
      is also what prefers-reduced-motion falls back to.
@@ -26,7 +25,7 @@
     --paper:#fcfbf9; --paper-2:#f4f1ea;
     --ink:#14130e; --ink-2:#585549; --ink-3:#8a8577;
     --rule:#e5e1d6; --rule-2:#d6d1c2;
-    --seed:#b35f05; --mark:#f7931a; --good:#1f7a4d; --bad:#c0392b;
+    --seed:#985005; --mark:#f7931a; --good:#1f7a4d; --bad:#c0392b;
     --card:#ffffff;
     --night:#100e0a; --night-2:#1b1811;
     --night-ink:#f2eee4; --night-ink-2:#a8a294; --night-rule:#2d281d;
@@ -72,6 +71,7 @@
   .fig > h2{margin-bottom:.6rem}
   .fig > .sub{margin-bottom:1.6rem;max-width:44rem}
   .stage{
+    --good:#4fc389;--bad:#e8705f;
     background:var(--night);border-radius:1.1rem;padding:clamp(1.2rem,3vw,2rem);
     position:relative;overflow:hidden;color:var(--night-ink);
   }
@@ -176,14 +176,6 @@
   @keyframes f3sweep{0%{width:0}70%,100%{width:var(--w)}}
   .f3-scan span{position:absolute;right:6px;top:50%;transform:translateY(-50%);
     font-family:var(--mono);font-size:.55rem;color:var(--mark);white-space:nowrap}
-  .f3-bundle{
-    position:absolute;top:-4px;height:42px;width:auto;padding:0 .5rem;border-radius:.35rem;
-    border:1px solid var(--mark);background:var(--night);display:flex;align-items:center;
-    font-family:var(--mono);font-size:.55rem;color:var(--mark);white-space:nowrap;z-index:2;
-    animation:f3drop 5s ease-out infinite;
-  }
-  @keyframes f3drop{0%{opacity:0;transform:translateY(-16px)}12%,100%{opacity:1;transform:translateY(0)}}
-
   /* ══ FIG 4 — MuSig2 ═════════════════════════════════════════ */
   .f4{display:grid;gap:.9rem;grid-template-columns:1fr;align-items:stretch}
   @media(min-width:52rem){.f4{grid-template-columns:1fr 1fr 1fr auto 1.15fr}}
@@ -233,9 +225,21 @@
   }
   .f5-note{margin-top:.2rem;font-size:.78rem;color:var(--night-ink-2)}
 
+  .motion-control{display:flex;align-items:center;gap:.5rem;min-height:44px;margin-top:.6rem;font-size:.9rem;color:var(--ink-2);cursor:pointer}
+  .motion-control input{accent-color:var(--seed);width:1rem;height:1rem}
+  :root:not(:has(#animate-diagrams:checked)) :is(.f1-chip,.f1-pulse,.f1-block,.f2-dot,.f2-mine,.f3-scan,.f4-stage,.f5-bad){animation:none !important}
+  :root:not(:has(#animate-diagrams:checked)) .f1-chip{position:relative;left:auto;width:100%;margin-bottom:5px;opacity:1;transform:none}
+  :root:not(:has(#animate-diagrams:checked)) .f1-track{height:auto;padding:8px}
+  :root:not(:has(#animate-diagrams:checked)) .f1-block{opacity:1;transform:none}
+  :root:not(:has(#animate-diagrams:checked)) :is(.f2-dot,.f2-mine){opacity:1}
+  :root:not(:has(#animate-diagrams:checked)) .f3-scan{width:var(--w)}
+  :root:not(:has(#animate-diagrams:checked)) .f4-stage{border-color:var(--mark)}
+
   /* ── reduced motion: freeze every figure on a legible frame ── */
   @media (prefers-reduced-motion:reduce){
-    .f1-chip,.f1-pulse,.f1-block,.f2-dot,.f2-mine,.f3-scan,.f3-bundle,.f4-stage,.f5-bad{
+    .motion-control{display:none}
+    html{scroll-behavior:auto}
+    .f1-chip,.f1-pulse,.f1-block,.f2-dot,.f2-mine,.f3-scan,.f4-stage,.f5-bad{
       animation:none !important;
     }
     .f1-chip{position:relative;left:auto;width:100%;margin-bottom:5px;opacity:1;transform:none}
@@ -243,33 +247,36 @@
     .f1-block{opacity:1;transform:none}
     .f2-dot,.f2-mine{opacity:1}
     .f3-scan{width:var(--w)}
-    .f3-bundle{opacity:1;transform:none}
     .f4-stage{border-color:var(--mark)}
   }
   footer{border-top:1px solid var(--rule);padding:2rem 0 3rem;font-size:.86rem;color:var(--ink-3);margin-top:3rem}
-#technical-guides a{text-decoration:underline;text-underline-offset:.15em}
+.takeaway a{text-decoration:underline;text-underline-offset:.15em}
+
+.topbar{border-bottom:1px solid var(--rule)}.topbar .bar{max-width:72.5rem;margin:auto;padding:1rem 2rem;display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;min-height:88px}.topbar .mark{font-size:1.4rem;font-weight:680;color:var(--ink)}.topbar .links{display:flex;gap:1.1rem;flex-wrap:wrap;font-size:.88rem}.topbar a{display:inline-flex;align-items:center;min-height:44px;color:var(--ink-2)}.skip-link{position:fixed;top:-6rem;left:1rem;padding:.7rem 1rem;background:var(--ink);color:var(--paper);z-index:100}.skip-link:focus{top:1rem}footer .bar{max-width:58rem;margin:auto;padding:0 2rem}footer nav{display:flex;gap:1.4rem;flex-wrap:wrap}footer a{min-height:44px;display:inline-flex;align-items:center}.technical-guides{display:flex;gap:.6rem 1.2rem;flex-wrap:wrap;font-size:.9rem;margin:1.5rem 0}.technical-guides a{min-height:36px;display:inline-flex;align-items:center}
+@media(max-width:40rem){.topbar .bar{padding:.6rem 1.1rem;gap:0}.topbar .links{gap:1rem;font-size:.8rem}}
 </style>
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="topbar"><div class="bar"><a class="mark" href="/" aria-label="Winnow home">winnow</a><nav class="links" aria-label="Main"><a href="/architecture">How it works</a><a href="/vaults">Shared wallets</a><a href="https://github.com/winnowwallet/winnow">GitHub ↗</a></nav></div></header>
 
 <header class="page">
   <div class="wrap">
-    <p class="eyebrow">Architecture</p>
-    <h1>How Winnow actually works.</h1>
-    <p class="sub" style="margin-top:1.1rem;max-width:40rem">Five choices that make a private wallet practical on a phone. Each one is a real trade, drawn rather than asserted.</p>
-    <nav aria-label="Technical guides" id="technical-guides">
-      <p class="sub" style="margin-top:1.1rem">Read in detail: <a href="/mobile">phone constraints</a> · <a href="/read-side">discovery and trust</a> · <a href="/write-side">payments and relay</a> · <a href="/vaults">vault policies</a> · <a href="/import">backup and import</a>.</p>
-      <p class="sub"><a href="https://github.com/winnowwallet/winnow/actions">Current test runs</a> · <a href="/roadmap">Planned work</a></p>
-    </nav>
+    <p class="eyebrow"><a href="/">Winnow</a> · Architecture</p>
+    <h1>How Winnow works.</h1>
+    <p class="sub" style="margin-top:1.1rem;max-width:40rem">Your phone finds and checks payments, keeps your wallet history, and signs with the keys you control.</p>
+    <p class="takeaway">Connections currently use your device’s IP address. Peers can see which blocks you request. <a href="/read-side">Read the privacy and trust limits</a>.</p>
+    <nav class="technical-guides" aria-label="Technical guides"><a href="/mobile">Device overview</a><a href="/read-side">Finding payments</a><a href="/write-side">Sending</a><a href="/import">Recovery</a><a href="/vaults">Shared wallets</a></nav>
+    <label class="motion-control"><input type="checkbox" id="animate-diagrams">Animate diagrams</label>
   </div>
 </header>
 
-<div class="wrap">
+<main class="wrap" id="main">
 
   <!-- ═══ FIGURE 1 ═══ -->
   <figure class="fig" id="fig-filters">
-    <h2>1 · It reads summaries, not the chain.</h2>
-    <p class="sub">Every block gets a compact filter — a small summary that answers “might this block touch one of your scripts?” Winnow checks that <em>on the phone</em>. Only a hit costs a full block download, and nobody is ever told which scripts it asked about.</p>
+    <h2>1 · Find payments on your phone</h2>
+    <p class="sub">Winnow checks public block filters against your wallet on the phone. A possible match triggers a block download to check for your payments.</p>
     <div class="stage">
       <div class="f1">
         <div class="f1-col">
@@ -300,13 +307,13 @@
         </div>
       </div>
     </div>
-    <p class="takeaway">The asymmetry is the design. A small public filter for each block, a whole block only on a match, and <b>no query that names an address</b> — so there is nothing for a wallet server to log, because there is no wallet server.</p>
+    <p class="takeaway">Your addresses stay on the device during filter matching. Requested blocks can still reveal interests to peers. <a href="/read-side">Discovery and trust</a>.</p>
   </figure>
 
   <!-- ═══ FIGURE 2 ═══ -->
   <figure class="fig" id="fig-window">
-    <h2>2 · It listens hard, but only briefly.</h2>
-    <p class="sub">Filters describe blocks, so a payment would normally be invisible until it confirms. While the Receive screen is open — exactly when you are expecting money — Winnow subscribes to full relay traffic and matches locally, then closes the window when you leave.</p>
+    <h2>2 · Watch for pending payments</h2>
+    <p class="sub">While Receive is open, Winnow briefly listens for relayed transactions and checks them locally. This can show a payment before it confirms; the listening window ends when you leave.</p>
     <div class="stage">
       <div class="f2-axis">
         <div class="f2-base"></div>
@@ -321,45 +328,44 @@
           <div class="f2-dot" style="left:52%;top:28px;animation-delay:-1.6s"></div>
           <div class="f2-dot" style="left:64%;top:44px;animation-delay:-2.1s"></div>
           <div class="f2-dot" style="left:78%;top:30px;animation-delay:-2.7s"></div>
-          <div class="f2-mine" style="left:44%;top:60px"><b>yours — seen unconfirmed while Receive is open</b></div>
+          <div class="f2-mine" style="left:44%;top:60px"><b>your payment</b></div>
         </div>
       </div>
       <div class="f2-legend">
-        <span><i style="background:rgba(168,162,148,.6)"></i>everyone's relay traffic — asked for wholesale, never per address</span>
+        <span><i style="background:rgba(168,162,148,.6)"></i>relayed transactions · matched locally</span>
         <span><i style="background:var(--mark)"></i>your payment, spotted on the device</span>
       </div>
     </div>
-    <p class="takeaway">Asking for <b>everything</b> is what keeps it private — asking for one address is what would give you away. The cost is bandwidth, and it is bounded by a screen you actually have open.</p>
+    <p class="takeaway">This uses extra bandwidth and can miss unconfirmed payments. Block scanning finds confirmed payments later. <a href="/mobile">Phone resource limits</a>.</p>
   </figure>
 
   <!-- ═══ FIGURE 3 ═══ -->
   <figure class="fig" id="fig-forward">
-    <h2>3 · It never looks backwards.</h2>
-    <p class="sub">Recovering an old wallet privately would mean re-downloading years of filters. Winnow refuses that: a new wallet scans forward from the day it was made, and an imported one arrives with its own history plus the height it was true as of.</p>
+    <h2>3 · Restore from saved history</h2>
+    <p class="sub">A new wallet scans from its creation height. A restored wallet resumes from the history and scan position in its backup file.</p>
     <div class="stage">
       <div class="f3-row">
-        <div class="f3-head"><span class="lbl">New wallet</span><span class="val">created at height H · nothing before it exists</span></div>
+        <div class="f3-head"><span class="lbl">New wallet</span><span class="val">start at creation height H</span></div>
         <div class="f3-bar">
           <div class="f3-never" style="width:34%"><span>never scanned</span></div>
           <div class="f3-scan" style="left:34%;--w:66%"><span>scanning forward →</span></div>
         </div>
       </div>
       <div class="f3-row">
-        <div class="f3-head"><span class="lbl">Imported wallet</span><span class="val">bundle is true as of height H · verify forward from there</span></div>
+        <div class="f3-head"><span class="lbl">Imported wallet</span><span class="val">saved at height H · resume from there</span></div>
         <div class="f3-bar">
-          <div class="f3-never" style="width:62%"><span>the old wallet already did this</span></div>
-          <div class="f3-bundle" style="left:62%">bundle ↓ UTXOs + history</div>
+          <div class="f3-never" style="width:62%"><span>saved history</span></div>
           <div class="f3-scan" style="left:62%;--w:38%"><span>verifying →</span></div>
         </div>
       </div>
     </div>
-    <p class="takeaway">Import cost is proportional to <b>how stale the bundle is, not how old the wallet is</b>. A bundle exported at the tip is a JSON parse and a zero-length scan — and it's why Winnow writes one of its own.</p>
+    <p class="takeaway">Keep <b>both recovery words and a backup file</b>. Words alone do not restore past payments. A phrase-free file restores watch-only access on a replacement device; the current import screen needs a file containing the words to restore signing. <a href="/import">Backup and recovery</a>.</p>
   </figure>
 
   <!-- ═══ FIGURE 4 ═══ -->
   <figure class="fig" id="fig-musig">
-    <h2>4 · A second signing device, one signature.</h2>
-    <p class="sub">Elena keeps a key on her phone and uses an independent signer for the second key. Her 2-of-2 MuSig2 savings require both for every payment. Two rounds, public nonces then partial signatures, produce a single Schnorr signature. The focused integration journey uses Bitcoin Core as the second signer, then exercises a script-path 2-of-3 payment. The private signet fixture mines confirmation blocks automatically. Focused app tests cover backup state. Hardware-wallet compatibility needs a separate test.</p>
+    <h2>4 · Share payment approval</h2>
+    <p class="sub">A 2-of-2 MuSig2 account needs both independent keys to approve a payment. A script-path 2-of-3 account lets any two owners approve while the third is away.</p>
     <div class="stage">
       <div class="f4">
         <div class="f4-stage">
@@ -374,7 +380,7 @@
         </div>
         <div class="f4-stage">
           <h4>Aggregate</h4>
-          <p>The two partials combine, and the result is checked against the vault's aggregate key before it is trusted.</p>
+          <p>Combine the partial signatures and verify the result against the account’s key.</p>
           <div class="f4-signers"><i style="background:var(--mark)"></i></div>
         </div>
         <div class="f4-arrow">→</div>
@@ -386,13 +392,13 @@
         </div>
       </div>
     </div>
-    <p class="takeaway">A second device adds a required key only if its secret stays independent. Both keys are required; losing either key and its backups can lock the funds. For shared control with one absent signer, use a <b>2-of-3 threshold</b> instead: the threshold is hidden in the Taproot output until a script-path spend reveals it. Neither policy certifies protection from coercion. <a href="/vaults">Compare the policies, metadata, and recovery limits</a>.</p>
+    <p class="takeaway">Each owner must keep an independent key and backup. The <a href="/recording">recorded journey</a> tests both policies with Bitcoin Core cosigners; hardware-wallet compatibility needs separate testing. <a href="/vaults">Signing and recovery limits</a>.</p>
   </figure>
 
   <!-- ═══ FIGURE 5 ═══ -->
   <figure class="fig" id="fig-peers">
-    <h2>5 · It asks several strangers the same question.</h2>
-    <p class="sub">A peer can lie by leaving your transaction out of a filter. You cannot prove which peer lied — but you can notice when they disagree. Winnow asks up to three of them for the same <em>filter checkpoint</em> and compares those answers before trusting any of them.</p>
+    <h2>5 · Compare peer responses</h2>
+    <p class="sub">Winnow compares filter checkpoints from up to three peers to detect disagreement. It also limits concentration when choosing peers automatically.</p>
     <div class="stage">
       <div class="f5">
         <div class="f5-peer f5-ok">
@@ -411,18 +417,14 @@
           <span class="verdict">✕ dropped</span>
         </div>
       </div>
-      <p class="f5-note">Among checkpoint answers a strict majority wins, and the odd peer out is dropped and replaced. When two disagree with no majority the lie is unattributable, so Winnow drops <em>all</em> the queried peers and re-dials rather than guess. This majority rule is the checkpoint comparison specifically — it does not govern every filter-header batch.</p>
+      <p class="f5-note">For checkpoints, a strict majority identifies a disagreeing peer. Without a majority, Winnow replaces the queried peers. Other filter checks have their own rules.</p>
     </div>
-    <p class="takeaway">Automatic peer selection limits concentration by public network block and discovery source. Manual peers are exempt from the source limit. These rules and checkpoint comparisons do not prove that different peers have different operators: a fully eclipsed phone can still receive one coordinated lie. The <a href="/read-side">read-side guide</a> explains what the phone verifies and what it must trust.</p>
+    <p class="takeaway">Several peers can share an operator and agree on false data. These checks do not make the phone a fully validating node. <a href="/read-side">What Winnow verifies</a>.</p>
   </figure>
 
-</div>
+</main>
 
-<footer>
-  <div class="wrap">
-    Winnow — <a href="/">the story</a> · <a href="/present">the walkthrough</a> · <a href="/roadmap">the roadmap</a> · <a href="/evidence">the evidence</a>
-  </div>
-</footer>
+<footer><div class="bar"><nav aria-label="Footer"><a href="/roadmap">Roadmap</a><a href="/privacy">Privacy</a><a href="/recording">Recording</a></nav></div></footer>
 
 </body>
 </html>

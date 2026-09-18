@@ -12,25 +12,43 @@ parser.add_argument('--root', type=Path, default=repository, help='repository or
 root = parser.parse_args().root.resolve() / 'docs'
 subprocess.run([str(repository / 'scripts/build-site'), '--root', str(root.parent), '--check'], check=True)
 errors = []
+fragments = []
+page_ids = {}
 
 class Page(HTMLParser):
     def __init__(self, path):
         super().__init__()
         self.path = path
+        self.ids = set()
     def handle_starttag(self, tag, attributes):
+        attrs = dict(attributes)
+        if attrs.get("id"):
+            self.ids.add(attrs["id"])
         for name, value in attributes:
             if name not in {'href', 'src', 'poster'} or not value:
                 continue
             url = urlsplit(value)
-            if url.scheme or url.netloc or not url.path:
+            if url.scheme or url.netloc:
+                continue
+            if not url.path:
+                if url.fragment:
+                    fragments.append((self.path, self.path, unquote(url.fragment), value))
                 continue
             path = (root if url.path.startswith('/') else self.path.parent) / unquote(url.path).lstrip('/')
-            if not any(p.is_file() for p in [path, path.with_suffix('.html'), path / 'index.html']):
+            target = next((p for p in [path, path.with_suffix('.html'), path / 'index.html'] if p.is_file()), None)
+            if target is None:
                 errors.append(f'{self.path.relative_to(root)}: missing {value}')
+            elif url.fragment and target.suffix == '.html':
+                fragments.append((self.path, target.resolve(), unquote(url.fragment), value))
 
 pages = sorted(root.rglob('*.html'))
 for path in pages:
-    Page(path).feed(path.read_text())
+    page = Page(path)
+    page.feed(path.read_text())
+    page_ids[path.resolve()] = page.ids
+for source, target, fragment, value in fragments:
+    if fragment not in page_ids.get(target.resolve(), set()):
+        errors.append(f'{source.relative_to(root)}: missing section {value}')
 for path in root.rglob('*'):
     if path.is_file():
         if path.stat().st_size > 25 * 1024 * 1024:
@@ -40,4 +58,4 @@ for path in root.rglob('*'):
                 errors.append(f'{path.relative_to(root)}: unresolved LFS pointer')
 if errors:
     raise SystemExit('\n'.join(errors))
-print(f'{len(pages)} pages: local links, media objects, and file sizes verified')
+print(f'{len(pages)} pages: local links and sections, media objects, and file sizes verified')

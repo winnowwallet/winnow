@@ -6,6 +6,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -40,10 +41,11 @@ class SiteArtifactTests(unittest.TestCase):
         (self.docs / "journeys.json").write_text(json.dumps([
             {"id": "setup", "section": "everyday", "title": "Start", "description": "Create a wallet.",
              "tests": [site.TEST], "journey": ["Create a wallet."]}]))
-        for name in ["privacy", "architecture", "roadmap", "vaults"]:
+        for name in ["privacy", "architecture", "roadmap", "vaults", "archive"]:
             (self.docs / f"{name}.html").write_text("<html></html>")
         (self.docs / "site.css").write_text("body { color: black }")
-        (self.docs / "signing.js").write_text("")
+        (self.docs / "home.css").write_text("body { color: black }")
+        (self.docs / "home.js").write_text("")
         (self.docs / "videos").mkdir()
         (self.docs / site.VIDEO).write_bytes(b"reviewed reference video")
         (self.docs / "screenshots").mkdir()
@@ -149,7 +151,7 @@ class SiteArtifactTests(unittest.TestCase):
         self.assertIn("/actions/runs/123", page)
         self.assertNotIn("/actions/runs/999", page)
         self.assertIn("a" * 40, page)
-        self.assertNotIn("<video", (output / "index.html").read_text())
+        self.assertIn('preload="none"', (output / "index.html").read_text())
         self.assertEqual(page.count("<video "), 1)
         self.assertIn('<video controls playsinline preload="metadata"', page)
         self.assertIn(f'<source src="/{site.VIDEO}" type="video/mp4">', page)
@@ -167,8 +169,20 @@ class SiteArtifactTests(unittest.TestCase):
         page = (output / "recording.html").read_text()
         self.assertIn("does not claim a new integration run", page)
         self.assertEqual(page.count("<video "), 1)
-        self.assertNotIn("<video", (output / "index.html").read_text())
+        self.assertIn('preload="none"', (output / "index.html").read_text())
         self.assertFalse((output / site.MANIFEST).exists())
+
+    def test_missing_section_link_prevents_publication(self):
+        (self.docs / "privacy.html").write_text('<a href="/#retired-section">Old guide</a>')
+        with self.assertRaises(subprocess.CalledProcessError):
+            site.prepare(self.base / "site", root=self.root)
+
+    def test_local_and_cross_page_section_links_are_supported(self):
+        (self.docs / "privacy.html").write_text(
+            '<h1 id="privacy">Privacy</h1><a href="#privacy">Here</a>'
+            '<a href="vaults#two%20keys">Shared</a>')
+        (self.docs / "vaults.html").write_text('<h1 id="two keys">Two keys</h1>')
+        site.prepare(self.base / "site", root=self.root)
 
     def test_existing_output_is_not_overwritten(self):
         output = self.base / "site"

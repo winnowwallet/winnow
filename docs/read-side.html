@@ -4,36 +4,28 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>The Read Side: How a Private Mobile Bitcoin Wallet Learns What&#x27;s Its Own &mdash; Winnow</title>
-<meta name="description" content="One paper in the Winnow set. The phone itself is A phone wallet; paying is the write side; shared custody is vaults; moving a wallet in is import.">
+<meta name="description" content="How Winnow finds payments using compact filters, with the privacy and trust limits explained.">
 <link rel="canonical" href="https://winnowwallet.com/read-side">
 <meta property="og:type" content="article">
 <meta property="og:url" content="https://winnowwallet.com/read-side">
 <meta property="og:title" content="The Read Side: How a Private Mobile Bitcoin Wallet Learns What&#x27;s Its Own &mdash; Winnow">
-<meta property="og:description" content="One paper in the Winnow set. The phone itself is A phone wallet; paying is the write side; shared custody is vaults; moving a wallet in is import.">
+<meta property="og:description" content="How Winnow finds payments using compact filters, with the privacy and trust limits explained.">
 <meta property="og:image" content="https://winnowwallet.com/og.png">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="The Read Side: How a Private Mobile Bitcoin Wallet Learns What&#x27;s Its Own &mdash; Winnow">
-<meta name="twitter:description" content="One paper in the Winnow set. The phone itself is A phone wallet; paying is the write side; shared custody is vaults; moving a wallet in is import.">
+<meta name="twitter:description" content="How Winnow finds payments using compact filters, with the privacy and trust limits explained.">
 <meta name="twitter:image" content="https://winnowwallet.com/og.png">
 <link rel="stylesheet" href="site.css">
 </head>
 <body>
-<header class="topbar">
-  <div class="bar">
-    <a class="mark" href="/"><b>&#8383;</b> Winnow</a>
-    <nav class="links">
-      <a href="/custody">How you hold it</a>
-      <a href="/present">Talk</a>
-      <a href="/architecture">Architecture</a>
-      <a href="https://github.com/winnowwallet/winnow">Source</a>
-    </nav>
-  </div>
-</header>
-<main>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="topbar"><div class="bar"><a class="mark" href="/" aria-label="Winnow home">winnow</a><nav class="links" aria-label="Main"><a href="/architecture">How it works</a><a href="/vaults">Shared wallets</a><a href="https://github.com/winnowwallet/winnow">GitHub ↗</a></nav></div></header>
+<main id="main">
   <h1 id="the-read-side-how-a-private-mobile-bitcoin-wallet-learns-whats-its-own">The Read Side: How a Private Mobile Bitcoin Wallet Learns What’s Its Own</h1>
-  <p><em>One paper in the Winnow set. The phone itself is <a href="/mobile">A phone wallet</a>; paying is <a href="/write-side">the write side</a>; shared custody is <a href="/vaults">vaults</a>; moving a wallet in is <a href="/import">import</a>. This paper owns one question: how the phone learns which coins are its own.</em> <em>All numbers marked “approx.” are order-of-magnitude estimates for orientation, not measurements; they are labeled as such wherever they appear. Exact protocol constants are exact. Historical signet UI measurements live in <code>screenshots/timings.json</code>; the current integration test does not update them.</em></p>
-  <hr />
-  <p>The <a href="screenshots/54-receive-label-prompt.png">receive label prompt</a> and <a href="screenshots/55-payment-receive-label.png">payment details</a> show these notes on a private test network. Receive address labels are local notes: who an address was shared with, or what a payment is for. Receive asks for a label before showing an unlabeled address, with an explicit skip. History matches the note against the payment’s exact output script; it does not infer a sender or make an explorer request. A new address starts unlabeled, and payments to an older labeled address retain that note. Labels are separate from contacts, excluded from copied addresses, QR codes, payment cards and wallet backups, and removed when the wallet is deleted or replaced.</p>
+  <p class="lede">Winnow downloads public block filters and checks them against your wallet on the phone. It fetches matching blocks to find payments without sending peers its watch list.</p>
+  <aside class="guide-summary"><p>Peers still see your IP address and block requests. Compact filters are not committed by Bitcoin consensus, so a fully eclipsed phone can receive a consistent false view. Recovery starts from a trusted backup’s height rather than searching the whole chain.</p></aside>
+  <nav class="contents" aria-label="On this page"><a href="#bip157158-compact-block-filters-client-side-filtering">Compact filters</a><a href="#honest-weaknesses-of-compact-filters">Limits</a><a href="#bounded-mempool-windows">Pending payments</a><a href="#threat-model-read-path">Threat model</a><a href="#use-case-walkthrough-what-serves-what-and-why">Use cases</a></nav>
+  <p>Numbers marked “approx.” are estimates, not measurements. Historical signet timings remain in <code>screenshots/timings.json</code>; the current journey does not update them.</p>
   <h2 id="the-problem">1. The problem</h2>
   <p>A Bitcoin wallet is, at its core, a holder of private keys plus the ability to answer four questions about the chain:</p>
   <ol type="1">
@@ -52,6 +44,7 @@
   <p><strong>Scope note:</strong> Winnow is a <em>fresh-wallet</em> product. Wallets are created new in the app; a new wallet has no history, so scanning runs <em>forward</em> from the moment of creation. Existing wallets may be imported <strong>only with their history included</strong> — the user supplies an export bundle (descriptor/keys + known transactions and UTXOs + a last-known height) from their previous wallet software, and the app verifies and updates that history by scanning filters forward from the bundle’s height. There is no historical back-scan machinery at all: catch-up cost is proportional to how stale the bundle is, and a bundle exported at the tip costs nothing. This constraint — chosen deliberately — is what makes the pure-P2P answer not merely acceptable but cheap. The bundle format, the verification algorithm, and what a lying file can still do are specified in <a href="/import">import</a>, not here.</p>
   <hr />
   <h2 id="the-candidate-mechanisms">2. The candidate mechanisms</h2>
+<details><summary>Other ways to find payments</summary>
   <h3 id="full-node-on-the-phone">2.1 Full node on the phone</h3>
   <p>Run Bitcoin Core (or equivalent) on the device: download and validate every block.</p>
   <ul>
@@ -75,6 +68,7 @@
   <li><strong>Consequence:</strong> Bitcoin Core has served BIP37 to peers only when explicitly enabled since v0.19 (2019); on today’s network it is effectively unavailable. Any design that needs “ask a node about my address” over P2P is a design from 2013.</li>
   </ul>
   <p>BIP37 matters here for one reason: it establishes that <strong>server-side matching is inherently leaky</strong>, which is why the modern design inverts it — <em>the data moves to the client, the matching happens on the client.</em></p>
+</details>
   <h3 id="bip157158-compact-block-filters-client-side-filtering">2.5 BIP157/158 compact block filters (client-side filtering)</h3>
   <p>This is the inversion, and the mechanism this product uses by default. Mechanics, precisely:</p>
   <ul>
@@ -89,6 +83,7 @@
   <li><strong>Matched blocks:</strong> only blocks that actually contain the wallet’s transactions, ~1–2 MB each (exact: block size varies up to 4M weight units). For typical personal use this is rare — days to weeks apart.</li>
   <li><strong>CPU/battery:</strong> hashing and matching a filter against a watch list of thousands of scripts is milliseconds of work per block on a modern phone. The signet UI suite measured mined→filter-detected at <strong>0.69s</strong> on an iPhone 17 Pro Max simulator (2026-08-17, <code>screenshots/timings.json</code>) — that figure includes mining-propagation and the match, not just GCS lookup, and is a measurement on signet, not a mainnet bandwidth claim.</li>
   </ul>
+<details><summary>Server privacy designs considered</summary>
   <h3 id="server-side-privacy-designs-considered-and-why-none-is-the-default">2.6 Server-side privacy designs (considered, and why none is the default)</h3>
   <p>Since the leak in §2.2/§2.3 is the server observing queries, can we build a <em>server that can’t observe</em>? The candidates:</p>
   <ul>
@@ -104,6 +99,7 @@
   </ul></li>
   </ul>
   <p>The pattern across §2.6: every server-side fix moves or shrinks the trust rather than deleting it, and every one requires operating infrastructure. Client-side filtering (§2.5) is the only mechanism that requires trusting no one with the read path.</p>
+</details>
   <h3 id="honest-weaknesses-of-compact-filters">2.7 Honest weaknesses of compact filters</h3>
   <p>Filters win the privacy argument; they lose elsewhere. Said louder than the strengths:</p>
   <ol type="1">
@@ -125,7 +121,7 @@
   </ul>
   <h3 id="threat-model-read-path">2.9 Threat model (read path)</h3>
   <p>What an adversary can do to <em>this</em> paper’s mechanism, not to keys or broadcast (those are <a href="/mobile">mobile</a> §5 and <a href="/write-side">write-side</a> §8).</p>
-  <div class="table-wrap"><table style="width:100%;">
+  <div class="table-wrap" role="region" tabindex="0" aria-label="Scrollable table"><table style="width:100%;">
   <colgroup>
   <col style="width: 23%" />
   <col style="width: 12%" />
@@ -188,7 +184,7 @@
   <p><strong>How to turn it off.</strong> Settings → <em>Verify the chain from genesis</em>. On, the app ignores the checkpoint and spends the minutes. Switching rebuilds the stored chain rather than mixing the two, so an install cannot end up half-validated.</p>
   <hr />
   <h2 id="use-case-walkthrough-what-serves-what-and-why">3. Use-case walkthrough: what serves what, and why</h2>
-  <div class="table-wrap"><table>
+  <div class="table-wrap" role="region" tabindex="0" aria-label="Scrollable table"><table>
   <colgroup>
   <col style="width: 5%" />
   <col style="width: 17%" />
@@ -281,6 +277,7 @@
   <p>For a fresh-wallet product, the read side reduces to a steady-state stream of ~3 MB/day (approx.) of compact filters, matched on-device, with full blocks fetched only on hits — plus bounded mempool windows (§2.8) for the moments a user is actively sending or expecting a payment. Winnow does not query a wallet-history server automatically. Discovery services still receive network requests; peers see protocol traffic, and direct connections expose the device’s IP. The costs — confirmation-time visibility for unexpected payments, crude fee estimation, reliance on honest filter peers cross-checked by header comparison — are real, bounded, and stated to the user instead of hidden. Warned explorer links let the user make a one-off disclosure without turning it into wallet infrastructure.</p>
   <p><strong>v1 on the read side is therefore: block headers + BIP157/158 compact filters + bounded mempool windows, over <code>Network.framework</code>, talking only to full-node peers that signal <code>NODE_COMPACT_FILTERS</code>. Esplora is an external, warned link—not a wallet backend.</strong> The phone those bytes land on, the spend, the vault, and the import are the other papers.</p>
   <hr />
+<details><summary>Future hardening and validation details</summary>
   <h2 id="future-hardening">5. Future hardening</h2>
   <p>Three known paths would strengthen this design further. None is buildable today on this product’s constraints; all are worth stating so the current trade-offs are legible against them.</p>
   <h3 id="consensus-committed-block-filters">5.1 Consensus-committed block filters</h3>
@@ -312,6 +309,7 @@
   </ul>
   <p>Inspect the <a href="https://github.com/winnowwallet/winnow/actions">current test runs and artifacts</a>. The <a href="/recording">payment recording</a> identifies the source and run behind that journey.</p>
   <hr />
+</details>
   <h2 id="references">6. References</h2>
   <ul>
   <li><a href="https://bips.dev/37/">BIP37: Connection Bloom filtering</a> (and its privacy critique: Gervais et al., ACSAC 2014)</li>
@@ -323,13 +321,6 @@
   <li><a href="https://bips.dev/341/">BIP341: Taproot</a> · <a href="https://bips.dev/340/">BIP340: Schnorr</a> · <a href="https://bips.dev/86/">BIP86</a> · <a href="https://bips.dev/327/">BIP327: MuSig2</a> · <a href="https://bips.dev/388/">BIP388</a> · <a href="https://bips.dev/370/">BIP370: PSBTv2</a></li>
   </ul>
 </main>
-<footer>
-  <div class="bar">
-    Winnow &mdash; <a href="/">the wallet</a> &middot; <a href="/custody">how you hold it</a>
-    &middot; <a href="/present">the talk</a> &middot; <a href="/roadmap">the roadmap</a>
-    &middot; <a href="/evidence">the evidence</a> &middot; <a href="/privacy">privacy</a>
-    &middot; <a href="https://github.com/winnowwallet/winnow">source</a>
-  </div>
-</footer>
+<footer><div class="bar"><nav aria-label="Footer"><a href="/roadmap">Roadmap</a><a href="/privacy">Privacy</a><a href="/recording">Recording</a></nav></div></footer>
 </body>
 </html>

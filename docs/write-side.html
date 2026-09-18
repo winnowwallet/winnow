@@ -3,46 +3,28 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>The Write Side: How a Phone Pays Without Asking Anyone &mdash; Winnow</title>
-<meta name="description" content="Technical guide for Winnow. Companion to the read side — that paper ends when the UTXOs are local. This one starts there. Framing: a phone wallet.">
+<title>How a payment is made &mdash; Winnow</title>
+<meta name="description" content="How Winnow chooses coins and fees, signs payments, and relays them to Bitcoin peers.">
 <link rel="canonical" href="https://winnowwallet.com/write-side">
 <meta property="og:type" content="article">
 <meta property="og:url" content="https://winnowwallet.com/write-side">
-<meta property="og:title" content="The Write Side: How a Phone Pays Without Asking Anyone &mdash; Winnow">
-<meta property="og:description" content="Technical guide for Winnow. Companion to the read side — that paper ends when the UTXOs are local. This one starts there. Framing: a phone wallet.">
+<meta property="og:title" content="How a payment is made &mdash; Winnow">
+<meta property="og:description" content="How Winnow chooses coins and fees, signs payments, and relays them to Bitcoin peers.">
 <meta property="og:image" content="https://winnowwallet.com/og.png">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="The Write Side: How a Phone Pays Without Asking Anyone &mdash; Winnow">
-<meta name="twitter:description" content="Technical guide for Winnow. Companion to the read side — that paper ends when the UTXOs are local. This one starts there. Framing: a phone wallet.">
+<meta name="twitter:title" content="How a payment is made &mdash; Winnow">
+<meta name="twitter:description" content="How Winnow chooses coins and fees, signs payments, and relays them to Bitcoin peers.">
 <meta name="twitter:image" content="https://winnowwallet.com/og.png">
 <link rel="stylesheet" href="site.css">
 </head>
 <body>
-<header class="topbar">
-  <div class="bar">
-    <a class="mark" href="/"><b>&#8383;</b> Winnow</a>
-    <nav class="links">
-      <a href="/custody">How you hold it</a>
-      <a href="/present">Talk</a>
-      <a href="/architecture">Architecture</a>
-      <a href="https://github.com/winnowwallet/winnow">Source</a>
-    </nav>
-  </div>
-</header>
-<main>
-  <h1 id="the-write-side-how-a-phone-pays-without-asking-anyone">The Write Side: How a Phone Pays Without Asking Anyone</h1>
-  <p><em>Technical guide for Winnow. Companion to <a href="/read-side">the read side</a> — that paper ends when the UTXOs are local. This one starts there. Framing: <a href="/mobile">a phone wallet</a>.</em></p>
-  <hr />
-  <h2 id="the-problem">1. The problem</h2>
-  <p>Once compact filters have answered “what’s mine?”, spending is four mechanical steps:</p>
-  <ol type="1">
-  <li><strong>Choose coins and a feerate</strong> so the transaction clears dust rules and will relay.</li>
-  <li><strong>Build</strong> an unsigned transaction whose change is not a fingerprint.</li>
-  <li><strong>Sign</strong> without leaving the seed in memory or in a file.</li>
-  <li><strong>Get it out</strong> — and know that it got out — without an API key and without calling the spend “received” at 0-conf.</li>
-  </ol>
-  <p>On a server-backed wallet these collapse to <code>POST /tx</code>. On a phone that refuses that server, each step has to be possible with only: the local UTXO set, a handful of outbound peers, and the keychain. This paper is those four steps, as implemented.</p>
-  <hr />
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="topbar"><div class="bar"><a class="mark" href="/" aria-label="Winnow home">winnow</a><nav class="links" aria-label="Main"><a href="/architecture">How it works</a><a href="/vaults">Shared wallets</a><a href="https://github.com/winnowwallet/winnow">GitHub ↗</a></nav></div></header>
+<main id="main">
+  <h1 id="the-write-side-how-a-phone-pays-without-asking-anyone">How a payment is made</h1>
+  <p class="lede">Choose coins and a fee, build the payment, review and sign, then relay it to Bitcoin peers. Confirmation comes from a later block.</p>
+  <nav class="contents" aria-label="On this page"><a href="#coin-selection-and-change">Coins and change</a><a href="#fees-without-a-mempool">Fees</a><a href="#signing">Signing</a><a href="#getting-it-out">Relay</a><a href="#what-still-leaks">Privacy</a></nav>
+  <h2 id="the-problem">Four steps</h2><ol><li>Select enough coins for the payment and fee.</li><li>Build a transaction and return any change to your wallet.</li><li>Review the address, amount and fee before signing.</li><li>Broadcast through peers, then distinguish relay from confirmation.</li></ol>
   <h2 id="one-spend-shape">2. One spend shape</h2>
   <p>Everyday spends are BIP86 P2TR key-path. The signed witness is one 64-byte Schnorr signature (<code>SIGHASH_DEFAULT</code>); fee math uses 66 witness bytes per input (compact-size count + length + 64). Script-path and MuSig2 shapes belong to <a href="/vaults">vaults</a> and plug into the same builder via <code>witnessBytesPerInput</code>.</p>
   <p>The phone <em>receives</em> only P2TR. It <em>pays</em> standard P2PKH, P2SH, P2WPKH, P2WSH and P2TR addresses. Destination diversity is a payment-layer concern; the wallet’s own outputs stay one type so coin selection, change, and watch-list code have a single script shape.</p>
@@ -106,7 +88,7 @@
   <p>There is no Dandelion, no Tor requirement, no equal-output coinjoin. A user who needs those wants a different product (or a vault plus a coordinator they bring themselves). This paper will not claim broadcast privacy the implementation does not provide.</p>
   <hr />
   <h2 id="use-cases">9. Use cases</h2>
-  <div class="table-wrap"><table>
+  <div class="table-wrap" role="region" tabindex="0" aria-label="Scrollable table"><table>
   <colgroup>
   <col style="width: 12%" />
   <col style="width: 41%" />
@@ -158,17 +140,8 @@
   </tbody>
   </table></div>
   <hr />
-  <h2 id="conclusion">10. Conclusion</h2>
-  <p>The write side of a phone wallet is not a REST client. It is coin selection that knows P2TR dust, a feerate that admits it is blind, a signing path that holds the seed for one call, and a relay state machine that survives the app being killed. Confirmation still comes from <a href="/read-side">the read side</a>. Nothing in this paper asks a server, unless the user turned one on and was told what that means.</p>
-  <p><strong>v1 is therefore: largest-first P2TR selection + <code>FeePolicy</code> + PSBTv2 key-path signing via libsecp256k1 + <code>TxBroadcaster</code> over the same peer pool that serves filters.</strong></p>
+<h2 id="conclusion">Related guides</h2><p><a href="/read-side">How confirmation is detected</a> · <a href="/vaults">Shared-wallet approvals</a> · <a href="/import">Backup and recovery</a></p>
 </main>
-<footer>
-  <div class="bar">
-    Winnow &mdash; <a href="/">the wallet</a> &middot; <a href="/custody">how you hold it</a>
-    &middot; <a href="/present">the talk</a> &middot; <a href="/roadmap">the roadmap</a>
-    &middot; <a href="/evidence">the evidence</a> &middot; <a href="/privacy">privacy</a>
-    &middot; <a href="https://github.com/winnowwallet/winnow">source</a>
-  </div>
-</footer>
+<footer><div class="bar"><nav aria-label="Footer"><a href="/roadmap">Roadmap</a><a href="/privacy">Privacy</a><a href="/recording">Recording</a></nav></div></footer>
 </body>
 </html>
