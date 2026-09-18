@@ -21,7 +21,8 @@ video. It does not autoplay or preload the recording. Without JavaScript, those
 links open the [recording page](https://winnowwallet.com/recording), which retains
 playback controls and source provenance. The [signing guide](vaults.html)
 explains the policies. Other pages are authored directly. Shared wallets combines the former custody overview with setup and backup instructions. Technical guides begin with summaries and contents links; deeper reference material uses native disclosures. The archive keeps old talk notes and public-signet evidence separate from the current recording. Older illustrations retain their dated provenance.
-[The roadmap](roadmap.html) separates planned work from current behavior.
+[The roadmap](roadmap.html) separates current behavior from earlier proposals
+that are not scheduled.
 [Architecture](architecture.html) links directly to the focused technical guides.
 Those HTML files are the maintained explanations; no separate paper or paper
 index is needed. [_redirects](_redirects) sends old paper URLs to the architecture page.

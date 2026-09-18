@@ -26,8 +26,8 @@ target selection, seed, input limit, and iteration count when replaying.
 
 CI runs the fixed-seed campaign for PRs, main, and Winnow releases. The separate weekly
 and manually dispatched lanes run 25,000 iterations per sanitizer with
-distinct rotating seeds: 225,000 cases under Address Sanitizer and another
-225,000 under Thread Sanitizer. A manual `replay_seed` input reproduces a
+distinct rotating seeds: 375,000 cases under Address Sanitizer and another
+375,000 under Thread Sanitizer (25,000 × 15 targets). A manual `replay_seed` input reproduces a
 recorded seed. For example, replay an address-sanitized run locally with:
 
 ```sh

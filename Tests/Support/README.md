@@ -34,7 +34,7 @@ configuration and under Xcode.
 | `TestScripts.swift` | `TestScripts.p2trDestination`, `TestScripts.bip86FirstMainnetAddress` |
 | `TestVaults.swift` | Deterministic cosigner masters, key expressions, the 2-of-3 `multi_a` and 2-of-2 MuSig2 vault builders, `funding` |
 | `P2P/` | `SyntheticChain`/`makeSyntheticChain`, `minedHeader`, `makeTestParams`, `makeFakeSegwitTx`, `ResumeOnce`, `LoopbackNode`, `LoopbackHTTPServer` |
-| `Node/` | `BitcoinCLI`, `CoreSigner`, `HostProcess`, `SignetMiner`: the custom-signet node and other signing wallets used by the UI journey |
+| `Node/` | `BitcoinCLI`, `CoreSigner`, `HostProcess`, `SignetMiner`, `SignetFixture`: the custom-signet node and other signing wallets used by the UI journey |
 
 Helpers that only one target can use stay in that target: `blockOutputScripts`
 in `BitcoinCoreTests/TestHelpers.swift` and anything that

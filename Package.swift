@@ -67,7 +67,8 @@ let package = Package(
         .executableTarget(
             name: "WinnowFixture",
             dependencies: ["TestSupport"],
-            path: "Tools/Fixture"
+            path: "Tools/Fixture",
+            exclude: ["README.md"]
         ),
         .testTarget(
             name: "BitcoinCoreTests",

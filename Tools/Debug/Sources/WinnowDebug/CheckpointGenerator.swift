@@ -41,8 +41,8 @@ enum CheckpointGenerator {
     /// A checkpoint on a difficulty-period boundary lets the chain verify
     /// every retarget after it exactly; a mid-period one leaves the first
     /// adjustment verifiable only as a bound, because the period's first
-    /// header is below the checkpoint. The shipped 900,000 predates this
-    /// rule; the next refresh moves it to a multiple of the interval.
+    /// header is below the checkpoint. The shipped checkpoint is already on
+    /// a period boundary; every replacement must preserve that property.
     static func requirePeriodBoundary(_ height: UInt32, params: NetworkParams) throws {
         let interval = params.difficultyAdjustmentInterval
         guard height % interval == 0 else {
@@ -178,7 +178,7 @@ enum CheckpointGenerator {
                       genesisTime: base.genesisTime, genesisBits: base.genesisBits,
                       genesisNonce: base.genesisNonce, genesisMerkleRoot: base.genesisMerkleRoot,
                       genesisHash: base.genesisHash, powLimit: base.powLimit, dnsSeeds: base.dnsSeeds,
-                      fallbackPeers: base.fallbackPeers, checkpoint: checkpoint)
+                      checkpoint: checkpoint)
     }
 
     /// The first `wanted` headers of a genesis-rooted file, in the same

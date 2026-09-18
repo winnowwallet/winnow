@@ -1,10 +1,13 @@
 [Back to main README](../../README.md)
 
-# The iPhone wallet
+# The wallet app
 
 SwiftUI screens and AppModel turn wallet and network state into receiving,
 sending, recovery, saved recipients, and shared accounts. The app owns user review,
 authentication, presentation, and lifecycle; WalletCore owns the Bitcoin rules.
+The app supports iPhone, iPad, and Apple silicon Mac (Designed for iPad).
+Simple mode uses one screen; Advanced mode adds Wallet, Send, and Settings tabs.
+The automated UI journey currently covers iPhone only.
 
 Wallet is the one account and transaction list. Payment details save or rename a
 recipient; Send holds the account and saved-recipient pickers. Ordinary payments,
@@ -31,3 +34,8 @@ Assets.xcassets contains the app icon and its Xcode metadata; it is an asset bun
 not another code layer. [make-icon.swift](../../scripts/make-icon.swift) creates icon
 artwork; changing it requires inspecting the rendered icon and building the app.
 Keep documentation outside the asset catalog so it is not treated as an asset.
+
+[Optional iCloud recovery](../../CloudKit/README.md) automatically updates an
+encrypted wallet backup after opt-in and finds it on a replacement device.
+CloudBackupController owns opt-in, lifecycle and last-success state;
+ICloudBackupStore owns private CloudKit transport and separate wrapping keys.

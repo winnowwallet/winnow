@@ -51,6 +51,21 @@ final class DeviceAuthenticationTests: XCTestCase {
         }
     }
 
+    func testCloudRestoreAuthenticatesBeforeReadingCloudData() async {
+        let authenticator = RecordingAuthenticator()
+        authenticator.shouldFail = true
+        let model = makeModel(deviceAuthenticator: authenticator)
+        do {
+            _ = try await model.restoreCloudBackup(UUID())
+            XCTFail("cloud restore ignored denied device authentication")
+        } catch RecordingAuthenticator.Failure.denied {
+            XCTAssertEqual(authenticator.reasons, ["Restore your wallet and signing key from iCloud"])
+            XCTAssertNil(model.walletID)
+        } catch {
+            XCTFail("cloud access ran before authentication: \(error)")
+        }
+    }
+
     /// The check the app passes is held for the Keychain read of that one
     /// operation and no longer. Deleting the wallet reads no secret, so
     /// when it returns nothing must be left for other code to read with.
@@ -75,7 +90,12 @@ final class DeviceAuthenticationTests: XCTestCase {
         try await model.authenticateSensitiveAction(reason: "control")
         XCTAssertTrue(model.keychainAuthentication.isGranted, "the fixture authenticator left no check")
 
+        let cachedCloudCopy = directory.appending(path: "cloud-backup.json")
+        try Data("encrypted-test-backup".utf8).write(to: cachedCloudCopy)
+
         try await model.destroyWallet()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cachedCloudCopy.path),
+                       "deleting the local wallet retained its encrypted local cloud copy")
         XCTAssertFalse(model.keychainAuthentication.isGranted,
                        "the wallet is gone and the check that let it go is still there for a read")
     }

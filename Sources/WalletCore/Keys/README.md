@@ -25,3 +25,8 @@ The [wallet](../Wallet/README.md), [signer](../Transactions/README.md), and
 [Keychain attributes](../../../AppTests/KeychainAttributeTests.swift), and
 [device authentication](../../../AppTests/DeviceAuthenticationTests.swift) check
 storage and app integration. Device-lock enforcement needs physical-device evidence.
+
+Optional [iCloud recovery](../../../CloudKit/README.md) is separate from this
+local signing store. Its encrypted backup includes the mnemonic after explicit
+opt-in and uses a dedicated synchronizable wrapping key; it never changes the
+local signing key attributes.

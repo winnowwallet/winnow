@@ -93,7 +93,7 @@ took 41 seconds; the complete workflow took **12 minutes 17 seconds** from
 creation to completion.
 
 That run published the full **268.083-second** browser recording, **15,572,004
-bytes**, and all 16 checkpoints to the [PR preview](https://pr-155.winnow-avs.pages.dev/).
+bytes**, and all 16 checkpoints to the [dated deployment](https://5c5c78fc.winnow-avs.pages.dev/).
 Its [recording page](https://5c5c78fc.winnow-avs.pages.dev/recording) identifies
 the original source and run. The normalized video SHA-256 is
 `451fda1e1b59238f14045543e47938cbf1c6b7e01c34427dda14d75fdf6a6120`.

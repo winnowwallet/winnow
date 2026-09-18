@@ -1,15 +1,9 @@
 import WalletCore
 import Foundation
 
-/// Release-path generators for two constants the app ships: the mainnet
-/// fallback-peer list (#161) and the mainnet header checkpoint (#89).
+/// Derives the mainnet header checkpoint from a genesis-validated header file.
+/// This development command uses WalletCore outside the shipping app.
 ///
-/// Both need something `swift test` never has — a published census artifact
-/// (or, from-crawl, the live network), or a 77 MB genesis-validated header
-/// file — so as env-gated test suites they never ran. These explicit
-/// development commands use WalletCore outside the shipping app.
-///
-///   winnow-debug generate fallback-peers [--census-commit SHA | --from-census URL-OR-PATH | --from-crawl] [--out PATH] [--floor 24]
 ///   winnow-debug generate checkpoint <headers.bin> [--height H] [--vector-out PATH]
 enum WinnowGenerate {
     static func execute(_ arguments: [String]) async throws {
@@ -17,9 +11,6 @@ enum WinnowGenerate {
             return usage()
         }
         switch command {
-        case "fallback-peers":
-            let options = try FallbackPeerGenerator.Options(arguments)
-            try await FallbackPeerGenerator.run(options)
         case "checkpoint":
             let options = try CheckpointGenerator.Options(arguments)
             try await CheckpointGenerator.run(options)
@@ -27,14 +18,6 @@ enum WinnowGenerate {
             throw GenerateError.usage("unknown command \(command)")
         }
     }
-
-    /// Tools/Debug/Sources/WinnowDebug/… → the package root is five
-    /// levels up. Taken from `#filePath` at compile time, as the generator test
-    /// this replaces did, so the default output lands in this checkout whatever
-    /// directory the tool is run from.
-    static let packageRoot = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        .deletingLastPathComponent().deletingLastPathComponent()
 
     static func option(_ name: String, in arguments: [String]) -> String? {
         guard let index = arguments.firstIndex(of: name), arguments.indices.contains(index + 1) else { return nil }
@@ -52,24 +35,7 @@ enum WinnowGenerate {
     }
 
     static let usageText = """
-    Winnow release-path generators
-
-      swift run winnow-debug generate fallback-peers [--census-commit SHA | --from-census URL-OR-PATH | --from-crawl] [--out PATH] [--floor 24]
-          Re-verify the winnow-census peers.json offline — public IP literals
-          on port 8333, one per /16, reported heights within 100 of the
-          artifact's recorded tip in either direction — and rewrite
-          Sources/WalletCore/Network/Protocol/FallbackPeersGenerated.swift.
-          --census-commit takes census/peers.json as committed in
-          winnowwallet/census at that commit, checks the bytes against the
-          blob the repository's tree names there, verifies the publisher's
-          signature when a key is compiled in, and records the commit in the
-          bundle (the release path; scripts/check-release-policy requires
-          it). With no --from-census the published artifact is fetched; a local
-          path reads a file. --from-crawl crawls mainnet from the DNS seeds
-          instead, asking every verified peer for its addr gossip and
-          dialling candidates pre-filtered by their advertised
-          NODE_COMPACT_FILTERS bit (a crawl also honours --target 96 and
-          --max-dials 4000).
+    Winnow header checkpoint derivation
 
       swift run winnow-debug generate checkpoint <headers.bin> [--height H] [--vector-out PATH]
           Derive the mainnet checkpoint at H (default: the shipped height) from a
@@ -82,17 +48,13 @@ enum WinnowGenerate {
 
 enum GenerateError: LocalizedError {
     case usage(String)
-    case thinList(String)
     case badSource(String)
-    case badCensus(String)
     case divergence(String)
 
     var errorDescription: String? {
         switch self {
         case let .usage(detail): "\(detail)\n\n\(WinnowGenerate.usageText)"
-        case let .thinList(detail): "\(detail) — refusing to ship a thin list"
         case let .badSource(detail): "unusable header file: \(detail)"
-        case let .badCensus(detail): "unusable census artifact: \(detail)"
         case let .divergence(detail): "checkpoint disagreement: \(detail)"
         }
     }

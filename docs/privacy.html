@@ -28,7 +28,7 @@
 
 <section id="what-the-app-does-with-your-data">
 <h2>On your device</h2>
-<p><strong>Keys.</strong> Seed material is generated on-device and stored in the iOS Keychain with this-device-only protection. The Keychain checks user presence before releasing it. Winnow does not automatically transmit this material.</p>
+<p><strong>Keys.</strong> Seed material is generated on-device and stored in the iOS Keychain with this-device-only protection. The Keychain checks user presence before releasing it. It stays on this device unless you explicitly export it or enable encrypted iCloud backup.</p>
 <p><strong>Receive labels.</strong> You can label an address before sharing it or skip. The note matches outputs locally and stays with that address when you request a new one. It does not verify a sender or create a return-payment destination. It is excluded from QR codes, copied or shared addresses, payment cards, and wallet backups. Deleting or replacing the wallet removes these labels.</p>
 <p><strong>Payment names.</strong> A received payment can keep a local name without an address. You can later attach an address you supplied or explicitly select a local or explorer suggestion. Funding-address suggestions are unverified; they do not identify senders, and reuse can reduce privacy.</p>
 </section>
@@ -51,6 +51,7 @@
 <section id="optional-requests">
 <h2>Optional requests</h2>
 <p><strong>Explorer lookups</strong> require consent explaining the transaction-ID and IP disclosures. You must choose a returned destination; even a sole result is never selected automatically. Opening an external browser has a separate disclosure warning.</p>
+<p><strong>iCloud backup</strong> is off until you enable it and authenticate. It uploads encrypted copies of this phone’s signing key, wallet history and shared accounts to your private iCloud database. A separate encryption key synchronizes through iCloud Keychain. Apple receives the backup size, network, save date and ordinary account/connection metadata. Access to the backup and that key allows wallet recovery. Automatic updates run while Winnow is open and wait for pending payments to confirm. Stopping updates or deleting the local wallet leaves the saved cloud copy available for recovery. Local recipient names and receive labels are not included.</p>
 <p><strong>Census refresh</strong> downloads the public candidate catalog from <code>census.winnowwallet.com</code> only when requested. Invalid data does not replace good data, and a refresh does not disconnect active peers. <strong>Reset and shuffle peers</strong> is a separate action that preserves manual settings and the downloaded catalog.</p>
 </section>
 

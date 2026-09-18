@@ -14,6 +14,4 @@ Keeping these in WalletCore avoids a separate P2P package boundary.
 [network-parameter tests](../../../../Tests/WalletCoreTests/Network/NetworkParamsTests.swift)
 cover encoding, parsing, and network selection.
 
-FallbackPeersGenerated.swift is produced by the
-[release-data generator](../../../../Tools/Generate/README.md). Refresh it through that
-tool and retain its log; do not hand-edit a list merely to pass the freshness gate.
+Peer discovery lives in [Peers](../Peers/README.md); no peer-address list is compiled into the app.

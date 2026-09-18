@@ -47,10 +47,10 @@ The build job owns fixture setup and teardown under its temporary directory.
 Test logs, checkpoint screenshots, the continuous video, and result bundles use a fresh `mktemp` evidence
 directory per job so cancelled runs cannot poison a later Xcode result path; prior
 wallet state and difficulty retargets cannot affect the next run. The single
-`app-tests-<run-id>` artifact contains `debug-build.log`, `units/` with
+`app-tests-<run-id>-<attempt>` artifact contains `debug-build.log`, `units/` with
 `AppTests.xcresult`, `journey/` with `NodeUI.xcresult`, `journey.mp4`,
 `video.log` and `node-screenshots/`, plus `release-build.log`.
-The three Keychain attribute checks use the app's existing iOS test host.
+The Keychain attribute tests use the app's existing iOS test host.
 They verify recorded attributes and round-trip storage; device-lock enforcement
 still needs real hardware. The retired story/media workflow has no CI role;
 app screenshots and video now come from the asserted UI journey through
@@ -64,14 +64,12 @@ tags in Winnow and the archived library remain fixed; the former library's
 `v0.1.0` is historical and is not Winnow's next version.
 
 Run Release manually first to validate the checkout without signing, uploading,
-assigning TestFlight groups or publishing. Release checks the generation date
-recorded inside `FallbackPeersGenerated.swift`, so copying or squashing history
-cannot make an old peer list appear fresh. The census observation must be no more than seven days old. Run
-`scripts/generate-fallback-peers --from-census https://census.winnowwallet.com/census/peers.json` (which runs `winnow-debug generate fallback-peers`
-from [Tools/Generate](../../Tools/Generate/README.md)), retain its log and
-commit the result before tagging. Refreshing the header checkpoint is the same
-tool's other subcommand, via `scripts/refresh-checkpoint`, and needs a
-genesis-validated header file; it is a manual release-time step, not a check.
+assigning TestFlight groups or publishing. Release validates the stable version;
+there is no bundled peer snapshot to generate or refresh before tagging.
+Refreshing the header checkpoint uses `scripts/refresh-checkpoint` and needs a
+genesis-validated header file. This is manual maintenance, not an automatic
+requirement for every release. Its validation and vector update are described in the
+[checkpoint runbook](../../Tools/Generate/README.md).
 The signed app archive is checked for E2E controls and its provenance is
 attached to the GitHub release.
 
@@ -96,8 +94,8 @@ and tools change together and need no internal version bumps.
 
 `docs/` is static HTML. `scripts/build-site` validates the journey inventory
 against app-test selectors and generates the homepage and recording page;
-the other pages are authored directly. The retired Advanced URLs redirect home.
-The app bundles the five design papers and `site.css` directly from that directory. Edit them once.
+the other pages are authored directly. The retired Advanced and Testing URLs redirect home.
+The app bundles the five technical guides and `site.css` directly from that directory. Edit them once.
 Run `scripts/build-site` after changing journey inputs, then `scripts/check-site`
 after `git lfs pull` to check local page/asset links and reject unresolved image pointers.
 
@@ -121,3 +119,7 @@ Website deploys to the existing Cloudflare Pages project `winnow`, using
 selected non-main branches use `preview-<run-id>`;
 the deployment URL appears in the Actions summary and environment. Fork PRs
 validate without deployment credentials. There is no second GitHub Pages site.
+
+Before releasing iCloud recovery, complete the [Apple container, schema and
+physical-device checks](../../CloudKit/README.md#apple-setup-required-before-release).
+Hosted CI does not establish Apple account setup or real Keychain synchronization.

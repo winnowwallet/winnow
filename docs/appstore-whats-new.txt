@@ -1,4 +1,5 @@
-• Winnow verifies the publisher's signature before accepting an updated peer list. The bundled peer list has also been refreshed.
+• Optional encrypted iCloud backup restores this phone’s signing key, wallet history and shared accounts on a replacement device. Use the same Apple Account with iCloud Keychain enabled.
+• Winnow verifies the publisher's signature before accepting an updated peer list. The app now discovers peers without a bundled address list.
 • Your wallet key is protected by your phone's passcode or Face ID inside the Keychain. Existing wallets receive this protection when opened.
 • Winnow connects directly to the Bitcoin network. The optional Tor connection has been removed; previous Tor users see a notice on first launch.
 • Updated wallet guides explain shared accounts, backups, and what peer-list and explorer services learn.

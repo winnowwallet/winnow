@@ -8,7 +8,7 @@ for ordinary-wallet, MuSig2 and 2-of-3 payments. CoreSigner creates real
 Core-held keys and exchanges PSBTs for the other signing wallets.
 
 `SignetFixture` shares the bank setup used by the native
-`winnow-fixture prepare-bank` command and the UI journey's readiness checks.
+[winnow-fixture prepare-bank](../../../Tools/Fixture/README.md) command and the UI journey's readiness checks.
 The host command reuses `BitcoinCLI` and `SignetMiner` to mature the bank before
 recording or XCTest starts. A fresh CI fixture still mines 101 blocks; no bank
 snapshot is reused across CI runs. The UI test then checks the chain and ready

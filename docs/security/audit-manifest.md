@@ -1,5 +1,9 @@
 # Winnow security audit manifest
 
+> Historical audit boundary, not a current source inventory or CI checklist.
+> For today’s checks and release process use the [CI runbook](../../.github/internal/ci-release.md);
+> [security notes](README.md) explain changes since these snapshots.
+
 This file freezes the source and evidence boundary for the security work. A
 checked box or passing test proves only the named property. It is not a
 general wallet-safety claim, and the mainnet decision is the

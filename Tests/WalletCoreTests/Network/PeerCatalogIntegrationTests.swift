@@ -24,16 +24,16 @@ struct PeerCatalogIntegrationTests {
         let after = try #require(await pool.connectedPeers().first)
         #expect(before === after)
         #expect(await before.isConnected)
-        #expect(await pool.candidateSourcesForTest()[.init(host: "8.8.8.8", port: 8333)] == .fallback)
+        #expect(await pool.candidateSourcesForTest()[.init(host: "8.8.8.8", port: 8333)] == .census)
         await pool.stop()
         try await pool.forgetKnownGood()
         let candidates = await pool.candidateSourcesForTest()
         #expect(candidates[manual] == .manual)
-        #expect(candidates[.init(host: "8.8.8.8", port: 8333)] == .fallback)
+        #expect(candidates[.init(host: "8.8.8.8", port: 8333)] == .census)
         await node.stop()
     }
 
-    @Test func expirationFallsBackToBundleAndFailedRefreshKeepsGoodCatalog() async throws {
+    @Test func expirationDropsCatalogAndFailedRefreshKeepsGoodCatalog() async throws {
         let clock = CatalogClock()
         let downloaded = CensusCatalogTests().catalog()
         let pool = PeerPool(params: .mainnet, censusCatalog: downloaded, catalogNow: { clock.read() })
@@ -43,7 +43,7 @@ struct PeerCatalogIntegrationTests {
         await #expect(throws: CensusCatalog.Invalid.schema) { try await pool.updateCensusCatalog(invalid) }
         #expect(await pool.candidateEndpointsForTest() == [peer])
         clock.advance()
-        #expect(Set(await pool.candidateEndpointsForTest()) == Set(NetworkParams.mainnet.fallbackPeers))
+        #expect(await pool.candidateEndpointsForTest().isEmpty)
     }
 
     @Test func reshuffleAvoidsPreviousPeersAndCensusPeersAreOneSource() async {
@@ -54,6 +54,6 @@ struct PeerCatalogIntegrationTests {
         let pool = PeerPool(params: .mainnet, censusCatalog: catalog, catalogNow: { fixture.now }, avoidOnReset: [previous])
         #expect(await pool.candidateEndpointsForTest().first == .init(host: "9.9.9.9", port: 8333))
         let sources = await pool.candidateSourcesForTest()
-        #expect(Set(sources.values) == [.fallback], "bundled and refreshed census peers are one trust source")
+        #expect(Set(sources.values) == [.census], "downloaded census peers are one trust source")
     }
 }

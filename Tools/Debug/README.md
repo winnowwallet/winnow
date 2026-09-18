@@ -33,8 +33,7 @@ explicit E2E run ID, it also copies that run's redacted event journal and
 signet peer list, when present. It does not copy wallets or Keychain material.
 These are local debugging files, with no publishing or media-review workflow.
 
-The [generator runbook](../Generate/README.md) documents fallback-peer and
-checkpoint refreshes. The soak preserves its JSONL metrics and optional
+The [generator runbook](../Generate/README.md) documents checkpoint refreshes. The soak preserves its JSONL metrics and optional
 header/filter/peer state, defaults to public signet and three peers, and takes
 one sample per minute. `--minutes 0` or omission runs until interrupted.
 Help performs no network work; invalid soak options retain exit status 2.

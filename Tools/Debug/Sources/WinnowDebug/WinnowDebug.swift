@@ -53,7 +53,6 @@ enum WinnowDebug {
       scripts/winnow-debug doctor
       scripts/winnow-debug diagnostics --simulator UDID --out DIR [--run E2E_RUN_ID]
       scripts/winnow-debug generate --help
-      scripts/winnow-debug generate fallback-peers [--from-census URL-OR-PATH | --from-crawl] [--out PATH] [--floor 24]
       scripts/winnow-debug generate checkpoint <headers.bin> [--height H] [--vector-out PATH]
       scripts/winnow-debug soak --help
       scripts/winnow-debug soak [--network signet|mainnet] [--minutes N] [--out PATH] [--state DIR]

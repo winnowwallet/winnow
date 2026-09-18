@@ -7,7 +7,10 @@ journey video with its source provenance.
 The recorded ordinary, MuSig2, and script-path 2-of-3 payment journey retained
 16 checkpoint screenshots as secondary run artifacts. The homepage keeps the
 overview and signing illustrations; detailed recording and test evidence live
-on separate pages.
+on separate pages. CI replaces these 16 images in each deployed artifact with
+new or validated cached journey captures. The deployment’s `/recording` page
+identifies their source run; the dated notes below describe repository assets,
+not necessarily the images on the live site.
 
 | Capture | Moment |
 | --- | --- |
@@ -28,7 +31,7 @@ on separate pages.
 | `15-approval-sent` | The 2-of-3 payment sent, before confirmation. |
 | `28-savings-confirmed` | The 2-of-3 account’s remaining confirmed balance. |
 
-These stills share the [published recording’s provenance](../videos/README.md):
+The checked-in reference stills share the [repository recording’s provenance](../videos/README.md):
 `test01CreateReceiveSendConfirm`, source
 [`809c383`](https://github.com/winnowwallet/winnow/commit/809c38313c1262b0526e24870bea2d144a37771b),
 iPhone 17 Pro simulator running iOS 26.5, 2026-09-17. The test passed with zero
@@ -56,7 +59,7 @@ selecting images.
 ## Historical capture provenance
 
 The records below describe earlier suites. The 16 exact filenames listed above
-now use the September 17 recording; other images retain their earlier provenance.
+in this repository use the September 17 recording; other images retain their earlier provenance.
 Historical `store-*.png` candidates
 were retired with the 0.7.0 one-screen interface and showed the four-tab layout.
 

@@ -1,5 +1,9 @@
 # Independent security review — 2026-09-14
 
+> This review describes the exact September 14 revisions below, not the
+> current app. The dated tracker records later dispositions. See
+> [security notes](README.md) for current scope and reporting policy.
+
 | | |
 |---|---|
 | Wallet revision | `winnowwallet/winnow` `main` @ `aae3b28` (merge of #96, 2026-09-14) |
@@ -144,6 +148,12 @@ configuration, and loads signatures on every census generator path. Bundled
 peers are regenerated from a signed pinned commit. This supersedes the
 empty-key setup note above; [the signing guide](../census-signing.md) records
 the key and rotation procedure.
+
+**Bundled-list removal, 2026-09-18** — the app no longer ships a peer snapshot,
+and its peer generator/crawler and snapshot release gate are removed. Signed
+manual downloads and verified caches remain; fresh installations can use DNS
+or manual peers. This supersedes the bundled-generation part of the activation
+note, not its signature requirement.
 
 | ID | Issue | ID | Issue | ID | Issue |
 |---|---|---|---|---|---|

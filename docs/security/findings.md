@@ -49,10 +49,12 @@ wallet data. This register retains findings and their disposition.
 | SEC-028 | Medium | S1 | Fixed on `main` | `E2EMode.looksSecret` — the value-level check that decides what may reach the published story journal — caught an extended private key *inside prose* (substring prefix scan) but required a mnemonic to be the entire string, so any label, note or surrounding sentence carried one straight past. The asymmetry favoured the less dangerous of the two: an xprv derives one account, a recovery phrase is the whole backup. `JournalRedactionTests`' own premise is that a seed filed under `"note"` beats every field-name denylist — but a seed filed under `"note"` *with any surrounding text* also beat the value check. Now scanned over every window of consecutive words. | `ErrorSurfaceTests`: the phrase prefixed, suffixed and embedded mid-sentence, with ordinary prose of the same length as the false-positive control. Restoring the whole-string check fails only the embedded case. Worth recording: before this fix the recovery-phrase assertion in `SEC-027` **passed against a leaking implementation** — a false negative, and the reason the two were found together |
 | SEC-029 | Low | S1 | Accepted | `UserDefaults` ride in the device backup and hold the wallet's master fingerprint (`backupPending.<fingerprint>`), the user's own node `host:port`, the custom explorer URL, the display name and the Tor flag — bounded privacy data with no secret-shaped value; everything else lives under the storage root that is excluded from backup. Recorded as accepted on 2026-09-14 (IR-021): moving these under the excluded root would trade a documented, bounded exposure for a second settings store with failure modes of its own. To be revisited if a value with more reach than an endpoint is ever added to the defaults. | Source inspection: `AppModel.DefaultsKey` and `storageDirectory()`'s `isExcludedFromBackup` |
 
-## Open release risks (not vulnerability claims)
+## Historical release-risk checklist (August 2026)
 
-These are gaps in required evidence and remain release-blocking under epic
-#100 even when no concrete exploit has been established:
+This intermediate checklist predates later fixes and the owner’s September 14
+GO decision in the [gate report](gate-report.md). Its “open” and “release-blocking”
+labels are historical, not current issue status. Keep the original observations
+for comparison with the dated validation rows below:
 
 - S1: release-artifact secret containment is now evidenced (E2E exclusion with a
   proven negative control, and a canary-controlled secret scan of the release

@@ -15,6 +15,7 @@ struct OnboardingView: View {
     @State private var mnemonic: String?
     @State private var writtenDown = false
     @State private var showImport = false
+    @State private var showCloudRestore = false
     @State private var suppressAutomaticBackupResume = false
     @State private var phraseEpoch = SensitivePresentationEpoch()
     @State private var phraseTask: Task<Void, Never>?
@@ -56,6 +57,10 @@ struct OnboardingView: View {
                             Label("Restore from backup", systemImage: "square.and.arrow.down")
                         }
                         .accessibilityIdentifier("importWalletButton")
+                        Button("Restore from iCloud", systemImage: "icloud.and.arrow.down") {
+                            showCloudRestore = true
+                        }
+                        .accessibilityIdentifier("restoreCloudBackupButton")
                     }
                 } footer: {
                     Text("First, write down your recovery words. Then save a backup file from Back up wallet on the main screen.")
@@ -93,6 +98,7 @@ struct OnboardingView: View {
                 }
             }
             .navigationTitle("Winnow")
+            .sheet(isPresented: $showCloudRestore) { CloudRestoreView() }
             .sheet(isPresented: $showImport) {
                 ImportBundleView()
             }

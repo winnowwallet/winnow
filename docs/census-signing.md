@@ -1,7 +1,7 @@
 # Census signing
 
 The [peer census](https://census.winnowwallet.com/census/peers.json) supplies
-release fallback peers and the manual refresh in Settings. Every downloaded
+the manual refresh in Settings. Every downloaded
 list must carry an Ed25519 signature from a publisher key compiled into the
 wallet. Peers remain untrusted: the wallet still validates their headers and
 filters independently.
@@ -32,23 +32,14 @@ foreign signatures stop deployment. The previous published list stays in use.
 
 The wallet requires the signature on manual refresh and verifies the stored
 bytes again on load. An empty trust configuration rejects every list. Old
-unsigned caches are ignored; bundled fallback peers remain available, and a
+unsigned caches are ignored; saved peers and DNS discovery remain available, and a
 successful manual refresh replaces the cache. Signature checks supplement the
 existing size, age, schema, and minimum-peer checks.
 
-## Release fallback peers
-
-Generate from a signed, committed census:
-
-```bash
-scripts/generate-fallback-peers --census-commit <full census commit sha>
-```
-
-The generator checks the payload against the repository blob at that commit,
-verifies the signature, and records the source commit, hash, and observation
-date in the generated bundle. `scripts/check-release-policy` requires that
-provenance. The default live URL and explicit `--from-census` file/URL paths
-also load the adjacent signature and enforce the same trust policy.
+The app ships no peer-address snapshot. A fresh install can discover peers
+through DNS seeds without downloading the census. An expired census stops
+supplying new candidates; previously connected peers remain in the saved
+peer cache, and DNS supplies additional candidates.
 
 ## Key rotation
 
@@ -68,7 +59,7 @@ secret is lost, use this rotation process; never restore unsigned acceptance.
 The publisher's contract tests verify its committed catalog, missing and
 modified signatures, foreign keys, and a known-answer signature shared with
 the wallet. Wallet tests cover signature refusal, empty trust, unsigned legacy
-caches, signed storage/expiry, and bounded signature loading by the generator.
+caches, signed storage/expiry, and DNS bootstrap without a census.
 
 The single payment journey does not need a separate census-refresh journey.
 Any lower-level or Debug fixture that refreshes a census must sign it with a

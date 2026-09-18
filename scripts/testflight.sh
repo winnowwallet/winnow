@@ -1,9 +1,11 @@
 #!/bin/bash
 # Winnow → TestFlight pipeline (App Store Connect API).
-# Prereqs: archive IPA at build/WinnowApp.ipa (see archive step below),
+# Prefer the hosted release/recovery/submission workflows; see scripts/README.md.
+# `all` is the default and uploads a build; it is not a status or help command.
+# Prereqs for `upload`/`all`: exported IPA at build/WinnowApp.ipa,
 # API key at ~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8.
 #
-#   export ASC_KEY_ID=5QT8WW3Q8H
+#   export ASC_KEY_ID=<key id>
 #   export ASC_ISSUER_ID=<issuer uuid>   # ASC → Users and Access → Integrations
 #   scripts/testflight.sh all
 #

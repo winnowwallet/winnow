@@ -8,10 +8,11 @@ file or a public feature page cannot provide on its own.
 
 [CI and release operations](ci-release.md) describes the
 current workflows. [Screenshot guidance](app-store-screenshots.md)
-explains how to select captures from asserted app journeys.
+explains how to select captures from the asserted app journey.
 
-Despite the directory name, these are public repository files. Runner provisioning
-and machine inventory belong to the separate private runner repository.
+Despite the directory name, these are public repository files. Current CI uses
+GitHub-hosted runners; contributors need no private runner repository or machine
+inventory.
 Dated handoffs and the [retired story note](story-run.md)
 are historical context. Verify current instructions against the linked workflow
 and its run artifacts; the prose itself is not a passing test result.

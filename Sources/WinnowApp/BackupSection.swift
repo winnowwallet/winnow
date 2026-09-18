@@ -12,6 +12,7 @@ struct BackupSection: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var showExport = false
+    @State private var showCloudBackup = false
     @State private var revealedMnemonic: String?
     @State private var revealError: String?
     @State private var revealing = false
@@ -23,6 +24,9 @@ struct BackupSection: View {
         // section: a Form flattens its sections, and a sheet attached to
         // one never presented.
         Section {
+            Button("iCloud backup", systemImage: "icloud") { showCloudBackup = true }
+                .disabled(model.walletID == nil)
+                .sheet(isPresented: $showCloudBackup) { CloudBackupView() }
             Button("Back up wallet") { showExport = true }
                 .disabled(model.walletID == nil)
                 .accessibilityIdentifier("exportBundleButton")
@@ -102,6 +106,7 @@ struct BackupSection: View {
         revealError = nil
         revealing = false
         showExport = false
+        showCloudBackup = false
     }
 }
 

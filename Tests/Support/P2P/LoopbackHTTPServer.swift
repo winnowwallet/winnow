@@ -4,7 +4,7 @@ import Network
 
 /// A loopback HTTP/1.1 server for `RoutedHTTPClient` tests: reads one
 /// request per connection, records it, and answers with canned bytes —
-/// one response for every host, or one per `Host:` name. Enough of the
+/// one response for every host, per `Host:` name, or per host/path. Enough of the
 /// protocol to prove the client half; nothing here parses a body.
 public actor LoopbackHTTPServer {
     private var listener: NWListener?
@@ -16,6 +16,7 @@ public actor LoopbackHTTPServer {
     public private(set) var httpRequests: [String] = []
     private let response: Data?
     private var responsesByHost: [String: Data]
+    private var responsesByPath: [String: [String: Data]] = [:]
     private var connections: [NWConnection] = []
 
     public init(response: Data? = nil, responsesByHost: [String: Data] = [:]) {
@@ -23,9 +24,13 @@ public actor LoopbackHTTPServer {
         self.responsesByHost = responsesByHost
     }
 
-    /// A per-name answer set after `start()`, when the port is known.
-    public func respond(to host: String, with data: Data) {
-        responsesByHost[host] = data
+    /// Configure answers before issuing requests; path routing avoids timed response swaps.
+    public func respond(to host: String, path: String? = nil, with data: Data) {
+        if let path {
+            responsesByPath[host, default: [:]][path] = data
+        } else {
+            responsesByHost[host] = data
+        }
     }
 
     /// `http://127.0.0.1:<port>`, with `path` appended.
@@ -75,7 +80,11 @@ public actor LoopbackHTTPServer {
                 .map { $0.dropFirst(5).trimmingCharacters(in: .whitespaces) } ?? ""
             let host = header.hasPrefix("[") ? header : String(header.split(separator: ":")[0])
             requestedHosts.append(host)
-            guard let response = responsesByHost[host] ?? response else { client.cancel(); return }
+            let path = head.split(separator: " ").dropFirst().first.map(String.init) ?? "/"
+            guard let response = responsesByPath[host]?[path] ?? responsesByHost[host] ?? response else {
+                client.cancel()
+                return
+            }
             try await Self.write(client, response)
         } catch {
             client.cancel()

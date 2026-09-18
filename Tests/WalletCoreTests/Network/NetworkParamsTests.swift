@@ -65,21 +65,6 @@ struct NetworkParamsTests {
         #expect(!params.dnsSeeds.isEmpty)
     }
 
-    @Test("mainnet bundles public clearnet peers; signet has none")
-    func fallbackPeersShape() {
-        #expect(NetworkParams.mainnet.fallbackPeers.count >= 4)
-        for peer in NetworkParams.mainnet.fallbackPeers {
-            #expect(peer.port > 0)
-            // Hardcoded entries must be public IP literals, never hostnames.
-            // `netblock` is the pool's own parse: nil for a hostname and nil
-            // for a non-public address, and unlike the old character check it
-            // accepts the IPv6 literals the release-time generator (#161)
-            // legitimately produces — hex digits broke a digits-and-dots test.
-            #expect(peer.netblock != nil, "\(peer.host) is not a public IP literal")
-        }
-        #expect(NetworkParams.signet.fallbackPeers.isEmpty)
-    }
-
     @Test("bits → target known values", arguments: [
         // (bits, big-endian target hex)
         (UInt32(0x1D00_FFFF), "00000000ffff0000000000000000000000000000000000000000000000000000"),

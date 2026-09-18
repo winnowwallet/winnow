@@ -1,9 +1,12 @@
-# v1 launch handoff
+# Historical v1 launch handoff — August 2026
 
 Status recorded 2026-08-17. This is a handoff checkpoint, not authorization to spend bitcoin, switch the default network, tag v1.0.0, upload assets, or submit the app.
 
-The runner setup instructions below are historical. The [current CI runbook](ci-release.md)
-uses GitHub-hosted Apple silicon with a fresh disposable signet fixture.
+The entire checklist below is historical, including its mainnet-default change,
+runner setup, checkpoint height, and v1 gate. It is not the current release plan.
+The [current CI runbook](ci-release.md) uses GitHub-hosted Apple silicon with
+one signet journey; [checkpoint maintenance](../../Tools/Generate/README.md)
+documents the current boundary. References below describe their dated revisions.
 
 ## Merged and verified
 

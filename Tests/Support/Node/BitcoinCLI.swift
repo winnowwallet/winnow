@@ -49,9 +49,8 @@ public enum BitcoinCLI {
         #endif
     }
 
-    /// The same lookup for suites that gate on an environment flag of their
-    /// own (the storefront capture): process environment first, then
-    /// ~/.winnow-node.env.
+    /// The same lookup for UI journey configuration such as screenshot output:
+    /// process environment first, then ~/.winnow-node.env on the simulator host.
     public static func environmentValue(_ key: String) -> String? { env(key) }
 
     private static let fileOverrides: [String: String] = {

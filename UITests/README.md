@@ -38,8 +38,7 @@ runs do not share coins. Paste buttons read the existing test control file.
 Detailed cases belong in `AppTests` and `WalletCoreTests`: labels, backup state,
 fee rules, signing invariants, privacy, and network recovery. The separate
 `DifferentialTests` target and job are removed. This journey does not establish
-every feature’s UI behavior or hardware-wallet compatibility. iPad follows
-once the iPhone run and its runtime are understood.
+every feature’s UI behavior or hardware-wallet compatibility. There is no iPad UI job currently.
 
 The scroll helper waits for text to materialize before reading its accessible
 label, including long descriptors and approval payloads that need not fit on

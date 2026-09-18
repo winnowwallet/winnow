@@ -278,9 +278,8 @@ public enum PeerMessage: Equatable, Sendable {
     case sendheaders
     /// Address gossip: `getaddr` (empty payload) asks, `addr` answers with a
     /// CompactSize count and that many timestamped `PeerAddress` records —
-    /// the legacy format, at most 1000 entries. There is deliberately no
-    /// BIP155 addrv2: the fallback-peer generator is the only consumer, and
-    /// what it wants from a peer is dialable IPv4/IPv6 literals.
+    /// the legacy IPv4/IPv6 format, at most 1000 entries.
+    /// The wallet pool does not use address gossip for discovery.
     case getaddr
     case addr([PeerAddress])
     /// BIP133: minimum feerate (sat/kvB) the peer relays to us.
