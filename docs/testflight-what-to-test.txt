@@ -1,6 +1,8 @@
-Winnow 0.7.5: automatic complete iCloud recovery and mainnet startup
+Winnow 0.7.9: automatic complete iCloud recovery and mainnet startup
 
 Peer-list updates now require a valid signature from the pinned census publisher. The bundled address list has been removed. Mainnet automatically refreshes a missing or expired signed census alongside DNS discovery and remembered peers. Older unsigned or expired census caches are ignored.
+
+Mainnet now connects to responsive peers without waiting for unrelated discovery attempts. A disconnected peer no longer leaves a response request waiting for its 30-second timeout. Check fresh startup, returning to the app, and repeated syncs.
 
 iCloud recovery
 
