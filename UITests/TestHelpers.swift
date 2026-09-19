@@ -94,9 +94,14 @@ extension XCTestCase {
     /// bar (a sheet's sits below the screen's), above the tab bar and the
     /// keyboard.
     @MainActor
-    private func clearBand(_ app: XCUIApplication, in frame: CGRect) -> ClosedRange<CGFloat> {
-        let barBottoms = app.navigationBars.allElementsBoundByIndex.map { $0.frame.maxY }
-        let top = max(frame.minY, barBottoms.max() ?? frame.minY)
+    private func clearBand(_ app: XCUIApplication, in frame: CGRect) -> ClosedRange<CGFloat>? {
+        // A dismissed sheet can remove a navigation bar between an indexed
+        // query and its frame read. Read the bars from one immutable snapshot.
+        guard let snapshot = try? app.snapshot() else {
+            XCTFail("could not snapshot the app's navigation bars")
+            return nil
+        }
+        let top = max(frame.minY, navigationBarBottom(snapshot) ?? frame.minY)
         var bottom = frame.maxY
         // A sheet covers the underlying tab bar; that bar must not shrink
         // the sheet's usable area and cause repeated ineffective drags.
@@ -104,6 +109,13 @@ extension XCTestCase {
             bottom = min(bottom, cover.frame.minY)
         }
         return top ... max(top, bottom)
+    }
+
+    @MainActor
+    private func navigationBarBottom(_ snapshot: XCUIElementSnapshot) -> CGFloat? {
+        let childBottoms = snapshot.children.compactMap { navigationBarBottom($0) }
+        let ownBottom = snapshot.elementType == .navigationBar ? [snapshot.frame.maxY] : []
+        return (childBottoms + ownBottom).max()
     }
 
     /// Drags `element` clear of the bars. A row taller than the band shows
@@ -115,7 +127,7 @@ extension XCTestCase {
         guard let appFrame = usableFrame(app) else { return false }
         // Each AX frame read resolves the element again. Reuse this geometry
         // within the reveal; the moving row is still reread after every drag.
-        let band = clearBand(app, in: appFrame)
+        guard let band = clearBand(app, in: appFrame) else { return false }
         let reach = band.upperBound - band.lowerBound - 2 * margin
         guard reach.isFinite, reach > 0 else { return false }
         for attempt in 0 ... 3 {
