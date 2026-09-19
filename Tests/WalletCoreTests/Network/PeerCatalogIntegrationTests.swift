@@ -10,7 +10,37 @@ private final class CatalogClock: @unchecked Sendable {
     func advance() { lock.lock(); defer { lock.unlock() }; value += 8 * 86400 }
 }
 
+private actor CatalogSeedGate {
+    private(set) var requests = 0
+    private var released = false
+    func release() { released = true }
+    func resolve() async -> [PeerEndpoint] {
+        requests += 1
+        while !released { try? await Task.sleep(for: .milliseconds(10)) }
+        return []
+    }
+}
+
 struct PeerCatalogIntegrationTests {
+    @Test func catalogArrivingDuringDiscoveryTriggersAnotherRoundWithoutWaitingForMonitor() async throws {
+        let gate = CatalogSeedGate()
+        let pool = PeerPool(params: .mainnet, maxDialAttempts: 0,
+                            seedResolver: SeedResolver { _, _, _ in await gate.resolve() },
+                            catalogNow: { CensusCatalogTests().now })
+        let startup = Task { await pool.start() }
+        #expect(await pollUntil { await gate.requests == NetworkParams.mainnet.dnsSeeds.count })
+        // No endpoints are needed to exercise the scheduling race; this test
+        // never dials public nodes or changes the production catalog floor.
+        var updated = CensusCatalogTests().catalog()
+        updated.networks["clearnet"] = []
+        try await pool.updateCensusCatalog(updated)
+        let firstRoundRequests = await gate.requests
+        await gate.release()
+        await startup.value
+        #expect(await pollUntil(.seconds(5)) { await gate.requests > firstRoundRequests })
+        await pool.stop()
+    }
+
     @Test func refreshPreservesTheActiveConnectionAndResetPreservesCatalogAndManualPeers() async throws {
         let chain = makeSyntheticChain(length: 4, watchHeight: 2)
         let node = LoopbackNode(params: chain.params, chain: chain.blocks)

@@ -8,10 +8,11 @@ here so discovery and admission follow one policy.
 
 [FilterSync](../Filters/README.md) and
 [AppModel](../../../WinnowApp/AppModel.swift) consume the pool.
-The pool tries manual peers, previously connected peers, and a fresh signed
-census downloaded through Advanced → Refresh peer list, then DNS seeds.
-There is no bundled list. Fresh installs use DNS discovery unless a manual
-peer is configured. Invalid or expired census caches do not prevent DNS
+The pool tries manual peers, previously connected peers, a fresh signed census,
+and DNS seeds. Mainnet automatically downloads the census when its cache is
+missing or expired. Advanced → Refresh peer list remains available.
+There is no bundled list. Fresh installs start DNS discovery independently of
+the automatic download. Invalid or expired census caches do not prevent DNS
 bootstrap. DNS uses DoH first, with system DNS when DoH yields no usable
 addresses. The source ceiling remains: DNS alone can occupy two of the
 three default slots; a manual peer or census provides another source.

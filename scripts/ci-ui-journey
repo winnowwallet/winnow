@@ -35,6 +35,20 @@ if [[ "$UI_SKIP_BUILD" != true ]]; then
     2>&1 | tee "$UI_RESULTS/ui-build.log"
 fi
 
+# Run the specification emitted by the shared build directly. Going through
+# the project again resolves the package graph even for test-without-building,
+# wasting recording time and CPU before the UI runner can launch.
+shopt -s nullglob
+UI_TEST_RUNS=("$UI_DERIVED_DATA"/Build/Products/WinnowApp_*.xctestrun)
+shopt -u nullglob
+if [[ ${#UI_TEST_RUNS[@]} -ne 1 ]]; then
+  echo "Expected exactly one WinnowApp test-run specification in $UI_DERIVED_DATA/Build/Products." >&2
+  exit 1
+fi
+UI_STARTED=$SECONDS
+phase() { echo "JOURNEY_PHASE $1 elapsed=$((SECONDS - UI_STARTED))s"; }
+phase prepared
+
 # Reuse the native package build from CI (or build it incrementally locally).
 # Fresh coinbase maturity is fixture setup, not UI work or recording content.
 # CI has already matured the bank; this becomes a quick readiness check there.
@@ -43,6 +57,7 @@ swift run winnow-fixture prepare-bank 2>&1 | tee "$UI_RESULTS/fixture-prepare.lo
 # bootstatus handles both a newly booted simulator and one already running.
 xcrun simctl boot "$UI_SIMULATOR_ID" > "$UI_RESULTS/video.log" 2>&1 || true
 xcrun simctl bootstatus "$UI_SIMULATOR_ID" -b >> "$UI_RESULTS/video.log" 2>&1
+phase simulator-ready
 
 UI_VIDEO_PID=""
 stop_video() {
@@ -95,6 +110,7 @@ finish() {
     if ! stop_video && (( result == 0 )); then result=1; fi
   fi
   collect_diagnostics
+  phase finalized
   exit "$result"
 }
 trap finish EXIT
@@ -127,8 +143,12 @@ if [[ "$UI_VIDEO_READY" != true ]]; then
   echo "Video recorder did not start within 60 seconds; see $UI_RESULTS/video.log." >&2
   exit 1
 fi
+phase recording-ready
 
-xcodebuild test-without-building "${UI_XCODE_ARGS[@]}" \
+xcodebuild test-without-building -xctestrun "${UI_TEST_RUNS[0]}" \
+  -destination "platform=iOS Simulator,id=$UI_SIMULATOR_ID" \
+  -only-testing:WinnowAppUITests \
   -test-timeouts-enabled YES -maximum-test-execution-time-allowance 600 \
   -resultBundlePath "$UI_RESULTS/NodeUI.xcresult" \
   2>&1 | tee "$UI_RESULTS/node-ui.log"
+phase tests-finished
