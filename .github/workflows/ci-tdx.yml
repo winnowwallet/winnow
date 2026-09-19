@@ -1,0 +1,280 @@
+name: Parallel tdx validation
+on:
+  workflow_call:
+    outputs:
+      website-artifact:
+        value: ${{ jobs.validation.outputs.artifact }}
+      deployment-branch:
+        value: ${{ jobs.validation.outputs.branch }}
+    inputs:
+      fresh:
+        type: boolean
+        default: false
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  # Matching main/tag evidence needs no worker and can bypass the fresh-run queue.
+  # Cache misses still queue at the host controller, with run-specific labels.
+  group: ${{ (github.ref_type == 'tag' || github.ref == 'refs/heads/main') && format('winnow-tdx-evidence-{0}', github.run_id) || 'winnow-tdx-pool' }}
+  cancel-in-progress: false
+  queue: max
+jobs:
+  evidence:
+    runs-on: ubuntu-24.04
+    outputs:
+      reuse: ${{ steps.lookup.outputs.reuse }}
+      fingerprint: ${{ steps.lookup.outputs.fingerprint }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - id: lookup
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE_FRESH: ${{ inputs.fresh }}
+        run: scripts/ci-validation lookup reused
+      - if: steps.lookup.outputs.reuse == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: reused-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: reused/
+          retention-days: 7
+  package:
+    needs: evidence
+    if: needs.evidence.outputs.reuse != 'true'
+    runs-on: [self-hosted, winnow-tdx-package, "winnow-run-${{ github.run_id }}-${{ github.run_attempt }}"]
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Restore compatible compilation products
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            .build
+            /Users/macdev/winnow-ci/results/production-build
+          key: tdx-v1-17F113-x86_64-package-${{ needs.evidence.outputs.fingerprint }}
+      - name: package validation
+        run: scripts/ci-tdx-lane package
+      - name: Preserve package evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tdx-package-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /Users/macdev/winnow-ci/results/lanes/
+            /Users/macdev/winnow-ci/results/*.log
+            /Users/macdev/winnow-ci/results/app/
+            /Users/macdev/winnow-ci/results/media/
+            /Users/macdev/winnow-ci/results/site/
+            /Users/macdev/winnow-ci/results/fuzz/
+            /Users/macdev/winnow-ci/results/supply-chain/
+            !/Users/macdev/winnow-ci/results/app/signet/
+          if-no-files-found: error
+          retention-days: 14
+  build:
+    needs: evidence
+    if: needs.evidence.outputs.reuse != 'true'
+    runs-on: [self-hosted, winnow-tdx-build, "winnow-run-${{ github.run_id }}-${{ github.run_attempt }}"]
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Restore compatible compilation products
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            /Users/macdev/winnow-ci/build
+          key: tdx-v1-17F113-x86_64-build-${{ needs.evidence.outputs.fingerprint }}
+      - name: build validation
+        run: scripts/ci-tdx-lane build
+      - name: Publish shared Debug products immediately
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tdx-debug-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /Users/macdev/winnow-ci/results/debug-transfer/
+          compression-level: 0
+          retention-days: 1
+      - name: Compile and inspect ARM64 Release
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          result=/Users/macdev/winnow-ci/results
+          xcodebuild -project WinnowApp.xcodeproj -scheme WinnowApp -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath "$result/release" -skipPackagePluginValidation -skipMacroValidation ARCHS=arm64 CODE_SIGNING_ALLOWED=NO build 2>&1 | tee "$result/app/release-build.log"
+          scripts/check-dependencies --xcode "$result/release"
+          scripts/check-swift-warnings "$result/app/release-build.log"
+          scripts/verify-release-e2e-exclusion "$result/release/Build/Products/Release-iphonesimulator/WinnowApp.app"
+          python3 -c 'import json,pathlib; p=pathlib.Path("/Users/macdev/winnow-ci/results/lanes/build.json"); r=json.loads(p.read_text()); r["release_inspected"]=True; p.write_text(json.dumps(r))'
+      - name: Preserve build evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tdx-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /Users/macdev/winnow-ci/results/lanes/
+            /Users/macdev/winnow-ci/results/*.log
+            /Users/macdev/winnow-ci/results/app/
+            /Users/macdev/winnow-ci/results/media/
+            /Users/macdev/winnow-ci/results/site/
+            /Users/macdev/winnow-ci/results/fuzz/
+            /Users/macdev/winnow-ci/results/supply-chain/
+            !/Users/macdev/winnow-ci/results/app/signet/
+          if-no-files-found: error
+          retention-days: 14
+  units:
+    needs: evidence
+    if: needs.evidence.outputs.reuse != 'true'
+    runs-on: [self-hosted, winnow-tdx-units, "winnow-run-${{ github.run_id }}-${{ github.run_attempt }}"]
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: units validation
+        run: scripts/ci-tdx-lane units
+      - name: Preserve units evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tdx-units-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /Users/macdev/winnow-ci/results/lanes/
+            /Users/macdev/winnow-ci/results/*.log
+            /Users/macdev/winnow-ci/results/app/
+            /Users/macdev/winnow-ci/results/media/
+            /Users/macdev/winnow-ci/results/site/
+            /Users/macdev/winnow-ci/results/fuzz/
+            /Users/macdev/winnow-ci/results/supply-chain/
+            !/Users/macdev/winnow-ci/results/app/signet/
+          if-no-files-found: error
+          retention-days: 14
+  journey:
+    needs: evidence
+    if: needs.evidence.outputs.reuse != 'true'
+    runs-on: [self-hosted, winnow-tdx-journey, "winnow-run-${{ github.run_id }}-${{ github.run_attempt }}"]
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Restore compatible compilation products
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            .build
+          key: tdx-v1-17F113-x86_64-journey-${{ needs.evidence.outputs.fingerprint }}
+      - name: journey validation
+        run: scripts/ci-tdx-lane journey
+      - name: Preserve journey evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tdx-journey-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /Users/macdev/winnow-ci/results/lanes/
+            /Users/macdev/winnow-ci/results/*.log
+            /Users/macdev/winnow-ci/results/app/
+            /Users/macdev/winnow-ci/results/media/
+            /Users/macdev/winnow-ci/results/site/
+            /Users/macdev/winnow-ci/results/fuzz/
+            /Users/macdev/winnow-ci/results/supply-chain/
+            !/Users/macdev/winnow-ci/results/app/signet/
+          if-no-files-found: error
+          retention-days: 14
+  validation:
+    if: always()
+    needs: [evidence, package, build, units, journey]
+    runs-on: ubuntu-24.04
+    outputs:
+      artifact: ${{ steps.site.outputs.artifact }}
+      branch: ${{ steps.site.outputs.branch }}
+    steps:
+      - name: Require every selected lane
+        env:
+          REUSE: ${{ needs.evidence.outputs.reuse }}
+          PLAN: ${{ needs.evidence.result }}
+          PACKAGE: ${{ needs.package.result }}
+          BUILD: ${{ needs.build.result }}
+          UNITS: ${{ needs.units.result }}
+          JOURNEY: ${{ needs.journey.result }}
+        run: |
+          [[ "$PLAN" == success ]]
+          if [[ "$REUSE" == true ]]; then
+            [[ "$PACKAGE:$BUILD:$UNITS:$JOURNEY" == skipped:skipped:skipped:skipped ]]
+          else
+            [[ "$PACKAGE:$BUILD:$UNITS:$JOURNEY" == success:success:success:success ]]
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Website and evidence regression tests
+        run: python3 -m unittest discover -s scripts/tests
+      - if: needs.evidence.outputs.reuse != 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: tdx-@(package|build|units|journey)-${{ github.run_id }}-${{ github.run_attempt }}
+          path: incoming
+      - if: needs.evidence.outputs.reuse == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: reused-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence
+      - name: Assemble complete validation evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        if: needs.evidence.outputs.reuse != 'true'
+        run: |
+          mkdir -p evidence/lanes
+          for lane in package build units journey; do
+            cp "incoming/tdx-$lane-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/lanes/$lane.json" evidence/lanes/
+          done
+          cp -R "incoming/tdx-journey-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/media" evidence/media
+          scripts/prepare-site-artifact --validate-media evidence/media
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" > evidence/timing-jobs.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > evidence/timing-run.json
+          scripts/ci-validation publish evidence
+      - name: Verify evidence and prepare website
+        id: site
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          scripts/ci-validation verify evidence
+          git lfs pull
+          scripts/prepare-site-artifact site --media evidence/media
+          echo "artifact=website-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/heads/main ]]; then
+            echo branch=main >> "$GITHUB_OUTPUT"
+          elif [[ -n "$PR_NUMBER" ]]; then
+            echo "branch=pr-$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          else
+            echo "branch=preview-$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
+          fi
+          cat evidence/validation.json >> "$GITHUB_STEP_SUMMARY"
+      - if: needs.evidence.outputs.reuse != 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: validation-${{ needs.evidence.outputs.fingerprint }}
+          path: evidence/
+          retention-days: 7
+          overwrite: true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ steps.site.outputs.artifact }}
+          path: site/
+          retention-days: 14

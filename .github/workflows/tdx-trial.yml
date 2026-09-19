@@ -1,0 +1,15 @@
+name: TDX rollout trial
+on:
+  pull_request:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: tdx-trial-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  trial:
+    if: vars.TDX_CI_ENABLED != 'true' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'codex/parallel-tdx-ci'
+    uses: ./.github/workflows/ci-tdx.yml
+    with:
+      fresh: true
