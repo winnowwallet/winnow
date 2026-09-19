@@ -46,8 +46,10 @@ final class WinnowAppUITests: XCTestCase {
         defer { app.terminate() }
         XCTAssertTrue(app.buttons["createWalletButton"].appears(within: 60))
         Screenshots.capture(app, "01-onboarding", testCase: self)
-        app.buttons["createWalletButton"].tap()
-        XCTAssertTrue(confirmBackupAndContinue(app), "could not confirm the new wallet's backup")
+        let create = app.buttons["createWalletButton"]
+        XCTAssertTrue(create.isEnabled)
+        XCTAssertTrue(tapVisibleCenter(app, create), "create wallet has no finite onscreen tap target")
+        XCTAssertTrue(app.buttons["receiveButton"].appears(within: 60), "creation should open the wallet without a backup checklist")
         XCTAssertTrue(app.staticTexts["balanceText"].appears(within: 60))
 
         app.buttons["receiveButton"].tap()

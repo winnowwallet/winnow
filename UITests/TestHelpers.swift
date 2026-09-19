@@ -174,32 +174,6 @@ extension XCTestCase {
         return shift < 0 ? -distance : distance
     }
 
-    /// The sync-progress section can put confirmation below the backup sheet's
-    /// visible rows. First await the sheet, then scroll its actual content.
-    @MainActor
-    func backupConfirmationIsReachable(_ app: XCUIApplication) -> Bool {
-        guard app.navigationBars["Wallet backup"].appears(within: 30) else { return false }
-        return scrollUntilExists(app, app.switches["writtenDownToggle"], maxSwipes: 5, fullyVisible: true)
-    }
-
-    @MainActor
-    func confirmBackupAndContinue(_ app: XCUIApplication) -> Bool {
-        let toggle = app.switches["writtenDownToggle"]
-        guard backupConfirmationIsReachable(app) else { return false }
-        let confirmed = poll(timeout: 20, interval: 1, "backup confirmation switched on") {
-            let thumb = toggle.children(matching: .switch).firstMatch
-            if (thumb.exists ? thumb.value : toggle.value) as? String == "1" { return true }
-            app.flipSwitch(toggle)
-            return false
-        }
-        guard confirmed else { return false }
-        let done = app.buttons["backupDoneButton"]
-        guard scrollUntilExists(app, done, maxSwipes: 5, fullyVisible: true),
-              poll(timeout: 10, interval: 1, "backup Done enabled", condition: { done.isEnabled }) else { return false }
-        done.tap()
-        return true
-    }
-
     /// Polls `condition` until it holds or the deadline passes (explicit
     /// waits, no fixed sleeps — the one allowed exception is the polling
     /// interval itself).

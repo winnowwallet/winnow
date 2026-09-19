@@ -115,7 +115,8 @@ the full checks; manual, nightly, and release runs always run fresh.
 
 Mainnet is the default network, and the app starts in beginner mode: one
 screen with the balance, Receive, Send, your activity, shared savings once you
-have any, and the backup — no settings. Open a payment to save or rename its
+have any, and automatic backup status — no settings. Manual backup is offered when
+iCloud is unavailable; Advanced contains recovery words and the cloud-backup switch. Open a payment to save or rename its
 recipient, then pick them from Saved recipients in Send. The same Send form
 handles every account: choose the account, recipient, and amount, then review
 the fee. Shared accounts continue to their required approvals before anything

@@ -134,7 +134,7 @@ actor PeopleStore {
     /// The file's payload. The file was a bare array of people before sender
     /// labels existed, and that older shape still decodes — as an envelope
     /// without any labels.
-    private struct PersistedPayload: Codable {
+    struct Backup: Codable, Equatable, Sendable {
         var people: [PersonRecord]
         var senderByTxid: [String: String]
 
@@ -147,6 +147,63 @@ actor PeopleStore {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             people = try container.decode([PersonRecord].self, forKey: .people)
             senderByTxid = try container.decodeIfPresent([String: String].self, forKey: .senderByTxid) ?? [:]
+        }
+    }
+
+    private typealias PersistedPayload = Backup
+
+    func backup() throws -> Backup {
+        guard !isDamaged else { throw PeopleStorageError.damaged }
+        return Backup(people: records, senderByTxid: senderByTxid)
+    }
+
+    static func validateBackup(_ backup: Backup, network: BitcoinNetwork) throws {
+        try validate(backup.people, senderByTxid: backup.senderByTxid, network: network)
+        let ids = Set(backup.people.map(\.id))
+        guard backup.senderByTxid.values.allSatisfy(ids.contains),
+              try JSONEncoder().encode(backup).count <= maximumFileBytes else {
+            throw PeopleStorageError.invalidState("invalid cloud address book")
+        }
+    }
+
+    /// Keep contacts already on this device and never rewind a recipient's
+    /// derivation counter. Remap labels when two snapshots name the same key.
+    func planRestore(_ incoming: Backup) throws -> Backup {
+        guard !isDamaged else { throw PeopleStorageError.damaged }
+        try Self.validateBackup(incoming, network: network)
+        var merged = records
+        var ids: [String: String] = [:]
+        for person in incoming.people {
+            let existing = try merged.first { $0.id == person.id }
+                ?? Self.firstSharingAKey(with: person, among: merged, network: network)
+            if let existing, let index = merged.firstIndex(where: { $0.id == existing.id }) {
+                ids[person.id] = existing.id
+                if try existing.payTo?.identity(network: network) == person.payTo?.identity(network: network) {
+                    merged[index].nextPaymentIndex = max(existing.nextPaymentIndex, person.nextPaymentIndex)
+                }
+            } else {
+                merged.append(person)
+                ids[person.id] = person.id
+            }
+        }
+        var labels = senderByTxid
+        for (txid, id) in incoming.senderByTxid where labels[txid] == nil { labels[txid] = ids[id] }
+        let result = Backup(people: merged, senderByTxid: labels)
+        try Self.validateBackup(result, network: network)
+        return result
+    }
+
+    func restore(_ backup: Backup) throws {
+        guard !isDamaged else { throw PeopleStorageError.damaged }
+        try Self.validateBackup(backup, network: network)
+        let previous = Backup(people: records, senderByTxid: senderByTxid)
+        records = backup.people
+        senderByTxid = backup.senderByTxid
+        do { try persist() }
+        catch {
+            records = previous.people
+            senderByTxid = previous.senderByTxid
+            throw error
         }
     }
 

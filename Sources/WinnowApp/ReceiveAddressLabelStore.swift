@@ -3,7 +3,8 @@ import WalletCore
 
 /// Local notes about our addresses, separate from contacts and sender identity.
 /// A snapshot belongs to exactly one wallet on one network. It is not part of
-/// an address, QR code, payment card, or wallet export.
+/// an address, QR code, payment card, or manual wallet export. Encrypted iCloud
+/// recovery includes these notes.
 @MainActor
 final class ReceiveAddressLabelStore {
     static let maximumLabels = 10_000
@@ -67,8 +68,13 @@ final class ReceiveAddressLabelStore {
         let payload = try JSONDecoder().decode(Payload.self, from: data)
         guard payload.version == 1, payload.walletID == walletID, payload.network == network.rawValue,
               payload.labels.count <= Self.maximumLabels else { throw StorageError.damaged }
+        return try validatedBackup(payload.labels, network: network)
+    }
+
+    static func validatedBackup(_ labels: [String: String], network: BitcoinNetwork) throws -> [Data: String] {
+        guard labels.count <= maximumLabels else { throw StorageError.full }
         var decoded: [Data: String] = [:]
-        for (key, label) in payload.labels {
+        for (key, label) in labels {
             guard let script = Data(hex: key), script.hex == key,
                   AddressDecoder.address(for: script, network: network) != nil,
                   try Self.normalizedLabel(label) == label, !label.isEmpty
@@ -76,6 +82,16 @@ final class ReceiveAddressLabelStore {
             decoded[script] = label
         }
         return decoded
+    }
+
+    func backup() throws -> [String: String] {
+        guard notice == nil else { throw StorageError.damaged }
+        return Dictionary(uniqueKeysWithValues: labels.map { ($0.key.hex, $0.value) })
+    }
+
+    func restore(_ backup: [String: String]) throws {
+        guard notice == nil else { throw StorageError.damaged }
+        try persist(Self.validatedBackup(backup, network: network))
     }
 
     static func normalizedLabel(_ text: String) throws -> String {
@@ -91,12 +107,16 @@ final class ReceiveAddressLabelStore {
     /// write succeeds, so a failed edit cannot silently relabel a payment.
     func setLabel(_ text: String, address: String) throws {
         guard notice == nil else { throw StorageError.damaged }
-        guard let storageURL else { throw StorageError.unavailable }
         let script = try AddressDecoder.scriptPubKey(for: address, network: network)
         let label = try Self.normalizedLabel(text)
         var updated = labels
         if label.isEmpty { updated.removeValue(forKey: script) }
         else { updated[script] = label }
+        try persist(updated)
+    }
+
+    private func persist(_ updated: [Data: String]) throws {
+        guard let storageURL else { throw StorageError.unavailable }
         guard updated.count <= Self.maximumLabels else { throw StorageError.full }
         let payload = Payload(walletID: walletID, network: network.rawValue,
                               labels: Dictionary(uniqueKeysWithValues: updated.map { ($0.key.hex, $0.value) }))

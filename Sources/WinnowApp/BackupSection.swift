@@ -24,9 +24,11 @@ struct BackupSection: View {
         // section: a Form flattens its sections, and a sheet attached to
         // one never presented.
         Section {
+            if model.advancedMode {
             Button("iCloud backup", systemImage: "icloud") { showCloudBackup = true }
                 .disabled(model.walletID == nil)
                 .sheet(isPresented: $showCloudBackup) { CloudBackupView() }
+            }
             Button("Back up wallet") { showExport = true }
                 .disabled(model.walletID == nil)
                 .accessibilityIdentifier("exportBundleButton")
@@ -37,12 +39,14 @@ struct BackupSection: View {
                     if phase == .background { clearSensitivePresentations() }
                 }
                 .onDisappear { clearSensitivePresentations() }
+            if model.advancedMode {
             Button("Show recovery phrase") { reveal() }
                 .disabled(model.walletID == nil || revealing)
                 .accessibilityIdentifier("revealPhraseButton")
                 .sheet(item: revealedItem) { words in
                     RevealPhraseView(mnemonic: words.text)
                 }
+            }
             if let revealError {
                 Text(revealError).foregroundStyle(.red).font(.footnote)
             }

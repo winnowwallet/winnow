@@ -35,7 +35,8 @@ not another code layer. [make-icon.swift](../../scripts/make-icon.swift) creates
 artwork; changing it requires inspecting the rendered icon and building the app.
 Keep documentation outside the asset catalog so it is not treated as an asset.
 
-[Optional iCloud recovery](../../CloudKit/README.md) automatically updates an
-encrypted wallet backup after opt-in and finds it on a replacement device.
-CloudBackupController owns opt-in, lifecycle and last-success state;
+[Automatic iCloud recovery](../../CloudKit/README.md) automatically updates an
+encrypted wallet backup by default and finds it on a replacement device. Beginner
+mode shows status; Advanced holds manual recovery and the persistent opt-out.
+CloudBackupController owns backup preferences, encrypted retries, lifecycle and last-success state;
 ICloudBackupStore owns private CloudKit transport and separate wrapping keys.
