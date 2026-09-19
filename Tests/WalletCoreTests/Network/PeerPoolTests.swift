@@ -79,6 +79,107 @@ struct PeerPoolTests {
         await pool.stop()
     }
 
+    @Test("ready local peers are seated without waiting for DNS")
+    func localDialsDoNotWaitForSeeds() async throws {
+        let first = LoopbackNode(params: .mainnet)
+        let second = LoopbackNode(params: .mainnet)
+        try await first.start()
+        try await second.start()
+        let gate = DiscoveryGate()
+        let pool = PeerPool(params: .mainnet, peerCount: 2,
+                            manualPeers: [await first.endpoint, await second.endpoint],
+                            seedResolver: SeedResolver { _, _, _ in await gate.wait(); return [] })
+        let startup = Task { await pool.start() }
+        // The blocked resolver is the ordering assertion. Use the shared
+        // hang guard so runner scheduling is not mistaken for DNS waiting.
+        let connected = await pollUntil { await pool.connectedPeers().count == 2 }
+        // Always release the gate so a failing implementation terminates too.
+        await gate.release()
+        await startup.value
+        #expect(connected, "healthy local handshakes must not be held behind DNS lookup")
+        await pool.stop()
+        await first.stop()
+        await second.stop()
+    }
+
+    @Test("a usable seed result connects while other seeds are still waiting")
+    func seedResultsAreConsumedAsTheyArrive() async throws {
+        let node = LoopbackNode(params: .mainnet)
+        try await node.start()
+        let endpoint = await node.endpoint
+        let gate = DiscoveryGate()
+        let firstSeed = NetworkParams.mainnet.dnsSeeds[0]
+        let pool = PeerPool(params: .mainnet, peerCount: 1,
+                            seedResolver: SeedResolver { host, _, _ in
+                                if host == firstSeed { return [endpoint] }
+                                await gate.wait()
+                                return []
+                            })
+        let startup = Task { await pool.start() }
+        let finished = await pollUntil {
+            let status = await pool.connectionStatus
+            return status.connected == 1 && !status.dialing
+        }
+        await gate.release()
+        await startup.value
+        #expect(finished, "one stalled seed must not hold up another seed's usable peer")
+        await pool.stop()
+        await node.stop()
+    }
+
+    @Test("DNS still fills a seat after diversity skips remembered candidates")
+    func diversityExhaustionStillResolvesSeeds() async throws {
+        var nodes: [LoopbackNode] = []
+        for _ in 0..<4 {
+            let node = LoopbackNode(params: .mainnet)
+            try await node.start()
+            nodes.append(node)
+        }
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appending(path: "peers.json")
+        var remembered: [PeerCandidate] = []
+        for node in nodes.prefix(3) {
+            remembered.append(PeerCandidate(endpoint: await node.endpoint, source: .census))
+        }
+        try JSONEncoder().encode(PersistedPeers(remembered)).write(to: file)
+        let seedPeer = await nodes[3].endpoint
+        let pool = PeerPool(params: .mainnet, peerCount: 3, peersFileURL: file,
+                            maxParallelDials: 1,
+                            seedResolver: SeedResolver { _, _, _ in [seedPeer] })
+        await pool.start()
+        let peers = await pool.connectedPeers()
+        #expect(peers.count == 3)
+        #expect(await pool.source(of: seedPeer) == .dnsSeed)
+        #expect(!((await pool.connectionStatus).exhausted))
+        await pool.stop()
+        for node in nodes { await node.stop() }
+    }
+
+    @Test("a full pool closes silent surplus dials immediately")
+    func fullPoolDoesNotWaitForSilentDial() async throws {
+        let good = LoopbackNode(params: params)
+        let silent = LoopbackNode(params: params, startSilent: true)
+        try await good.start()
+        try await silent.start()
+        let pool = PeerPool(params: params, peerCount: 1,
+                            manualPeers: [await silent.endpoint, await good.endpoint],
+                            // Longer than pollUntil's 60-second hang guard:
+                            // natural dial timeout cannot make this test pass.
+                            dialTimeout: .seconds(90))
+        let startup = Task { await pool.start() }
+        let finished = await pollUntil {
+            let status = await pool.connectionStatus
+            return status.connected == 1 && !status.dialing
+        }
+        await pool.stop()
+        await silent.stop()
+        await good.stop()
+        await startup.value
+        #expect(finished, "sync startup must not wait out an unused peer's dial timeout")
+    }
+
     @Test("dialing past the target leaves exactly peerCount peers connected")
     func targetIsRespected() async throws {
         var nodes: [LoopbackNode] = []
@@ -744,4 +845,12 @@ final class TestClock: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         offset += duration
     }
+}
+
+private actor DiscoveryGate {
+    private var released = false
+    func wait() async {
+        while !released && !Task.isCancelled { try? await Task.sleep(for: .milliseconds(10)) }
+    }
+    func release() { released = true }
 }

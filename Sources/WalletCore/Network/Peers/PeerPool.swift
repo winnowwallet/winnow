@@ -543,13 +543,18 @@ public actor PeerPool {
 
     // MARK: - Internals
 
+    private enum DiscoveryResult: Sendable {
+        case dial(PeerEndpoint, PeerConnection?)
+        case seeds([PeerEndpoint])
+    }
+
     /// Starts dials for the next eligible candidates, up to the parallel
     /// and per-round caps. Candidates the diversity policy would refuse are
     /// skipped before the dial, not after: they would cost a connection
     /// attempt and a slot in the race for nothing.
     private func launchEligibleDials(from queue: [PeerCandidate], next: inout Int,
                                      running: inout Int,
-                                     into group: inout TaskGroup<(PeerEndpoint, PeerConnection?)>) {
+                                     into group: inout TaskGroup<DiscoveryResult>) {
         while next < queue.count, running < maxParallelDials,
               attemptsThisRound < maxDialAttempts {
             let candidate = queue[next]
@@ -564,9 +569,9 @@ public actor PeerPool {
             group.addTask { [dialTimeout] in
                 do {
                     try await peer.connect(timeout: dialTimeout)
-                    return (endpoint, peer)
+                    return .dial(endpoint, peer)
                 } catch {
-                    return (endpoint, nil) // unreachable or bad handshake
+                    return .dial(endpoint, nil) // unreachable or bad handshake
                 }
             }
         }
@@ -610,10 +615,9 @@ public actor PeerPool {
 
     /// Races up to `maxParallelDials` candidates at a time (each with the
     /// short `dialTimeout`) until the pool is full or the round's candidates
-    /// — capped at `maxDialAttempts` — are used up. In-flight stragglers are
-    /// never cancelled (PeerConnection's checked continuations do not respond
-    /// to cancellation); they resolve on their own timeout and a late success
-    /// with no slot left is disconnected again.
+    /// — capped at `maxDialAttempts` — are used up. Once full, close surplus
+    /// connections before draining the race: their timeouts must not delay
+    /// callers that are waiting to begin sync.
     private func replenish() async {
         guard started, !replenishing, peers.count < peerCount else { return }
         replenishing = true
@@ -621,39 +625,52 @@ public actor PeerPool {
         exhausted = false
         defer { finishReplenish() }
 
-        // Dial manual / persisted / census first. Resolve DNS seeds only
-        // if those sources cannot fill the pool — a working manual peer
-        // must not wait on DoH.
+        // Give manual / persisted / census candidates the first dial slots.
+        // DNS completions then join the same race as connections; explicitly
+        // configured peers get a chance to fill the pool without DNS.
         // Cooling endpoints are skipped, not rejected: they come back into the
         // queue on a later round once their timer expires (#82).
         let excluded = Set(peers.map(\.endpoint)).union(rejectedForSession).union(coolingEndpoints)
         var queue = localCandidates(excluding: excluded)
         var resolvedSeeds = false
+        var seen = excluded.union(queue.map(\.endpoint))
         var next = 0
-        await withTaskGroup(of: (PeerEndpoint, PeerConnection?).self) { group in
+        await withTaskGroup(of: DiscoveryResult.self) { group in
             var running = 0
+            var seedLookups = 0
             while peers.count < peerCount, started {
-                if next >= queue.count && !resolvedSeeds {
-                    resolvedSeeds = true
-                    var seen = excluded
-                    seen.formUnion(queue.map(\.endpoint))
-                    queue.append(contentsOf: await seedCandidates(excluding: seen))
-                }
                 launchEligibleDials(from: queue, next: &next, running: &running,
                                     into: &group)
-                guard running > 0, let (endpoint, dialed) = await group.next() else { break }
-                running -= 1
-                inFlight.removeValue(forKey: endpoint)
-                guard let peer = dialed else { continue }
-                let source = queue.first { $0.endpoint == endpoint }?.source ?? .persisted
-                await seatArrival(peer, endpoint: endpoint, source: source)
+                // Lookups share the completion queue with handshakes, so a
+                // slow seed cannot hide a ready connection or another seed's
+                // results. Local peers still get the first dial slots.
+                if next >= queue.count && !resolvedSeeds && (running == 0 || manualPeers.isEmpty) {
+                    resolvedSeeds = true
+                    for seed in params.dnsSeeds.shuffled() {
+                        seedLookups += 1
+                        group.addTask { [seedResolver, params] in
+                            .seeds(await seedResolver.resolve(host: seed,
+                                port: params.defaultPort,
+                                allowPrivate: params.allowsPrivateSeedAddresses))
+                        }
+                    }
+                }
+                guard running > 0 || seedLookups > 0,
+                      let result = await group.next() else { break }
+                switch result {
+                case let .seeds(endpoints):
+                    seedLookups -= 1
+                    queue += endpoints.filter { seen.insert($0).inserted }
+                        .map { PeerCandidate(endpoint: $0, source: .dnsSeed) }
+                case let .dial(endpoint, dialed):
+                    running -= 1
+                    inFlight.removeValue(forKey: endpoint)
+                    guard let peer = dialed else { continue }
+                    let source = queue.first { $0.endpoint == endpoint }?.source ?? .persisted
+                    await seatArrival(peer, endpoint: endpoint, source: source)
+                }
             }
-            // The pool filled or stopped while other dials were in flight.
-            // Their receive tasks keep them alive until explicitly closed.
-            for await (endpoint, peer) in group {
-                inFlight.removeValue(forKey: endpoint)
-                await peer?.disconnect()
-            }
+            await cancelSurplusDiscovery(in: &group)
         }
         // Judged after the round against the last validated tip, so a stale
         // peer that raced in ahead of honest ones does not keep its seat.
@@ -663,6 +680,19 @@ public actor PeerPool {
             // Refill the slots just freed. `replenishing` is still set here,
             // so the follow-up runs after this round has fully returned.
             Task { await self.pruneAndReplenish() }
+        }
+    }
+
+    /// Disconnect resumes pending handshake continuations immediately;
+    /// drain afterward so no surplus receive task keeps a socket alive.
+    private func cancelSurplusDiscovery(in group: inout TaskGroup<DiscoveryResult>) async {
+        group.cancelAll()
+        for peer in inFlight.values { await peer.disconnect() }
+        for await result in group {
+            if case let .dial(endpoint, peer) = result {
+                inFlight.removeValue(forKey: endpoint)
+                await peer?.disconnect()
+            }
         }
     }
 
@@ -751,18 +781,6 @@ public actor PeerPool {
         // Refill empty seats promptly without disconnecting healthy peers.
         if replenishing { catalogChangedDuringRound = true }
         else { Task { await self.replenish() } }
-    }
-
-    /// DNS-seed results (DoH, then getaddrinfo). Called only when local
-    /// candidates did not fill the pool.
-    private func seedCandidates(excluding connected: Set<PeerEndpoint>) async -> [PeerCandidate] {
-        let seeds = await seedResolver.resolveSeeds(
-            params.dnsSeeds, port: params.defaultPort,
-            allowPrivate: params.allowsPrivateSeedAddresses
-        )
-        var seen = connected
-        return seeds.filter { seen.insert($0).inserted }
-            .map { PeerCandidate(endpoint: $0, source: .dnsSeed) }
     }
 
     /// The most a peers file may weigh: the writer keeps 100 entries, so a
