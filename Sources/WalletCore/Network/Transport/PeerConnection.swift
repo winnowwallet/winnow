@@ -333,6 +333,8 @@ public actor PeerConnection {
     /// `command` have arrived (or the timeout from `requestMany` fires).
     /// Drains any matching backlog entries first.
     private func collect(id: UUID, command: String, count: Int) async throws -> [PeerMessage] {
+        try Task.checkCancellation()
+        guard connection != nil, !didTeardown else { throw PeerError.notConnected }
         var received: [PeerMessage] = []
         while received.count < count,
               let index = backlog.firstIndex(where: { $0.message.command == command }) {
@@ -602,6 +604,11 @@ public actor PeerConnection {
     var backlogSize: (messages: Int, bytes: Int) { (backlog.count, backlogBytes) }
 
     private func waitFor(matching commands: Set<String>, timeout: Duration) async throws -> PeerMessage {
+        // Sending can fail and tear down the connection before an async-let
+        // waiter gets its actor turn. Teardown has already drained waiters;
+        // registering another here would sleep until the response deadline.
+        try Task.checkCancellation()
+        guard connection != nil, !didTeardown else { throw PeerError.notConnected }
         if let index = backlog.firstIndex(where: { commands.contains($0.message.command) }) {
             return takeFromBacklog(at: index).message
         }
