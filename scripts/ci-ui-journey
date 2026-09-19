@@ -52,7 +52,11 @@ phase prepared
 # Reuse the native package build from CI (or build it incrementally locally).
 # Fresh coinbase maturity is fixture setup, not UI work or recording content.
 # CI has already matured the bank; this becomes a quick readiness check there.
-swift run winnow-fixture prepare-bank 2>&1 | tee "$UI_RESULTS/fixture-prepare.log"
+if [[ -n "${WINNOW_FIXTURE_EXECUTABLE:-}" ]]; then
+  "$WINNOW_FIXTURE_EXECUTABLE" prepare-bank 2>&1 | tee "$UI_RESULTS/fixture-prepare.log"
+else
+  swift run winnow-fixture prepare-bank 2>&1 | tee "$UI_RESULTS/fixture-prepare.log"
+fi
 
 # bootstatus handles both a newly booted simulator and one already running.
 xcrun simctl boot "$UI_SIMULATOR_ID" > "$UI_RESULTS/video.log" 2>&1 || true

@@ -32,7 +32,7 @@ jobs:
     uses: ./.github/workflows/ci.yml
 
   testflight:
-    if: github.event_name == 'push'
+    if: ${{ !cancelled() && needs.ci.result == 'success' && github.event_name == 'push' }}
     needs: ci
     runs-on: macos-latest
     timeout-minutes: 120
@@ -110,6 +110,9 @@ jobs:
           scripts/verify-release-e2e-exclusion
           build/WinnowApp.xcarchive/Products/Applications/WinnowApp.app
 
+      - name: Verify exact signed archive identity and iCloud container
+        run: scripts/verify-signed-archive build/WinnowApp.xcarchive/Products/Applications/WinnowApp.app
+
       - name: Verify archive dependency resolution
         run: scripts/check-dependencies --xcode build/DerivedData
 
@@ -144,6 +147,8 @@ jobs:
           	<string>app-store-connect</string>
           	<key>destination</key>
           	<string>upload</string>
+            <key>iCloudContainerEnvironment</key>
+            <string>Production</string>
           	<key>signingStyle</key>
           	<string>automatic</string>
           	<key>teamID</key>
@@ -182,6 +187,7 @@ jobs:
           rmdir "${RUNNER_TEMP}/winnow-signing" 2>/dev/null || true
 
   github-release:
+    if: ${{ !cancelled() && needs.testflight.result == 'success' }}
     needs: testflight
     runs-on: ubuntu-latest
     timeout-minutes: 15
