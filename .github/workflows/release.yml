@@ -116,23 +116,7 @@ jobs:
       - name: Verify archive dependency resolution
         run: scripts/check-dependencies --xcode build/DerivedData
 
-      - name: Generate SBOM and app build provenance
-        run: >-
-          scripts/generate-supply-chain-metadata
-          --output-dir build/supply-chain
-          --subject build/WinnowApp.xcarchive/Products/Applications/WinnowApp.app
-          --subject-name WinnowApp.app
-          --builder-id https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.workflow_sha }}
-
-      - name: Upload supply-chain metadata for release publication
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: release-supply-chain-${{ github.run_id }}
-          path: build/supply-chain/
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Upload to App Store Connect
+      - name: Export the App Store distribution package
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
@@ -143,28 +127,59 @@ jobs:
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
-          	<key>method</key>
-          	<string>app-store-connect</string>
-          	<key>destination</key>
-          	<string>upload</string>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>destination</key>
+            <string>export</string>
             <key>iCloudContainerEnvironment</key>
             <string>Production</string>
-          	<key>signingStyle</key>
-          	<string>automatic</string>
-          	<key>teamID</key>
-          	<string>2858MX5336</string>
-          	<key>manageAppVersionAndBuildNumber</key>
-          	<false/>
+            <key>signingStyle</key>
+            <string>automatic</string>
+            <key>teamID</key>
+            <string>2858MX5336</string>
+            <key>manageAppVersionAndBuildNumber</key>
+            <false/>
           </dict>
           </plist>
           EOF
           xcodebuild -exportArchive -archivePath build/WinnowApp.xcarchive \
             -exportOptionsPlist build/ExportOptions.plist \
+            -exportPath build/export \
             -allowProvisioningUpdates \
             -authenticationKeyPath "${RUNNER_TEMP}/winnow-signing/AuthKey.p8" \
             -authenticationKeyID "$ASC_KEY_ID" \
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             -skipPackagePluginValidation -skipMacroValidation
+
+      - name: Verify the exported production package
+        run: scripts/verify-exported-ipa build/export/WinnowApp.ipa
+
+      - name: Generate SBOM and app build provenance
+        run: >-
+          scripts/generate-supply-chain-metadata
+          --output-dir build/supply-chain
+          --subject build/export/WinnowApp.ipa
+          --subject-name WinnowApp.ipa
+          --builder-id https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.workflow_sha }}
+
+      - name: Upload supply-chain metadata for release publication
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-supply-chain-${{ github.run_id }}
+          path: build/supply-chain/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload the verified package to App Store Connect
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          API_PRIVATE_KEYS_DIR: ${{ runner.temp }}/winnow-signing
+        run: |
+          shasum -a 256 -c build/export/WinnowApp.ipa.verified.sha256
+          ln -s AuthKey.p8 "$API_PRIVATE_KEYS_DIR/AuthKey_${ASC_KEY_ID}.p8"
+          xcrun altool --upload-app -f build/export/WinnowApp.ipa -t ios \
+            --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
 
       - name: TestFlight groups (internal + external)
         env:
@@ -183,7 +198,7 @@ jobs:
         run: |
           security delete-keychain "$RUNNER_TEMP/winnow-ci.keychain-db" || true
           rm -f "$RUNNER_TEMP/dev.p12"
-          rm -f "${RUNNER_TEMP}/winnow-signing/AuthKey.p8"
+          find "${RUNNER_TEMP}/winnow-signing" -maxdepth 1 -name 'AuthKey*.p8' -delete
           rmdir "${RUNNER_TEMP}/winnow-signing" 2>/dev/null || true
 
   github-release:

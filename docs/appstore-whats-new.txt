@@ -3,3 +3,4 @@
 • Winnow automatically discovers iCloud backups on a replacement device. Use the same Apple Account with iCloud Keychain enabled.
 • Your wallet remains usable without iCloud. If it is not backed up, Winnow shows a warning and offers a manual backup.
 • Mainnet startup automatically refreshes missing or expired signed census data alongside saved peers and DNS discovery. No peer list is bundled with the app.
+• Mainnet connects to responsive peers sooner and avoids a 30-second sync delay when a peer disconnects.

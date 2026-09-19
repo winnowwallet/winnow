@@ -89,7 +89,10 @@ wrong repository, mismatched attempts, missing/corrupted artifacts or lookup
 errors require fresh validation. Squash commit IDs may differ; original tested
 commit and recording provenance remain intact. Nightly and manual validations
 always run fresh. Media is normalized once, then reused for website and release
-evidence. Each new signed archive is rebuilt and checked independently.
+evidence. Each new signed archive is rebuilt and checked independently. Development archives
+may omit the iCloud environment until export. The exact exported IPA is then
+checked for Production iCloud, disabled debugging, signature, identity, ARM64 and
+absence of test controls; its hash is checked again immediately before upload.
 
 ## Rollout and fallback
 
