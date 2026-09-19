@@ -246,3 +246,26 @@ class SiteArtifactTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NormalizeOnlyTests(unittest.TestCase):
+    setUp = SiteArtifactTests.setUp
+    def test_normalize_only_preserves_complete_media_without_building_site(self):
+        import shutil
+        journey=self.base/'journey';journey.mkdir()
+        (journey/'node-ui.log').write_text(
+            "Test Case '-[WinnowAppUITests.WinnowAppUITests " + site.TEST +
+            "]' passed (200.5 seconds).\n** TEST EXECUTE SUCCEEDED **")
+        (journey/'NodeUI.xcresult').mkdir()
+        shutil.copytree(self.media/'screenshots',journey/'node-screenshots')
+        output=self.base/'normalized'
+        def encode(source,destination):
+            destination.write_bytes((self.media/site.VIDEO).read_bytes())
+            return self.evidence['video'],self.evidence['video']
+        with patch.object(site,'ROOT',self.root), patch.object(site,'normalize_video',side_effect=encode) as encoder, \
+             patch.object(site,'prepare',side_effect=AssertionError('must not build website')):
+            site.main(['--normalize-journey',str(journey),'--media-output',str(output),
+                       '--source-sha','a'*40,'--run-url',self.evidence['run_url']])
+            encoder.assert_called_once()
+            self.assertEqual(len(list((output/'screenshots').glob('*.png'))),16)
+            self.assertEqual(site.validate_media(output,self.names)['source_sha'],'a'*40)

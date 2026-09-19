@@ -256,7 +256,11 @@ extension WinnowAppUITests {
     private func tap(_ app: XCUIApplication, _ identifier: String, up: Bool = false) {
         let button = app.buttons[identifier]
         XCTAssertTrue(scrollUntilExists(app, button, maxSwipes: 8, up: up, fullyVisible: true), identifier)
-        XCTAssertTrue(poll(timeout: 15, interval: 0.2, "\(identifier) enabled") { button.isEnabled })
-        XCTAssertTrue(tapVisibleCenter(app, button), "\(identifier) has no finite onscreen tap target")
+        // A lazy row can be replaced after scrolling while still reporting
+        // enabled. Wait for usable geometry within the same readiness deadline;
+        // tapVisibleCenter sends no event until it has a finite onscreen target.
+        XCTAssertTrue(poll(timeout: 15, interval: 0.2, "\(identifier) enabled with an onscreen tap target") {
+            button.exists && button.isEnabled && tapVisibleCenter(app, button)
+        })
     }
 }

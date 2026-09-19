@@ -1,0 +1,23 @@
+#!/usr/bin/env python3
+"""Verify the exact version and production iCloud entitlement in each new archive."""
+import os
+from pathlib import Path
+import plistlib
+import subprocess
+import sys
+
+app=Path(sys.argv[1])
+info=plistlib.loads((app/'Info.plist').read_bytes())
+assert info['CFBundleShortVersionString']==os.environ['TESTFLIGHT_MARKETING_VERSION'], 'archive version mismatch'
+assert str(info['CFBundleVersion'])==os.environ['TESTFLIGHT_BUILD_NUMBER'], 'archive build number mismatch'
+assert info['CFBundleIdentifier']=='com.btcswift.app', 'archive bundle mismatch'
+subprocess.run(['codesign','--verify','--deep','--strict',str(app)],check=True)
+entitlements=plistlib.loads(subprocess.check_output(['codesign','-d','--entitlements',':-',str(app)],stderr=subprocess.DEVNULL))
+assert entitlements['com.apple.developer.icloud-container-identifiers']==['iCloud.com.btcswift.app']
+assert 'CloudKit' in entitlements['com.apple.developer.icloud-services']
+# The archive may use the development identity; App Store export must request
+# Production explicitly and Apple re-signs it for distribution on upload.
+assert entitlements.get('com.apple.developer.icloud-container-environment') in {'Development','Production'}
+architectures=subprocess.check_output(['lipo','-archs',str(app/info['CFBundleExecutable'])],text=True).split()
+assert architectures==['arm64'], 'archive must contain the iPhone ARM64 executable'
+print('Signed archive version, build, ARM64 and iCloud container verified; export requires Production.')

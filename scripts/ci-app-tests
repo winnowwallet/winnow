@@ -16,10 +16,17 @@ esac
 mkdir -p "$APP_RESULTS"
 APP_SIMULATOR_ID="${SIMULATOR_ID:-$(scripts/ios-simulator iPhone)}"
 APP_DERIVED_DATA="${DERIVED_DATA:-$APP_RESULTS/DerivedData}"
-xcodebuild "$APP_TEST_ACTION" -project WinnowApp.xcodeproj -scheme WinnowApp -configuration Debug \
+if [[ "$APP_TEST_ACTION" == test-without-building ]]; then
+  shopt -s nullglob
+  specs=("$APP_DERIVED_DATA"/Build/Products/WinnowApp_*.xctestrun)
+  [[ ${#specs[@]} == 1 ]] || { echo 'Expected exactly one app test specification' >&2; exit 1; }
+  args=(-xctestrun "${specs[0]}")
+else
+  args=(-project WinnowApp.xcodeproj -scheme WinnowApp -configuration Debug
+        -derivedDataPath "$APP_DERIVED_DATA" -skipPackagePluginValidation -skipMacroValidation)
+fi
+xcodebuild "$APP_TEST_ACTION" "${args[@]}" \
   -destination "platform=iOS Simulator,id=$APP_SIMULATOR_ID" \
-  -derivedDataPath "$APP_DERIVED_DATA" \
   -resultBundlePath "$APP_RESULTS/AppTests.xcresult" \
   -only-testing:WinnowAppTests \
-  -skipPackagePluginValidation -skipMacroValidation \
   2>&1 | tee "$APP_RESULTS/app-tests.log"

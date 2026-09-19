@@ -203,6 +203,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path, nargs="?")
     choice = parser.add_mutually_exclusive_group()
+    choice.add_argument("--normalize-journey", type=Path, help="normalize verified journey media without building a website")
     choice.add_argument("--journey", type=Path, help="successful raw CI journey directory")
     choice.add_argument("--media", type=Path, help="cached normalized journey-media artifact")
     choice.add_argument("--validate-media", type=Path, help="only validate cached media; do not build or copy")
@@ -213,9 +214,19 @@ def main(argv=None):
     if args.validate_media is not None:
         if any(value is not None for value in [args.output, args.media_output, args.source_sha, args.run_url]):
             parser.error("--validate-media cannot be combined with output or packaging options")
+    elif args.normalize_journey is not None:
+        if args.output is not None or args.media_output is None:
+            parser.error("--normalize-journey requires --media-output and no website output")
     elif args.output is None:
         parser.error("output is required unless --validate-media is used")
     try:
+        if args.normalize_journey is not None:
+            names = captures(ROOT)
+            source_sha, run_url = run_identity(args.source_sha, args.run_url, ROOT)
+            fresh_media(args.normalize_journey, args.media_output, names, source_sha, run_url)
+            validate_media(args.media_output, names)
+            print(f"Normalized verified journey media: {args.media_output}")
+            return
         if args.validate_media is not None:
             validate_media(args.validate_media, captures(ROOT))
             print(f"Validated cached journey media: {args.validate_media}")

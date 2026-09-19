@@ -75,11 +75,7 @@ extension XCTestCase {
             // not cost many seconds of waiting per drag.
             if element.appears(within: 1.5) {
                 guard fullyVisible else { return true }
-                if let revealed = reveal(app, element, fullyVisible: fullyVisible) {
-                    return revealed
-                }
-                // The nudge carried a lazy row out of the form's window;
-                // keep going until it materializes again.
+                return reveal(app, element, fullyVisible: fullyVisible)
             }
             let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: up ? 0.25 : 0.75))
             let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: up ? 0.75 : 0.25))
@@ -87,7 +83,7 @@ extension XCTestCase {
         }
         guard element.appears(within: 1.5) else { return false }
         guard fullyVisible else { return true }
-        return reveal(app, element, fullyVisible: fullyVisible) ?? false
+        return reveal(app, element, fullyVisible: fullyVisible)
     }
 
     /// The vertical band a row is tappable in: below the lowest navigation
@@ -120,9 +116,10 @@ extension XCTestCase {
 
     /// Drags `element` clear of the bars. A row taller than the band shows
     /// its top; `fullyVisible` requires its whole frame inside the clear area.
-    /// Nil when a lazily built row disappears or has no usable frame yet.
+    /// Wait for lazy-row geometry before another gesture. An extra downward
+    /// drag at the top of a form can dismiss its sheet and abandon signing.
     @MainActor
-    private func reveal(_ app: XCUIApplication, _ element: XCUIElement, fullyVisible: Bool) -> Bool? {
+    private func reveal(_ app: XCUIApplication, _ element: XCUIElement, fullyVisible: Bool) -> Bool {
         let margin: CGFloat = 8
         guard let appFrame = usableFrame(app) else { return false }
         // Each AX frame read resolves the element again. Reuse this geometry
@@ -131,7 +128,7 @@ extension XCTestCase {
         let reach = band.upperBound - band.lowerBound - 2 * margin
         guard reach.isFinite, reach > 0 else { return false }
         for attempt in 0 ... 3 {
-            guard let frame = usableFrame(element) else { return nil }
+            guard let frame = usableFrame(element, within: 1.5) else { return false }
             let shift = revealShift(frame, in: band, margin: margin, reach: reach)
             if shift == 0 {
                 // XCTest can reject a valid visible button's activation point.
@@ -150,12 +147,18 @@ extension XCTestCase {
     }
 
     @MainActor
-    private func usableFrame(_ element: XCUIElement) -> CGRect? {
-        guard element.exists else { return nil }
-        let frame = element.frame
-        guard !frame.isEmpty,
-              [frame.minX, frame.minY, frame.maxX, frame.maxY].allSatisfy(\.isFinite) else { return nil }
-        return frame
+    private func usableFrame(_ element: XCUIElement, within timeout: TimeInterval = 0) -> CGRect? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while true {
+            if element.exists {
+                let frame = element.frame
+                if !frame.isEmpty,
+                   [frame.minX, frame.minY, frame.maxX, frame.maxY].allSatisfy(\.isFinite) { return frame }
+            }
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { return nil }
+            Thread.sleep(forTimeInterval: min(0.2, remaining))
+        }
     }
 
     /// Call after revealing and enabling the element. SwiftUI can replace its

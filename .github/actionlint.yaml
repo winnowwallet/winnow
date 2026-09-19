@@ -1,0 +1,6 @@
+self-hosted-runner:
+  labels:
+    - winnow-tdx-package
+    - winnow-tdx-build
+    - winnow-tdx-units
+    - winnow-tdx-journey
