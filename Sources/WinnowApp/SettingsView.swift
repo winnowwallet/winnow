@@ -54,6 +54,7 @@ struct SettingsView: View {
                 BackupSection()
 
                 if model.advancedMode {
+                    PeerGatewaysSection()
                     Section {
                         Button(model.refreshingCatalog ? "Refreshing… \(model.catalogBytes) bytes" : "Refresh peer list") {
                             Task { await model.refreshPeerCatalog() }
@@ -93,7 +94,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Manual peers")
                 } footer: {
-                    Text("Manual peers are tried first. Seeds resolve over HTTPS (Cloudflare 1.1.1.1), with system DNS as the fallback. The default port is 8333 (mainnet) / 38333 (signet). Peers must advertise compact filters and pass Winnow's checks.")
+                    Text("Manual peers are tried first when their network is enabled. Clearnet seeds resolve over HTTPS (Cloudflare 1.1.1.1), with system DNS as the fallback. Overlay names are resolved by their SOCKS gateway. The default port is 8333 (mainnet) / 38333 (signet). Peers must advertise compact filters and pass Winnow's checks.")
                 }
                 }
 

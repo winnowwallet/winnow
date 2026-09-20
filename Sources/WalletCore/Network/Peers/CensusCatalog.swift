@@ -5,8 +5,8 @@ import Foundation
 /// Shared by release generation, refresh, and the census publisher.
 ///
 /// The published list carries `clearnet`, `tor` and `i2p` arrays. The wallet
-/// dials clearnet only, so validation reads the clearnet array and keeps
-/// nothing else: a validated catalog has exactly one network.
+/// uses overlay entries only when a gateway is configured. Every retained
+/// entry is validated before it can reach the peer pool.
 public struct CensusCatalog: Codable, Equatable, Sendable {
     public struct Entry: Codable, Equatable, Sendable {
         public var host: String
@@ -71,7 +71,27 @@ public struct CensusCatalog: Codable, Equatable, Sendable {
         guard tip > 0 else { throw Invalid.height }
         var result = self
         result.networks = ["clearnet": try validatedEntries(entries, minimum: minimumEntries)]
+        for network in [PeerNetwork.tor, .i2p] {
+            if let entries = networks[network.rawValue] {
+                result.networks[network.rawValue] = try validatedOverlayEntries(entries, network: network)
+            }
+        }
         return result
+    }
+
+    private func validatedOverlayEntries(_ entries: [Entry], network: PeerNetwork) throws -> [Entry] {
+        guard entries.count <= 2_000 else { throw Invalid.size }
+        var seen = Set<PeerEndpoint>()
+        return try entries.map { input in
+            var entry = input
+            guard entry.port > 0, entry.userAgent.utf8.count <= 256,
+                  !entry.userAgent.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 }),
+                  let host = network.canonicalHost(entry.host) else { throw Invalid.endpoint }
+            guard Self.nearTip(entry.startHeight, tip: tip) else { throw Invalid.height }
+            entry.host = host
+            guard seen.insert(entry.endpoint).inserted else { throw Invalid.duplicate }
+            return entry
+        }.sorted { ($0.host, $0.port) < ($1.host, $1.port) }
     }
 
     private func validatedEntries(_ entries: [Entry], minimum: Int) throws -> [Entry] {

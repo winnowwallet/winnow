@@ -23,7 +23,9 @@ SOCKS CONNECT request before starting the Bitcoin handshake. Proxy failures
 never fall back to a direct connection. Negotiation is bounded by the connection
 timeout and releases the connection when cancelled.
 
-The default is `nil` (direct TCP). The GUI wallet continues to use that default;
-this API does not start Tor/I2P routers or add wallet settings. Loopback coverage
+The default is `nil` (direct TCP). The GUI wallet can discover external gateways
+through MagicDNS or accept manual gateway settings; see
+[gateway discovery](../../../../docs/peer-gateways.md). The library never starts
+Tor/I2P routers. PeerPool applies a network allowlist before selecting a proxy. Loopback coverage
 in [SOCKS tests](../../../../Tests/WalletCoreTests/Network/SocksProxyTests.swift)
 checks routing, refusal, malformed replies, timeout, cancellation, and direct TCP.

@@ -47,6 +47,7 @@ public actor PeerPool {
     private let peersFileURL: URL?
     /// DNS-seed resolver (DoH, then getaddrinfo). Injectable for tests.
     private let seedResolver: SeedResolver
+    public let gateways: PeerGatewayConfiguration
     private var censusCatalog: CensusCatalog?
     private let catalogNow: @Sendable () -> Date
     private var inFlight: [PeerEndpoint: PeerConnection] = [:]
@@ -128,9 +129,11 @@ public actor PeerPool {
                 maxParallelDials: Int = 5, maxDialAttempts: Int = 50,
                 seedResolver: SeedResolver? = nil,
                 censusCatalog: CensusCatalog? = nil,
+                gateways: PeerGatewayConfiguration = .init(),
                 catalogNow: @Sendable @escaping () -> Date = { Date() },
                 avoidOnReset: Set<PeerEndpoint> = [],
                 now: @Sendable @escaping () -> ContinuousClock.Instant = { ContinuousClock.now }) {
+        self.gateways = gateways
         self.params = params
         self.peerCount = peerCount
         self.manualPeers = manualPeers
@@ -559,12 +562,12 @@ public actor PeerPool {
               attemptsThisRound < maxDialAttempts {
             let candidate = queue[next]
             next += 1
-            guard policy.admits(candidate, given: seatedCandidates()) else { continue }
+            guard gateways.permits(candidate.endpoint), policy.admits(candidate, given: seatedCandidates()) else { continue }
             let endpoint = candidate.endpoint
             running += 1
             attemptsThisRound += 1
             let peer = PeerConnection(endpoint: endpoint, params: params,
-                                      relayPreference: relayPreference)
+                                      relayPreference: relayPreference, socksProxy: gateways.proxy(for: endpoint))
             inFlight[endpoint] = peer
             group.addTask { [dialTimeout] in
                 do {
@@ -646,7 +649,7 @@ public actor PeerPool {
                 // results. Local peers still get the first dial slots.
                 if next >= queue.count && !resolvedSeeds && (running == 0 || manualPeers.isEmpty) {
                     resolvedSeeds = true
-                    for seed in params.dnsSeeds.shuffled() {
+                    for seed in (gateways.isValid && gateways.networks.contains(.clearnet) ? params.dnsSeeds.shuffled() : []) {
                         seedLookups += 1
                         group.addTask { [seedResolver, params] in
                             .seeds(await seedResolver.resolve(host: seed,
@@ -660,7 +663,7 @@ public actor PeerPool {
                 switch result {
                 case let .seeds(endpoints):
                     seedLookups -= 1
-                    queue += endpoints.filter { seen.insert($0).inserted }
+                    queue += endpoints.filter { gateways.permits($0) && seen.insert($0).inserted }
                         .map { PeerCandidate(endpoint: $0, source: .dnsSeed) }
                 case let .dial(endpoint, dialed):
                     running -= 1
@@ -766,12 +769,24 @@ public actor PeerPool {
                   (0...CensusCatalog.maximumAgeDays).contains(Int(floor(catalogNow().timeIntervalSince1970 / 86_400)) - day) else { return nil }
             return catalog
         }
-        let automatic = (freshCatalog?.networks["clearnet"]?.map(\.endpoint) ?? []).shuffled()
+        let automatic = interleavedCatalogEndpoints(freshCatalog)
         let preferred = automatic.filter { !avoidOnReset.contains($0) }
         let previous = automatic.filter { avoidOnReset.contains($0) }
         ordered += (preferred + previous).map { PeerCandidate(endpoint: $0, source: .census) }
         var seen = connected
-        return ordered.filter { seen.insert($0.endpoint).inserted }
+        return ordered.filter { gateways.permits($0.endpoint) && seen.insert($0.endpoint).inserted }
+    }
+
+    /// A large Tor list must not occupy every initial dial while a usable
+    /// clearnet candidate waits behind it. Shuffle within each network, then
+    /// interleave the networks; provenance checks still govern actual seats.
+    private func interleavedCatalogEndpoints(_ catalog: CensusCatalog?) -> [PeerEndpoint] {
+        let lists = PeerNetwork.allCases.filter { gateways.networks.contains($0) }.map {
+            (catalog?.networks[$0.rawValue]?.map(\.endpoint) ?? []).shuffled()
+        }
+        return (0..<(lists.map(\.count).max() ?? 0)).flatMap { index in
+            lists.compactMap { index < $0.count ? $0[index] : nil }
+        }
     }
 
     /// Refresh only changes future discovery. Existing peers stay connected.

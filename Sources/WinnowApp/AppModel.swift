@@ -322,6 +322,12 @@ final class AppModel {
     /// was in flight fails rather than finishing in the background; the next
     /// activation makes a new one.
     private(set) var httpClient = RoutedHTTPClient()
+    private(set) var gatewaySettings: PeerGatewaySettings
+    private(set) var activePeerGateways = PeerGatewayConfiguration()
+    private(set) var discoveringGateways = false
+    private let discoverGateways: @Sendable () async -> PeerGatewayConfiguration
+    private var gatewayDiscoveryTask: Task<PeerGatewayConfiguration, Never>?
+    private var preparedGatewayGeneration: UInt64?
     /// Bumps on every suspend, network switch and rebuild. Async work reads
     /// it before starting and again after each await, and drops its result
     /// when the generation it started in is over.
@@ -407,7 +413,11 @@ final class AppModel {
     init(deviceAuthenticator: (any DeviceAuthenticating)? = nil,
          e2e: E2EMode? = E2EMode.current, defaults: UserDefaults = .standard,
          storeKeys: (any StoreKeyVault)? = nil, keyStore: (any KeyStore)? = nil,
-         cloudBackups: CloudBackupController? = nil) {
+         cloudBackups: CloudBackupController? = nil,
+         discoverGateways: @escaping @Sendable () async -> PeerGatewayConfiguration = {
+             await TailnetGatewayDiscovery().discover()
+         }) {
+        self.discoverGateways = discoverGateways
         self.cloudBackups = cloudBackups ?? CloudBackupController()
         allowsCloudBackup = e2e == nil || cloudBackups != nil
         self.deviceAuthenticator = deviceAuthenticator
@@ -426,6 +436,16 @@ final class AppModel {
         peopleStore = PeopleStore(keys: storeKeys)
         let defaults = e2e?.defaults ?? defaults
         self.defaults = defaults
+        let initialGatewaySettings: PeerGatewaySettings
+        if defaults.object(forKey: "peerGatewaySettings") != nil {
+            initialGatewaySettings = defaults.data(forKey: "peerGatewaySettings").flatMap {
+                try? JSONDecoder().decode(PeerGatewaySettings.self, from: $0)
+            } ?? .init(mode: .manual, manual: .init(networks: []))
+        } else { initialGatewaySettings = .init() }
+        gatewaySettings = initialGatewaySettings
+        let initialGateways = initialGatewaySettings.mode == .manual ? initialGatewaySettings.manual : PeerGatewayConfiguration()
+        activePeerGateways = initialGateways
+        httpClient = RoutedHTTPClient(proxy: initialGateways.httpProxy, enabled: initialGateways.permitsPublicHTTP)
         // 0.7.0 and earlier shipped an opt-in Tor route (`torEnabled`). It
         // is gone with 0.7.1; an installation that had it on is told once
         // rather than silently connecting directly.
@@ -581,7 +601,9 @@ final class AppModel {
         if case .storageDamaged = stage { return }
         scheduleAutomaticCloudPreparation()
         let epoch = networkGeneration
-        if httpClient.isCancelled { httpClient = RoutedHTTPClient() }
+        if httpClient.isCancelled {
+            httpClient = RoutedHTTPClient(proxy: activePeerGateways.httpProxy, enabled: activePeerGateways.permitsPublicHTTP)
+        }
         await buildStackIfNeeded()
         guard epoch == networkGeneration, isActive else { return }
         schedulePeerCatalogRefresh()
@@ -595,6 +617,9 @@ final class AppModel {
     /// fails, and async work that started before this call discards its
     /// result. Callers then stop the pool; `activate()` starts the next one.
     private func suspendNetworking() {
+        gatewayDiscoveryTask?.cancel()
+        gatewayDiscoveryTask = nil
+        discoveringGateways = false
         automaticCatalogTask?.cancel()
         automaticCatalogTask = nil
         networkGeneration &+= 1
@@ -604,6 +629,11 @@ final class AppModel {
     /// Retries peer discovery after the pool reported exhaustion (the UI's
     /// Retry button). Rebuilds the stack when it never came up.
     func retryPeerDiscovery() async {
+        if gatewaySettings.mode == .automatic {
+            nextAutomaticCatalogAttempt = .distantPast
+            await reconnect()
+            return
+        }
         nextAutomaticCatalogAttempt = .distantPast
         schedulePeerCatalogRefresh()
         if let stack {
@@ -724,10 +754,11 @@ final class AppModel {
         PeerPool(params: params, peerCount: e2e?.peerCount ?? 3, manualPeers: parsedManualPeers(),
                                 peersFileURL: dir.appending(path: "peers.json"),
                                 relayPreference: true,
-                                dialTimeout: .seconds(5),
+                                dialTimeout: activePeerGateways.networks == [.clearnet] ? .seconds(5) : .seconds(30),
                                 seedResolver: .routed(client: httpClient),
                                 censusCatalog: network == .mainnet
                                     ? catalogStore?.load(trusting: censusTrustedKeys)?.catalog : nil,
+                                gateways: activePeerGateways,
                                 avoidOnReset: peersToAvoid)
     }
 
@@ -738,15 +769,18 @@ final class AppModel {
     }
 
     private func buildStackIfNeeded() async {
-        guard stack == nil else { return }
+        guard stack == nil, let dir = storageDirectory() else { return }
         if buildingStack {
             await waitForStackBuild()
             return
         }
-        guard let dir = storageDirectory() else { return }
         let epoch = networkGeneration
         buildingStack = true
         defer { buildingStack = false }
+        // Wallet creation/import can request the stack before activation has
+        // finished. Every entry point must wait for the same routing decision.
+        await preparePeerGateways()
+        guard epoch == networkGeneration, isActive, !Task.isCancelled else { return }
         do {
             let params = e2e?.networkParams ?? NetworkParams.params(for: network)
             // relayPreference: peers inv us relayed transactions so bounded
@@ -2583,6 +2617,50 @@ final class AppModel {
         stack = nil
         await previous?.pool.stop()
         await previous?.broadcaster.shutdown()
+    }
+
+    /// Resolve once per foreground generation. No address discovered on one
+    /// tailnet is persisted or reused when the next foreground starts.
+    func preparePeerGateways() async {
+        let epoch = networkGeneration
+        guard preparedGatewayGeneration != epoch else { return }
+        let config: PeerGatewayConfiguration
+        switch gatewaySettings.mode {
+        case .direct: config = .init()
+        case .manual: config = gatewaySettings.manual
+        case .automatic:
+            // UI journeys never probe the developer's real tailnet.
+            if e2e != nil { config = .init(); break }
+            if gatewayDiscoveryTask == nil {
+                discoveringGateways = true
+                gatewayDiscoveryTask = Task { [discoverGateways] in await discoverGateways() }
+            }
+            guard let task = gatewayDiscoveryTask else { return }
+            config = await task.value
+        }
+        guard epoch == networkGeneration, !Task.isCancelled else { return }
+        preparedGatewayGeneration = epoch
+        gatewayDiscoveryTask = nil
+        discoveringGateways = false
+        if activePeerGateways == config, !httpClient.isCancelled { return }
+        activePeerGateways = config
+        httpClient.cancel()
+        httpClient = RoutedHTTPClient(proxy: config.httpProxy, enabled: config.permitsPublicHTTP)
+    }
+
+    func setPeerGatewaySettings(_ settings: PeerGatewaySettings) async throws {
+        guard settings.mode != .manual || settings.manual.isValid else {
+            throw PeerGatewayConfiguration.Invalid.configuration
+        }
+        let data = try JSONEncoder().encode(settings)
+        suspendNetworking()
+        gatewaySettings = settings
+        defaults.set(data, forKey: "peerGatewaySettings")
+        activePeerGateways = settings.mode == .manual ? settings.manual : .init()
+        // Apply returns promptly; connection and discovery continue in the
+        // foreground. The old networking generation cannot install a result.
+        await stopNetworking()
+        Task { [weak self] in await self?.activate() }
     }
 
     /// Rebuilds the stack so changed peer settings take effect.

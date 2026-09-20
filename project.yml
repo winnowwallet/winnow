@@ -30,6 +30,7 @@ targets:
       path: build/WinnowApp-Info.plist
       properties:
         LSMinimumSystemVersion: "14.0"
+        NSLocalNetworkUsageDescription: "Winnow checks your Tailscale gateways and connects to Bitcoin nodes you configure."
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
     sources:
