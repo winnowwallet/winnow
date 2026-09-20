@@ -1,5 +1,6 @@
 import Foundation
 import os
+import Network
 
 /// One ephemeral HTTP session. Every fetch names one host on purpose — the
 /// census, a DNS-over-HTTPS resolver, an explorer — so a redirect may move
@@ -38,12 +39,16 @@ public final class RoutedHTTPClient: Sendable {
         }
     }
     private let session: URLSession
+    public let proxy: PeerEndpoint?
+    public let enabled: Bool
     private struct Requests {
         var closed = false
         var tasks: [UUID: Task<Data, Error>] = [:]
     }
     private let requests = OSAllocatedUnfairLock(initialState: Requests())
-    public init() {
+    public init(proxy: PeerEndpoint? = nil, enabled: Bool = true) {
+        self.proxy = proxy
+        self.enabled = enabled && (proxy == nil || PeerGatewayConfiguration.validProxy(proxy))
         let config = URLSessionConfiguration.ephemeral
         config.httpShouldSetCookies = false
         config.httpCookieStorage = nil
@@ -52,6 +57,11 @@ public final class RoutedHTTPClient: Sendable {
         // Finite inactivity and whole-resource limits.
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 120
+        if let proxy, let port = NWEndpoint.Port(rawValue: proxy.port) {
+            config.proxyConfigurations = [ProxyConfiguration(socksv5Proxy: .hostPort(host: NWEndpoint.Host(proxy.host), port: port))]
+            config.timeoutIntervalForRequest = 90
+            config.timeoutIntervalForResource = 180
+        }
         session = URLSession(configuration: config, delegate: RedirectPolicy(), delegateQueue: nil)
     }
     deinit { session.invalidateAndCancel() }
@@ -67,7 +77,7 @@ public final class RoutedHTTPClient: Sendable {
     }
     public func get(_ url: URL, maximumBytes: Int, accept: String? = nil,
                     progress: (@Sendable (Int) -> Void)? = nil) async throws -> Data {
-        guard Self.permits(url), maximumBytes > 0 else { throw Failure.unavailable }
+        guard enabled, Self.permits(url), maximumBytes > 0 else { throw Failure.unavailable }
         let id = UUID()
         // Admit and register the owned task under the same lock used by
         // cancel(). Invalidate URLSession only at deinit: Foundation raises an
