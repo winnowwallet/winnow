@@ -15,3 +15,15 @@ Wire types live in [Protocol](../Protocol/README.md).
 [peer-pool tests](../../../../Tests/WalletCoreTests/Network/PeerPoolTests.swift), and
 [wire tests](../../../../Tests/WalletCoreTests/Network/WireTests.swift) exercise it through
 controlled peers. Real-network soak evidence adds observations beyond loopback tests.
+
+Library callers such as the census may pass `socksProxy: PeerEndpoint(...)`
+to `PeerConnection` to use an external, unauthenticated SOCKS5 gateway. TCP
+connects to that gateway and sends the destination hostname unresolved in a
+SOCKS CONNECT request before starting the Bitcoin handshake. Proxy failures
+never fall back to a direct connection. Negotiation is bounded by the connection
+timeout and releases the connection when cancelled.
+
+The default is `nil` (direct TCP). The GUI wallet continues to use that default;
+this API does not start Tor/I2P routers or add wallet settings. Loopback coverage
+in [SOCKS tests](../../../../Tests/WalletCoreTests/Network/SocksProxyTests.swift)
+checks routing, refusal, malformed replies, timeout, cancellation, and direct TCP.
