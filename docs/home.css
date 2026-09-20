@@ -13,3 +13,7 @@ footer{display:flex;align-items:center;justify-content:space-between;gap:24px;pa
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{transition:none!important}}
 
 @media(forced-colors:active){.mode-choice:has(input:checked)>span{outline:3px solid Highlight;outline-offset:-3px}.mode-choice:has(input:focus-visible)>span{outline:3px dashed Highlight;outline-offset:3px}.key-dot{border:1px solid CanvasText}.key-dot.absent{border-style:dashed}}
+
+/* Keep homepage navigation readable when the network links wrap. */
+.site-header nav{flex-wrap:wrap;justify-content:flex-end;column-gap:20px;row-gap:0}
+@media(max-width:650px){.site-header{height:auto;min-height:102px;align-items:flex-start;flex-direction:column;gap:12px;padding-block:20px}.site-header nav{justify-content:flex-start;column-gap:18px}}

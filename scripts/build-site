@@ -141,7 +141,7 @@ def homepage(journeys, cases):
 </head><body>
 <a class="skip-link" href="#main">Skip to content</a>
 <header class="site-header wrap"><a class="brand" href="/" aria-label="Winnow home"><span class="brand-icon" aria-hidden="true">₿</span> winnow</a>
-<nav aria-label="Main"><a href="/architecture">How it works</a><a href="https://github.com/winnowwallet/winnow">GitHub <span aria-hidden="true">↗</span></a></nav></header>
+<nav aria-label="Main"><a href="https://census.winnowwallet.com/">Census</a><a href="https://census.winnowwallet.com/health/">Network health</a><a href="/architecture">How it works</a><a href="https://github.com/winnowwallet/winnow">GitHub <span aria-hidden="true">↗</span></a></nav></header>
 <main id="main" class="wrap">
 <section class="hero" aria-labelledby="hero-title">
 <div class="hero-copy"><p class="eyebrow"><span></span> A BITCOIN WALLET FOR IPHONE</p>
