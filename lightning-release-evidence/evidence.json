@@ -51,7 +51,7 @@
   },
   "notes": [
     "Physical-device checks are deferred to the internal regtest TestFlight beta; no physical verification is claimed.",
-    "This evidence permits upload-only with the encryption plist value YES. It does not permit tester assignment or assert an exemption.",
+    "This evidence permits upload-only with encryption declaration keys absent, invoking Apple\u2019s questionnaire. It does not permit tester assignment or assert an exemption.",
     "Journey manifests hash the unedited videos retained in the task evidence package. Hosted CI recording and full peer evidence are retained in CI run 36208451486."
   ]
 }
