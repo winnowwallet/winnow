@@ -10,7 +10,7 @@
     "containsProprietaryCryptography": false,
     "containsThirdPartyCryptography": true
   },
-  "app_description": "Native Swift Bitcoin Lightning research wallet, tested using regtest coins. Uses publicly documented AES-GCM, ChaCha20-Poly1305, ChaCha20, HMAC/SHA-256, secp256k1 ECDH, ECDSA and Schnorr. CryptoKit provides the Apple cryptography; the app also includes libsecp256k1 and a Swift implementation of the standard ChaCha20 stream used by published BOLT 4 onion routing. This release is an international internal TestFlight beta, with no public App Store release requested.",
+  "app_description": "Internal TestFlight Swift Lightning regtest wallet. Uses published AES-GCM, ChaCha20-Poly1305, ChaCha20, HMAC/SHA-256, secp256k1 ECDH, ECDSA and Schnorr via CryptoKit, libsecp256k1 and Swift. International beta; no public App Store release requested.",
   "french_store_answer": {
     "value": false,
     "basis": "Current public App Store version 1.0 is PREPARE_FOR_SUBMISSION. This authorized rollout is international internal TestFlight only; no public App Store release is requested. This does not assume beta testers are all in the United States or change any country availability settings."

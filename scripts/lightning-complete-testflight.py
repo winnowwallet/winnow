@@ -22,6 +22,12 @@ assert draft['source'] == SOURCE and draft['bundle'] == BUNDLE
 assert draft['distribution_scope'] == 'International internal TestFlight beta; no public App Store release requested'
 
 
+class AppleError(RuntimeError):
+    def __init__(self, method, endpoint, status, details):
+        self.status, self.details = status, details
+        super().__init__(f'Apple {method} {endpoint}: HTTP {status}: {json.dumps(details)}')
+
+
 def asc(method, endpoint, data=None):
     token = subprocess.check_output(['swift', str(ROOT / 'scripts/asc-jwt.swift'), os.environ['ASC_KEY_PATH'],
         os.environ['ASC_KEY_ID'], os.environ['ASC_ISSUER_ID']], text=True).strip()
@@ -34,7 +40,7 @@ def asc(method, endpoint, data=None):
             return json.loads(raw) if raw else None
     except urllib.error.HTTPError as error:
         details = json.loads(error.read())
-        raise RuntimeError(f'Apple {method} {endpoint}: HTTP {error.code}: {json.dumps(details)}') from None
+        raise AppleError(method, endpoint, error.code, details) from None
 
 
 assert asc('GET', '/apps/' + APP)['data']['attributes']['bundleId'] == BUNDLE
@@ -46,27 +52,44 @@ versions = asc('GET', '/apps/' + APP + '/appStoreVersions?limit=200')['data']
 assert all(v['attributes']['appStoreState'] == 'PREPARE_FOR_SUBMISSION' for v in versions), 'public store distribution needs a separate availability review'
 attributes = dict(appDescription=draft['app_description'], availableOnFrenchStore=False,
                   containsProprietaryCryptography=False, containsThirdPartyCryptography=True)
+assert len(attributes['appDescription']) <= 300
+assert draft['french_store_answer']['value'] is False
 assert draft['technical_answers'] == dict(uses_encryption=True, containsProprietaryCryptography=False, containsThirdPartyCryptography=True)
 existing = asc('GET', '/appEncryptionDeclarations?filter[app]=' + APP + '&limit=200')['data']
 matching = [d for d in existing if all(d['attributes'].get(k) == v for k, v in attributes.items())]
 assert len(matching) <= 1, 'ambiguous existing declaration'
+no_document_response = None
 if matching:
     declaration = matching[0]
 else:
-    declaration = asc('POST', '/appEncryptionDeclarations', {'data': {
-        'type': 'appEncryptionDeclarations', 'attributes': attributes,
-        'relationships': {'app': {'data': {'type': 'apps', 'id': APP}}}}})['data']
+    try:
+        declaration = asc('POST', '/appEncryptionDeclarations', {'data': {
+            'type': 'appEncryptionDeclarations', 'attributes': attributes,
+            'relationships': {'app': {'data': {'type': 'apps', 'id': APP}}}}})['data']
+    except AppleError as error:
+        # Apple documents that standard outside-OS crypto needs an encryption
+        # document only for French App Store distribution. Its API refuses to
+        # create a declaration for the other cases. Match only that response;
+        # permission, validation and unrelated 409 errors must still fail.
+        errors = error.details.get('errors', [])
+        expected = 'Cannot create appEncryptionDeclarations unless either containsProprietaryCryptography is True or containsThirdPartyCryptography and availableOnFrenchStore are both True'
+        assert error.status == 409 and len(errors) == 1 and errors[0]['code'] == 'ENTITY_ERROR.ATTRIBUTE.INVALID' and errors[0]['detail'] == expected, str(error)
+        no_document_response = {'http_status': error.status, 'response': error.details}
+        declaration = None
 result = dict(receipt, distribution_scope=draft['distribution_scope'], declaration=declaration,
-              questionnaire_answers=attributes, available_to_internal_testers=False)
+              questionnaire_answers=attributes, apple_no_document_response=no_document_response,
+              documentation_basis='https://developer.apple.com/help/app-store-connect/reference/app-information/export-compliance-documentation-for-encryption/',
+              available_to_internal_testers=False)
 destination = ROOT / 'control-output/finalization.json'
 destination.parent.mkdir(exist_ok=True)
 destination.write_text(json.dumps(result, indent=2) + '\n')
-state = declaration['attributes']['appEncryptionDeclarationState']
-if state != 'APPROVED':
+state = declaration['attributes']['appEncryptionDeclarationState'] if declaration else 'DOCUMENTATION_NOT_REQUIRED'
+if declaration and state != 'APPROVED':
     print('Apple declaration state: ' + state + '; tester assignment remains pending.')
     raise SystemExit(0)
-assert declaration['attributes']['usesEncryption'] is True
-exempt = declaration['attributes']['exempt']
+if declaration:
+    assert declaration['attributes']['usesEncryption'] is True
+exempt = declaration['attributes']['exempt'] if declaration else True
 assert isinstance(exempt, bool), 'Apple did not return a determination'
 nonexempt = not exempt
 current = asc('GET', '/builds/' + build_id)['data']['attributes']['usesNonExemptEncryption']
@@ -84,6 +107,6 @@ environment = dict(os.environ, TESTFLIGHT_BUNDLE_ID=BUNDLE, TESTFLIGHT_MARKETING
                    TESTFLIGHT_BUILD_NUMBER='2', TESTFLIGHT_BUILD_ID=build_id)
 subprocess.run([str(ROOT.parent / 'tooling/scripts/testflight.sh'), 'internal'], env=environment, check=True)
 result.update(available_to_internal_testers=True, internal_group='PQLN Regtest Internal',
-              apple_encryption_determination={'exempt': exempt, 'declaration_id': declaration['id'], 'state': state})
+              apple_encryption_determination={'exempt_from_documentation': exempt, 'declaration_id': declaration['id'] if declaration else None, 'state': state})
 destination.write_text(json.dumps(result, indent=2) + '\n')
 print('Verified existing internal group can install version 0.2.0 build 2.')
