@@ -1,0 +1,547 @@
+{
+  "attempt": 1,
+  "conclusion": "success",
+  "createdAt": "2026-09-26T01:26:53Z",
+  "databaseId": 36208451486,
+  "event": "pull_request",
+  "headSha": "ac1f6e72a490bfb6413bcfda6730756856329095",
+  "jobs": [
+    {
+      "completedAt": "2026-09-26T02:08:19Z",
+      "conclusion": "success",
+      "databaseId": 108309965953,
+      "name": "Swift Lightning independent peers",
+      "startedAt": "2026-09-26T01:27:35Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-26T01:27:36Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-26T01:27:35Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:27:41Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "number": 2,
+          "startedAt": "2026-09-26T01:27:36Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:27:41Z",
+          "conclusion": "success",
+          "name": "Use the same Python runtime as Winnow validation",
+          "number": 3,
+          "startedAt": "2026-09-26T01:27:41Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:27:42Z",
+          "conclusion": "success",
+          "name": "Research release evidence and signing policy tests",
+          "number": 4,
+          "startedAt": "2026-09-26T01:27:41Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:28:02Z",
+          "conclusion": "success",
+          "name": "Prepare host-only reference tools",
+          "number": 5,
+          "startedAt": "2026-09-26T01:27:42Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:42:56Z",
+          "conclusion": "success",
+          "name": "Build unmodified reference peers and verify pinned async behavior",
+          "number": 6,
+          "startedAt": "2026-09-26T01:28:02Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:45:24Z",
+          "conclusion": "success",
+          "name": "Swift state, persistence, transport and vector tests",
+          "number": 7,
+          "startedAt": "2026-09-26T01:42:57Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:45:35Z",
+          "conclusion": "success",
+          "name": "Upstream LDK offer, request and static-invoice checks",
+          "number": 8,
+          "startedAt": "2026-09-26T01:45:24Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:46:03Z",
+          "conclusion": "success",
+          "name": "Swift-to-LDK async settlement with both clients offline",
+          "number": 9,
+          "startedAt": "2026-09-26T01:45:35Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:46:28Z",
+          "conclusion": "success",
+          "name": "LDK-to-Swift async settlement with both clients offline",
+          "number": 10,
+          "startedAt": "2026-09-26T01:46:03Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:46:48Z",
+          "conclusion": "success",
+          "name": "Swift-to-LDK async settlement across provider crashes",
+          "number": 11,
+          "startedAt": "2026-09-26T01:46:28Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:47:07Z",
+          "conclusion": "success",
+          "name": "LDK-to-Swift async settlement across provider crashes",
+          "number": 12,
+          "startedAt": "2026-09-26T01:46:48Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:47:42Z",
+          "conclusion": "success",
+          "name": "Recipient never returns; Swift recovers without either provider",
+          "number": 13,
+          "startedAt": "2026-09-26T01:47:07Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:48:25Z",
+          "conclusion": "success",
+          "name": "Stock-peer payments, process restart and force close",
+          "number": 14,
+          "startedAt": "2026-09-26T01:47:42Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:49:04Z",
+          "conclusion": "success",
+          "name": "Stock-peer payments, process restart and cooperative close",
+          "number": 15,
+          "startedAt": "2026-09-26T01:48:25Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:49:05Z",
+          "conclusion": "success",
+          "name": "Install pinned app project generator",
+          "number": 16,
+          "startedAt": "2026-09-26T01:49:04Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T02:01:14Z",
+          "conclusion": "success",
+          "name": "Record Swift app sharing, offline payment, crashes and returned funds",
+          "number": 17,
+          "startedAt": "2026-09-26T01:49:05Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T02:07:45Z",
+          "conclusion": "success",
+          "name": "Compile the device research release and exclude test activation",
+          "number": 18,
+          "startedAt": "2026-09-26T02:01:14Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T02:07:54Z",
+          "conclusion": "success",
+          "name": "Preserve app recording and independent evidence",
+          "number": 19,
+          "startedAt": "2026-09-26T02:07:45Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T02:07:55Z",
+          "conclusion": "success",
+          "name": "Preserve reference and interoperability evidence",
+          "number": 20,
+          "startedAt": "2026-09-26T02:07:54Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T02:07:55Z",
+          "conclusion": "success",
+          "name": "Post Use the same Python runtime as Winnow validation",
+          "number": 39,
+          "startedAt": "2026-09-26T02:07:55Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T02:07:56Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "number": 40,
+          "startedAt": "2026-09-26T02:07:55Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T02:08:13Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 41,
+          "startedAt": "2026-09-26T02:07:56Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/posix4e/winnow-lightning/actions/runs/36208451486/job/108309965953"
+    },
+    {
+      "completedAt": "2026-09-26T01:58:14Z",
+      "conclusion": "success",
+      "databaseId": 108309966075,
+      "name": "hosted / build",
+      "startedAt": "2026-09-26T01:27:33Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-26T01:27:36Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-26T01:27:34Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:27:38Z",
+          "conclusion": "success",
+          "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "number": 2,
+          "startedAt": "2026-09-26T01:27:36Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:27:38Z",
+          "conclusion": "success",
+          "name": "Prepare fresh evidence and shared build directory",
+          "number": 3,
+          "startedAt": "2026-09-26T01:27:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:27:38Z",
+          "conclusion": "success",
+          "name": "Set up Python",
+          "number": 4,
+          "startedAt": "2026-09-26T01:27:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:27:39Z",
+          "conclusion": "success",
+          "name": "Reuse tested journey media when only the website changed",
+          "number": 5,
+          "startedAt": "2026-09-26T01:27:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:27:39Z",
+          "conclusion": "skipped",
+          "name": "Download the matching journey media",
+          "number": 6,
+          "startedAt": "2026-09-26T01:27:39Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:27:39Z",
+          "conclusion": "skipped",
+          "name": "Validate downloaded journey media",
+          "number": 7,
+          "startedAt": "2026-09-26T01:27:39Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:27:43Z",
+          "conclusion": "success",
+          "name": "Check website, artifact reuse and release tooling",
+          "number": 8,
+          "startedAt": "2026-09-26T01:27:39Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:27:49Z",
+          "conclusion": "success",
+          "name": "Complexity budget and test gates",
+          "number": 9,
+          "startedAt": "2026-09-26T01:27:43Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:27:58Z",
+          "conclusion": "success",
+          "name": "Prepare fresh journey tools",
+          "number": 10,
+          "startedAt": "2026-09-26T01:27:49Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:30:29Z",
+          "conclusion": "success",
+          "name": "Package and debugging tool tests",
+          "number": 11,
+          "startedAt": "2026-09-26T01:27:58Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:32:10Z",
+          "conclusion": "success",
+          "name": "Release-build production package and reject first-party warnings",
+          "number": 12,
+          "startedAt": "2026-09-26T01:30:29Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:32:18Z",
+          "conclusion": "success",
+          "name": "Validate Swift Lightning transactions with Bitcoin Core",
+          "number": 13,
+          "startedAt": "2026-09-26T01:32:10Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:32:18Z",
+          "conclusion": "success",
+          "name": "Exercise release debugging commands",
+          "number": 14,
+          "startedAt": "2026-09-26T01:32:18Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:32:18Z",
+          "conclusion": "success",
+          "name": "Generate deterministic SBOM and build provenance",
+          "number": 15,
+          "startedAt": "2026-09-26T01:32:18Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:32:19Z",
+          "conclusion": "success",
+          "name": "Upload build log, SBOM, and provenance",
+          "number": 16,
+          "startedAt": "2026-09-26T01:32:18Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:32:32Z",
+          "conclusion": "success",
+          "name": "Bounded deterministic fuzz smoke",
+          "number": 17,
+          "startedAt": "2026-09-26T01:32:19Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:32:33Z",
+          "conclusion": "success",
+          "name": "Upload fuzz log and reproducer",
+          "number": 18,
+          "startedAt": "2026-09-26T01:32:32Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:32:33Z",
+          "conclusion": "success",
+          "name": "Install pinned XcodeGen",
+          "number": 19,
+          "startedAt": "2026-09-26T01:32:33Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:32:36Z",
+          "conclusion": "success",
+          "name": "Generate project and choose the shared iPhone simulator",
+          "number": 20,
+          "startedAt": "2026-09-26T01:32:33Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:33:38Z",
+          "conclusion": "success",
+          "name": "Build Debug app and test runners once",
+          "number": 21,
+          "startedAt": "2026-09-26T01:32:36Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:36:55Z",
+          "conclusion": "success",
+          "name": "App unit tests (required)",
+          "number": 22,
+          "startedAt": "2026-09-26T01:33:38Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:37:01Z",
+          "conclusion": "success",
+          "name": "Verify resolved Debug dependencies",
+          "number": 23,
+          "startedAt": "2026-09-26T01:36:55Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:39:46Z",
+          "conclusion": "success",
+          "name": "Start the trusted run's isolated signet fixture",
+          "number": 24,
+          "startedAt": "2026-09-26T01:37:01Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:53:08Z",
+          "conclusion": "success",
+          "name": "Recorded signet UI journey",
+          "number": 25,
+          "startedAt": "2026-09-26T01:39:46Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:53:12Z",
+          "conclusion": "success",
+          "name": "Stop the trusted run's simulator and fixture",
+          "number": 26,
+          "startedAt": "2026-09-26T01:53:08Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:55:56Z",
+          "conclusion": "success",
+          "name": "Build and inspect release app",
+          "number": 27,
+          "startedAt": "2026-09-26T01:53:12Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:56:06Z",
+          "conclusion": "success",
+          "name": "Upload app results",
+          "number": 28,
+          "startedAt": "2026-09-26T01:55:56Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:58:00Z",
+          "conclusion": "success",
+          "name": "Prepare the website artifact",
+          "number": 29,
+          "startedAt": "2026-09-26T01:56:06Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:58:04Z",
+          "conclusion": "success",
+          "name": "Save reusable journey media",
+          "number": 30,
+          "startedAt": "2026-09-26T01:58:00Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:58:07Z",
+          "conclusion": "success",
+          "name": "Upload the tested website",
+          "number": 31,
+          "startedAt": "2026-09-26T01:58:04Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:58:08Z",
+          "conclusion": "success",
+          "name": "Post Set up Python",
+          "number": 61,
+          "startedAt": "2026-09-26T01:58:07Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:58:08Z",
+          "conclusion": "success",
+          "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "number": 62,
+          "startedAt": "2026-09-26T01:58:08Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T01:58:10Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 63,
+          "startedAt": "2026-09-26T01:58:08Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/posix4e/winnow-lightning/actions/runs/36208451486/job/108309966075"
+    },
+    {
+      "completedAt": "2026-09-26T01:27:26Z",
+      "conclusion": "skipped",
+      "databaseId": 108309966556,
+      "name": "tdx",
+      "startedAt": "2026-09-26T01:27:26Z",
+      "status": "completed",
+      "steps": [],
+      "url": "https://github.com/posix4e/winnow-lightning/actions/runs/36208451486/job/108309966556"
+    },
+    {
+      "completedAt": "2026-09-26T01:58:15Z",
+      "conclusion": "skipped",
+      "databaseId": 108314860170,
+      "name": "website",
+      "startedAt": "2026-09-26T01:58:15Z",
+      "status": "completed",
+      "steps": [],
+      "url": "https://github.com/posix4e/winnow-lightning/actions/runs/36208451486/job/108314860170"
+    },
+    {
+      "completedAt": "2026-09-26T02:08:23Z",
+      "conclusion": "success",
+      "databaseId": 108316491025,
+      "name": "validation",
+      "startedAt": "2026-09-26T02:08:21Z",
+      "status": "completed",
+      "steps": [
+        {
+          "completedAt": "2026-09-26T02:08:22Z",
+          "conclusion": "success",
+          "name": "Set up job",
+          "number": 1,
+          "startedAt": "2026-09-26T02:08:22Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T02:08:22Z",
+          "conclusion": "success",
+          "name": "Run [[ \"$HOSTED:$TDX\" == success:skipped || \"$HOSTED:$TDX\" == skipped:success ]] || exit 1",
+          "number": 2,
+          "startedAt": "2026-09-26T02:08:22Z",
+          "status": "completed"
+        },
+        {
+          "completedAt": "2026-09-26T02:08:22Z",
+          "conclusion": "success",
+          "name": "Complete job",
+          "number": 3,
+          "startedAt": "2026-09-26T02:08:22Z",
+          "status": "completed"
+        }
+      ],
+      "url": "https://github.com/posix4e/winnow-lightning/actions/runs/36208451486/job/108316491025"
+    }
+  ],
+  "status": "completed",
+  "updatedAt": "2026-09-26T02:08:24Z",
+  "url": "https://github.com/posix4e/winnow-lightning/actions/runs/36208451486",
+  "retrieved_at": "2026-09-26T02:09:31.216498+00:00"
+}
