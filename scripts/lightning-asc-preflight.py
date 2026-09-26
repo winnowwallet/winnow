@@ -36,9 +36,14 @@ report = {'app': {'id': APP, 'bundle': app['attributes']['bundleId'], 'name': ap
 for row in builds['data']:
     attributes = row['attributes']
     version = row.get('relationships', {}).get('preReleaseVersion', {}).get('data') or {}
+    beta = get('/builds/' + row['id'] + '/buildBetaDetail', optional=True)
+    beta_attributes = (beta.get('data') or {}).get('attributes', {})
     report['builds'].append(dict(id=row['id'], build=attributes.get('version'), version=versions.get(version.get('id')),
         processing=attributes.get('processingState'), nonexempt=attributes.get('usesNonExemptEncryption'),
-        uploaded_at=attributes.get('uploadedDate'), expired=attributes.get('expired')))
+        uploaded_at=attributes.get('uploadedDate'), expired=attributes.get('expired'),
+        beta_detail_http_status=beta.get('http_status', 200),
+        internal_beta_state=beta_attributes.get('internalBuildState'),
+        external_beta_state=beta_attributes.get('externalBuildState')))
 for row in declarations['data']:
     allowed = {'appEncryptionDeclarationState', 'usesEncryption', 'exempt', 'containsProprietaryCryptography',
                'containsThirdPartyCryptography', 'availableOnFrenchStore', 'appDescription', 'createdDate', 'platform'}

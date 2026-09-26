@@ -1,6 +1,14 @@
 name: Lightning TestFlight upload
 on:
   workflow_dispatch:
+    inputs:
+      operation:
+        description: Inspect the existing app or upload the pinned build
+        type: choice
+        default: inspect
+        options:
+          - inspect
+          - upload
 permissions:
   contents: read
   actions: read
@@ -51,6 +59,7 @@ jobs:
           python3 control/scripts/lightning-asc-preflight.py
           mv control/control-output/app-state.json control/control-output/app-state-before.json
       - name: Import existing signing certificate
+        if: inputs.operation == 'upload'
         env:
           DEV_CERT_P12: ${{ secrets.DEV_CERT_P12 }}
           DEV_CERT_P12_PASSWORD: ${{ secrets.DEV_CERT_P12_PASSWORD }}
@@ -67,6 +76,7 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -k "$KCPW" "$KC" >/dev/null
           security list-keychains -d user -s "$KC" login.keychain
       - name: Archive, verify, upload, and confirm Apple processing
+        if: inputs.operation == 'upload'
         run: |
           python3 tooling/scripts/release-lightning \
             --source-checkout "$GITHUB_WORKSPACE/app" \
