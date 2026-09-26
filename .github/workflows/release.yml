@@ -33,14 +33,14 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: posix4e/winnow-lightning
-          ref: ac1f6e72a490bfb6413bcfda6730756856329095
+          ref: d2314878cf85c32c35a5c03b15fa54fbe97235c8
           path: app
           persist-credentials: false
       - name: Check out committed release tooling
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: posix4e/winnow-lightning
-          ref: fc7a3dc34c1f498a894df12dcaf62020896e8c4a
+          ref: d2314878cf85c32c35a5c03b15fa54fbe97235c8
           path: tooling
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
@@ -81,8 +81,8 @@ jobs:
         run: |
           python3 tooling/scripts/release-lightning \
             --source-checkout "$GITHUB_WORKSPACE/app" \
-            --commit ac1f6e72a490bfb6413bcfda6730756856329095 \
-            --version 0.2.0 --build 2 \
+            --commit d2314878cf85c32c35a5c03b15fa54fbe97235c8 \
+            --version 0.3.0 --build 3 \
             --evidence "$GITHUB_WORKSPACE/control/lightning-release-evidence/evidence.json" \
             --output "$RUNNER_TEMP/lightning-release" \
             --upload-only
@@ -96,7 +96,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: lightning-testflight-0.2.0-2
+          name: lightning-testflight-0.3.0-3
           path: |
             control/control-output/*.json
             ${{ runner.temp }}/lightning-release/*.log
