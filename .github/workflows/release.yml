@@ -14,7 +14,6 @@ jobs:
     env:
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-      ASC_KEY_PATH: ${{ runner.temp }}/lightning-asc/AuthKey.p8
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -43,10 +42,12 @@ jobs:
       - name: Prepare existing API credential and read app state
         env:
           ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+          ASC_KEY_PATH: ${{ runner.temp }}/lightning-asc/AuthKey.p8
         run: |
           umask 077
           mkdir -p "$RUNNER_TEMP/lightning-asc"
           printf '%s' "$ASC_PRIVATE_KEY" > "$ASC_KEY_PATH"
+          printf 'ASC_KEY_PATH=%s\n' "$ASC_KEY_PATH" >> "$GITHUB_ENV"
           python3 control/scripts/lightning-asc-preflight.py
           mv control/control-output/app-state.json control/control-output/app-state-before.json
       - name: Import existing signing certificate
