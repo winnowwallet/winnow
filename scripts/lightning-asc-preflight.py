@@ -31,8 +31,12 @@ versions = {row['id']: row['attributes'].get('version') for row in builds.get('i
             if row['type'] == 'preReleaseVersions'}
 declarations = get('/appEncryptionDeclarations?filter[app]=' + APP + '&limit=200', optional=True)
 groups = get('/apps/' + APP + '/betaGroups?limit=200')
+store_versions = get('/apps/' + APP + '/appStoreVersions?limit=200')
 report = {'app': {'id': APP, 'bundle': app['attributes']['bundleId'], 'name': app['attributes']['name']},
-    'builds': [], 'declarations_http_status': declarations.get('http_status', 200), 'declarations': [], 'groups': []}
+    'builds': [], 'declarations_http_status': declarations.get('http_status', 200), 'declarations': [], 'groups': [],
+    'app_store_versions': [{'version': row['attributes'].get('versionString'),
+                            'state': row['attributes'].get('appStoreState')}
+                           for row in store_versions['data']]}
 for row in builds['data']:
     attributes = row['attributes']
     version = row.get('relationships', {}).get('preReleaseVersion', {}).get('data') or {}
