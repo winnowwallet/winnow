@@ -26,7 +26,7 @@ def get(path, optional=False):
 
 app = get('/apps/' + APP)['data']
 assert app['attributes']['bundleId'] == 'com.btcswift.lightning'
-builds = get('/apps/' + APP + '/builds?sort=-uploadedDate&limit=30&include=preReleaseVersion')
+builds = get('/builds?filter[app]=' + APP + '&sort=-uploadedDate&limit=30&include=preReleaseVersion')
 versions = {row['id']: row['attributes'].get('version') for row in builds.get('included', [])
             if row['type'] == 'preReleaseVersions'}
 declarations = get('/apps/' + APP + '/appEncryptionDeclarations?limit=200', optional=True)
