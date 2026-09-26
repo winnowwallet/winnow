@@ -29,7 +29,7 @@ assert app['attributes']['bundleId'] == 'com.btcswift.lightning'
 builds = get('/builds?filter[app]=' + APP + '&sort=-uploadedDate&limit=30&include=preReleaseVersion')
 versions = {row['id']: row['attributes'].get('version') for row in builds.get('included', [])
             if row['type'] == 'preReleaseVersions'}
-declarations = get('/apps/' + APP + '/appEncryptionDeclarations?limit=200', optional=True)
+declarations = get('/appEncryptionDeclarations?filter[app]=' + APP + '&limit=200', optional=True)
 groups = get('/apps/' + APP + '/betaGroups?limit=200')
 report = {'app': {'id': APP, 'bundle': app['attributes']['bundleId'], 'name': app['attributes']['name']},
     'builds': [], 'declarations_http_status': declarations.get('http_status', 200), 'declarations': [], 'groups': []}
@@ -45,8 +45,6 @@ for row in declarations['data']:
     report['declarations'].append({'id': row['id'], **{k: v for k, v in row['attributes'].items() if k in allowed}})
 for row in groups['data']:
     attributes = row['attributes']
-    if attributes.get('name') != 'PQLNRegtestInternal':
-        continue
     testers = get('/betaGroups/' + row['id'] + '/relationships/betaTesters?limit=200')
     report['groups'].append({'id': row['id'], 'name': attributes['name'], 'internal': attributes.get('isInternalGroup'),
         'tester_count': testers.get('meta', {}).get('paging', {}).get('total', len(testers['data']))})

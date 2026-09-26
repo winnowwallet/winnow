@@ -1,38 +1,99 @@
-name: Lightning TestFlight preflight
+name: Lightning TestFlight upload
 on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 concurrency:
-  group: lightning-testflight-preflight
+  group: lightning-testflight-upload
   cancel-in-progress: false
 jobs:
-  preflight:
+  upload:
     runs-on: macos-latest
-    timeout-minutes: 10
+    timeout-minutes: 120
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_PATH: ${{ runner.temp }}/lightning-asc/AuthKey.p8
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
+          path: control
           persist-credentials: false
-      - name: Read existing research app with existing CI credentials
+      - name: Check out exact tested app source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: posix4e/winnow-lightning
+          ref: ac1f6e72a490bfb6413bcfda6730756856329095
+          path: app
+          persist-credentials: false
+      - name: Check out committed release tooling
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: posix4e/winnow-lightning
+          ref: ed6a3fa2935556ee16dffdcf1ffeab48049bd962
+          path: tooling
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install pinned XcodeGen
+        run: app/scripts/install-xcodegen
+      - name: Prepare existing API credential and read app state
         env:
           ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-          ASC_KEY_PATH: ${{ runner.temp }}/lightning-asc/AuthKey.p8
         run: |
           umask 077
           mkdir -p "$RUNNER_TEMP/lightning-asc"
           printf '%s' "$ASC_PRIVATE_KEY" > "$ASC_KEY_PATH"
-          python3 scripts/lightning-asc-preflight.py
-      - name: Preserve credential-free preflight report
+          python3 control/scripts/lightning-asc-preflight.py
+          mv control/control-output/app-state.json control/control-output/app-state-before.json
+      - name: Import existing signing certificate
+        env:
+          DEV_CERT_P12: ${{ secrets.DEV_CERT_P12 }}
+          DEV_CERT_P12_PASSWORD: ${{ secrets.DEV_CERT_P12_PASSWORD }}
+        run: |
+          umask 077
+          KC="$RUNNER_TEMP/lightning-ci.keychain-db"
+          KCPW="$(uuidgen)"
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          printf '%s' "$DEV_CERT_P12" | base64 -D > "$RUNNER_TEMP/lightning-dev.p12"
+          security import "$RUNNER_TEMP/lightning-dev.p12" -k "$KC" -P "$DEV_CERT_P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          rm "$RUNNER_TEMP/lightning-dev.p12"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KCPW" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" login.keychain
+      - name: Archive, verify, upload, and confirm Apple processing
+        run: |
+          python3 tooling/scripts/release-lightning \
+            --source-checkout "$GITHUB_WORKSPACE/app" \
+            --commit ac1f6e72a490bfb6413bcfda6730756856329095 \
+            --version 0.2.0 --build 2 \
+            --evidence "$GITHUB_WORKSPACE/control/lightning-release-evidence/evidence.json" \
+            --output "$RUNNER_TEMP/lightning-release" \
+            --upload-only
+      - name: Read back existing app after upload
+        if: always()
+        run: python3 control/scripts/lightning-asc-preflight.py
+      - name: Preserve release receipt, verified IPA, logs, and app state
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: lightning-asc-preflight
-          path: control-output/app-state.json
+          name: lightning-testflight-0.2.0-2
+          path: |
+            control/control-output/*.json
+            ${{ runner.temp }}/lightning-release/*.log
+            ${{ runner.temp }}/lightning-release/release.json
+            ${{ runner.temp }}/lightning-release/ExportOptions.plist
+            ${{ runner.temp }}/lightning-release/export/*.ipa
+            ${{ runner.temp }}/lightning-release/export/*.verified.sha256
+            ${{ runner.temp }}/lightning-release/supply-chain/
           if-no-files-found: error
           retention-days: 14
-      - name: Remove temporary API key
+      - name: Remove temporary credentials
         if: always()
-        run: rm -f "$RUNNER_TEMP/lightning-asc/AuthKey.p8"
+        run: |
+          security delete-keychain "$RUNNER_TEMP/lightning-ci.keychain-db" || true
+          rm -f "$RUNNER_TEMP/lightning-dev.p12" "$RUNNER_TEMP/lightning-asc/AuthKey.p8"

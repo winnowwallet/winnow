@@ -1,0 +1,20 @@
+{
+  "result": "passed",
+  "manifest": {
+    "source": "ac1f6e72a490bfb6413bcfda6730756856329095",
+    "dirty": false,
+    "simulator": "B166304F-5BCC-486A-9B58-2D69557FB3F9",
+    "bundle": "com.btcswift.lightning",
+    "executable_sha256": "0b189d975dfaeb16f4240d7958165110ac3e21882b8fc550c35dfa70a42d200a",
+    "xcode": "Xcode 27.0\nBuild version 27A266a",
+    "device": {
+      "name": "iPhone 18 Pro",
+      "device_type": "com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro",
+      "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+    },
+    "content_size": "accessibility-extra-extra-extra-large",
+    "scope": "ResearchDebug regtest fixture; physical authentication is a separate release gate"
+  },
+  "video_sha256": "2f3d6851f839bfd18feddc0b30cb18b6a590cfa72e4843d2384e3d485b3f589a",
+  "independent_receipt_sha256": "3f3cdca13cbfdd2f7d0edc231448dae6d37c0b79bd9a94c166271347ea9d8912"
+}

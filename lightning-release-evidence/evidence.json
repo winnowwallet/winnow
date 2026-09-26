@@ -1,0 +1,57 @@
+{
+  "source": "ac1f6e72a490bfb6413bcfda6730756856329095",
+  "bundle": "com.btcswift.lightning",
+  "physical_device": false,
+  "device_checks_deferred_to_testflight": true,
+  "checks": {
+    "owner_authentication": "pending",
+    "cancelled_authentication": "pending",
+    "file_protection": "pending",
+    "exact_share": "pending",
+    "ipad": "passed",
+    "large_text": "passed"
+  },
+  "artifacts": [
+    {
+      "path": "iphone-journey.json",
+      "sha256": "2bb03d95c2c5b7b77c236f5a0adbc3e528148946139de4c35a59e12a37a59f15"
+    },
+    {
+      "path": "iphone-independent-receipt.json",
+      "sha256": "5aaedfde0b76648e89dff04836d0d93b135f3a8eebb62df90dba15bcb8172337"
+    },
+    {
+      "path": "ipad-journey.json",
+      "sha256": "d3ae3a599dc732a721d21b45b976196d7a64134ad65156706e64282a42b942cf"
+    },
+    {
+      "path": "ipad-independent-receipt.json",
+      "sha256": "ae9d478b1d651a941643f6d32f3cb83cd3bdf5b8f6141f49a62552052d04fb28"
+    },
+    {
+      "path": "large-text-journey.json",
+      "sha256": "b7cf89fb45fd719d7ebd3bbf64295c12ec61037509c0a4f0a89301c7312ff7fd"
+    },
+    {
+      "path": "large-text-independent-receipt.json",
+      "sha256": "3f3cdca13cbfdd2f7d0edc231448dae6d37c0b79bd9a94c166271347ea9d8912"
+    },
+    {
+      "path": "ci-run.json",
+      "sha256": "99ff2e48db44e7c10f96ba655a4bf7fd7bdd71ae8df827d64ef219a40bb790a1"
+    },
+    {
+      "path": "encryption-inventory.md",
+      "sha256": "33f20afd483d025273b43697f3f65b6e1f55144f530f12f17a02b6285ac0a81b"
+    }
+  ],
+  "encryption": {
+    "mode": "pending",
+    "artifact": "encryption-inventory.md"
+  },
+  "notes": [
+    "Physical-device checks are deferred to the internal regtest TestFlight beta; no physical verification is claimed.",
+    "This evidence permits upload-only with the encryption plist value YES. It does not permit tester assignment or assert an exemption.",
+    "Journey manifests hash the unedited videos retained in the task evidence package. Hosted CI recording and full peer evidence are retained in CI run 36208451486."
+  ]
+}
