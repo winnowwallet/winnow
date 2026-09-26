@@ -13,7 +13,7 @@ permissions:
   contents: read
   actions: read
 concurrency:
-  group: lightning-testflight-upload
+  group: ${{ inputs.operation == 'inspect' && 'lightning-testflight-inspect' || 'lightning-testflight-upload' }}
   cancel-in-progress: false
 jobs:
   upload:
