@@ -39,7 +39,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: posix4e/winnow-lightning
-          ref: ed6a3fa2935556ee16dffdcf1ffeab48049bd962
+          ref: 729601afa14f0b681216ebb02a2803c65e8fa148
           path: tooling
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
