@@ -1,0 +1,20 @@
+{
+  "result": "passed",
+  "manifest": {
+    "source": "ac1f6e72a490bfb6413bcfda6730756856329095",
+    "dirty": false,
+    "simulator": "E643BC5D-02B6-401E-A3D1-8F4AD0C65329",
+    "bundle": "com.btcswift.lightning",
+    "executable_sha256": "0b189d975dfaeb16f4240d7958165110ac3e21882b8fc550c35dfa70a42d200a",
+    "xcode": "Xcode 27.0\nBuild version 27A266a",
+    "device": {
+      "name": "iPad (A16)",
+      "device_type": "com.apple.CoreSimulator.SimDeviceType.iPad-A16",
+      "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-18-6"
+    },
+    "content_size": "large",
+    "scope": "ResearchDebug regtest fixture; physical authentication is a separate release gate"
+  },
+  "video_sha256": "31fcbeac761ba2914f6e16ba809eb72ee4239d49a4f30cd2d14e4f797339d2a2",
+  "independent_receipt_sha256": "ae9d478b1d651a941643f6d32f3cb83cd3bdf5b8f6141f49a62552052d04fb28"
+}
