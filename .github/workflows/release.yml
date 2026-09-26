@@ -9,6 +9,7 @@ on:
         options:
           - inspect
           - upload
+          - declare-and-enable
 permissions:
   contents: read
   actions: read
@@ -39,7 +40,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: posix4e/winnow-lightning
-          ref: 729601afa14f0b681216ebb02a2803c65e8fa148
+          ref: fc7a3dc34c1f498a894df12dcaf62020896e8c4a
           path: tooling
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
@@ -85,6 +86,9 @@ jobs:
             --evidence "$GITHUB_WORKSPACE/control/lightning-release-evidence/evidence.json" \
             --output "$RUNNER_TEMP/lightning-release" \
             --upload-only
+      - name: Submit source-grounded encryption facts and verify existing internal access
+        if: inputs.operation == 'declare-and-enable'
+        run: python3 control/scripts/lightning-complete-testflight.py
       - name: Read back existing app after upload
         if: always()
         run: python3 control/scripts/lightning-asc-preflight.py
