@@ -1,0 +1,38 @@
+{
+  "previous_source": "ac1f6e72a490bfb6413bcfda6730756856329095",
+  "source": "d2314878cf85c32c35a5c03b15fa54fbe97235c8",
+  "unchanged_crypto_and_dependency_files": [
+    {
+      "path": "Package.swift",
+      "sha256": "95843deb3fb94f3eb5b44373537d83464934c0b711019e5f4acf0882558b810f"
+    },
+    {
+      "path": "Package.resolved",
+      "sha256": "8cd7fd20f40e99d1c1ec538942986a9ca53a4bbe0e687e65d1d47f0a15cd2e69"
+    },
+    {
+      "path": "Sources/LightningCore/NoiseCrypto.swift",
+      "sha256": "0e25e1a3756c4942ff0b858ecee794eb22cd1926e0f4a5a83f1d50bfd1af4cd1"
+    },
+    {
+      "path": "Sources/LightningCore/LightningHandshake.swift",
+      "sha256": "ebf016812d30dd0bb1bcb337db31e85c0ca04a9092c740920cb1353207be70c6"
+    },
+    {
+      "path": "Sources/LightningCore/OnionPacket.swift",
+      "sha256": "dc41b404464c24f0e262fea81d9757fcfb1916d535e5473c0b02e9721a8bfb1c"
+    },
+    {
+      "path": "Sources/LightningCore/ChannelKeys.swift",
+      "sha256": "d361709e95d909ec1af9ead1867e6c3d4cf80e6031289c8ec0b4d0cadda8f961"
+    },
+    {
+      "path": "Sources/LightningCore/Bolt12Encoding.swift",
+      "sha256": "1dd770a4503e80a3712598433b1afc1955ad1233ed5e5c31d6651900070cd52c"
+    },
+    {
+      "path": "Sources/LightningCore/LightningJournal.swift",
+      "sha256": "d303ec2df32e483512453a6c3d95a9ed264d7152b47e2e5cc44c3676b2cdc0f9"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+Swift Lightning research beta. Mainnet uses real bitcoin; signet and regtest use test coins.
+
+This version uses Winnow's Swift wallet, transactions and verified chain scanner with a native Swift Lightning engine. It uses a separate Swift storage namespace and preserves older Winnow Lightning wallet files. Keep the app open for chain verification and recovery; this beta does not protect channels while the app is stopped.
+
+A fresh install should discover public mainnet Bitcoin peers automatically. Switch networks in Settings and check that each wallet and Lightning node identity survives switching and relaunching. Existing regtest installations retain their wallet and can switch to mainnet or public signet; only regtest needs a private Bitcoin test node.
+
+With a compatible provider profile for the selected network: review and fund a channel, create a reusable receive offer, and use Apple's Share sheet or Copy/Paste. Receive offers and offline payments require an async-capable provider and configured path. Senders should review the amount and maximum fee. Awaiting recipient means pending. Only Settled confirms payment. Try an offline recipient, restart each client, check that history reconciles once, then close the channel and verify returned wallet funds. Controlled interoperability tests use regtest; they do not establish funded mainnet behavior.
+
+Physical-device checks are pending for this beta: test successful and canceled Face ID/passcode approval for funding, payment and close; cancellation must not submit an action. Check exact Share/Copy contents and report behavior when locking and unlocking the device. Simulator runs do not establish locked-device journal or Keychain protection.
+
+Keep this device and its local files while a channel or recovery is outstanding. Cloud backup and wallet deletion are unavailable for this research wallet.
+
+Known display issue: on iPad at the largest accessibility text size, the Bitcoin Receive address-label sheet can clip its lower controls. Use a smaller text size for that flow in this beta. The standard-size iPad journey is tested separately.
