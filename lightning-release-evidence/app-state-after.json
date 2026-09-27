@@ -6,6 +6,18 @@
   },
   "builds": [
     {
+      "id": "7c274d2e-15fd-4391-9d3d-b9a383d5431e",
+      "build": "7",
+      "version": "0.3.0",
+      "processing": "VALID",
+      "nonexempt": false,
+      "uploaded_at": "2026-09-27T08:49:33-07:00",
+      "expired": false,
+      "beta_detail_http_status": 200,
+      "internal_beta_state": "IN_BETA_TESTING",
+      "external_beta_state": "READY_FOR_BETA_SUBMISSION"
+    },
+    {
       "id": "219da1d8-fcf7-4477-9c59-65bdc4ecab44",
       "build": "6",
       "version": "0.3.0",

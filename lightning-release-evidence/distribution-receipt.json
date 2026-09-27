@@ -1,21 +1,21 @@
 {
-  "source": "b3bb94a6870b286ab11dbf7a201cdd8e357d738f",
-  "ci_run": 36323251930,
+  "source": "248d31fdc6d7051ea8a01f23256b44824738c04b",
+  "ci_run": 36327707050,
   "bundle": "com.btcswift.lightning",
   "version": "0.3.0",
-  "build": "6",
-  "ipa_sha256": "f52e38b90645e5ebecd2d92d0e95868c0724297859d82904e7467c619cc9c42a",
-  "evidence_sha256": "3a33c23ccffb1308eb8c417646f9758f386327499ed0ec3f72b4bf981bb0848c",
+  "build": "7",
+  "ipa_sha256": "63ca13365ab762c8d1cdd65f42dc62f4f8a780b3180da6cb38cc8d4f4e3b9f67",
+  "evidence_sha256": "59ca0f201ef8bbdaeca4e1c4d799d057b07ffacf131c57f23e762d1d0fc00297",
   "encryption": {
     "mode": "pending",
     "artifact": "encryption-inventory.md"
   },
-  "release_tooling_source": "b3bb94a6870b286ab11dbf7a201cdd8e357d738f",
+  "release_tooling_source": "248d31fdc6d7051ea8a01f23256b44824738c04b",
   "device_checks_deferred_to_testflight": true,
   "uploaded": true,
   "processed": true,
   "available_to_internal_testers": true,
-  "app_store_connect_build": "219da1d8-fcf7-4477-9c59-65bdc4ecab44",
+  "app_store_connect_build": "7c274d2e-15fd-4391-9d3d-b9a383d5431e",
   "distribution_scope": "International internal TestFlight beta; no public App Store release requested",
   "declaration": null,
   "questionnaire_answers": {
@@ -29,7 +29,7 @@
     "response": {
       "errors": [
         {
-          "id": "fbec3fc2-b924-4fc2-88ed-8646df596c5d",
+          "id": "19a5e4dc-b997-4ca4-aa7d-8ba7771f5239",
           "status": "409",
           "code": "ENTITY_ERROR.ATTRIBUTE.INVALID",
           "title": "An attribute value is invalid.",
