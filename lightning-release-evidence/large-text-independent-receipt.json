@@ -1,6 +1,6 @@
 {
   "result": "passed",
-  "hash": "b8bbb96da855494d2ee05dcdc5ef50c3249771f1e00a18a27dfdbac1a51d8601",
+  "hash": "c75181812073380ab0311d060a7a4b2aae4548e670737f6c748687cb316f31dd",
   "amount_msat": 5000000,
   "provider_fees_msat": [
     1000,
@@ -9,84 +9,84 @@
   "timeline": [
     {
       "event": "recipient_started",
-      "monotonic_ns": 25615702371791,
-      "pid": 85377,
+      "monotonic_ns": 30134954945625,
+      "pid": 99356,
       "node": "03d4594f7d27cf88702bf16d56d1e29e6fa966f84e1c8d26c696e411d11c9a2424"
     },
     {
       "event": "recipient_channel_confirmed",
-      "monotonic_ns": 25652364477958,
-      "txid": "e3a354fc83e47729916a6e14917013bb2ff31790b917e9f0c9c70901ba229139",
-      "channel": "399122ba0109c7c9f0e917b99017f32fbb137091146e6a912977e483fc54a3e2"
+      "monotonic_ns": 30172362778791,
+      "txid": "31c64ff810502f32c79e7c423482f4dd8e9d822cea441983ce45a51f5daef02b",
+      "channel": "2bf0ae5d1fa545ce831944ea2c829d8eddf48234427c9ec7322f5010f84fc631"
     },
     {
       "event": "recipient_killed",
-      "monotonic_ns": 25710195804666,
-      "pid": 85377,
+      "monotonic_ns": 30228643711041,
+      "pid": 99356,
       "signal": "SIGKILL",
       "running": false
     },
     {
       "event": "sender_started",
-      "monotonic_ns": 25735173091791,
-      "pid": 85617,
+      "monotonic_ns": 30250817486708,
+      "pid": 99647,
       "node": "03c62e62665464815dd66520e06d55899cab5e6ebdcf99f295fa817b09f2ea6885"
     },
     {
       "event": "canceled_funding_review_did_not_publish",
-      "monotonic_ns": 25809804411291
+      "monotonic_ns": 30312355292916
     },
     {
       "event": "sender_funding_confirmed",
-      "monotonic_ns": 25830530327708,
-      "txid": "6e6de4d99e092f304c8986cc64b1ba52918b875ead98b7b8e8eda0dd286c1cf2"
+      "monotonic_ns": 30331605764083,
+      "txid": "41b12566a03c4255f404530b3a2915103d6b4931a46474e2cdddfc1aaa09f976"
     },
     {
       "event": "held_and_durably_notified",
-      "monotonic_ns": 25869355238625,
-      "hash": "b8bbb96da855494d2ee05dcdc5ef50c3249771f1e00a18a27dfdbac1a51d8601",
+      "monotonic_ns": 30370617389125,
+      "hash": "c75181812073380ab0311d060a7a4b2aae4548e670737f6c748687cb316f31dd",
       "amount_msat": 5002000,
-      "notification_sha256": "9bfde48a56fee0a6f96741e785adf3e224c28df1f8bbe0fb74b91bae8088a406"
+      "notification_sha256": "987b6742a2ab31efa6b6c484576dadacf18477030e82326cd13a7d70accf1658"
     },
     {
       "event": "sender_killed",
-      "monotonic_ns": 25869412767166,
-      "pid": 85617,
+      "monotonic_ns": 30370671920708,
+      "pid": 99647,
       "signal": "SIGKILL",
       "running": false
     },
     {
       "event": "recipient_started",
-      "monotonic_ns": 25888857912250,
-      "pid": 85881,
+      "monotonic_ns": 30389271915083,
+      "pid": 99973,
       "node": "03d4594f7d27cf88702bf16d56d1e29e6fa966f84e1c8d26c696e411d11c9a2424"
     },
     {
       "event": "recipient_settled_while_sender_stopped",
-      "monotonic_ns": 25909506197083,
-      "hash": "b8bbb96da855494d2ee05dcdc5ef50c3249771f1e00a18a27dfdbac1a51d8601"
+      "monotonic_ns": 30409245515041,
+      "hash": "c75181812073380ab0311d060a7a4b2aae4548e670737f6c748687cb316f31dd"
     },
     {
       "event": "recipient_killed",
-      "monotonic_ns": 25913120622791,
-      "pid": 85881,
+      "monotonic_ns": 30412833874416,
+      "pid": 99973,
       "signal": "SIGKILL",
       "running": false
     },
     {
       "event": "sender_started",
-      "monotonic_ns": 25931382624875,
-      "pid": 85949,
+      "monotonic_ns": 30431436285416,
+      "pid": 173,
       "node": "03c62e62665464815dd66520e06d55899cab5e6ebdcf99f295fa817b09f2ea6885"
     }
   ],
   "ldk_commit": "0a2b003e7e1602df8933b15b7563ba8b6e198391",
   "bitcoin_core_version": 310100,
-  "swift_source": "d2314878cf85c32c35a5c03b15fa54fbe97235c8",
+  "swift_source": "24148af7e2355b7ee83cd0ba729f63603777fd5d",
   "source_dirty": false,
   "reference_binary_sha256": "f4b7e53589b30f78d73e381c9137a2995dc34e8949e3cae15e865e80a45fd848",
   "funding_fee_sat": 770,
   "close_fee_sat": 905,
   "returned_wallet_balance_sat": 1993323,
-  "close_transaction": "43b2eb60393a8aca5076a31e5db2caf0fc6c5e3b1f9723de5b7208fa60110956"
+  "close_transaction": "87cf4fd27396b66ecc92e0fa71831207c33aee2691d42bff6eb20916b9ca35f3"
 }

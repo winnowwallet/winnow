@@ -1,0 +1,42 @@
+{
+  "source": "7ebbda2bfd83b655452149456d7bb216152727f2",
+  "app_source_clean": true,
+  "configuration": "ResearchDebug",
+  "bundle": "com.btcswift.lightning",
+  "e2e_flags": false,
+  "manual_peers": [],
+  "local_test_node": false,
+  "network": "mainnet",
+  "device": "iPhone 17 Pro",
+  "runtime": "iOS 26.3.1",
+  "timing_scope": "Observed seconds from XCUIApplication.launch including automation, onboarding and simulator authentication overhead; one sample each.",
+  "fresh": {
+    "simulator": "5DE0C2B3-1DA1-41BB-910F-D3F518843C97",
+    "wallet_creation_started_seconds": 9.1,
+    "wallet_ready_seconds": 16.31,
+    "first_peer_observed_seconds": 19.84,
+    "sync_complete_observed_seconds": 54.66,
+    "peer_count": 3,
+    "verified_tip": 968756,
+    "peers": [
+      "96.35.228.28:8333",
+      "42.98.64.16:8333",
+      "104.57.139.189:8333"
+    ]
+  },
+  "warm": {
+    "simulator": "4C64D3EA-0AF3-4D10-9013-719761E0DD48",
+    "wallet_ready_seconds": 16.66,
+    "first_peer_observed_seconds": 17.56,
+    "sync_complete_observed_seconds": 17.61,
+    "peer_count": 3,
+    "verified_tip": 968755,
+    "peers": [
+      "73.202.32.81:8333",
+      "62.246.244.168:8333",
+      "32.217.31.151:8333"
+    ]
+  },
+  "app_executable_sha256": "fcb72e08d36a10849a2991a622a82ad80094d50f24506f946bdb80775c84e945",
+  "result": "passed"
+}

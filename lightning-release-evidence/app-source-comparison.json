@@ -1,0 +1,8 @@
+{
+  "previous_app_source": "7ebbda2bfd83b655452149456d7bb216152727f2",
+  "source": "24148af7e2355b7ee83cd0ba729f63603777fd5d",
+  "changed_paths": [
+    "UITests/LightningAppUITests.swift"
+  ],
+  "all_non_test_files_identical": true
+}

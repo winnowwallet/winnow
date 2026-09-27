@@ -1,3 +1,5 @@
+New in build 4: Simple now opens the one-screen wallet and stays selected after restarting the app. Advanced brings back the Lightning, Wallet, Send and Settings tabs while keeping your wallet and Lightning identity. Test both directions and relaunch in Simple mode.
+
 Swift Lightning research beta. Mainnet uses real bitcoin; signet and regtest use test coins.
 
 This version uses Winnow's Swift wallet, transactions and verified chain scanner with a native Swift Lightning engine. It uses a separate Swift storage namespace and preserves older Winnow Lightning wallet files. Keep the app open for chain verification and recovery; this beta does not protect channels while the app is stopped.
