@@ -1,0 +1,85 @@
+{
+  "app": {
+    "id": "6815392502",
+    "bundle": "com.btcswift.lightning",
+    "name": "Winnow Lightning"
+  },
+  "builds": [
+    {
+      "id": "ac764d08-76e2-49c5-a77e-607852564e33",
+      "build": "5",
+      "version": "0.3.0",
+      "processing": "VALID",
+      "nonexempt": false,
+      "uploaded_at": "2026-09-26T19:42:21-07:00",
+      "expired": false,
+      "beta_detail_http_status": 200,
+      "internal_beta_state": "IN_BETA_TESTING",
+      "external_beta_state": "READY_FOR_BETA_SUBMISSION"
+    },
+    {
+      "id": "275db40a-011b-4e88-bd2e-b01682b78469",
+      "build": "4",
+      "version": "0.3.0",
+      "processing": "VALID",
+      "nonexempt": false,
+      "uploaded_at": "2026-09-26T17:56:30-07:00",
+      "expired": false,
+      "beta_detail_http_status": 200,
+      "internal_beta_state": "IN_BETA_TESTING",
+      "external_beta_state": "READY_FOR_BETA_SUBMISSION"
+    },
+    {
+      "id": "e5e8d8dc-c0e7-40eb-b76d-861cbf7698ba",
+      "build": "3",
+      "version": "0.3.0",
+      "processing": "VALID",
+      "nonexempt": false,
+      "uploaded_at": "2026-09-26T16:13:09-07:00",
+      "expired": false,
+      "beta_detail_http_status": 200,
+      "internal_beta_state": "IN_BETA_TESTING",
+      "external_beta_state": "READY_FOR_BETA_SUBMISSION"
+    },
+    {
+      "id": "894bd457-a837-40a4-b819-594cd66dd6ad",
+      "build": "2",
+      "version": "0.2.0",
+      "processing": "VALID",
+      "nonexempt": false,
+      "uploaded_at": "2026-09-26T07:18:40-07:00",
+      "expired": false,
+      "beta_detail_http_status": 200,
+      "internal_beta_state": "IN_BETA_TESTING",
+      "external_beta_state": "READY_FOR_BETA_SUBMISSION"
+    },
+    {
+      "id": "4cb2d1a1-8daa-42e6-aa34-5a1596bea152",
+      "build": "1",
+      "version": "0.1.0",
+      "processing": "VALID",
+      "nonexempt": false,
+      "uploaded_at": "2026-09-23T13:24:19-07:00",
+      "expired": false,
+      "beta_detail_http_status": 200,
+      "internal_beta_state": "IN_BETA_TESTING",
+      "external_beta_state": "READY_FOR_BETA_SUBMISSION"
+    }
+  ],
+  "declarations_http_status": 200,
+  "declarations": [],
+  "groups": [
+    {
+      "id": "d13e3bf2-c7b1-4e4e-beb6-f592b0d7fdd0",
+      "name": "PQLN Regtest Internal",
+      "internal": true,
+      "tester_count": 1
+    }
+  ],
+  "app_store_versions": [
+    {
+      "version": "1.0",
+      "state": "PREPARE_FOR_SUBMISSION"
+    }
+  ]
+}
