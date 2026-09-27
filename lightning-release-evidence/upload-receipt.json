@@ -1,0 +1,19 @@
+{
+  "source": "248d31fdc6d7051ea8a01f23256b44824738c04b",
+  "ci_run": 36327707050,
+  "bundle": "com.btcswift.lightning",
+  "version": "0.3.0",
+  "build": "7",
+  "ipa_sha256": "63ca13365ab762c8d1cdd65f42dc62f4f8a780b3180da6cb38cc8d4f4e3b9f67",
+  "evidence_sha256": "59ca0f201ef8bbdaeca4e1c4d799d057b07ffacf131c57f23e762d1d0fc00297",
+  "encryption": {
+    "mode": "pending",
+    "artifact": "encryption-inventory.md"
+  },
+  "release_tooling_source": "248d31fdc6d7051ea8a01f23256b44824738c04b",
+  "device_checks_deferred_to_testflight": true,
+  "uploaded": true,
+  "processed": true,
+  "available_to_internal_testers": false,
+  "app_store_connect_build": "7c274d2e-15fd-4391-9d3d-b9a383d5431e"
+}
