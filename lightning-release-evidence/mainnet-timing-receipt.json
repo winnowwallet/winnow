@@ -1,5 +1,5 @@
 {
-  "source": "7ebbda2bfd83b655452149456d7bb216152727f2",
+  "source": "1cab34cdeee3426393a1487339f005eaf8857aae",
   "app_source_clean": true,
   "configuration": "ResearchDebug",
   "bundle": "com.btcswift.lightning",
@@ -7,36 +7,27 @@
   "manual_peers": [],
   "local_test_node": false,
   "network": "mainnet",
+  "simulator": "5DE0C2B3-1DA1-41BB-910F-D3F518843C97",
   "device": "iPhone 17 Pro",
   "runtime": "iOS 26.3.1",
-  "timing_scope": "Observed seconds from XCUIApplication.launch including automation, onboarding and simulator authentication overhead; one sample each.",
-  "fresh": {
-    "simulator": "5DE0C2B3-1DA1-41BB-910F-D3F518843C97",
-    "wallet_creation_started_seconds": 9.1,
-    "wallet_ready_seconds": 16.31,
-    "first_peer_observed_seconds": 19.84,
-    "sync_complete_observed_seconds": 54.66,
-    "peer_count": 3,
-    "verified_tip": 968756,
-    "peers": [
-      "96.35.228.28:8333",
-      "42.98.64.16:8333",
-      "104.57.139.189:8333"
-    ]
-  },
-  "warm": {
-    "simulator": "4C64D3EA-0AF3-4D10-9013-719761E0DD48",
-    "wallet_ready_seconds": 16.66,
-    "first_peer_observed_seconds": 17.56,
-    "sync_complete_observed_seconds": 17.61,
-    "peer_count": 3,
-    "verified_tip": 968755,
-    "peers": [
-      "73.202.32.81:8333",
-      "62.246.244.168:8333",
-      "32.217.31.151:8333"
-    ]
-  },
-  "app_executable_sha256": "fcb72e08d36a10849a2991a622a82ad80094d50f24506f946bdb80775c84e945",
-  "result": "passed"
+  "fresh": false,
+  "timing_scope": "One existing-wallet sample; observed seconds include launch and XCTest overhead.",
+  "sync_complete_observed_seconds": 13.07,
+  "first_peer_observed_seconds": 13.030144095420837,
+  "verified_tip": 968769,
+  "peers": [
+    "96.35.228.28:8333",
+    "24.249.43.58:8333",
+    "75.131.195.63:8333"
+  ],
+  "background_observed_seconds": 30.39,
+  "resumed_sync_observed_seconds": 33.57,
+  "resume_and_sync_seconds": 3.18,
+  "last_complete_chain_check": "Chain checked 1 sec ago",
+  "app_executable_sha256": "f8d7c4ddc7a4a0b6c8febded1a98d130009deb352825593be34ee4c4ea89373b",
+  "diagnostic_source_sha256": "c4e8ccd9051a74a8fe662204b631125d5056665369eedc0c3c4dc916fd9a45c3",
+  "log_sha256": "218c5ec97a922bfe3c0da2451b2dc9b2dc5ef366c16d28ff367aa8c5d234d416",
+  "result": "passed",
+  "scope": "Ordinary public-mainnet sync and background/foreground handoff. No simulated OS BGTask launch; does not establish actual wake scheduling.",
+  "earlier_attempt": "Mainnet sync succeeded; the external test used Thread.sleep polling for application state and timed out. System logs confirm background transition. Replaced the diagnostic wait with XCUIApplication.wait(for:timeout:); app source unchanged."
 }

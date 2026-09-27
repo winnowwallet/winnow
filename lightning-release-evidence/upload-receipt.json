@@ -1,19 +1,9 @@
 {
-  "source": "24148af7e2355b7ee83cd0ba729f63603777fd5d",
-  "ci_run": 36281402224,
+  "source": "1cab34cdeee3426393a1487339f005eaf8857aae",
   "bundle": "com.btcswift.lightning",
   "version": "0.3.0",
-  "build": "4",
-  "ipa_sha256": "af96a52f3330d001692e00d9adbe69d65fae8ebc6ae7bb31517547622ca48b3e",
-  "evidence_sha256": "2448f9cda2f8243f1a7f98b97575e73550fe3a8ec4e2c7e07be6ee76ab22f64b",
-  "encryption": {
-    "mode": "pending",
-    "artifact": "encryption-inventory.md"
-  },
-  "release_tooling_source": "24148af7e2355b7ee83cd0ba729f63603777fd5d",
-  "device_checks_deferred_to_testflight": true,
-  "uploaded": true,
-  "processed": true,
-  "available_to_internal_testers": false,
-  "app_store_connect_build": "275db40a-011b-4e88-bd2e-b01682b78469"
+  "build": "5",
+  "uploaded": false,
+  "processed": false,
+  "note": "Fail-closed placeholder; replace only with the verified successful upload receipt."
 }

@@ -1,5 +1,47 @@
 {
-  "source": "24148af7e2355b7ee83cd0ba729f63603777fd5d",
+  "source": "1cab34cdeee3426393a1487339f005eaf8857aae",
+  "ipad_journey_and_simple_persistence": {
+    "devicesAndConfigurations": [
+      {
+        "device": {
+          "architecture": "arm64",
+          "deviceId": "E643BC5D-02B6-401E-A3D1-8F4AD0C65329",
+          "deviceName": "iPad (A16)",
+          "modelName": "iPad (A16)",
+          "osBuildNumber": "22G86",
+          "osVersion": "18.6",
+          "platform": "iOS Simulator"
+        },
+        "expectedFailures": 0,
+        "failedTests": 0,
+        "passedTests": 2,
+        "skippedTests": 0,
+        "testPlanConfiguration": {
+          "configurationId": "1",
+          "configurationName": "Test Scheme Action"
+        }
+      }
+    ],
+    "environmentDescription": "WinnowLightning \u00b7 Built with macOS 27.0",
+    "expectedFailures": 0,
+    "failedTests": 0,
+    "finishTime": 1790474616.986,
+    "passedTests": 2,
+    "result": "Passed",
+    "runtimeWarnings": [
+      {
+        "issueType": "Runtime Warning",
+        "message": "Invalid frame dimension (negative or non-finite)."
+      }
+    ],
+    "skippedTests": 0,
+    "startTime": 1790474481.402,
+    "statistics": [],
+    "testFailures": [],
+    "title": "Test - WinnowLightning",
+    "topInsights": [],
+    "totalTestCount": 2
+  },
   "maximum_accessibility_text_regression": {
     "devicesAndConfigurations": [
       {
@@ -14,7 +56,7 @@
         },
         "expectedFailures": 0,
         "failedTests": 0,
-        "passedTests": 1,
+        "passedTests": 2,
         "skippedTests": 0,
         "testPlanConfiguration": {
           "configurationId": "1",
@@ -25,95 +67,21 @@
     "environmentDescription": "WinnowLightning \u00b7 Built with macOS 27.0",
     "expectedFailures": 0,
     "failedTests": 0,
-    "finishTime": 1790467459.01,
-    "passedTests": 1,
+    "finishTime": 1790475238.183,
+    "passedTests": 2,
     "result": "Passed",
-    "runtimeWarnings": [],
+    "runtimeWarnings": [
+      {
+        "issueType": "Runtime Warning",
+        "message": "Invalid frame dimension (negative or non-finite)."
+      }
+    ],
     "skippedTests": 0,
-    "startTime": 1790467405.095,
+    "startTime": 1790474697.253,
     "statistics": [],
     "testFailures": [],
     "title": "Test - WinnowLightning",
     "topInsights": [],
-    "totalTestCount": 1
-  },
-  "earlier_app_source_reports": {
-    "source": "7ebbda2bfd83b655452149456d7bb216152727f2",
-    "reports": [
-      {
-        "devicesAndConfigurations": [
-          {
-            "device": {
-              "architecture": "arm64",
-              "deviceId": "0EAE6D6B-3AA2-4793-9FED-6A2881315663",
-              "deviceName": "Winnow Lightning Validation",
-              "modelName": "iPhone 17 Pro",
-              "osBuildNumber": "23D8133",
-              "osVersion": "26.3.1",
-              "platform": "iOS Simulator"
-            },
-            "expectedFailures": 0,
-            "failedTests": 0,
-            "passedTests": 2,
-            "skippedTests": 0,
-            "testPlanConfiguration": {
-              "configurationId": "1",
-              "configurationName": "Test Scheme Action"
-            }
-          }
-        ],
-        "environmentDescription": "WinnowLightning \u00b7 Built with macOS 27.0",
-        "expectedFailures": 0,
-        "failedTests": 0,
-        "finishTime": 1790465656.813,
-        "passedTests": 2,
-        "result": "Passed",
-        "runtimeWarnings": [],
-        "skippedTests": 0,
-        "startTime": 1790465631.052,
-        "statistics": [],
-        "testFailures": [],
-        "title": "Test - WinnowLightning",
-        "topInsights": [],
-        "totalTestCount": 2
-      },
-      {
-        "devicesAndConfigurations": [
-          {
-            "device": {
-              "architecture": "arm64",
-              "deviceId": "0EAE6D6B-3AA2-4793-9FED-6A2881315663",
-              "deviceName": "Winnow Lightning Validation",
-              "modelName": "iPhone 17 Pro",
-              "osBuildNumber": "23D8133",
-              "osVersion": "26.3.1",
-              "platform": "iOS Simulator"
-            },
-            "expectedFailures": 0,
-            "failedTests": 0,
-            "passedTests": 8,
-            "skippedTests": 0,
-            "testPlanConfiguration": {
-              "configurationId": "1",
-              "configurationName": "Test Scheme Action"
-            }
-          }
-        ],
-        "environmentDescription": "WinnowApp \u00b7 Built with macOS 27.0",
-        "expectedFailures": 0,
-        "failedTests": 0,
-        "finishTime": 1790465687.915,
-        "passedTests": 8,
-        "result": "Passed",
-        "runtimeWarnings": [],
-        "skippedTests": 0,
-        "startTime": 1790465669.636,
-        "statistics": [],
-        "testFailures": [],
-        "title": "Test - WinnowApp",
-        "topInsights": [],
-        "totalTestCount": 8
-      }
-    ]
+    "totalTestCount": 2
   }
 }

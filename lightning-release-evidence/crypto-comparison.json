@@ -1,6 +1,6 @@
 {
-  "previous_source": "d2314878cf85c32c35a5c03b15fa54fbe97235c8",
-  "source": "24148af7e2355b7ee83cd0ba729f63603777fd5d",
+  "previous_source": "24148af7e2355b7ee83cd0ba729f63603777fd5d",
+  "source": "1cab34cdeee3426393a1487339f005eaf8857aae",
   "unchanged_crypto_and_dependency_files": [
     {
       "path": "Package.swift",
@@ -29,17 +29,30 @@
     {
       "path": "Sources/LightningCore/Bolt12Encoding.swift",
       "sha256": "1dd770a4503e80a3712598433b1afc1955ad1233ed5e5c31d6651900070cd52c"
-    },
-    {
-      "path": "Sources/LightningCore/LightningJournal.swift",
-      "sha256": "d303ec2df32e483512453a6c3d95a9ed264d7152b47e2e5cc44c3676b2cdc0f9"
     }
   ],
-  "entire_core_and_dependency_paths_verified_unchanged": [
-    "Sources/WalletCore",
-    "Sources/LightningCore",
-    "Package.swift",
-    "Package.resolved",
-    "project.yml"
-  ]
+  "wallet_core_unchanged": true,
+  "changed_paths": [
+    "AppTests/BackgroundSyncTests.swift",
+    "Sources/LightningCore/LightningBackgroundResume.swift",
+    "Sources/LightningCore/LightningBackgroundStore.swift",
+    "Sources/LightningCore/LightningChainDriver.swift",
+    "Sources/LightningCore/LightningChainMonitor.swift",
+    "Sources/LightningCore/LightningEngine.swift",
+    "Sources/LightningCore/LightningJournal.swift",
+    "Sources/WinnowApp/AppModel.swift",
+    "Sources/WinnowApp/BackgroundSyncScheduler.swift",
+    "Sources/WinnowApp/BackgroundSyncStatusView.swift",
+    "Sources/WinnowApp/HomeView.swift",
+    "Sources/WinnowApp/LightningAppChain.swift",
+    "Sources/WinnowApp/LightningAppController.swift",
+    "Sources/WinnowApp/LightningView.swift",
+    "Sources/WinnowApp/WinnowApp.swift",
+    "Tests/LightningCoreTests/ChainRecoveryTests.swift",
+    "docs/engineering/swift-lightning.md",
+    "docs/lightning-what-to-test.txt",
+    "project.yml",
+    "scripts/check-test-gates"
+  ],
+  "change": "A separate journal reuses AES-256-GCM for pre-signed background recovery; no new cryptographic algorithm or dependency."
 }

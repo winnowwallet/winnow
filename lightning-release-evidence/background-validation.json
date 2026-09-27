@@ -1,0 +1,24 @@
+{
+  "source": "1cab34cdeee3426393a1487339f005eaf8857aae",
+  "checks": [
+    {
+      "name": "LightningCoreTests",
+      "result": "passed",
+      "cases": 65,
+      "log": "/tmp/winnow-background-core-refactored2.log",
+      "sha256": "79d1effbb2587e6226f078e4d702a63635a9d8dffc6d0b1614183bb15802c585"
+    },
+    {
+      "name": "BackgroundSyncTests and WalletStartupTests",
+      "result": "passed",
+      "cases": 12,
+      "skipped": 1,
+      "skip_reason": "Simulator does not record file protection; hardware enforcement remains pending.",
+      "log": "/tmp/winnow-background-lifecycle-1cab34c.log",
+      "sha256": "42c6383f34534aaa22ee9a25ca1fad4d5a3fb127def6b1f145070839025b1ff7"
+    }
+  ],
+  "lint": "swiftlint lint --strict --quiet passed",
+  "test_gates": "scripts/check-test-gates passed",
+  "scope": "Current-source component and lifecycle tests. OS scheduling and actual locked-device enforcement are not established by these runs."
+}
