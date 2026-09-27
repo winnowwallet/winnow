@@ -1,11 +1,7 @@
 {
-  "previous_source": "24148af7e2355b7ee83cd0ba729f63603777fd5d",
-  "source": "1cab34cdeee3426393a1487339f005eaf8857aae",
+  "previous_source": "1cab34cdeee3426393a1487339f005eaf8857aae",
+  "source": "b3bb94a6870b286ab11dbf7a201cdd8e357d738f",
   "unchanged_crypto_and_dependency_files": [
-    {
-      "path": "Package.swift",
-      "sha256": "95843deb3fb94f3eb5b44373537d83464934c0b711019e5f4acf0882558b810f"
-    },
     {
       "path": "Package.resolved",
       "sha256": "8cd7fd20f40e99d1c1ec538942986a9ca53a4bbe0e687e65d1d47f0a15cd2e69"
@@ -29,30 +25,62 @@
     {
       "path": "Sources/LightningCore/Bolt12Encoding.swift",
       "sha256": "1dd770a4503e80a3712598433b1afc1955ad1233ed5e5c31d6651900070cd52c"
+    },
+    {
+      "path": "Sources/LightningCore/LightningJournal.swift",
+      "sha256": "1f6eeeaf397c7fc601470ec3b95d2c4d4dc590e31dd756d3fb0ea0cbf1eb33da"
     }
   ],
   "wallet_core_unchanged": true,
   "changed_paths": [
-    "AppTests/BackgroundSyncTests.swift",
-    "Sources/LightningCore/LightningBackgroundResume.swift",
-    "Sources/LightningCore/LightningBackgroundStore.swift",
-    "Sources/LightningCore/LightningChainDriver.swift",
+    "AppTests/ChannelProtectionTests.swift",
+    "AppTests/LightningReceivingTests.swift",
+    "Package.swift",
+    "Sources/LightningCore/Bolt11Decoding.swift",
+    "Sources/LightningCore/Bolt11Invoice.swift",
+    "Sources/LightningCore/Bolt11Signature.swift",
+    "Sources/LightningCore/ChannelState.swift",
+    "Sources/LightningCore/LightningChain.swift",
     "Sources/LightningCore/LightningChainMonitor.swift",
     "Sources/LightningCore/LightningEngine.swift",
-    "Sources/LightningCore/LightningJournal.swift",
+    "Sources/LightningCore/LightningInvoiceRouting.swift",
+    "Sources/LightningCore/LightningLiquidity.swift",
+    "Sources/LightningCore/LightningLiquidityHTTP.swift",
+    "Sources/LightningCore/LightningLiquiditySession.swift",
+    "Sources/LightningCore/LightningPayments.swift",
+    "Sources/LightningCore/LightningPeerSession.swift",
     "Sources/WinnowApp/AppModel.swift",
-    "Sources/WinnowApp/BackgroundSyncScheduler.swift",
     "Sources/WinnowApp/BackgroundSyncStatusView.swift",
+    "Sources/WinnowApp/BeginnerHomeView.swift",
+    "Sources/WinnowApp/ChannelProtection.swift",
+    "Sources/WinnowApp/ChannelProtectionView.swift",
     "Sources/WinnowApp/HomeView.swift",
-    "Sources/WinnowApp/LightningAppChain.swift",
     "Sources/WinnowApp/LightningAppController.swift",
+    "Sources/WinnowApp/LightningAppReceiving.swift",
+    "Sources/WinnowApp/LightningInputViews.swift",
+    "Sources/WinnowApp/LightningLiquidityView.swift",
+    "Sources/WinnowApp/LightningProfile.swift",
+    "Sources/WinnowApp/LightningProviders.swift",
+    "Sources/WinnowApp/LightningReceiveView.swift",
     "Sources/WinnowApp/LightningView.swift",
+    "Sources/WinnowApp/ReceiveEntryView.swift",
     "Sources/WinnowApp/WinnowApp.swift",
+    "Tests/LightningCoreTests/Bolt11Tests.swift",
     "Tests/LightningCoreTests/ChainRecoveryTests.swift",
-    "docs/engineering/swift-lightning.md",
-    "docs/lightning-what-to-test.txt",
-    "project.yml",
-    "scripts/check-test-gates"
+    "Tests/LightningCoreTests/ChannelEngineTests.swift",
+    "Tests/LightningCoreTests/InvoiceRoutingTests.swift",
+    "Tests/LightningCoreTests/LiquidityTests.swift",
+    "Tools/LightningPeerFixture/LiquidityProbe.swift",
+    "Tools/LightningPeerFixture/PeerFixture.swift",
+    "UITests/LightningAppUITests.swift",
+    "UITests/TestHelpers.swift",
+    "docs/engineering/lightning-receiving.md",
+    "scripts/ci-lightning-peer"
   ],
-  "change": "A separate journal reuses AES-256-GCM for pre-signed background recovery; no new cryptographic algorithm or dependency."
+  "change": "BOLT11 recoverable ECDSA via existing libsecp256k1; LSPS1 via existing Noise or OS HTTPS; no new algorithm or third-party dependency.",
+  "new_signature_call_sites": [
+    "Sources/LightningCore/Bolt11Invoice.swift",
+    "Sources/LightningCore/Bolt11Signature.swift"
+  ],
+  "channel_check_reminders": "Apple UserNotifications and local UserDefaults metadata; no new cryptography"
 }

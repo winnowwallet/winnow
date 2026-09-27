@@ -1,20 +1,20 @@
 {
   "result": "passed",
   "manifest": {
-    "source": "1cab34cdeee3426393a1487339f005eaf8857aae",
+    "source": "b3bb94a6870b286ab11dbf7a201cdd8e357d738f",
     "dirty": false,
-    "simulator": "E643BC5D-02B6-401E-A3D1-8F4AD0C65329",
+    "simulator": "4BAD1D04-0D01-45E2-8D56-327276D3D967",
     "bundle": "com.btcswift.lightning",
-    "executable_sha256": "2c086a5a6437b8895053dcb1ebc9cebfca9276b19e30b0626e5b00d0cca80c34",
+    "executable_sha256": "c0dae26302028fab84e91d84694181756775a6a1f1dac25cb3904d86bd3578c8",
     "xcode": "Xcode 27.0\nBuild version 27A266a",
     "device": {
-      "name": "iPad (A16)",
-      "device_type": "com.apple.CoreSimulator.SimDeviceType.iPad-A16",
-      "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-18-6"
+      "name": "iPad Pro 13-inch (M5)",
+      "device_type": "com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB",
+      "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
     },
     "content_size": "large",
     "scope": "ResearchDebug regtest fixture; physical authentication is a separate release gate"
   },
-  "video_sha256": "54d4b949038c43196f823ffbe68916f5e376da962f0ae2ec9e05291c30ff7756",
-  "independent_receipt_sha256": "5cbed66e23e1634c741eb935572a0a8b2fef0035ab4ba41d1aa75dad7edeb40c"
+  "video_sha256": "c40f540c305386319070394ff6dcef6f4043d9cd585438cd47205f7fb2336486",
+  "independent_receipt_sha256": "366aab4dc2b8551621b032122e3065a2644afbab3de5eb5fa21e0607a5064a6e"
 }

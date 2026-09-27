@@ -33,14 +33,14 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: posix4e/winnow-lightning
-          ref: 972540f13b0a18d57c17334d2e3f88791e78effd
+          ref: b3bb94a6870b286ab11dbf7a201cdd8e357d738f
           path: app
           persist-credentials: false
       - name: Check out committed release tooling
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: posix4e/winnow-lightning
-          ref: 972540f13b0a18d57c17334d2e3f88791e78effd
+          ref: b3bb94a6870b286ab11dbf7a201cdd8e357d738f
           path: tooling
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
@@ -49,8 +49,8 @@ jobs:
       - name: Wait for the exact app source to pass required CI
         if: inputs.operation == 'upload'
         run: |
-          test "$(gh run view 36287084416 -R posix4e/winnow-lightning --json headSha --jq .headSha)" = 972540f13b0a18d57c17334d2e3f88791e78effd
-          gh run watch 36287084416 -R posix4e/winnow-lightning --exit-status --interval 30
+          test "$(gh run view 36323251930 -R posix4e/winnow-lightning --json headSha --jq .headSha)" = b3bb94a6870b286ab11dbf7a201cdd8e357d738f
+          gh run watch 36323251930 -R posix4e/winnow-lightning --exit-status --interval 30
       - name: Install pinned XcodeGen
         run: app/scripts/install-xcodegen
       - name: Prepare existing API credential and read app state
@@ -86,7 +86,7 @@ jobs:
         run: |
           python3 tooling/scripts/release-lightning \
             --source-checkout "$GITHUB_WORKSPACE/app" \
-            --commit 972540f13b0a18d57c17334d2e3f88791e78effd \
+            --commit b3bb94a6870b286ab11dbf7a201cdd8e357d738f \
             --version 0.3.0 --build 6 \
             --evidence "$GITHUB_WORKSPACE/control/lightning-release-evidence/evidence.json" \
             --output "$RUNNER_TEMP/lightning-release" \
