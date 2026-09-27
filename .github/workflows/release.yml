@@ -33,14 +33,14 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: posix4e/winnow-lightning
-          ref: 24148af7e2355b7ee83cd0ba729f63603777fd5d
+          ref: 1cab34cdeee3426393a1487339f005eaf8857aae
           path: app
           persist-credentials: false
       - name: Check out committed release tooling
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: posix4e/winnow-lightning
-          ref: 24148af7e2355b7ee83cd0ba729f63603777fd5d
+          ref: 1cab34cdeee3426393a1487339f005eaf8857aae
           path: tooling
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
@@ -49,8 +49,8 @@ jobs:
       - name: Wait for the exact app source to pass required CI
         if: inputs.operation == 'upload'
         run: |
-          test "$(gh run view 36281402224 -R posix4e/winnow-lightning --json headSha --jq .headSha)" = 24148af7e2355b7ee83cd0ba729f63603777fd5d
-          gh run watch 36281402224 -R posix4e/winnow-lightning --exit-status --interval 30
+          test "$(gh run view 36287084416 -R posix4e/winnow-lightning --json headSha --jq .headSha)" = 1cab34cdeee3426393a1487339f005eaf8857aae
+          gh run watch 36287084416 -R posix4e/winnow-lightning --exit-status --interval 30
       - name: Install pinned XcodeGen
         run: app/scripts/install-xcodegen
       - name: Prepare existing API credential and read app state
@@ -86,8 +86,8 @@ jobs:
         run: |
           python3 tooling/scripts/release-lightning \
             --source-checkout "$GITHUB_WORKSPACE/app" \
-            --commit 24148af7e2355b7ee83cd0ba729f63603777fd5d \
-            --version 0.3.0 --build 4 \
+            --commit 1cab34cdeee3426393a1487339f005eaf8857aae \
+            --version 0.3.0 --build 5 \
             --evidence "$GITHUB_WORKSPACE/control/lightning-release-evidence/evidence.json" \
             --output "$RUNNER_TEMP/lightning-release" \
             --upload-only
@@ -101,7 +101,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: lightning-testflight-0.3.0-4
+          name: lightning-testflight-0.3.0-5
           path: |
             control/control-output/*.json
             ${{ runner.temp }}/lightning-release/*.log

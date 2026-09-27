@@ -1,11 +1,11 @@
 {
   "result": "passed",
   "manifest": {
-    "source": "24148af7e2355b7ee83cd0ba729f63603777fd5d",
+    "source": "1cab34cdeee3426393a1487339f005eaf8857aae",
     "dirty": false,
     "simulator": "E643BC5D-02B6-401E-A3D1-8F4AD0C65329",
     "bundle": "com.btcswift.lightning",
-    "executable_sha256": "fcb72e08d36a10849a2991a622a82ad80094d50f24506f946bdb80775c84e945",
+    "executable_sha256": "2c086a5a6437b8895053dcb1ebc9cebfca9276b19e30b0626e5b00d0cca80c34",
     "xcode": "Xcode 27.0\nBuild version 27A266a",
     "device": {
       "name": "iPad (A16)",
@@ -15,6 +15,6 @@
     "content_size": "large",
     "scope": "ResearchDebug regtest fixture; physical authentication is a separate release gate"
   },
-  "video_sha256": "a2f764fb8d01e358331d9b111b5b06fea61a26e58ed25a0f8e8c25f630ea51ef",
-  "independent_receipt_sha256": "6a9637576403eb0a3c78177b9903b1cd2235a74921d7b60315fb21cfa343428e"
+  "video_sha256": "54d4b949038c43196f823ffbe68916f5e376da962f0ae2ec9e05291c30ff7756",
+  "independent_receipt_sha256": "5cbed66e23e1634c741eb935572a0a8b2fef0035ab4ba41d1aa75dad7edeb40c"
 }

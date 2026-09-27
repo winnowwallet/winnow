@@ -1,8 +1,28 @@
 {
-  "previous_app_source": "7ebbda2bfd83b655452149456d7bb216152727f2",
-  "source": "24148af7e2355b7ee83cd0ba729f63603777fd5d",
+  "previous_app_source": "24148af7e2355b7ee83cd0ba729f63603777fd5d",
+  "source": "1cab34cdeee3426393a1487339f005eaf8857aae",
   "changed_paths": [
-    "UITests/LightningAppUITests.swift"
+    "AppTests/BackgroundSyncTests.swift",
+    "Sources/LightningCore/LightningBackgroundResume.swift",
+    "Sources/LightningCore/LightningBackgroundStore.swift",
+    "Sources/LightningCore/LightningChainDriver.swift",
+    "Sources/LightningCore/LightningChainMonitor.swift",
+    "Sources/LightningCore/LightningEngine.swift",
+    "Sources/LightningCore/LightningJournal.swift",
+    "Sources/WinnowApp/AppModel.swift",
+    "Sources/WinnowApp/BackgroundSyncScheduler.swift",
+    "Sources/WinnowApp/BackgroundSyncStatusView.swift",
+    "Sources/WinnowApp/HomeView.swift",
+    "Sources/WinnowApp/LightningAppChain.swift",
+    "Sources/WinnowApp/LightningAppController.swift",
+    "Sources/WinnowApp/LightningView.swift",
+    "Sources/WinnowApp/WinnowApp.swift",
+    "Tests/LightningCoreTests/ChainRecoveryTests.swift",
+    "docs/engineering/swift-lightning.md",
+    "docs/lightning-what-to-test.txt",
+    "project.yml",
+    "scripts/check-test-gates"
   ],
-  "all_non_test_files_identical": true
+  "all_non_test_files_identical": false,
+  "display_evidence": "Fresh current-source iPad and maximum-accessibility-text journeys passed. Previous release receipts were replaced."
 }

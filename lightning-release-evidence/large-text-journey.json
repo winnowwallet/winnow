@@ -1,11 +1,11 @@
 {
   "result": "passed",
   "manifest": {
-    "source": "24148af7e2355b7ee83cd0ba729f63603777fd5d",
+    "source": "1cab34cdeee3426393a1487339f005eaf8857aae",
     "dirty": false,
     "simulator": "0EAE6D6B-3AA2-4793-9FED-6A2881315663",
     "bundle": "com.btcswift.lightning",
-    "executable_sha256": "fcb72e08d36a10849a2991a622a82ad80094d50f24506f946bdb80775c84e945",
+    "executable_sha256": "2c086a5a6437b8895053dcb1ebc9cebfca9276b19e30b0626e5b00d0cca80c34",
     "xcode": "Xcode 27.0\nBuild version 27A266a",
     "device": {
       "name": "Winnow Lightning Validation",
@@ -15,6 +15,6 @@
     "content_size": "accessibility-extra-extra-extra-large",
     "scope": "ResearchDebug regtest fixture; physical authentication is a separate release gate"
   },
-  "video_sha256": "3d687d8363238c03baf12ad0b98d1e96a93df6d158826e967e7ed19e32b8faa7",
-  "independent_receipt_sha256": "8d8289bd037b3ae08e8344d240d39b0724954d440d949e54ea8bd4b72599cb6a"
+  "video_sha256": "63411d44ea09f7f0b13a2fb841e5c056a80e236cdf146a4b4778f391ec0c1d3e",
+  "independent_receipt_sha256": "a464283d5b0b8952fd8044430a161a8373419f929b77e9b445a9116f24ce81c1"
 }
