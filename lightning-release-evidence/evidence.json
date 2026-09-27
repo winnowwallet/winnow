@@ -1,5 +1,5 @@
 {
-  "source": "d2314878cf85c32c35a5c03b15fa54fbe97235c8",
+  "source": "24148af7e2355b7ee83cd0ba729f63603777fd5d",
   "bundle": "com.btcswift.lightning",
   "physical_device": false,
   "device_checks_deferred_to_testflight": true,
@@ -13,48 +13,52 @@
   },
   "artifacts": [
     {
-      "path": "iphone-journey.json",
-      "sha256": "3a6e381fb20f568ee95adf5afcae188b131e411062d96eb0d6b0e3b8b5da54aa"
-    },
-    {
-      "path": "iphone-independent-receipt.json",
-      "sha256": "6cbb413631ef7603a9e35e9dffd2ffb6a568caa779277982094042795466b5d6"
-    },
-    {
       "path": "ipad-journey.json",
-      "sha256": "c5cdaf72fb3db2b616af127cb09f7da61708025317a8f5c51955be8ae25d2fc6"
+      "sha256": "b8e97bb46b86b9aed6901e73e1e9e93d380221169a208458fc39a30acbf42c56"
     },
     {
       "path": "ipad-independent-receipt.json",
-      "sha256": "01bfadddb249201c57dc55bfeb61243cf38c61ec66992bd26dec35df51369874"
+      "sha256": "6a9637576403eb0a3c78177b9903b1cd2235a74921d7b60315fb21cfa343428e"
     },
     {
       "path": "large-text-journey.json",
-      "sha256": "080d206c72775e11bd51cccc9ef8d6c6db6d2cace778c10496c91a8d51a47d6c"
+      "sha256": "9db78bc7daf2cf61b7d2da67afcd0cb75114314d1cc3c03b20c0962615d0ff04"
     },
     {
       "path": "large-text-independent-receipt.json",
-      "sha256": "17590ae270db3c48723813271f67b692d7727254157ae06d270a6b163a479936"
-    },
-    {
-      "path": "ci-run.json",
-      "sha256": "160bcdb17c51c9fb4a00922dc1c61403c32975f8734c2fea3cd9bcf9e6d71e17"
+      "sha256": "8d8289bd037b3ae08e8344d240d39b0724954d440d949e54ea8bd4b72599cb6a"
     },
     {
       "path": "encryption-inventory.md",
-      "sha256": "8d760ac151b0d27816783390d5e71e5fd1d3d159e86389e742578945baf06e22"
+      "sha256": "c211bfc061c434b43c1835bf620e8cf096ef2683488072d8b3e4e06ae60ca94a"
     },
     {
       "path": "encryption-questionnaire.json",
-      "sha256": "506d59c3de84f0945e01f49abc1bcbafec35cd2ba71b387c74b24c4581428ba9"
+      "sha256": "88b3c2777dfa967ff72f3d6003ad60287957c7fe864c36757ab05bca19055b48"
     },
     {
       "path": "crypto-comparison.json",
-      "sha256": "4a1046486eab71a437a78aabe2886e99a69913a307ff88b8584209128ca84adc"
+      "sha256": "78909bb8b6ff494550d217d45f602899a3a840a844311c462ccbca389dc7bc9e"
+    },
+    {
+      "path": "app-source-comparison.json",
+      "sha256": "e6c1dac844093a5513d6850565e9888753124206020395a98d01793a52bfed3c"
+    },
+    {
+      "path": "simple-mode-tests.json",
+      "sha256": "c1f75df93c70870007f312a5ee0dc85ce23490f7a4c48a83a15124d0f01d38a2"
+    },
+    {
+      "path": "mainnet-timing-receipt.json",
+      "sha256": "b3b1fe0f93b59fae4c51460ac1dda5d837e2f3550ab46f0017368827e6886d6e"
+    },
+    {
+      "path": "app-state-before.json",
+      "sha256": "ae83a1879027f2a6fe824427a0e9b7a6cd85e8a1e4257938bc4f8de612286f75"
     },
     {
       "path": "what-to-test.txt",
-      "sha256": "20620a533bc694ad286cf42950187e971b1843ac79168345c881dd36b9917e93"
+      "sha256": "c6b00bdfcf1437760a3b922f996f9463f49a489d111ff3b480f0e3bc18b05829"
     }
   ],
   "encryption": {
@@ -62,11 +66,11 @@
     "artifact": "encryption-inventory.md"
   },
   "notes": [
-    "Physical-device checks are deferred to the existing internal TestFlight beta; no physical verification is claimed.",
-    "Upload-only invokes the factual encryption questionnaire. It does not permit tester assignment or assert an exemption.",
-    "The exact-head hosted CI iPhone recording and peer evidence are retained in run 36259487060. iPad and large-text recordings are retained in the local testflight-0.3.0-3 evidence package.",
-    "Two iPadOS 26.3 automation attempts missed payment review after keyboard dismissal; those failures are retained. The full iPadOS 18.6 journey passed using the same unchanged app and test binary.",
-    "iPhone large-text attempts on iOS 26.3 and 27.0 timed out in screenshot/event automation while the host power log records system sleep. Those runs are retained as failures, not release passes. A later fixture build failed to read Package.swift from the iCloud Documents directory; the identical clean commit was checked out under /tmp for the rerun.",
-    "An additional iPad plus maximum-accessibility-text combination failed at the Receive address-label sheet because its lower controls were clipped. This is retained as a known display limitation in What to Test; it is not represented as passing. The required iPad check uses standard text, and the separate large-text check uses iPhone."
+    "Physical-device checks remain pending and deferred to the existing internal TestFlight group.",
+    "Current-source recorded journeys pass on iPad A16/iOS 18.6 at standard text and iPhone 17 Pro/iOS 26.3 at maximum accessibility text. Each includes both the complete independent-peer payment/crash/close scenario and the Simple-mode regression.",
+    "The release pipeline waits for successful exact-source CI run 36281402224 before signing; release-lightning separately verifies current green CI before archiving.",
+    "An earlier largest-text run on 7ebbda2 passed the payment journey but failed the new mode test at onboarding because its Create button was offscreen. It is retained as a failed attempt. Revision 24148af changes only test scrolling; the app runtime is unchanged.",
+    "Public mainnet timings and standard-size preference tests were recorded on 7ebbda2. app-source-comparison.json verifies that all non-test files are identical to this source.",
+    "The known iPad maximum-text Receive-sheet clipping limitation remains in What to Test; standard iPad and maximum-text iPhone coverage are separate configurations."
   ]
 }

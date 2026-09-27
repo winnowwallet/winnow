@@ -1,0 +1,119 @@
+{
+  "source": "24148af7e2355b7ee83cd0ba729f63603777fd5d",
+  "maximum_accessibility_text_regression": {
+    "devicesAndConfigurations": [
+      {
+        "device": {
+          "architecture": "arm64",
+          "deviceId": "0EAE6D6B-3AA2-4793-9FED-6A2881315663",
+          "deviceName": "Winnow Lightning Validation",
+          "modelName": "iPhone 17 Pro",
+          "osBuildNumber": "23D8133",
+          "osVersion": "26.3.1",
+          "platform": "iOS Simulator"
+        },
+        "expectedFailures": 0,
+        "failedTests": 0,
+        "passedTests": 1,
+        "skippedTests": 0,
+        "testPlanConfiguration": {
+          "configurationId": "1",
+          "configurationName": "Test Scheme Action"
+        }
+      }
+    ],
+    "environmentDescription": "WinnowLightning \u00b7 Built with macOS 27.0",
+    "expectedFailures": 0,
+    "failedTests": 0,
+    "finishTime": 1790467459.01,
+    "passedTests": 1,
+    "result": "Passed",
+    "runtimeWarnings": [],
+    "skippedTests": 0,
+    "startTime": 1790467405.095,
+    "statistics": [],
+    "testFailures": [],
+    "title": "Test - WinnowLightning",
+    "topInsights": [],
+    "totalTestCount": 1
+  },
+  "earlier_app_source_reports": {
+    "source": "7ebbda2bfd83b655452149456d7bb216152727f2",
+    "reports": [
+      {
+        "devicesAndConfigurations": [
+          {
+            "device": {
+              "architecture": "arm64",
+              "deviceId": "0EAE6D6B-3AA2-4793-9FED-6A2881315663",
+              "deviceName": "Winnow Lightning Validation",
+              "modelName": "iPhone 17 Pro",
+              "osBuildNumber": "23D8133",
+              "osVersion": "26.3.1",
+              "platform": "iOS Simulator"
+            },
+            "expectedFailures": 0,
+            "failedTests": 0,
+            "passedTests": 2,
+            "skippedTests": 0,
+            "testPlanConfiguration": {
+              "configurationId": "1",
+              "configurationName": "Test Scheme Action"
+            }
+          }
+        ],
+        "environmentDescription": "WinnowLightning \u00b7 Built with macOS 27.0",
+        "expectedFailures": 0,
+        "failedTests": 0,
+        "finishTime": 1790465656.813,
+        "passedTests": 2,
+        "result": "Passed",
+        "runtimeWarnings": [],
+        "skippedTests": 0,
+        "startTime": 1790465631.052,
+        "statistics": [],
+        "testFailures": [],
+        "title": "Test - WinnowLightning",
+        "topInsights": [],
+        "totalTestCount": 2
+      },
+      {
+        "devicesAndConfigurations": [
+          {
+            "device": {
+              "architecture": "arm64",
+              "deviceId": "0EAE6D6B-3AA2-4793-9FED-6A2881315663",
+              "deviceName": "Winnow Lightning Validation",
+              "modelName": "iPhone 17 Pro",
+              "osBuildNumber": "23D8133",
+              "osVersion": "26.3.1",
+              "platform": "iOS Simulator"
+            },
+            "expectedFailures": 0,
+            "failedTests": 0,
+            "passedTests": 8,
+            "skippedTests": 0,
+            "testPlanConfiguration": {
+              "configurationId": "1",
+              "configurationName": "Test Scheme Action"
+            }
+          }
+        ],
+        "environmentDescription": "WinnowApp \u00b7 Built with macOS 27.0",
+        "expectedFailures": 0,
+        "failedTests": 0,
+        "finishTime": 1790465687.915,
+        "passedTests": 8,
+        "result": "Passed",
+        "runtimeWarnings": [],
+        "skippedTests": 0,
+        "startTime": 1790465669.636,
+        "statistics": [],
+        "testFailures": [],
+        "title": "Test - WinnowApp",
+        "topInsights": [],
+        "totalTestCount": 8
+      }
+    ]
+  }
+}

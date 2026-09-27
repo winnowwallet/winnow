@@ -1,6 +1,6 @@
 {
-  "previous_source": "ac1f6e72a490bfb6413bcfda6730756856329095",
-  "source": "d2314878cf85c32c35a5c03b15fa54fbe97235c8",
+  "previous_source": "d2314878cf85c32c35a5c03b15fa54fbe97235c8",
+  "source": "24148af7e2355b7ee83cd0ba729f63603777fd5d",
   "unchanged_crypto_and_dependency_files": [
     {
       "path": "Package.swift",
@@ -34,5 +34,12 @@
       "path": "Sources/LightningCore/LightningJournal.swift",
       "sha256": "d303ec2df32e483512453a6c3d95a9ed264d7152b47e2e5cc44c3676b2cdc0f9"
     }
+  ],
+  "entire_core_and_dependency_paths_verified_unchanged": [
+    "Sources/WalletCore",
+    "Sources/LightningCore",
+    "Package.swift",
+    "Package.resolved",
+    "project.yml"
   ]
 }
