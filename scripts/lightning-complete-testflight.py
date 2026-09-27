@@ -11,10 +11,10 @@ if not __debug__:
 ROOT = Path(__file__).resolve().parent.parent
 APP = '6815392502'
 BUNDLE = 'com.btcswift.lightning'
-SOURCE = '248d31fdc6d7051ea8a01f23256b44824738c04b'
+SOURCE = '1f1bfdd956c84765c444ed6b0667806b20626c55'
 receipt = json.loads((ROOT / 'lightning-release-evidence/upload-receipt.json').read_text())
 assert receipt['source'] == SOURCE and receipt['bundle'] == BUNDLE
-assert receipt['version'] == '0.3.0' and receipt['build'] == '7'
+assert receipt['version'] == '0.3.0' and receipt['build'] == '8'
 assert receipt['uploaded'] is True and receipt['processed'] is True
 build_id = receipt['app_store_connect_build']
 draft = json.loads((ROOT / 'lightning-release-evidence/encryption-questionnaire.json').read_text())
@@ -45,7 +45,7 @@ def asc(method, endpoint, data=None):
 
 
 assert asc('GET', '/apps/' + APP)['data']['attributes']['bundleId'] == BUNDLE
-builds = asc('GET', '/builds?filter[app]=' + APP + '&filter[version]=7&filter[preReleaseVersion.version]=0.3.0&limit=2')['data']
+builds = asc('GET', '/builds?filter[app]=' + APP + '&filter[version]=8&filter[preReleaseVersion.version]=0.3.0&limit=2')['data']
 assert len(builds) == 1 and builds[0]['id'] == build_id and builds[0]['attributes']['processingState'] == 'VALID'
 # This is an internal beta, with no public App Store rollout. Do not infer the
 # French-store answer if the app has any submitted or released store version.
@@ -105,11 +105,11 @@ if nonexempt:
     assert asc('GET', '/builds/' + build_id + '/appEncryptionDeclaration')['data']['id'] == declaration['id']
 assert asc('GET', '/builds/' + build_id)['data']['attributes']['usesNonExemptEncryption'] is nonexempt
 environment = dict(os.environ, TESTFLIGHT_BUNDLE_ID=BUNDLE, TESTFLIGHT_MARKETING_VERSION='0.3.0',
-                   TESTFLIGHT_BUILD_NUMBER='7', TESTFLIGHT_BUILD_ID=build_id)
+                   TESTFLIGHT_BUILD_NUMBER='8', TESTFLIGHT_BUILD_ID=build_id)
 environment['TESTFLIGHT_WHATS_NEW_FILE'] = str(ROOT / 'lightning-release-evidence/what-to-test.txt')
 subprocess.run([str(ROOT.parent / 'tooling/scripts/testflight.sh'), 'notes'], env=environment, check=True)
 subprocess.run([str(ROOT.parent / 'tooling/scripts/testflight.sh'), 'internal'], env=environment, check=True)
 result.update(available_to_internal_testers=True, internal_group='PQLN Regtest Internal',
               apple_encryption_determination={'exempt_from_documentation': exempt, 'declaration_id': declaration['id'] if declaration else None, 'state': state})
 destination.write_text(json.dumps(result, indent=2) + '\n')
-print('Verified existing internal group can install version 0.3.0 build 7.')
+print('Verified existing internal group can install version 0.3.0 build 8.')

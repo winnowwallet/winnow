@@ -1,59 +1,195 @@
 {
-  "previous_source": "b3bb94a6870b286ab11dbf7a201cdd8e357d738f",
-  "source": "248d31fdc6d7051ea8a01f23256b44824738c04b",
-  "unchanged_crypto_and_dependency_files": [
+  "previous_source": "248d31fdc6d7051ea8a01f23256b44824738c04b",
+  "source": "1f1bfdd956c84765c444ed6b0667806b20626c55",
+  "unchanged_primitives_and_dependencies": true,
+  "files": [
+    {
+      "path": "Package.swift",
+      "previous_sha256": "7fac92704aa7b03ff726f6fe10e45fbe20a8f690e6b034852ee1e31f57135f17",
+      "current_sha256": "7fac92704aa7b03ff726f6fe10e45fbe20a8f690e6b034852ee1e31f57135f17",
+      "unchanged": true
+    },
     {
       "path": "Package.resolved",
-      "sha256": "8cd7fd20f40e99d1c1ec538942986a9ca53a4bbe0e687e65d1d47f0a15cd2e69"
+      "previous_sha256": "8cd7fd20f40e99d1c1ec538942986a9ca53a4bbe0e687e65d1d47f0a15cd2e69",
+      "current_sha256": "8cd7fd20f40e99d1c1ec538942986a9ca53a4bbe0e687e65d1d47f0a15cd2e69",
+      "unchanged": true
     },
     {
       "path": "Sources/LightningCore/NoiseCrypto.swift",
-      "sha256": "0e25e1a3756c4942ff0b858ecee794eb22cd1926e0f4a5a83f1d50bfd1af4cd1"
+      "previous_sha256": "0e25e1a3756c4942ff0b858ecee794eb22cd1926e0f4a5a83f1d50bfd1af4cd1",
+      "current_sha256": "0e25e1a3756c4942ff0b858ecee794eb22cd1926e0f4a5a83f1d50bfd1af4cd1",
+      "unchanged": true
     },
     {
       "path": "Sources/LightningCore/LightningHandshake.swift",
-      "sha256": "ebf016812d30dd0bb1bcb337db31e85c0ca04a9092c740920cb1353207be70c6"
-    },
-    {
-      "path": "Sources/LightningCore/OnionPacket.swift",
-      "sha256": "dc41b404464c24f0e262fea81d9757fcfb1916d535e5473c0b02e9721a8bfb1c"
-    },
-    {
-      "path": "Sources/LightningCore/ChannelKeys.swift",
-      "sha256": "d361709e95d909ec1af9ead1867e6c3d4cf80e6031289c8ec0b4d0cadda8f961"
-    },
-    {
-      "path": "Sources/LightningCore/Bolt12Encoding.swift",
-      "sha256": "1dd770a4503e80a3712598433b1afc1955ad1233ed5e5c31d6651900070cd52c"
+      "previous_sha256": "ebf016812d30dd0bb1bcb337db31e85c0ca04a9092c740920cb1353207be70c6",
+      "current_sha256": "ebf016812d30dd0bb1bcb337db31e85c0ca04a9092c740920cb1353207be70c6",
+      "unchanged": true
     },
     {
       "path": "Sources/LightningCore/LightningJournal.swift",
-      "sha256": "1f6eeeaf397c7fc601470ec3b95d2c4d4dc590e31dd756d3fb0ea0cbf1eb33da"
+      "previous_sha256": "1f6eeeaf397c7fc601470ec3b95d2c4d4dc590e31dd756d3fb0ea0cbf1eb33da",
+      "current_sha256": "1f6eeeaf397c7fc601470ec3b95d2c4d4dc590e31dd756d3fb0ea0cbf1eb33da",
+      "unchanged": true
     },
     {
-      "path": "Package.swift",
-      "sha256": "7fac92704aa7b03ff726f6fe10e45fbe20a8f690e6b034852ee1e31f57135f17"
+      "path": "Sources/LightningCore/OnionPacket.swift",
+      "previous_sha256": "dc41b404464c24f0e262fea81d9757fcfb1916d535e5473c0b02e9721a8bfb1c",
+      "current_sha256": "dc41b404464c24f0e262fea81d9757fcfb1916d535e5473c0b02e9721a8bfb1c",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/LightningCore/ChannelKeys.swift",
+      "previous_sha256": "d361709e95d909ec1af9ead1867e6c3d4cf80e6031289c8ec0b4d0cadda8f961",
+      "current_sha256": "d361709e95d909ec1af9ead1867e6c3d4cf80e6031289c8ec0b4d0cadda8f961",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/LightningCore/Bolt12Encoding.swift",
+      "previous_sha256": "1dd770a4503e80a3712598433b1afc1955ad1233ed5e5c31d6651900070cd52c",
+      "current_sha256": "1dd770a4503e80a3712598433b1afc1955ad1233ed5e5c31d6651900070cd52c",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/WalletCore/Crypto/Base58.swift",
+      "previous_sha256": "3eb3e9f27ecd3aabed212acaafd641f9a561803a65a511a774fbe0c9212c2e94",
+      "current_sha256": "3eb3e9f27ecd3aabed212acaafd641f9a561803a65a511a774fbe0c9212c2e94",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/WalletCore/Crypto/Bech32.swift",
+      "previous_sha256": "33a1f217e9d794039d1d89734918e24ffe739c036e98b343a1a01a78ff8c9062",
+      "current_sha256": "33a1f217e9d794039d1d89734918e24ffe739c036e98b343a1a01a78ff8c9062",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/WalletCore/Crypto/GCSFilter.swift",
+      "previous_sha256": "ee3bb9902d4a72e932023108821d3d30d49637985bda6c7a86b63ee3af42420d",
+      "current_sha256": "ee3bb9902d4a72e932023108821d3d30d49637985bda6c7a86b63ee3af42420d",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/WalletCore/Crypto/PBKDF2.swift",
+      "previous_sha256": "f79f4636a3116ad471214dd88d8d753d1b77c1cec4b261f074420b856b6f6b10",
+      "current_sha256": "f79f4636a3116ad471214dd88d8d753d1b77c1cec4b261f074420b856b6f6b10",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/WalletCore/Crypto/README.md",
+      "previous_sha256": "9ec65134f0b0939417eb7e386bf9d5e63e4d2c5c54eabc215b191bb5f76c7da7",
+      "current_sha256": "9ec65134f0b0939417eb7e386bf9d5e63e4d2c5c54eabc215b191bb5f76c7da7",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/WalletCore/Crypto/RIPEMD160.swift",
+      "previous_sha256": "ca7a02bff70958e3116fb0574fb46b048c4e96ef2ed6fc217aed67cd1ab3c2ee",
+      "current_sha256": "ca7a02bff70958e3116fb0574fb46b048c4e96ef2ed6fc217aed67cd1ab3c2ee",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/WalletCore/Crypto/SipHash.swift",
+      "previous_sha256": "38bb36dfb7ee66ba1bc4133a916d6f7dc691cf92f2aeb8b9e60cf353a61af03b",
+      "current_sha256": "38bb36dfb7ee66ba1bc4133a916d6f7dc691cf92f2aeb8b9e60cf353a61af03b",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/WalletCore/Crypto/TaggedHash.swift",
+      "previous_sha256": "96f460c317c90ed0a175225adbcf2d587ea85422c3572c52bfa17d46bfb19163",
+      "current_sha256": "96f460c317c90ed0a175225adbcf2d587ea85422c3572c52bfa17d46bfb19163",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/WalletCore/Keys/BIP32.swift",
+      "previous_sha256": "4a6130e249206b025e57ae1d9de21ef84616a2723b522f4747ca1bd53798e2dd",
+      "current_sha256": "4a6130e249206b025e57ae1d9de21ef84616a2723b522f4747ca1bd53798e2dd",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/WalletCore/Keys/BIP39.swift",
+      "previous_sha256": "90436fbaa49baabf5e32d222b8ea488f888651aa74f7379de5f6460cc1c5f031",
+      "current_sha256": "90436fbaa49baabf5e32d222b8ea488f888651aa74f7379de5f6460cc1c5f031",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/WalletCore/Keys/BIP39Wordlist.swift",
+      "previous_sha256": "324ec283f93b5f68b1ecd8084f5111135245026f4416b958772073d8915ba18d",
+      "current_sha256": "324ec283f93b5f68b1ecd8084f5111135245026f4416b958772073d8915ba18d",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/WalletCore/Keys/BIP86.swift",
+      "previous_sha256": "38c1617d4100d2ce26d2198272f1c282d23af8009382ae2fbef680500144916c",
+      "current_sha256": "38c1617d4100d2ce26d2198272f1c282d23af8009382ae2fbef680500144916c",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/WalletCore/Keys/KeyStore.swift",
+      "previous_sha256": "5821e3ddb3a0084ae1c3d66a55f66dbb0b5429f6b6376d3ca80c35a8d82be9f5",
+      "current_sha256": "5821e3ddb3a0084ae1c3d66a55f66dbb0b5429f6b6376d3ca80c35a8d82be9f5",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/WalletCore/Keys/KeychainStore.swift",
+      "previous_sha256": "4560f439eb97ae0b31ed99304d15d061cfc3b4c30f7b3f325da2e104eba09005",
+      "current_sha256": "4560f439eb97ae0b31ed99304d15d061cfc3b4c30f7b3f325da2e104eba09005",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/WalletCore/Keys/README.md",
+      "previous_sha256": "21b6d07251f3a841a33f865cf968c975e090537ab15ec8663c780d14b57c8096",
+      "current_sha256": "21b6d07251f3a841a33f865cf968c975e090537ab15ec8663c780d14b57c8096",
+      "unchanged": true
     }
   ],
-  "wallet_core_unchanged": true,
   "changed_paths": [
-    "Sources/LightningCore/LightningAppState.swift",
+    "AppTests/LightningAppTests.swift",
+    "AppTests/LightningReceivingTests.swift",
+    "AppTests/SyncPhaseDisplayTests.swift",
+    "Sources/LightningCore/Bolt11Decoding.swift",
+    "Sources/LightningCore/Bolt11Payment.swift",
+    "Sources/LightningCore/Bolt11PaymentRoute.swift",
+    "Sources/LightningCore/Bolt11Signature.swift",
+    "Sources/LightningCore/LightningEngine.swift",
+    "Sources/LightningCore/LightningGossipQuery.swift",
     "Sources/LightningCore/LightningInvoiceRouting.swift",
-    "Sources/LightningCore/LightningPeerNotice.swift",
+    "Sources/LightningCore/LightningInvoiceSending.swift",
+    "Sources/LightningCore/LightningPayments.swift",
+    "Sources/LightningCore/LightningPeerRouting.swift",
     "Sources/LightningCore/LightningPeerSession.swift",
-    "Sources/WinnowApp/LightningAppController.swift",
-    "Sources/WinnowApp/LightningAppFunding.swift",
+    "Sources/LightningCore/LightningRouteSearch.swift",
+    "Sources/LightningCore/LightningRoutingGraph.swift",
+    "Sources/LightningCore/README.md",
+    "Sources/WalletCore/Network/Filters/FilterSync.swift",
+    "Sources/WinnowApp/AppModel.swift",
+    "Sources/WinnowApp/BeginnerHomeView.swift",
+    "Sources/WinnowApp/HomeView.swift",
+    "Sources/WinnowApp/LightningAppInvoicePayments.swift",
     "Sources/WinnowApp/LightningAppReceiving.swift",
+    "Sources/WinnowApp/LightningInvoiceSendView.swift",
+    "Sources/WinnowApp/LightningLiquidityView.swift",
     "Sources/WinnowApp/LightningReceiveView.swift",
+    "Sources/WinnowApp/LightningReviewView.swift",
     "Sources/WinnowApp/LightningView.swift",
+    "Sources/WinnowApp/PaymentScannerView.swift",
+    "Sources/WinnowApp/SendView.swift",
     "Tests/LightningCoreTests/ChannelEngineTests.swift",
-    "Tests/LightningCoreTests/InvoiceRoutingTests.swift",
-    "Tests/LightningCoreTests/PeerNoticeTests.swift",
+    "Tests/LightningCoreTests/InvoiceSendingTests.swift",
     "Tests/LightningCoreTests/PeerSessionTests.swift",
-    "Tools/LightningPeerFixture/LiquidityProbe.swift",
+    "Tests/LightningCoreTests/RoutingGraphTests.swift",
+    "Tests/Support/P2P/LoopbackNode.swift",
+    "Tests/WalletCoreTests/Network/FilterSyncTests.swift",
+    "Tools/LightningPeerFixture/InvoiceRouteProbe.swift",
     "Tools/LightningPeerFixture/PeerFixture.swift",
     "UITests/LightningAppUITests.swift",
-    "docs/engineering/lightning-receiving.md"
-  ],
-  "change": "Peer keepalive and queued message handling, provider notices and rejection lifecycle, truthful unfunded channel display; no new algorithm, signature implementation or dependency."
+    "UITests/TestHelpers.swift",
+    "docs/engineering/lightning-receiving.md",
+    "docs/engineering/lightning-release.md",
+    "docs/engineering/lightning-sending.md",
+    "project.yml",
+    "scripts/check-test-gates",
+    "scripts/ci-lightning-peer",
+    "scripts/ci-lightning-ui",
+    "scripts/lightning-ui-fixture"
+  ]
 }

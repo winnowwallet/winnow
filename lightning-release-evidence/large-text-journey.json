@@ -1,20 +1,20 @@
 {
   "result": "passed",
   "manifest": {
-    "source": "248d31fdc6d7051ea8a01f23256b44824738c04b",
+    "source": "1f1bfdd956c84765c444ed6b0667806b20626c55",
     "dirty": false,
-    "simulator": "B166304F-5BCC-486A-9B58-2D69557FB3F9",
+    "simulator": "2421C3E5-2B36-4750-8E80-78FCCC08C9BD",
     "bundle": "com.btcswift.lightning",
-    "executable_sha256": "134f4d6b1cdf4fd79b7f3ff42ee438557db9afb0ee8048de259e51c4a65f1df5",
+    "executable_sha256": "b86d33e911346c0fc79aab8bf2d3c646cf623768187f5b594faeb84461157e15",
     "xcode": "Xcode 27.0\nBuild version 27A266a",
     "device": {
-      "name": "iPhone 18 Pro",
-      "device_type": "com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro",
-      "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+      "name": "iPhone 17 Pro",
+      "device_type": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+      "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-3"
     },
     "content_size": "accessibility-extra-extra-extra-large",
     "scope": "ResearchDebug regtest fixture; physical authentication is a separate release gate"
   },
-  "video_sha256": "24d5ba251b7848196e89da98e49547df803c74a85e2796de9e1fc536b1100041",
-  "independent_receipt_sha256": "bb332722a58b541962fedc81b3df1a3ff62632a69327481ea31bf2411ad54a1a"
+  "video_sha256": "119b4ed5f812ca8112a0b05b64853f47f1dd1c20616a4f140d052378aed597c2",
+  "independent_receipt_sha256": "479719fe3f2e1b85ae8870183a56ad436069cdccbf957b071ee0b89d544d40c7"
 }

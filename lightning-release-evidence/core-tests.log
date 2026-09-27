@@ -1,243 +1,623 @@
-Building for debugging...
-[Computing dependencies]
-[Using on-disk description]
-[1 / 50]
-[4 / 9] LightningCore-product
-[4 / 9] winnow-lightning-fixture-product
-[4 / 9] LightningCoreTests-product
-[6 / 11] LightningCoreTests-product
-[12 / 16] LightningCoreTests-product
-[13 / 16] LightningCoreTests-product
-[16 / 16] winnow-lightning-fixture-product
-Build complete! (4.76 sec)
-Test Suite 'Selected tests' started at 2026-09-27 10:54:27.281.
-Test Suite 'WalletCoreTests.xctest' started at 2026-09-27 10:54:27.282.
-Test Suite 'WalletCoreTests.xctest' passed at 2026-09-27 10:54:27.282.
-	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.000) seconds
-Test Suite 'Selected tests' passed at 2026-09-27 10:54:27.282.
-	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.002) seconds
-Test Suite 'Selected tests' started at 2026-09-27 10:54:27.367.
-Test Suite 'ToolsTests.xctest' started at 2026-09-27 10:54:27.368.
-Test Suite 'ToolsTests.xctest' passed at 2026-09-27 10:54:27.368.
-	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.000) seconds
-Test Suite 'Selected tests' passed at 2026-09-27 10:54:27.368.
-	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.001) seconds
-Test Suite 'Selected tests' started at 2026-09-27 10:54:27.435.
-Test Suite 'LightningCoreTests.xctest' started at 2026-09-27 10:54:27.436.
-Test Suite 'AsyncPaymentTests' started at 2026-09-27 10:54:27.436.
-Test Case '-[LightningCoreTests.AsyncPaymentTests testBlindedRouteBindsRequestPreimageAndReceiverConstraints]' started.
-Test Case '-[LightningCoreTests.AsyncPaymentTests testBlindedRouteBindsRequestPreimageAndReceiverConstraints]' passed (0.050 seconds).
-Test Case '-[LightningCoreTests.AsyncPaymentTests testFeeAndCLTVCeilingsCannotChangeWithAnInvoice]' started.
-Test Case '-[LightningCoreTests.AsyncPaymentTests testFeeAndCLTVCeilingsCannotChangeWithAnInvoice]' passed (0.015 seconds).
-Test Suite 'AsyncPaymentTests' passed at 2026-09-27 10:54:27.501.
-	 Executed 2 tests, with 0 failures (0 unexpected) in 0.065 (0.065) seconds
-Test Suite 'Bolt11Tests' started at 2026-09-27 10:54:27.501.
-Test Case '-[LightningCoreTests.Bolt11Tests testCorruptSignatureFailsWithoutCrashingEvenWithValidChecksum]' started.
-Test Case '-[LightningCoreTests.Bolt11Tests testCorruptSignatureFailsWithoutCrashingEvenWithValidChecksum]' passed (0.008 seconds).
-Test Case '-[LightningCoreTests.Bolt11Tests testInvoicesBindNetworkAmountSecretAndNodeAndHavePrivateRoute]' started.
-Test Case '-[LightningCoreTests.Bolt11Tests testInvoicesBindNetworkAmountSecretAndNodeAndHavePrivateRoute]' passed (0.013 seconds).
-Test Case '-[LightningCoreTests.Bolt11Tests testPublishedBolt11InvoiceVector]' started.
-Test Case '-[LightningCoreTests.Bolt11Tests testPublishedBolt11InvoiceVector]' passed (0.001 seconds).
-Test Suite 'Bolt11Tests' passed at 2026-09-27 10:54:27.523.
-	 Executed 3 tests, with 0 failures (0 unexpected) in 0.022 (0.022) seconds
-Test Suite 'Bolt12Tests' started at 2026-09-27 10:54:27.523.
-Test Case '-[LightningCoreTests.Bolt12Tests testPaymentReviewRejectsWrongChainExpiryAndUnacceptedCurrency]' started.
-Test Case '-[LightningCoreTests.Bolt12Tests testPaymentReviewRejectsWrongChainExpiryAndUnacceptedCurrency]' passed (0.004 seconds).
-Test Case '-[LightningCoreTests.Bolt12Tests testPublishedMerkleRootsAndInvoiceRequestSignature]' started.
-Test Case '-[LightningCoreTests.Bolt12Tests testPublishedMerkleRootsAndInvoiceRequestSignature]' passed (0.004 seconds).
-Test Case '-[LightningCoreTests.Bolt12Tests testPublishedOfferAndFormattingVectors]' started.
-Test Case '-[LightningCoreTests.Bolt12Tests testPublishedOfferAndFormattingVectors]' passed (0.017 seconds).
-Test Case '-[LightningCoreTests.Bolt12Tests testUpstreamAsyncMessagesMatchExactlyAndRejectMalformedFraming]' started.
-Test Case '-[LightningCoreTests.Bolt12Tests testUpstreamAsyncMessagesMatchExactlyAndRejectMalformedFraming]' passed (0.003 seconds).
-Test Case '-[LightningCoreTests.Bolt12Tests testUpstreamStaticInvoiceRejectsSubstitutionExpiryAndSignatureDamage]' started.
-Test Case '-[LightningCoreTests.Bolt12Tests testUpstreamStaticInvoiceRejectsSubstitutionExpiryAndSignatureDamage]' passed (0.007 seconds).
-Test Suite 'Bolt12Tests' passed at 2026-09-27 10:54:27.559.
-	 Executed 5 tests, with 0 failures (0 unexpected) in 0.036 (0.036) seconds
-Test Suite 'ChainRecoveryTests' started at 2026-09-27 10:54:27.559.
-Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundDeadlinePersistsCloseBeforeBroadcastAndForegroundAdoptsIt]' started.
-Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundDeadlinePersistsCloseBeforeBroadcastAndForegroundAdoptsIt]' passed (0.161 seconds).
-Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundIntentReplayDoesNotReopenFinalizedCooperativeClose]' started.
-Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundIntentReplayDoesNotReopenFinalizedCooperativeClose]' passed (0.052 seconds).
-Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundPresignsRevokedRemoteHTLCAndSecondStagePenalty]' started.
-Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundPresignsRevokedRemoteHTLCAndSecondStagePenalty]' passed (0.056 seconds).
-Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundRecoveryContainsNoPrivateKeysAndHonorsCSVAndReorg]' started.
-Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundRecoveryContainsNoPrivateKeysAndHonorsCSVAndReorg]' passed (0.049 seconds).
-Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundStoreAheadOfFailedFullJournalCannotResumePayments]' started.
-Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundStoreAheadOfFailedFullJournalCannotResumePayments]' passed (0.034 seconds).
-Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundUsesWalletScannerAndDoesNotPublishDuringPartialCatchup]' started.
-Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundUsesWalletScannerAndDoesNotPublishDuringPartialCatchup]' passed (0.047 seconds).
-Test Case '-[LightningCoreTests.ChainRecoveryTests testCheckpointWalletAndLightningScanWithoutGenesisHeaders]' started.
-Test Case '-[LightningCoreTests.ChainRecoveryTests testCheckpointWalletAndLightningScanWithoutGenesisHeaders]' passed (0.019 seconds).
-Test Case '-[LightningCoreTests.ChainRecoveryTests testCooperativeCloseFinalizesAtDepthAndReorgRestoresClosing]' started.
-Test Case '-[LightningCoreTests.ChainRecoveryTests testCooperativeCloseFinalizesAtDepthAndReorgRestoresClosing]' passed (0.015 seconds).
-Test Case '-[LightningCoreTests.ChainRecoveryTests testDelayedSweepUsesNewConfirmationHeightAfterReorg]' started.
-Test Case '-[LightningCoreTests.ChainRecoveryTests testDelayedSweepUsesNewConfirmationHeightAfterReorg]' passed (1.599 seconds).
-Test Case '-[LightningCoreTests.ChainRecoveryTests testDriverSharesVerifiedFilterScannerAndRestoresItsOwnFrontier]' started.
-Test Case '-[LightningCoreTests.ChainRecoveryTests testDriverSharesVerifiedFilterScannerAndRestoresItsOwnFrontier]' passed (0.030 seconds).
-Test Case '-[LightningCoreTests.ChainRecoveryTests testFailedBackgroundWriteNeverAdvancesFullJournalOrPublishesActions]' started.
-Test Case '-[LightningCoreTests.ChainRecoveryTests testFailedBackgroundWriteNeverAdvancesFullJournalOrPublishesActions]' passed (0.041 seconds).
-Test Case '-[LightningCoreTests.ChainRecoveryTests testForceCloseIntentSurvivesCrashButStaleBackupCannotPublish]' started.
-Test Case '-[LightningCoreTests.ChainRecoveryTests testForceCloseIntentSurvivesCrashButStaleBackupCannotPublish]' passed (0.020 seconds).
-Test Case '-[LightningCoreTests.ChainRecoveryTests testFundingReorgBlocksOldOutboxAndPaymentUntilReconfirmed]' started.
-Test Case '-[LightningCoreTests.ChainRecoveryTests testFundingReorgBlocksOldOutboxAndPaymentUntilReconfirmed]' passed (0.020 seconds).
-Test Case '-[LightningCoreTests.ChainRecoveryTests testLegacyJournalRetainsGenesisAndUpgradesWithoutLosingIdentity]' started.
-Test Case '-[LightningCoreTests.ChainRecoveryTests testLegacyJournalRetainsGenesisAndUpgradesWithoutLosingIdentity]' passed (0.016 seconds).
-Test Case '-[LightningCoreTests.ChainRecoveryTests testOnChainSuccessAndTimeoutReconcileOnceAfterDepthAndUndoOnReorg]' started.
-Test Case '-[LightningCoreTests.ChainRecoveryTests testOnChainSuccessAndTimeoutReconcileOnceAfterDepthAndUndoOnReorg]' passed (0.642 seconds).
-Test Case '-[LightningCoreTests.ChainRecoveryTests testRejectsWrongAncestryStaleWatchesAndIncompleteScan]' started.
-Test Case '-[LightningCoreTests.ChainRecoveryTests testRejectsWrongAncestryStaleWatchesAndIncompleteScan]' passed (0.000 seconds).
-Test Case '-[LightningCoreTests.ChainRecoveryTests testScanBirthdaySurvivesRestartAndCannotSkipExistingChannels]' started.
-Test Case '-[LightningCoreTests.ChainRecoveryTests testScanBirthdaySurvivesRestartAndCannotSkipExistingChannels]' passed (0.014 seconds).
-Test Case '-[LightningCoreTests.ChainRecoveryTests testSchemaUpgradePrecedesFirstBackgroundPlanAndFailureLeavesNoPlan]' started.
-Test Case '-[LightningCoreTests.ChainRecoveryTests testSchemaUpgradePrecedesFirstBackgroundPlanAndFailureLeavesNoPlan]' passed (0.049 seconds).
-Test Suite 'ChainRecoveryTests' passed at 2026-09-27 10:54:30.426.
-	 Executed 18 tests, with 0 failures (0 unexpected) in 2.865 (2.866) seconds
-Test Suite 'ChannelEngineTests' started at 2026-09-27 10:54:30.426.
-Test Case '-[LightningCoreTests.ChannelEngineTests testAsyncRequiresHoldingPeerAndFeeAuthorization]' started.
-Test Case '-[LightningCoreTests.ChannelEngineTests testAsyncRequiresHoldingPeerAndFeeAuthorization]' passed (0.101 seconds).
-Test Case '-[LightningCoreTests.ChannelEngineTests testCloseFeeUsesWalletSizingAndEnforcesReviewedLimitAboveCommitmentFee]' started.
-Test Case '-[LightningCoreTests.ChannelEngineTests testCloseFeeUsesWalletSizingAndEnforcesReviewedLimitAboveCommitmentFee]' passed (0.032 seconds).
-Test Case '-[LightningCoreTests.ChannelEngineTests testClosingAgreementAndDuplicateDoNotEchoSignatures]' started.
-Test Case '-[LightningCoreTests.ChannelEngineTests testClosingAgreementAndDuplicateDoNotEchoSignatures]' passed (0.036 seconds).
-Test Case '-[LightningCoreTests.ChannelEngineTests testDiskFailureStopsSignaturePublicationAndFurtherActions]' started.
-Test Case '-[LightningCoreTests.ChannelEngineTests testDiskFailureStopsSignaturePublicationAndFurtherActions]' passed (0.008 seconds).
-Test Case '-[LightningCoreTests.ChannelEngineTests testExpiredInvoiceCannotSendAndFailedPersistenceFreezesAsyncOutbox]' started.
-Test Case '-[LightningCoreTests.ChannelEngineTests testExpiredInvoiceCannotSendAndFailedPersistenceFreezesAsyncOutbox]' passed (0.113 seconds).
-Test Case '-[LightningCoreTests.ChannelEngineTests testFundingAndPeerIdentityCannotBeSubstituted]' started.
-Test Case '-[LightningCoreTests.ChannelEngineTests testFundingAndPeerIdentityCannotBeSubstituted]' passed (0.009 seconds).
-Test Case '-[LightningCoreTests.ChannelEngineTests testHeldNotificationWaitsForBothCommitmentDirectionsRegardlessOfReleasePathOrder]' started.
-Test Case '-[LightningCoreTests.ChannelEngineTests testHeldNotificationWaitsForBothCommitmentDirectionsRegardlessOfReleasePathOrder]' passed (0.087 seconds).
-Test Case '-[LightningCoreTests.ChannelEngineTests testHTLCCommitRevocationAndSettlementBalances]' started.
-Test Case '-[LightningCoreTests.ChannelEngineTests testHTLCCommitRevocationAndSettlementBalances]' passed (0.151 seconds).
-Test Case '-[LightningCoreTests.ChannelEngineTests testJournalEncryptionIntegrityAndExclusiveWriter]' started.
-Test Case '-[LightningCoreTests.ChannelEngineTests testJournalEncryptionIntegrityAndExclusiveWriter]' passed (0.014 seconds).
-Test Case '-[LightningCoreTests.ChannelEngineTests testLostOnionDeliveryRetriesExactRequestAcrossRestartAndStopsAfterInvoice]' started.
-Test Case '-[LightningCoreTests.ChannelEngineTests testLostOnionDeliveryRetriesExactRequestAcrossRestartAndStopsAfterInvoice]' passed (0.078 seconds).
-Test Case '-[LightningCoreTests.ChannelEngineTests testOfferPaymentIDAndRequestSurviveRestartWithoutAnotherHTLC]' started.
-Test Case '-[LightningCoreTests.ChannelEngineTests testOfferPaymentIDAndRequestSurviveRestartWithoutAnotherHTLC]' passed (0.099 seconds).
-Test Case '-[LightningCoreTests.ChannelEngineTests testOnionRejectionDoesNotInterruptChannelButPersistenceFailureDoes]' started.
-Test Case '-[LightningCoreTests.ChannelEngineTests testOnionRejectionDoesNotInterruptChannelButPersistenceFailureDoes]' passed (0.093 seconds).
-Test Case '-[LightningCoreTests.ChannelEngineTests testOpeningPersistsEnforceableCommitmentBeforeBroadcast]' started.
-Test Case '-[LightningCoreTests.ChannelEngineTests testOpeningPersistsEnforceableCommitmentBeforeBroadcast]' passed (0.037 seconds).
-Test Case '-[LightningCoreTests.ChannelEngineTests testOpeningRejectionCannotDiscardEnforceableChannel]' started.
-Test Case '-[LightningCoreTests.ChannelEngineTests testOpeningRejectionCannotDiscardEnforceableChannel]' passed (0.031 seconds).
-Test Case '-[LightningCoreTests.ChannelEngineTests testReestablishmentAcceptsOnlyOriginalFundingIdentity]' started.
-Test Case '-[LightningCoreTests.ChannelEngineTests testReestablishmentAcceptsOnlyOriginalFundingIdentity]' passed (0.041 seconds).
-Test Case '-[LightningCoreTests.ChannelEngineTests testRegistrationOrderingDuplicateHeldAndExpiredPath]' started.
-Test Case '-[LightningCoreTests.ChannelEngineTests testRegistrationOrderingDuplicateHeldAndExpiredPath]' passed (0.251 seconds).
-Test Case '-[LightningCoreTests.ChannelEngineTests testTaprootRecoveryDoesNotRequirePeerSupportButCooperativeCloseDoes]' started.
-Test Case '-[LightningCoreTests.ChannelEngineTests testTaprootRecoveryDoesNotRequirePeerSupportButCooperativeCloseDoes]' passed (0.073 seconds).
-Test Suite 'ChannelEngineTests' passed at 2026-09-27 10:54:31.681.
-	 Executed 17 tests, with 0 failures (0 unexpected) in 1.254 (1.255) seconds
-Test Suite 'InvoiceRoutingTests' started at 2026-09-27 10:54:31.681.
-Test Case '-[LightningCoreTests.InvoiceRoutingTests testInvoiceRequiresVerifiedPositionAndSignedCurrentPrivateChannelPolicy]' started.
-Test Case '-[LightningCoreTests.InvoiceRoutingTests testInvoiceRequiresVerifiedPositionAndSignedCurrentPrivateChannelPolicy]' passed (0.021 seconds).
-Test Case '-[LightningCoreTests.InvoiceRoutingTests testOlderJournalWithoutFundingPositionRequestsRescanAndOffersNoCapacity]' started.
-Test Case '-[LightningCoreTests.InvoiceRoutingTests testOlderJournalWithoutFundingPositionRequestsRescanAndOffersNoCapacity]' passed (0.013 seconds).
-Test Case '-[LightningCoreTests.InvoiceRoutingTests testUnfundedAndRejectedRequestsIgnoreUnrelatedRoutingUpdates]' started.
-Test Case '-[LightningCoreTests.InvoiceRoutingTests testUnfundedAndRejectedRequestsIgnoreUnrelatedRoutingUpdates]' passed (0.007 seconds).
-Test Suite 'InvoiceRoutingTests' passed at 2026-09-27 10:54:31.722.
-	 Executed 3 tests, with 0 failures (0 unexpected) in 0.040 (0.041) seconds
-Test Suite 'LiquidityTests' started at 2026-09-27 10:54:31.722.
-Test Case '-[LightningCoreTests.LiquidityTests testProviderRequestsRequireConfirmedPrivateChannelWithinLimits]' started.
-Test Case '-[LightningCoreTests.LiquidityTests testProviderRequestsRequireConfirmedPrivateChannelWithinLimits]' passed (0.001 seconds).
-Test Case '-[LightningCoreTests.LiquidityTests testQuoteRejectsMismatchedAmountNetworkTermsAndExpiry]' started.
-Test Case '-[LightningCoreTests.LiquidityTests testQuoteRejectsMismatchedAmountNetworkTermsAndExpiry]' passed (0.008 seconds).
-Test Case '-[LightningCoreTests.LiquidityTests testResponseMatchesIdAndHandlesNullErrorAndExplicitRefusal]' started.
-Test Case '-[LightningCoreTests.LiquidityTests testResponseMatchesIdAndHandlesNullErrorAndExplicitRefusal]' passed (0.000 seconds).
-Test Suite 'LiquidityTests' passed at 2026-09-27 10:54:31.732.
-	 Executed 3 tests, with 0 failures (0 unexpected) in 0.009 (0.010) seconds
-Test Suite 'OnionMessageTests' started at 2026-09-27 10:54:31.732.
-Test Case '-[LightningCoreTests.OnionMessageTests testBlindedRoutePrefixLargePacketAndAuthenticatedReply]' started.
-Test Case '-[LightningCoreTests.OnionMessageTests testBlindedRoutePrefixLargePacketAndAuthenticatedReply]' passed (0.275 seconds).
-Test Case '-[LightningCoreTests.OnionMessageTests testKnowingNodeAndContextDoesNotAuthorizeForgedReply]' started.
-Test Case '-[LightningCoreTests.OnionMessageTests testKnowingNodeAndContextDoesNotAuthorizeForgedReply]' passed (0.012 seconds).
-Test Suite 'OnionMessageTests' passed at 2026-09-27 10:54:32.019.
-	 Executed 2 tests, with 0 failures (0 unexpected) in 0.287 (0.287) seconds
-Test Suite 'OnionTests' started at 2026-09-27 10:54:32.019.
-Test Case '-[LightningCoreTests.OnionTests testChaCha20PublishedZeroKeyStream]' started.
-Test Case '-[LightningCoreTests.OnionTests testChaCha20PublishedZeroKeyStream]' passed (0.000 seconds).
-Test Case '-[LightningCoreTests.OnionTests testIndependentCoreLightningPacket]' started.
-Test Case '-[LightningCoreTests.OnionTests testIndependentCoreLightningPacket]' passed (0.017 seconds).
-Test Case '-[LightningCoreTests.OnionTests testPaymentSecretAmountAndExpiryAreBoundTogether]' started.
-Test Case '-[LightningCoreTests.OnionTests testPaymentSecretAmountAndExpiryAreBoundTogether]' passed (0.000 seconds).
-Test Case '-[LightningCoreTests.OnionTests testVariableHopPayloadsAuthenticationAndForwarding]' started.
-Test Case '-[LightningCoreTests.OnionTests testVariableHopPayloadsAuthenticationAndForwarding]' passed (0.030 seconds).
-Test Suite 'OnionTests' passed at 2026-09-27 10:54:32.067.
-	 Executed 4 tests, with 0 failures (0 unexpected) in 0.048 (0.048) seconds
-Test Suite 'PeerNoticeTests' started at 2026-09-27 10:54:32.067.
-Test Case '-[LightningCoreTests.PeerNoticeTests testRejectedOpeningDoesNotReplayAfterReconnectOrRestart]' started.
-Test Case '-[LightningCoreTests.PeerNoticeTests testRejectedOpeningDoesNotReplayAfterReconnectOrRestart]' passed (0.010 seconds).
-Test Case '-[LightningCoreTests.PeerNoticeTests testTruncatedPeerNoticeIsRejected]' started.
-Test Case '-[LightningCoreTests.PeerNoticeTests testTruncatedPeerNoticeIsRejected]' passed (0.000 seconds).
-Test Case '-[LightningCoreTests.PeerNoticeTests testUnknownChannelNoticeIsIgnoredAndTemporaryChannelIsRecognized]' started.
-Test Case '-[LightningCoreTests.PeerNoticeTests testUnknownChannelNoticeIsIgnoredAndTemporaryChannelIsRecognized]' passed (0.005 seconds).
-Test Case '-[LightningCoreTests.PeerNoticeTests testUntrustedProviderTextIsBoundedAndNonPrintableDataIsHidden]' started.
-Test Case '-[LightningCoreTests.PeerNoticeTests testUntrustedProviderTextIsBoundedAndNonPrintableDataIsHidden]' passed (0.000 seconds).
-Test Case '-[LightningCoreTests.PeerNoticeTests testWarningIsRecordedWithoutThrowingAndErrorRetainsProviderReason]' started.
-Test Case '-[LightningCoreTests.PeerNoticeTests testWarningIsRecordedWithoutThrowingAndErrorRetainsProviderReason]' passed (0.001 seconds).
-Test Suite 'PeerNoticeTests' passed at 2026-09-27 10:54:32.083.
-	 Executed 5 tests, with 0 failures (0 unexpected) in 0.016 (0.016) seconds
-Test Suite 'PeerSessionTests' started at 2026-09-27 10:54:32.083.
-Test Case '-[LightningCoreTests.PeerSessionTests testChainScanKeepsControlTrafficAliveAndDefersChannelProcessing]' started.
-Test Case '-[LightningCoreTests.PeerSessionTests testChainScanKeepsControlTrafficAliveAndDefersChannelProcessing]' passed (0.289 seconds).
-Test Suite 'PeerSessionTests' passed at 2026-09-27 10:54:32.372.
-	 Executed 1 test, with 0 failures (0 unexpected) in 0.289 (0.289) seconds
-Test Suite 'RevocationTests' started at 2026-09-27 10:54:32.372.
-Test Case '-[LightningCoreTests.RevocationTests testAllPublishedStorageVectors]' started.
-Test Case '-[LightningCoreTests.RevocationTests testAllPublishedStorageVectors]' passed (0.004 seconds).
-Test Case '-[LightningCoreTests.RevocationTests testOutOfOrderAndInvalidSecretsDoNotAdvanceState]' started.
-Test Case '-[LightningCoreTests.RevocationTests testOutOfOrderAndInvalidSecretsDoNotAdvanceState]' passed (0.076 seconds).
-Test Suite 'RevocationTests' passed at 2026-09-27 10:54:32.453.
-	 Executed 2 tests, with 0 failures (0 unexpected) in 0.081 (0.081) seconds
-Test Suite 'SighashTests' started at 2026-09-27 10:54:32.453.
-Test Case '-[LightningCoreTests.SighashTests testAmountsAndSignaturesCannotBeSubstituted]' started.
-Test Case '-[LightningCoreTests.SighashTests testAmountsAndSignaturesCannotBeSubstituted]' passed (0.005 seconds).
-Test Case '-[LightningCoreTests.SighashTests testBOLT3KeyDerivations]' started.
-Test Case '-[LightningCoreTests.SighashTests testBOLT3KeyDerivations]' passed (0.007 seconds).
-Test Case '-[LightningCoreTests.SighashTests testHTLCResolutionRejectsWrongPreimagesAndSignatures]' started.
-Test Case '-[LightningCoreTests.SighashTests testHTLCResolutionRejectsWrongPreimagesAndSignatures]' passed (0.018 seconds).
-Test Case '-[LightningCoreTests.SighashTests testInvalidSighashInputsRejectWithoutTrapping]' started.
-Test Case '-[LightningCoreTests.SighashTests testInvalidSighashInputsRejectWithoutTrapping]' passed (0.001 seconds).
-Test Case '-[LightningCoreTests.SighashTests testPublishedBIP143Digests]' started.
-Test Case '-[LightningCoreTests.SighashTests testPublishedBIP143Digests]' passed (0.002 seconds).
-Test Suite 'SighashTests' passed at 2026-09-27 10:54:32.486.
-	 Executed 5 tests, with 0 failures (0 unexpected) in 0.033 (0.033) seconds
-Test Suite 'VectorTests' started at 2026-09-27 10:54:32.486.
-Test Case '-[LightningCoreTests.VectorTests testAllBOLT3CommitmentAndHTLCVectors]' started.
-Test Case '-[LightningCoreTests.VectorTests testAllBOLT3CommitmentAndHTLCVectors]' passed (0.302 seconds).
-Test Case '-[LightningCoreTests.VectorTests testBOLT3SecretGenerationVectors]' started.
-Test Case '-[LightningCoreTests.VectorTests testBOLT3SecretGenerationVectors]' passed (0.001 seconds).
-Test Case '-[LightningCoreTests.VectorTests testBOLT8PublishedHandshakeVectors]' started.
-Test Case '-[LightningCoreTests.VectorTests testBOLT8PublishedHandshakeVectors]' passed (0.039 seconds).
-Test Case '-[LightningCoreTests.VectorTests testBOLT8PublishedMessageRotationVectors]' started.
-Test Case '-[LightningCoreTests.VectorTests testBOLT8PublishedMessageRotationVectors]' passed (0.011 seconds).
-Test Case '-[LightningCoreTests.VectorTests testCoalescedFramesAndHeaderAuthentication]' started.
-Test Case '-[LightningCoreTests.VectorTests testCoalescedFramesAndHeaderAuthentication]' passed (0.000 seconds).
-Test Case '-[LightningCoreTests.VectorTests testTransportFragmentationAndAuthenticationFailure]' started.
-Test Case '-[LightningCoreTests.VectorTests testTransportFragmentationAndAuthenticationFailure]' passed (0.020 seconds).
-Test Case '-[LightningCoreTests.VectorTests testTwoFreshPeersAuthenticateBothIdentities]' started.
-Test Case '-[LightningCoreTests.VectorTests testTwoFreshPeersAuthenticateBothIdentities]' passed (0.009 seconds).
-Test Suite 'VectorTests' passed at 2026-09-27 10:54:32.869.
-	 Executed 7 tests, with 0 failures (0 unexpected) in 0.383 (0.383) seconds
-Test Suite 'WireTests' started at 2026-09-27 10:54:32.869.
-Test Case '-[LightningCoreTests.WireTests testBigSizeBoundariesAndCanonicalEncoding]' started.
-Test Case '-[LightningCoreTests.WireTests testBigSizeBoundariesAndCanonicalEncoding]' passed (0.000 seconds).
-Test Case '-[LightningCoreTests.WireTests testFeaturesAndSlicedMessages]' started.
-Test Case '-[LightningCoreTests.WireTests testFeaturesAndSlicedMessages]' passed (0.000 seconds).
-Test Case '-[LightningCoreTests.WireTests testShutdownWitnessProgramsRespectNegotiationAndExactPushLength]' started.
-Test Case '-[LightningCoreTests.WireTests testShutdownWitnessProgramsRespectNegotiationAndExactPushLength]' passed (0.000 seconds).
-Test Case '-[LightningCoreTests.WireTests testTLVRejectsUnknownRequiredDuplicatesOrderAndOverflow]' started.
-Test Case '-[LightningCoreTests.WireTests testTLVRejectsUnknownRequiredDuplicatesOrderAndOverflow]' passed (0.000 seconds).
-Test Suite 'WireTests' passed at 2026-09-27 10:54:32.871.
-	 Executed 4 tests, with 0 failures (0 unexpected) in 0.001 (0.001) seconds
-Test Suite 'LightningCoreTests.xctest' passed at 2026-09-27 10:54:32.871.
-	 Executed 81 tests, with 0 failures (0 unexpected) in 5.427 (5.435) seconds
-Test Suite 'Selected tests' passed at 2026-09-27 10:54:32.871.
-	 Executed 81 tests, with 0 failures (0 unexpected) in 5.427 (5.436) seconds
-Test Suite 'Selected tests' started at 2026-09-27 10:54:33.005.
-Test Suite 'BitcoinCoreTests.xctest' started at 2026-09-27 10:54:33.006.
-Test Suite 'BitcoinCoreTests.xctest' passed at 2026-09-27 10:54:33.006.
-	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.000) seconds
-Test Suite 'Selected tests' passed at 2026-09-27 10:54:33.006.
-	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.001) seconds
+##[group]Run swift test --filter LightningCoreTests
+2026-09-27T21:34:47.3994820Z [36;1mswift test --filter LightningCoreTests[0m
+2026-09-27T21:34:47.5774220Z shell: /bin/bash -e {0}
+2026-09-27T21:34:47.5774660Z env:
+2026-09-27T21:34:47.5775300Z   RUSTUP_TOOLCHAIN: 1.89.0
+2026-09-27T21:34:47.5776110Z   pythonLocation: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-27T21:34:47.5776620Z   PKG_CONFIG_PATH: /Users/runner/hostedtoolcache/Python/3.12.10/arm64/lib/pkgconfig
+2026-09-27T21:34:47.5777630Z   Python_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-27T21:34:47.5778320Z   Python2_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-27T21:34:47.5779100Z   Python3_ROOT_DIR: /Users/runner/hostedtoolcache/Python/3.12.10/arm64
+2026-09-27T21:34:47.5779800Z   REFERENCE_DIR: /Users/runner/work/_temp/lightning-references
+2026-09-27T21:34:47.5780320Z   WINNOW_LIGHTNING_RESULTS: /Users/runner/work/_temp/lightning-results
+2026-09-27T21:34:47.5781230Z   WINNOW_BITCOIN_DIR: /opt/homebrew/bin
+2026-09-27T21:34:47.5781650Z   WINNOW_CLN_DIR: /Users/runner/work/_temp/lightning-references/cln
+2026-09-27T21:34:47.5782390Z   WINNOW_LDK_HARNESS: /Users/runner/work/_temp/lightning-references/harness/target/debug/winnow-lightning-reference
+2026-09-27T21:34:47.5782850Z ##[endgroup]
+2026-09-27T21:34:56.6884640Z Fetching https://github.com/21-DOT-DEV/swift-secp256k1
+2026-09-27T21:34:58.0403740Z [1/11160] Fetching swift-secp256k1
+2026-09-27T21:34:58.7581050Z Fetched https://github.com/21-DOT-DEV/swift-secp256k1 from cache (2.07s)
+2026-09-27T21:34:58.7592670Z Computing version for https://github.com/21-DOT-DEV/swift-secp256k1
+2026-09-27T21:34:59.1776960Z Computed https://github.com/21-DOT-DEV/swift-secp256k1 at 0.23.2 (2.50s)
+2026-09-27T21:34:59.2611880Z Creating working copy for https://github.com/21-DOT-DEV/swift-secp256k1
+2026-09-27T21:35:00.1826440Z Working copy of https://github.com/21-DOT-DEV/swift-secp256k1 resolved at 0.23.2
+2026-09-27T21:35:08.2366890Z [1/1] Compiling plugin SharedSourcesPlugin
+2026-09-27T21:35:08.2368070Z Building for debugging...
+2026-09-27T21:35:08.2495730Z [1/48] /Users/runner/work/winnow-lightning/winnow-lightning/.build/arm64-apple-macosx/debug/WinnowPackageTests.derived/runner.swift
+2026-09-27T21:35:08.2506720Z [1/48] Write winnow-lightning-fixture-entitlement.plist
+2026-09-27T21:35:08.2516610Z [1/48] Write winnow-fixture-entitlement.plist
+2026-09-27T21:35:08.2517920Z [1/48] Write winnow-lightning-peer-fixture-entitlement.plist
+2026-09-27T21:35:08.2518470Z [1/48] Write winnow-debug-entitlement.plist
+2026-09-27T21:35:08.3981100Z [6/48] Write swift-version-7974D3F7F03D5E95.txt
+2026-09-27T21:35:08.5780640Z [7/48] Compiling precomputed_ecmult_gen.c
+2026-09-27T21:35:08.6614640Z [8/48] Compiling Utility.c
+2026-09-27T21:35:08.6760920Z [8/48] Copying Vectors
+2026-09-27T21:35:08.6861990Z [8/48] Copying Cases
+2026-09-27T21:35:08.6930910Z [11/48] Copying Vectors
+2026-09-27T21:35:08.6957130Z [13/48] Write sources
+2026-09-27T21:35:08.7017960Z [16/48] Write WinnowFuzz-entitlement.plist
+2026-09-27T21:35:08.7119260Z [17/48] Write sources
+2026-09-27T21:35:08.7984630Z [29/48] Compiling secp256k1.c
+2026-09-27T21:35:09.4172040Z [30/48] Compiling precomputed_ecmult.c
+2026-09-27T21:35:13.9924120Z [32/92] Compiling P256K ECDSA.swift
+2026-09-27T21:35:13.9924770Z [33/92] Compiling P256K ECDSASignature.swift
+2026-09-27T21:35:13.9925490Z [34/92] Compiling P256K EdDSA.swift
+2026-09-27T21:35:13.9926840Z [35/92] Compiling P256K Errors.swift
+2026-09-27T21:35:13.9927540Z [36/92] Compiling P256K GeneralizedTime.swift
+2026-09-27T21:35:13.9928910Z [37/92] Compiling P256K HashDigest.swift
+2026-09-27T21:35:13.9929970Z [38/92] Compiling P256K MuSig+Aggregate.swift
+2026-09-27T21:35:13.9932210Z [39/92] Compiling P256K MuSig+Nonces.swift
+2026-09-27T21:35:13.9932700Z [40/92] Compiling P256K MuSig+Signing.swift
+2026-09-27T21:35:13.9935320Z [41/92] Compiling P256K MuSig+Tweak.swift
+2026-09-27T21:35:13.9936290Z [42/92] Compiling P256K MuSig.swift
+2026-09-27T21:35:14.0038510Z [43/92] Compiling P256K ObjectIdentifier.swift
+2026-09-27T21:35:14.0039770Z [44/92] Compiling P256K P256K.swift
+2026-09-27T21:35:14.0040230Z [45/92] Compiling P256K PEMDocument.swift
+2026-09-27T21:35:14.0040520Z [46/92] Compiling P256K PKCS8PrivateKey.swift
+2026-09-27T21:35:14.0041070Z [47/92] Compiling P256K PrettyBytes.swift
+2026-09-27T21:35:14.0041660Z [48/92] Compiling P256K PrivateKeyImplementation.swift
+2026-09-27T21:35:14.0042420Z [49/92] Compiling P256K PublicKeyImplementation.swift
+2026-09-27T21:35:14.0049820Z [50/92] Compiling P256K RNG_boring.swift
+2026-09-27T21:35:14.0050430Z [51/92] Compiling P256K Recovery+Signature.swift
+2026-09-27T21:35:14.0051050Z [52/92] Compiling P256K Recovery.swift
+2026-09-27T21:35:14.0051900Z [53/92] Emitting module P256K
+2026-09-27T21:35:14.0052650Z [54/92] Compiling P256K Placeholder.swift
+2026-09-27T21:35:14.0053070Z [55/92] Compiling P256K ASN1.swift
+2026-09-27T21:35:14.0053450Z [56/92] Compiling P256K ASN1Any.swift
+2026-09-27T21:35:14.0053990Z [57/92] Compiling P256K ASN1BitString.swift
+2026-09-27T21:35:14.0054750Z [58/92] Compiling P256K ASN1Boolean.swift
+2026-09-27T21:35:14.0055210Z [59/92] Compiling P256K ASN1Identifier.swift
+2026-09-27T21:35:14.0055940Z [60/92] Compiling P256K ASN1Integer.swift
+2026-09-27T21:35:14.0056730Z [61/92] Compiling P256K ASN1Null.swift
+2026-09-27T21:35:14.0057030Z [62/92] Compiling P256K ASN1OctetString.swift
+2026-09-27T21:35:14.0057370Z [63/92] Compiling P256K ASN1Strings.swift
+2026-09-27T21:35:14.0057650Z [64/92] Compiling P256K ArraySliceBigint.swift
+2026-09-27T21:35:14.0058060Z [65/92] Compiling P256K Combine.swift
+2026-09-27T21:35:14.0058330Z [66/92] Compiling P256K Context.swift
+2026-09-27T21:35:14.0062470Z [67/92] Compiling P256K CryptoKitErrors.swift
+2026-09-27T21:35:14.0062770Z [68/92] Compiling P256K DH.swift
+2026-09-27T21:35:14.0063110Z [69/92] Compiling P256K Digest.swift
+2026-09-27T21:35:14.0063480Z [70/92] Compiling P256K ECDH.swift
+2026-09-27T21:35:14.0063740Z [71/92] Compiling P256K ECDSA+PrivateKey.swift
+2026-09-27T21:35:14.0064100Z [72/92] Compiling P256K ECDSA+PublicKey.swift
+2026-09-27T21:35:14.0064460Z [73/92] Compiling P256K ECDSA+Signature.swift
+2026-09-27T21:35:14.0064750Z [74/92] Compiling P256K ECDSA+Tweak.swift
+2026-09-27T21:35:14.0065100Z [75/92] Compiling P256K ECDSA+XonlyKey.swift
+2026-09-27T21:35:15.0091590Z [76/113] Compiling P256K SEC1PrivateKey.swift
+2026-09-27T21:35:15.0093130Z [77/113] Compiling P256K SHA256.swift
+2026-09-27T21:35:15.0093620Z [78/113] Compiling P256K SafeCompare.swift
+2026-09-27T21:35:15.0094100Z [79/113] Compiling P256K Schnorr+Nonces.swift
+2026-09-27T21:35:15.0095140Z [80/113] Compiling P256K Schnorr+PrivateKey.swift
+2026-09-27T21:35:15.0095620Z [81/113] Compiling P256K Schnorr+PublicKey.swift
+2026-09-27T21:35:15.0096020Z [82/113] Compiling P256K Schnorr+Signature.swift
+2026-09-27T21:35:15.0096470Z [83/113] Compiling P256K Schnorr+Tweak.swift
+2026-09-27T21:35:15.0096920Z [84/113] Compiling P256K Schnorr+XonlyKey.swift
+2026-09-27T21:35:15.0097270Z [85/113] Compiling P256K Schnorr.swift
+2026-09-27T21:35:15.0097690Z [86/113] Compiling P256K SecureBytes.swift
+2026-09-27T21:35:15.0098020Z [87/113] Compiling P256K Signature.swift
+2026-09-27T21:35:15.0098320Z [88/113] Compiling P256K SubjectPublicKeyInfo.swift
+2026-09-27T21:35:15.0098700Z [89/113] Compiling P256K UInt256+Arithmetic.swift
+2026-09-27T21:35:15.0099030Z [90/113] Compiling P256K UInt256+FixedWidthInteger.swift
+2026-09-27T21:35:15.0099400Z [91/113] Compiling P256K UInt256+Modular.swift
+2026-09-27T21:35:15.0099740Z [92/113] Compiling P256K UInt256+Representation.swift
+2026-09-27T21:35:15.0100090Z [93/113] Compiling P256K UInt256.swift
+2026-09-27T21:35:15.0100350Z [94/113] Compiling P256K Utility.swift
+2026-09-27T21:35:15.0100770Z [95/113] Compiling P256K XonlyKeyImplementation.swift
+2026-09-27T21:35:15.0101150Z [96/113] Compiling P256K Zeroization.swift
+2026-09-27T21:35:22.4095900Z [97/155] Compiling WalletCore Base58.swift
+2026-09-27T21:35:22.4100770Z [98/155] Compiling WalletCore Bech32.swift
+2026-09-27T21:35:22.4105700Z [99/155] Compiling WalletCore GCSFilter.swift
+2026-09-27T21:35:22.4106250Z [100/155] Compiling WalletCore PBKDF2.swift
+2026-09-27T21:35:22.4106760Z [101/155] Compiling WalletCore RIPEMD160.swift
+2026-09-27T21:35:22.4109330Z [102/155] Compiling WalletCore SipHash.swift
+2026-09-27T21:35:22.4124770Z [103/155] Compiling WalletCore TaggedHash.swift
+2026-09-27T21:35:22.4125700Z [104/155] Compiling WalletCore Descriptor.swift
+2026-09-27T21:35:22.4126700Z [105/155] Compiling WalletCore MuSig.swift
+2026-09-27T21:35:22.4127250Z [106/155] Compiling WalletCore MuSig2.swift
+2026-09-27T21:35:22.4128580Z [107/155] Compiling WalletCore BIP32.swift
+2026-09-27T21:35:22.4129100Z [108/155] Compiling WalletCore BIP39.swift
+2026-09-27T21:35:22.4130400Z [109/155] Compiling WalletCore BIP39Wordlist.swift
+2026-09-27T21:35:22.4131110Z [110/155] Compiling WalletCore BIP86.swift
+2026-09-27T21:35:22.4132280Z [111/155] Compiling WalletCore KeyStore.swift
+2026-09-27T21:35:22.4132800Z [112/155] Compiling WalletCore KeychainStore.swift
+2026-09-27T21:35:22.4133880Z [113/155] Compiling WalletCore TxBroadcaster.swift
+2026-09-27T21:35:22.4134790Z [114/155] Compiling WalletCore FilterScanObserver.swift
+2026-09-27T21:35:22.4135590Z [115/155] Compiling WalletCore FilterSync.swift
+2026-09-27T21:35:22.4136200Z [116/155] Compiling WalletCore HeaderChain.swift
+2026-09-27T21:35:22.4136650Z [117/155] Compiling WalletCore UInt256.swift
+2026-09-27T21:35:22.4137350Z [118/155] Emitting module WalletCore
+2026-09-27T21:35:22.4137990Z [119/155] Compiling WalletCore MempoolWindow.swift
+2026-09-27T21:35:22.4139200Z [120/155] Compiling WalletCore CensusCatalog.swift
+2026-09-27T21:35:22.4139870Z [121/155] Compiling WalletCore CensusCatalogStore.swift
+2026-09-27T21:35:22.4140330Z [122/155] Compiling WalletCore CensusSignature.swift
+2026-09-27T21:35:22.4140980Z [123/155] Compiling WalletCore PeerDiversity.swift
+2026-09-27T21:35:22.4141410Z [124/155] Compiling WalletCore PeerPool.swift
+2026-09-27T21:35:22.4142050Z [125/155] Compiling WalletCore SeedResolver.swift
+2026-09-27T21:35:22.4142610Z [126/155] Compiling WalletCore Block.swift
+2026-09-27T21:35:22.4143190Z [127/155] Compiling WalletCore Framing.swift
+2026-09-27T21:35:22.4144030Z [128/155] Compiling WalletCore Inventory.swift
+2026-09-27T21:35:22.4144850Z [129/155] Compiling WalletCore Messages.swift
+2026-09-27T21:35:22.4145730Z [130/155] Compiling WalletCore NetworkParams.swift
+2026-09-27T21:35:22.4146830Z [131/155] Compiling WalletCore PeerAddress.swift
+2026-09-27T21:35:22.4147430Z [132/155] Compiling WalletCore Transaction.swift
+2026-09-27T21:35:22.4147950Z [133/155] Compiling WalletCore Wire.swift
+2026-09-27T21:35:22.4149710Z [134/155] Compiling WalletCore PeerConnection.swift
+2026-09-27T21:35:22.4150600Z [135/155] Compiling WalletCore RoutedHTTPClient.swift
+2026-09-27T21:35:22.4151190Z [136/155] Compiling WalletCore PSBT.swift
+2026-09-27T21:35:22.4152170Z [137/155] Compiling WalletCore PSBTRoles.swift
+2026-09-27T21:35:22.4153140Z [138/155] Compiling WalletCore Multisig.swift
+2026-09-27T21:35:26.8175610Z [139/175] Compiling WalletCore Script.swift
+2026-09-27T21:35:26.8177460Z [140/175] Compiling WalletCore Taproot.swift
+2026-09-27T21:35:26.8177900Z [141/175] Compiling WalletCore AddressDecoder.swift
+2026-09-27T21:35:26.8178330Z [142/175] Compiling WalletCore FundingSources.swift
+2026-09-27T21:35:26.8178720Z [143/175] Compiling WalletCore SighashBIP143.swift
+2026-09-27T21:35:26.8179070Z [144/175] Compiling WalletCore SighashBIP341.swift
+2026-09-27T21:35:26.8179480Z [145/175] Compiling WalletCore Signer.swift
+2026-09-27T21:35:26.8179830Z [146/175] Compiling WalletCore TransactionBuilder.swift
+2026-09-27T21:35:26.8180350Z [147/175] Compiling WalletCore CloudWalletBackup.swift
+2026-09-27T21:35:26.8180800Z [148/175] Compiling WalletCore CoinSelection.swift
+2026-09-27T21:35:26.8181190Z [149/175] Compiling WalletCore ExportStagingFile.swift
+2026-09-27T21:35:26.8181690Z [150/175] Compiling WalletCore FeePolicy.swift
+2026-09-27T21:35:26.8182060Z [151/175] Compiling WalletCore FundingFile.swift
+2026-09-27T21:35:26.8183070Z [152/175] Compiling WalletCore FundingReservation.swift
+2026-09-27T21:35:26.8183460Z [153/175] Compiling WalletCore ImportBundle.swift
+2026-09-27T21:35:26.8183880Z [154/175] Compiling WalletCore People.swift
+2026-09-27T21:35:26.8184150Z [155/175] Compiling WalletCore Vault.swift
+2026-09-27T21:35:26.8184580Z [156/175] Compiling WalletCore VaultRecord.swift
+2026-09-27T21:35:26.8185000Z [157/175] Compiling WalletCore VaultSetup.swift
+2026-09-27T21:35:26.8185290Z [158/175] Compiling WalletCore Wallet.swift
+2026-09-27T21:35:27.4664310Z [159/195] Emitting module TestSupport
+2026-09-27T21:35:27.7327830Z [160/200] Compiling WinnowFuzzCore Exercise.swift
+2026-09-27T21:35:27.7427800Z [161/200] Emitting module WinnowFuzzCore
+2026-09-27T21:35:28.1772080Z [162/243] Compiling LightningCore ChannelHTLCs.swift
+2026-09-27T21:35:28.1873570Z [163/243] Compiling LightningCore ChannelKeys.swift
+2026-09-27T21:35:28.1974040Z [164/243] Compiling LightningCore ChannelNegotiation.swift
+2026-09-27T21:35:28.2075240Z [165/243] Compiling LightningCore ChannelOpening.swift
+2026-09-27T21:35:28.2175660Z [166/243] Compiling LightningCore ChannelRecovery.swift
+2026-09-27T21:35:28.3379720Z [167/243] Compiling LightningCore BlindedPath.swift
+2026-09-27T21:35:28.3480110Z [168/243] Compiling LightningCore BlindedPayment.swift
+2026-09-27T21:35:28.3581260Z [169/243] Emitting module WinnowDebug
+2026-09-27T21:35:28.3681870Z [170/243] Compiling LightningCore AsyncPaymentMessage.swift
+2026-09-27T21:35:28.3782640Z [171/243] Compiling LightningCore AsyncPaymentRoute.swift
+2026-09-27T21:35:28.7112530Z [172/245] Compiling WinnowDebug WinnowDebug.swift
+2026-09-27T21:35:28.7214280Z [173/245] Compiling WinnowDebug WinnowGenerate.swift
+2026-09-27T21:35:29.2103370Z [174/247] Compiling WinnowFuzz main.swift
+2026-09-27T21:35:29.2203780Z [175/247] Emitting module WinnowFuzz
+2026-09-27T21:35:29.2304930Z [175/247] Write Objects.LinkFileList
+2026-09-27T21:35:29.7331600Z [177/247] Linking winnow-debug
+2026-09-27T21:35:30.0724550Z [185/247] Compiling LightningCore Bolt11Payment.swift
+2026-09-27T21:35:30.0843740Z [186/247] Compiling LightningCore Bolt11PaymentRoute.swift
+2026-09-27T21:35:30.0966200Z [187/247] Compiling LightningCore Bolt11Signature.swift
+2026-09-27T21:35:30.0992660Z [188/247] Compiling LightningCore Bolt12Encoding.swift
+2026-09-27T21:35:30.1023190Z [189/247] Compiling LightningCore ChannelClosing.swift
+2026-09-27T21:35:30.1131520Z [190/247] Compiling LightningCore ChannelCommitments.swift
+2026-09-27T21:35:30.1545960Z [190/247] Applying winnow-debug
+2026-09-27T21:35:30.2204350Z [191/247] Linking WinnowFuzz
+2026-09-27T21:35:30.5532150Z [193/284] Emitting module WinnowFixture
+2026-09-27T21:35:30.5636460Z [194/284] Compiling WinnowFixture WinnowFixture.swift
+2026-09-27T21:35:30.5943380Z [194/284] Applying WinnowFuzz
+2026-09-27T21:35:33.8655530Z [196/290] Compiling ToolsTests CheckpointBoundaryTests.swift
+2026-09-27T21:35:33.8755680Z [197/290] Compiling ToolsTests DebugSystemTests.swift
+2026-09-27T21:35:33.8856870Z [198/290] Compiling ToolsTests FuzzRegressionTests.swift
+2026-09-27T21:35:34.1159820Z [199/292] Emitting module LightningCore
+2026-09-27T21:35:34.1265990Z [200/292] Compiling WalletCoreTests HeaderDifficultyTests.swift
+2026-09-27T21:35:34.1367170Z [201/292] Compiling WalletCoreTests HeaderRulesTests.swift
+2026-09-27T21:35:34.1467670Z [202/292] Compiling WalletCoreTests HeaderStorageTests.swift
+2026-09-27T21:35:34.1568920Z [203/292] Compiling WalletCoreTests MempoolWindowTests.swift
+2026-09-27T21:35:34.1669480Z [204/292] Compiling WalletCoreTests NetworkParamsTests.swift
+2026-09-27T21:35:34.1771110Z [205/292] Compiling WalletCoreTests PeerCatalogIntegrationTests.swift
+2026-09-27T21:35:34.1871120Z [206/292] Compiling WalletCoreTests PeerClosedRequestTests.swift
+2026-09-27T21:35:34.1972560Z [207/292] Compiling WalletCoreTests PeerConnectionTests.swift
+2026-09-27T21:35:34.2022300Z [208/292] Compiling WalletCoreTests PeerPolicyTests.swift
+2026-09-27T21:35:34.2022790Z [209/292] Compiling WalletCoreTests PeerPoolTests.swift
+2026-09-27T21:35:34.2028840Z [210/292] Compiling WalletCoreTests RoutedSeedTests.swift
+2026-09-27T21:35:34.2029320Z [211/292] Compiling WalletCoreTests RoutingTests.swift
+2026-09-27T21:35:34.2029760Z [212/292] Compiling WalletCoreTests SocksProxyTests.swift
+2026-09-27T21:35:34.2030190Z [213/292] Compiling LightningCore LightningChainPayments.swift
+2026-09-27T21:35:34.2030580Z [214/292] Compiling LightningCore LightningConnection.swift
+2026-09-27T21:35:34.2030990Z [215/292] Compiling LightningCore LightningEngine.swift
+2026-09-27T21:35:34.2031340Z [216/292] Compiling LightningCore LightningErrors.swift
+2026-09-27T21:35:34.2031780Z [217/292] Compiling LightningCore LightningFeatures.swift
+2026-09-27T21:35:34.2032360Z [218/292] Compiling LightningCore LightningGossipQuery.swift
+2026-09-27T21:35:34.2032740Z [219/292] Compiling LightningCore LightningHandshake.swift
+2026-09-27T21:35:34.2033070Z [220/292] Compiling LightningCore LightningInvoiceRouting.swift
+2026-09-27T21:35:34.2033390Z [221/292] Compiling ToolsTests GenerateTests.swift
+2026-09-27T21:35:34.2033830Z [222/292] Compiling ToolsTests InspectionTests.swift
+2026-09-27T21:35:34.2034140Z [226/292] Compiling ToolsTests OperatorCLITests.swift
+2026-09-27T21:35:34.2056610Z [227/292] Compiling ToolsTests resource_bundle_accessor.swift
+2026-09-27T21:35:34.2057120Z [228/292] Compiling WalletCoreTests HostProcessTests.swift
+2026-09-27T21:35:34.2057550Z [229/292] Compiling WalletCoreTests HostileInputBoundsTests.swift
+2026-09-27T21:35:34.2058020Z [230/292] Compiling WalletCoreTests ImportBundleTests.swift
+2026-09-27T21:35:34.2058400Z [231/292] Compiling WalletCoreTests KeyStoreTests.swift
+2026-09-27T21:35:34.2058890Z [232/292] Compiling WalletCoreTests CensusCatalogStoreTests.swift
+2026-09-27T21:35:34.2059360Z [233/292] Compiling WalletCoreTests CensusCatalogTests.swift
+2026-09-27T21:35:34.2059770Z [234/292] Compiling WalletCoreTests CensusSignatureTests.swift
+2026-09-27T21:35:34.2060190Z [235/292] Compiling WalletCoreTests ConnectionBoundsTests.swift
+2026-09-27T21:35:34.2060630Z [236/292] Compiling WalletCoreTests FilterConsensusTests.swift
+2026-09-27T21:35:34.2061070Z [237/292] Compiling WalletCoreTests FilterScanObserverTests.swift
+2026-09-27T21:35:34.2061490Z [238/292] Compiling WalletCoreTests FilterSyncAdversaryTests.swift
+2026-09-27T21:35:34.2061930Z [239/292] Compiling WalletCoreTests FilterSyncTests.swift
+2026-09-27T21:35:34.2062310Z [240/292] Compiling WalletCoreTests FramingBoundsTests.swift
+2026-09-27T21:35:34.2062710Z [241/292] Compiling WalletCoreTests HeaderChainTests.swift
+2026-09-27T21:35:35.6722540Z [246/313] Emitting module ToolsTests
+2026-09-27T21:35:39.2604140Z [247/325] Compiling BitcoinCoreTests BIP390Tests.swift
+2026-09-27T21:35:39.2707410Z [248/325] Compiling BitcoinCoreTests BIP39Tests.swift
+2026-09-27T21:35:39.2808450Z [249/325] Compiling BitcoinCoreTests BIP86Tests.swift
+2026-09-27T21:35:39.2909650Z [250/325] Compiling BitcoinCoreTests Bech32Tests.swift
+2026-09-27T21:35:39.3010870Z [251/325] Compiling BitcoinCoreTests CryptoTests.swift
+2026-09-27T21:35:40.0101300Z [252/330] Compiling BitcoinCoreTests BIP158Tests.swift
+2026-09-27T21:35:40.0202560Z [253/330] Compiling BitcoinCoreTests BIP32Tests.swift
+2026-09-27T21:35:40.0303800Z [254/330] Compiling BitcoinCoreTests BIP340Tests.swift
+2026-09-27T21:35:40.0405020Z [255/330] Compiling BitcoinCoreTests BIP341Tests.swift
+2026-09-27T21:35:40.0506780Z [256/330] Compiling BitcoinCoreTests BIP380Tests.swift
+2026-09-27T21:35:40.0608100Z [257/330] Compiling BitcoinCoreTests BIP387Tests.swift
+2026-09-27T21:35:40.0709250Z [258/330] Emitting module BitcoinCoreTests
+2026-09-27T21:35:41.1633100Z [259/330] Compiling LightningCore LightningInvoiceSending.swift
+2026-09-27T21:35:41.1734390Z [260/330] Compiling LightningCore LightningJournal.swift
+2026-09-27T21:35:41.1835710Z [261/330] Compiling LightningCore LightningLiquidity.swift
+2026-09-27T21:35:41.1936860Z [262/330] Compiling LightningCore LightningLiquidityHTTP.swift
+2026-09-27T21:35:41.2038040Z [263/330] Compiling LightningCore LightningLiquiditySession.swift
+2026-09-27T21:35:41.2143540Z [264/330] Compiling LightningCore LightningOffer.swift
+2026-09-27T21:35:41.2244800Z [265/330] Compiling LightningCore LightningPayments.swift
+2026-09-27T21:35:41.2346110Z [266/330] Compiling LightningCore LightningPeerNotice.swift
+2026-09-27T21:35:41.2447710Z [267/330] Compiling LightningCore LightningPeerRouting.swift
+2026-09-27T21:35:41.2548930Z [268/330] Compiling LightningCore LightningPeerSession.swift
+2026-09-27T21:35:41.2561360Z [269/330] Compiling LightningCore LightningRecovery.swift
+2026-09-27T21:35:41.2561900Z [270/330] Compiling LightningCore LightningRouteSearch.swift
+2026-09-27T21:35:41.2562620Z [271/330] Compiling LightningCore LightningRoutingGraph.swift
+2026-09-27T21:35:41.2563110Z [272/330] Compiling LightningCore LightningTransport.swift
+2026-09-27T21:35:41.2563560Z [273/330] Compiling LightningCore LightningWire.swift
+2026-09-27T21:35:41.2563990Z [274/330] Compiling LightningCore NoiseCrypto.swift
+2026-09-27T21:35:41.2564360Z [275/330] Compiling LightningCore OnionMessage.swift
+2026-09-27T21:35:41.2564850Z [276/330] Compiling LightningCore OnionPacket.swift
+2026-09-27T21:35:41.2565200Z [277/330] Compiling LightningCore PaymentPayload.swift
+2026-09-27T21:35:41.2565640Z [278/330] Compiling LightningCore RevocationSecrets.swift
+2026-09-27T21:35:41.2566420Z [279/330] Compiling LightningCore StaticInvoice.swift
+2026-09-27T21:35:41.2566860Z [279/330] Write Objects.LinkFileList
+2026-09-27T21:35:42.0658080Z [281/335] Compiling LightningPeerFixture LiquidityProbe.swift
+2026-09-27T21:35:42.0758670Z [282/335] Compiling LightningPeerFixture OfflineEvidence.swift
+2026-09-27T21:35:42.0860120Z [283/335] Emitting module LightningPeerFixture
+2026-09-27T21:35:42.0960630Z [284/335] Compiling LightningPeerFixture AutomaticPeer.swift
+2026-09-27T21:35:42.1061390Z [285/335] Compiling LightningPeerFixture InvoiceRouteProbe.swift
+2026-09-27T21:35:42.2899520Z [286/336] Compiling BitcoinCoreTests DescriptorBoundsTests.swift
+2026-09-27T21:35:42.3021240Z [287/336] Compiling BitcoinCoreTests DescriptorTests.swift
+2026-09-27T21:35:42.3143850Z [288/336] Compiling BitcoinCoreTests MuSig2Tests.swift
+2026-09-27T21:35:42.3245110Z [289/336] Compiling BitcoinCoreTests TestHelpers.swift
+2026-09-27T21:35:42.3282930Z [290/336] Compiling BitcoinCoreTests resource_bundle_accessor.swift
+2026-09-27T21:35:42.7929610Z [290/336] Linking winnow-fixture
+2026-09-27T21:35:43.3174840Z [292/339] Compiling LightningFixture OfferVectors.swift
+2026-09-27T21:35:43.3274950Z [293/339] Emitting module LightningFixture
+2026-09-27T21:35:43.3286910Z [294/339] Compiling LightningFixture main.swift
+2026-09-27T21:35:43.4328140Z [294/339] Applying winnow-fixture
+2026-09-27T21:35:43.4329470Z [296/339] Compiling LightningPeerFixture PeerFixture.swift
+2026-09-27T21:35:43.4453570Z [296/339] Write Objects.LinkFileList
+2026-09-27T21:35:44.2165640Z [297/352] Linking winnow-lightning-fixture
+2026-09-27T21:35:44.2167380Z [298/352] Write Objects.LinkFileList
+2026-09-27T21:35:44.2725790Z [299/352] Applying winnow-lightning-fixture
+2026-09-27T21:35:44.9503080Z [300/352] Linking winnow-lightning-peer-fixture
+2026-09-27T21:35:45.0044460Z [301/352] Applying winnow-lightning-peer-fixture
+2026-09-27T21:35:54.2982030Z [303/352] Emitting module LightningCoreTests
+2026-09-27T21:35:56.7595750Z [304/358] Compiling LightningCoreTests RevocationTests.swift
+2026-09-27T21:35:56.7697150Z [305/358] Compiling LightningCoreTests RoutingGraphTests.swift
+2026-09-27T21:35:56.7751360Z [306/358] Compiling LightningCoreTests SighashTests.swift
+2026-09-27T21:35:56.7751990Z [307/358] Compiling LightningCoreTests VectorTests.swift
+2026-09-27T21:35:56.7752550Z [308/358] Compiling LightningCoreTests WireTests.swift
+2026-09-27T21:35:56.7753340Z [309/358] Compiling LightningCoreTests resource_bundle_accessor.swift
+2026-09-27T21:35:58.9564360Z [310/358] Compiling LightningCoreTests InvoiceSendingTests.swift
+2026-09-27T21:35:58.9665550Z [311/358] Compiling LightningCoreTests LiquidityTests.swift
+2026-09-27T21:35:58.9766670Z [312/358] Compiling LightningCoreTests OnionMessageTests.swift
+2026-09-27T21:35:58.9842810Z [313/358] Compiling LightningCoreTests OnionTests.swift
+2026-09-27T21:35:58.9843500Z [314/358] Compiling LightningCoreTests PeerNoticeTests.swift
+2026-09-27T21:35:58.9844140Z [315/358] Compiling LightningCoreTests PeerSessionTests.swift
+2026-09-27T21:35:58.9844720Z [316/358] Compiling LightningCoreTests AsyncPaymentTests.swift
+2026-09-27T21:35:58.9846270Z /Users/runner/work/winnow-lightning/winnow-lightning/Tests/LightningCoreTests/ChannelEngineTests.swift:563:13: warning: no calls to throwing functions occur within 'try' expression
+2026-09-27T21:35:58.9847710Z 561 |             secret: Data(repeating: 8, count: 32), nodeSecret: Data(repeating: 2, count: 32), route: nil, timestamp: 100)
+2026-09-27T21:35:58.9848470Z 562 |         func request(_ amount: UInt64) throws -> LightningEngine.InvoicePayment {
+2026-09-27T21:35:58.9849700Z 563 |             try .init(id: Data(repeating: 92, count: 32), peer: p.bobKey, channelID: p.id, invoice: text, network: .regtest,
+2026-09-27T21:35:58.9851570Z     |             `- warning: no calls to throwing functions occur within 'try' expression
+2026-09-27T21:35:58.9852410Z 564 |                       amountMsat: amount, feeLimitMsat: 0, maximumDelta: 144, route: try Bolt11PaymentRoute(hops: []))
+2026-09-27T21:35:58.9852920Z 565 |         }
+2026-09-27T21:35:58.9853170Z [317/358] Compiling LightningCoreTests Bolt11Tests.swift
+2026-09-27T21:35:58.9854140Z /Users/runner/work/winnow-lightning/winnow-lightning/Tests/LightningCoreTests/ChannelEngineTests.swift:563:13: warning: no calls to throwing functions occur within 'try' expression
+2026-09-27T21:35:58.9855210Z 561 |             secret: Data(repeating: 8, count: 32), nodeSecret: Data(repeating: 2, count: 32), route: nil, timestamp: 100)
+2026-09-27T21:35:58.9855940Z 562 |         func request(_ amount: UInt64) throws -> LightningEngine.InvoicePayment {
+2026-09-27T21:35:58.9857400Z 563 |             try .init(id: Data(repeating: 92, count: 32), peer: p.bobKey, channelID: p.id, invoice: text, network: .regtest,
+2026-09-27T21:35:58.9858050Z     |             `- warning: no calls to throwing functions occur within 'try' expression
+2026-09-27T21:35:58.9859330Z 564 |                       amountMsat: amount, feeLimitMsat: 0, maximumDelta: 144, route: try Bolt11PaymentRoute(hops: []))
+2026-09-27T21:35:58.9859880Z 565 |         }
+2026-09-27T21:35:58.9860450Z [318/358] Compiling LightningCoreTests Bolt12Tests.swift
+2026-09-27T21:35:58.9861880Z /Users/runner/work/winnow-lightning/winnow-lightning/Tests/LightningCoreTests/ChannelEngineTests.swift:563:13: warning: no calls to throwing functions occur within 'try' expression
+2026-09-27T21:35:58.9864570Z 561 |             secret: Data(repeating: 8, count: 32), nodeSecret: Data(repeating: 2, count: 32), route: nil, timestamp: 100)
+2026-09-27T21:35:58.9865230Z 562 |         func request(_ amount: UInt64) throws -> LightningEngine.InvoicePayment {
+2026-09-27T21:35:58.9865810Z 563 |             try .init(id: Data(repeating: 92, count: 32), peer: p.bobKey, channelID: p.id, invoice: text, network: .regtest,
+2026-09-27T21:35:58.9866910Z     |             `- warning: no calls to throwing functions occur within 'try' expression
+2026-09-27T21:35:58.9867800Z 564 |                       amountMsat: amount, feeLimitMsat: 0, maximumDelta: 144, route: try Bolt11PaymentRoute(hops: []))
+2026-09-27T21:35:58.9868320Z 565 |         }
+2026-09-27T21:35:58.9868690Z [319/358] Compiling LightningCoreTests ChainRecoveryTests.swift
+2026-09-27T21:35:58.9869580Z /Users/runner/work/winnow-lightning/winnow-lightning/Tests/LightningCoreTests/ChannelEngineTests.swift:563:13: warning: no calls to throwing functions occur within 'try' expression
+2026-09-27T21:35:58.9871230Z 561 |             secret: Data(repeating: 8, count: 32), nodeSecret: Data(repeating: 2, count: 32), route: nil, timestamp: 100)
+2026-09-27T21:35:58.9872200Z 562 |         func request(_ amount: UInt64) throws -> LightningEngine.InvoicePayment {
+2026-09-27T21:35:58.9872860Z 563 |             try .init(id: Data(repeating: 92, count: 32), peer: p.bobKey, channelID: p.id, invoice: text, network: .regtest,
+2026-09-27T21:35:58.9873900Z     |             `- warning: no calls to throwing functions occur within 'try' expression
+2026-09-27T21:35:58.9874560Z 564 |                       amountMsat: amount, feeLimitMsat: 0, maximumDelta: 144, route: try Bolt11PaymentRoute(hops: []))
+2026-09-27T21:35:58.9875120Z 565 |         }
+2026-09-27T21:35:58.9875460Z [320/358] Compiling LightningCoreTests ChannelEngineTests.swift
+2026-09-27T21:35:58.9876510Z /Users/runner/work/winnow-lightning/winnow-lightning/Tests/LightningCoreTests/ChannelEngineTests.swift:563:13: warning: no calls to throwing functions occur within 'try' expression
+2026-09-27T21:35:58.9877720Z 561 |             secret: Data(repeating: 8, count: 32), nodeSecret: Data(repeating: 2, count: 32), route: nil, timestamp: 100)
+2026-09-27T21:35:58.9878410Z 562 |         func request(_ amount: UInt64) throws -> LightningEngine.InvoicePayment {
+2026-09-27T21:35:58.9879120Z 563 |             try .init(id: Data(repeating: 92, count: 32), peer: p.bobKey, channelID: p.id, invoice: text, network: .regtest,
+2026-09-27T21:35:58.9879800Z     |             `- warning: no calls to throwing functions occur within 'try' expression
+2026-09-27T21:35:58.9880500Z 564 |                       amountMsat: amount, feeLimitMsat: 0, maximumDelta: 144, route: try Bolt11PaymentRoute(hops: []))
+2026-09-27T21:35:58.9881060Z 565 |         }
+2026-09-27T21:35:58.9881370Z [321/358] Compiling LightningCoreTests InvoiceRoutingTests.swift
+2026-09-27T21:35:58.9882280Z /Users/runner/work/winnow-lightning/winnow-lightning/Tests/LightningCoreTests/ChannelEngineTests.swift:563:13: warning: no calls to throwing functions occur within 'try' expression
+2026-09-27T21:35:58.9883240Z 561 |             secret: Data(repeating: 8, count: 32), nodeSecret: Data(repeating: 2, count: 32), route: nil, timestamp: 100)
+2026-09-27T21:35:58.9883910Z 562 |         func request(_ amount: UInt64) throws -> LightningEngine.InvoicePayment {
+2026-09-27T21:35:58.9884550Z 563 |             try .init(id: Data(repeating: 92, count: 32), peer: p.bobKey, channelID: p.id, invoice: text, network: .regtest,
+2026-09-27T21:35:58.9885240Z     |             `- warning: no calls to throwing functions occur within 'try' expression
+2026-09-27T21:35:58.9885890Z 564 |                       amountMsat: amount, feeLimitMsat: 0, maximumDelta: 144, route: try Bolt11PaymentRoute(hops: []))
+2026-09-27T21:35:58.9886380Z 565 |         }
+2026-09-27T21:35:59.5070660Z [356/358] Emitting module WalletCoreTests
+2026-09-27T21:36:14.9509800Z [357/374] Compiling WalletCoreTests TransactionTests.swift
+2026-09-27T21:36:14.9511450Z [358/374] Compiling WalletCoreTests TxBroadcasterStoreTests.swift
+2026-09-27T21:36:14.9512080Z [359/374] Compiling WalletCoreTests TxBroadcasterTests.swift
+2026-09-27T21:36:14.9512580Z [360/374] Compiling WalletCoreTests WireTests.swift
+2026-09-27T21:36:14.9512930Z [361/374] Compiling WalletCoreTests PSBTTests.swift
+2026-09-27T21:36:14.9513330Z [362/374] Compiling WalletCoreTests PeopleTests.swift
+2026-09-27T21:36:14.9513730Z [363/374] Compiling WalletCoreTests RegtestParamsTests.swift
+2026-09-27T21:36:14.9514180Z [364/374] Compiling WalletCoreTests SighashBIP341Tests.swift
+2026-09-27T21:36:14.9514510Z [365/374] Compiling WalletCoreTests SignerTests.swift
+2026-09-27T21:36:14.9514940Z [366/374] Compiling WalletCoreTests TransactionBuilderTests.swift
+2026-09-27T21:36:14.9515420Z [367/374] Compiling WalletCoreTests UnsupportedWalletDataTests.swift
+2026-09-27T21:36:14.9515840Z [368/374] Compiling WalletCoreTests VaultAdmissionTests.swift
+2026-09-27T21:36:14.9516290Z [369/374] Compiling WalletCoreTests VaultSpendTests.swift
+2026-09-27T21:36:14.9516650Z [370/374] Compiling WalletCoreTests WalletReorgTests.swift
+2026-09-27T21:36:14.9517060Z [371/374] Compiling WalletCoreTests WalletTests.swift
+2026-09-27T21:36:14.9517450Z [372/374] Compiling WalletCoreTests resource_bundle_accessor.swift
+2026-09-27T21:36:15.8946730Z [373/376] Emitting module WinnowPackageTests
+2026-09-27T21:36:15.8947100Z [374/376] Compiling WinnowPackageTests runner.swift
+2026-09-27T21:36:15.9073460Z [374/376] Write Objects.LinkFileList
+2026-09-27T21:36:17.1322800Z [375/376] Linking WinnowPackageTests
+2026-09-27T21:36:17.1356300Z Build complete! (80.46s)
+2026-09-27T21:36:21.7235620Z Test Suite 'Selected tests' started at 2026-09-27 21:36:17.895.
+2026-09-27T21:36:21.7236240Z Test Suite 'WinnowPackageTests.xctest' started at 2026-09-27 21:36:17.898.
+2026-09-27T21:36:21.7236810Z Test Suite 'AsyncPaymentTests' started at 2026-09-27 21:36:17.898.
+2026-09-27T21:36:21.7237590Z Test Case '-[LightningCoreTests.AsyncPaymentTests testBlindedRouteBindsRequestPreimageAndReceiverConstraints]' started.
+2026-09-27T21:36:21.7238680Z Test Case '-[LightningCoreTests.AsyncPaymentTests testBlindedRouteBindsRequestPreimageAndReceiverConstraints]' passed (0.054 seconds).
+2026-09-27T21:36:21.7239530Z Test Case '-[LightningCoreTests.AsyncPaymentTests testFeeAndCLTVCeilingsCannotChangeWithAnInvoice]' started.
+2026-09-27T21:36:21.7240460Z Test Case '-[LightningCoreTests.AsyncPaymentTests testFeeAndCLTVCeilingsCannotChangeWithAnInvoice]' passed (0.016 seconds).
+2026-09-27T21:36:21.7241190Z Test Suite 'AsyncPaymentTests' passed at 2026-09-27 21:36:17.969.
+2026-09-27T21:36:21.7241660Z 	 Executed 2 tests, with 0 failures (0 unexpected) in 0.070 (0.071) seconds
+2026-09-27T21:36:21.7242130Z Test Suite 'Bolt11Tests' started at 2026-09-27 21:36:17.969.
+2026-09-27T21:36:21.7242710Z Test Case '-[LightningCoreTests.Bolt11Tests testCorruptSignatureFailsWithoutCrashingEvenWithValidChecksum]' started.
+2026-09-27T21:36:21.7243570Z Test Case '-[LightningCoreTests.Bolt11Tests testCorruptSignatureFailsWithoutCrashingEvenWithValidChecksum]' passed (0.007 seconds).
+2026-09-27T21:36:21.7244400Z Test Case '-[LightningCoreTests.Bolt11Tests testInvoicesBindNetworkAmountSecretAndNodeAndHavePrivateRoute]' started.
+2026-09-27T21:36:21.7245300Z Test Case '-[LightningCoreTests.Bolt11Tests testInvoicesBindNetworkAmountSecretAndNodeAndHavePrivateRoute]' passed (0.014 seconds).
+2026-09-27T21:36:21.7246070Z Test Case '-[LightningCoreTests.Bolt11Tests testPublishedBolt11InvoiceVector]' started.
+2026-09-27T21:36:21.7246670Z Test Case '-[LightningCoreTests.Bolt11Tests testPublishedBolt11InvoiceVector]' passed (0.001 seconds).
+2026-09-27T21:36:21.7247220Z Test Suite 'Bolt11Tests' passed at 2026-09-27 21:36:17.992.
+2026-09-27T21:36:21.7247600Z 	 Executed 3 tests, with 0 failures (0 unexpected) in 0.023 (0.023) seconds
+2026-09-27T21:36:21.7248070Z Test Suite 'Bolt12Tests' started at 2026-09-27 21:36:17.992.
+2026-09-27T21:36:21.7248630Z Test Case '-[LightningCoreTests.Bolt12Tests testPaymentReviewRejectsWrongChainExpiryAndUnacceptedCurrency]' started.
+2026-09-27T21:36:21.7250250Z Test Case '-[LightningCoreTests.Bolt12Tests testPaymentReviewRejectsWrongChainExpiryAndUnacceptedCurrency]' passed (0.002 seconds).
+2026-09-27T21:36:21.7251120Z Test Case '-[LightningCoreTests.Bolt12Tests testPublishedMerkleRootsAndInvoiceRequestSignature]' started.
+2026-09-27T21:36:21.7251790Z Test Case '-[LightningCoreTests.Bolt12Tests testPublishedMerkleRootsAndInvoiceRequestSignature]' passed (0.004 seconds).
+2026-09-27T21:36:21.7252630Z Test Case '-[LightningCoreTests.Bolt12Tests testPublishedOfferAndFormattingVectors]' started.
+2026-09-27T21:36:21.7253290Z Test Case '-[LightningCoreTests.Bolt12Tests testPublishedOfferAndFormattingVectors]' passed (0.018 seconds).
+2026-09-27T21:36:21.7254120Z Test Case '-[LightningCoreTests.Bolt12Tests testUpstreamAsyncMessagesMatchExactlyAndRejectMalformedFraming]' started.
+2026-09-27T21:36:21.7254990Z Test Case '-[LightningCoreTests.Bolt12Tests testUpstreamAsyncMessagesMatchExactlyAndRejectMalformedFraming]' passed (0.003 seconds).
+2026-09-27T21:36:21.7255850Z Test Case '-[LightningCoreTests.Bolt12Tests testUpstreamStaticInvoiceRejectsSubstitutionExpiryAndSignatureDamage]' started.
+2026-09-27T21:36:21.7256720Z Test Case '-[LightningCoreTests.Bolt12Tests testUpstreamStaticInvoiceRejectsSubstitutionExpiryAndSignatureDamage]' passed (0.008 seconds).
+2026-09-27T21:36:21.7257400Z Test Suite 'Bolt12Tests' passed at 2026-09-27 21:36:18.029.
+2026-09-27T21:36:21.7258260Z 	 Executed 5 tests, with 0 failures (0 unexpected) in 0.036 (0.037) seconds
+2026-09-27T21:36:21.7258720Z Test Suite 'ChainRecoveryTests' started at 2026-09-27 21:36:18.029.
+2026-09-27T21:36:21.7259430Z Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundDeadlinePersistsCloseBeforeBroadcastAndForegroundAdoptsIt]' started.
+2026-09-27T21:36:21.7260330Z Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundDeadlinePersistsCloseBeforeBroadcastAndForegroundAdoptsIt]' passed (0.173 seconds).
+2026-09-27T21:36:21.7261320Z Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundIntentReplayDoesNotReopenFinalizedCooperativeClose]' started.
+2026-09-27T21:36:21.7262190Z Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundIntentReplayDoesNotReopenFinalizedCooperativeClose]' passed (0.054 seconds).
+2026-09-27T21:36:21.7263110Z Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundPresignsRevokedRemoteHTLCAndSecondStagePenalty]' started.
+2026-09-27T21:36:21.7264040Z Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundPresignsRevokedRemoteHTLCAndSecondStagePenalty]' passed (0.059 seconds).
+2026-09-27T21:36:21.7264890Z Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundRecoveryContainsNoPrivateKeysAndHonorsCSVAndReorg]' started.
+2026-09-27T21:36:21.7265810Z Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundRecoveryContainsNoPrivateKeysAndHonorsCSVAndReorg]' passed (0.055 seconds).
+2026-09-27T21:36:21.7266660Z Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundStoreAheadOfFailedFullJournalCannotResumePayments]' started.
+2026-09-27T21:36:21.7267560Z Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundStoreAheadOfFailedFullJournalCannotResumePayments]' passed (0.036 seconds).
+2026-09-27T21:36:21.7268470Z Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundUsesWalletScannerAndDoesNotPublishDuringPartialCatchup]' started.
+2026-09-27T21:36:21.7269390Z Test Case '-[LightningCoreTests.ChainRecoveryTests testBackgroundUsesWalletScannerAndDoesNotPublishDuringPartialCatchup]' passed (0.092 seconds).
+2026-09-27T21:36:21.7270280Z Test Case '-[LightningCoreTests.ChainRecoveryTests testCheckpointWalletAndLightningScanWithoutGenesisHeaders]' started.
+2026-09-27T21:36:21.7271080Z Test Case '-[LightningCoreTests.ChainRecoveryTests testCheckpointWalletAndLightningScanWithoutGenesisHeaders]' passed (0.022 seconds).
+2026-09-27T21:36:21.7271930Z Test Case '-[LightningCoreTests.ChainRecoveryTests testCooperativeCloseFinalizesAtDepthAndReorgRestoresClosing]' started.
+2026-09-27T21:36:21.7272890Z Test Case '-[LightningCoreTests.ChainRecoveryTests testCooperativeCloseFinalizesAtDepthAndReorgRestoresClosing]' passed (0.017 seconds).
+2026-09-27T21:36:21.7273730Z Test Case '-[LightningCoreTests.ChainRecoveryTests testDelayedSweepUsesNewConfirmationHeightAfterReorg]' started.
+2026-09-27T21:36:21.7274600Z Test Case '-[LightningCoreTests.ChainRecoveryTests testDelayedSweepUsesNewConfirmationHeightAfterReorg]' passed (1.033 seconds).
+2026-09-27T21:36:21.7275530Z Test Case '-[LightningCoreTests.ChainRecoveryTests testDriverSharesVerifiedFilterScannerAndRestoresItsOwnFrontier]' started.
+2026-09-27T21:36:21.7276460Z Test Case '-[LightningCoreTests.ChainRecoveryTests testDriverSharesVerifiedFilterScannerAndRestoresItsOwnFrontier]' passed (0.032 seconds).
+2026-09-27T21:36:21.7277360Z Test Case '-[LightningCoreTests.ChainRecoveryTests testFailedBackgroundWriteNeverAdvancesFullJournalOrPublishesActions]' started.
+2026-09-27T21:36:21.7278300Z Test Case '-[LightningCoreTests.ChainRecoveryTests testFailedBackgroundWriteNeverAdvancesFullJournalOrPublishesActions]' passed (0.040 seconds).
+2026-09-27T21:36:21.7279140Z Test Case '-[LightningCoreTests.ChainRecoveryTests testForceCloseIntentSurvivesCrashButStaleBackupCannotPublish]' started.
+2026-09-27T21:36:21.7332500Z Test Case '-[LightningCoreTests.ChainRecoveryTests testForceCloseIntentSurvivesCrashButStaleBackupCannotPublish]' passed (0.021 seconds).
+2026-09-27T21:36:21.7333870Z Test Case '-[LightningCoreTests.ChainRecoveryTests testFundingReorgBlocksOldOutboxAndPaymentUntilReconfirmed]' started.
+2026-09-27T21:36:21.7334900Z Test Case '-[LightningCoreTests.ChainRecoveryTests testFundingReorgBlocksOldOutboxAndPaymentUntilReconfirmed]' passed (0.021 seconds).
+2026-09-27T21:36:21.7335790Z Test Case '-[LightningCoreTests.ChainRecoveryTests testLegacyJournalRetainsGenesisAndUpgradesWithoutLosingIdentity]' started.
+2026-09-27T21:36:21.7336650Z Test Case '-[LightningCoreTests.ChainRecoveryTests testLegacyJournalRetainsGenesisAndUpgradesWithoutLosingIdentity]' passed (0.017 seconds).
+2026-09-27T21:36:21.7337570Z Test Case '-[LightningCoreTests.ChainRecoveryTests testOnChainSuccessAndTimeoutReconcileOnceAfterDepthAndUndoOnReorg]' started.
+2026-09-27T21:36:21.7338410Z Test Case '-[LightningCoreTests.ChainRecoveryTests testOnChainSuccessAndTimeoutReconcileOnceAfterDepthAndUndoOnReorg]' passed (0.517 seconds).
+2026-09-27T21:36:21.7339200Z Test Case '-[LightningCoreTests.ChainRecoveryTests testRejectsWrongAncestryStaleWatchesAndIncompleteScan]' started.
+2026-09-27T21:36:21.7340150Z Test Case '-[LightningCoreTests.ChainRecoveryTests testRejectsWrongAncestryStaleWatchesAndIncompleteScan]' passed (0.000 seconds).
+2026-09-27T21:36:21.7341030Z Test Case '-[LightningCoreTests.ChainRecoveryTests testScanBirthdaySurvivesRestartAndCannotSkipExistingChannels]' started.
+2026-09-27T21:36:21.7342110Z Test Case '-[LightningCoreTests.ChainRecoveryTests testScanBirthdaySurvivesRestartAndCannotSkipExistingChannels]' passed (0.015 seconds).
+2026-09-27T21:36:21.7343380Z Test Case '-[LightningCoreTests.ChainRecoveryTests testSchemaUpgradePrecedesFirstBackgroundPlanAndFailureLeavesNoPlan]' started.
+2026-09-27T21:36:21.7344240Z Test Case '-[LightningCoreTests.ChainRecoveryTests testSchemaUpgradePrecedesFirstBackgroundPlanAndFailureLeavesNoPlan]' passed (0.047 seconds).
+2026-09-27T21:36:21.7345020Z Test Suite 'ChainRecoveryTests' passed at 2026-09-27 21:36:20.281.
+2026-09-27T21:36:21.7345410Z 	 Executed 18 tests, with 0 failures (0 unexpected) in 2.250 (2.253) seconds
+2026-09-27T21:36:21.7345860Z Test Suite 'ChannelEngineTests' started at 2026-09-27 21:36:20.281.
+2026-09-27T21:36:21.7346360Z Test Case '-[LightningCoreTests.ChannelEngineTests testAsyncRequiresHoldingPeerAndFeeAuthorization]' started.
+2026-09-27T21:36:21.7347060Z Test Case '-[LightningCoreTests.ChannelEngineTests testAsyncRequiresHoldingPeerAndFeeAuthorization]' passed (0.098 seconds).
+2026-09-27T21:36:21.7347920Z Test Case '-[LightningCoreTests.ChannelEngineTests testCloseFeeUsesWalletSizingAndEnforcesReviewedLimitAboveCommitmentFee]' started.
+2026-09-27T21:36:21.7349190Z Test Case '-[LightningCoreTests.ChannelEngineTests testCloseFeeUsesWalletSizingAndEnforcesReviewedLimitAboveCommitmentFee]' passed (0.032 seconds).
+2026-09-27T21:36:21.7349990Z Test Case '-[LightningCoreTests.ChannelEngineTests testClosingAgreementAndDuplicateDoNotEchoSignatures]' started.
+2026-09-27T21:36:21.7350700Z Test Case '-[LightningCoreTests.ChannelEngineTests testClosingAgreementAndDuplicateDoNotEchoSignatures]' passed (0.037 seconds).
+2026-09-27T21:36:21.7351470Z Test Case '-[LightningCoreTests.ChannelEngineTests testDiskFailureStopsSignaturePublicationAndFurtherActions]' started.
+2026-09-27T21:36:21.7352420Z Test Case '-[LightningCoreTests.ChannelEngineTests testDiskFailureStopsSignaturePublicationAndFurtherActions]' passed (0.008 seconds).
+2026-09-27T21:36:21.7353390Z Test Case '-[LightningCoreTests.ChannelEngineTests testExpiredInvoiceCannotSendAndFailedPersistenceFreezesAsyncOutbox]' started.
+2026-09-27T21:36:21.7354970Z Test Case '-[LightningCoreTests.ChannelEngineTests testExpiredInvoiceCannotSendAndFailedPersistenceFreezesAsyncOutbox]' passed (0.115 seconds).
+2026-09-27T21:36:21.7355880Z Test Case '-[LightningCoreTests.ChannelEngineTests testFundingAndPeerIdentityCannotBeSubstituted]' started.
+2026-09-27T21:36:21.7356740Z Test Case '-[LightningCoreTests.ChannelEngineTests testFundingAndPeerIdentityCannotBeSubstituted]' passed (0.009 seconds).
+2026-09-27T21:36:21.7357820Z Test Case '-[LightningCoreTests.ChannelEngineTests testHeldNotificationWaitsForBothCommitmentDirectionsRegardlessOfReleasePathOrder]' started.
+2026-09-27T21:36:21.7359000Z Test Case '-[LightningCoreTests.ChannelEngineTests testHeldNotificationWaitsForBothCommitmentDirectionsRegardlessOfReleasePathOrder]' passed (0.091 seconds).
+2026-09-27T21:36:21.7359990Z Test Case '-[LightningCoreTests.ChannelEngineTests testHTLCCommitRevocationAndSettlementBalances]' started.
+2026-09-27T21:36:21.7360790Z Test Case '-[LightningCoreTests.ChannelEngineTests testHTLCCommitRevocationAndSettlementBalances]' passed (0.176 seconds).
+2026-09-27T21:36:21.7361610Z Test Case '-[LightningCoreTests.ChannelEngineTests testInvoiceInvalidAmountExpiryAndDiskFailureCannotPublish]' started.
+2026-09-27T21:36:21.7362440Z Test Case '-[LightningCoreTests.ChannelEngineTests testInvoiceInvalidAmountExpiryAndDiskFailureCannotPublish]' passed (0.054 seconds).
+2026-09-27T21:36:21.7363300Z Test Case '-[LightningCoreTests.ChannelEngineTests testInvoicePaymentPersistsOnceAndSettlesThroughTheChannel]' started.
+2026-09-27T21:36:21.7364100Z Test Case '-[LightningCoreTests.ChannelEngineTests testInvoicePaymentPersistsOnceAndSettlesThroughTheChannel]' passed (0.170 seconds).
+2026-09-27T21:36:21.7364960Z Test Case '-[LightningCoreTests.ChannelEngineTests testJournalEncryptionIntegrityAndExclusiveWriter]' started.
+2026-09-27T21:36:21.7365770Z Test Case '-[LightningCoreTests.ChannelEngineTests testJournalEncryptionIntegrityAndExclusiveWriter]' passed (0.013 seconds).
+2026-09-27T21:36:21.7366540Z Test Case '-[LightningCoreTests.ChannelEngineTests testLostOnionDeliveryRetriesExactRequestAcrossRestartAndStopsAfterInvoice]' started.
+2026-09-27T21:36:21.7367420Z Test Case '-[LightningCoreTests.ChannelEngineTests testLostOnionDeliveryRetriesExactRequestAcrossRestartAndStopsAfterInvoice]' passed (0.081 seconds).
+2026-09-27T21:36:21.7368280Z Test Case '-[LightningCoreTests.ChannelEngineTests testOfferPaymentIDAndRequestSurviveRestartWithoutAnotherHTLC]' started.
+2026-09-27T21:36:21.7369110Z Test Case '-[LightningCoreTests.ChannelEngineTests testOfferPaymentIDAndRequestSurviveRestartWithoutAnotherHTLC]' passed (0.085 seconds).
+2026-09-27T21:36:21.7369950Z Test Case '-[LightningCoreTests.ChannelEngineTests testOnionRejectionDoesNotInterruptChannelButPersistenceFailureDoes]' started.
+2026-09-27T21:36:21.7370890Z Test Case '-[LightningCoreTests.ChannelEngineTests testOnionRejectionDoesNotInterruptChannelButPersistenceFailureDoes]' passed (0.094 seconds).
+2026-09-27T21:36:21.7371760Z Test Case '-[LightningCoreTests.ChannelEngineTests testOpeningPersistsEnforceableCommitmentBeforeBroadcast]' started.
+2026-09-27T21:36:21.7372630Z Test Case '-[LightningCoreTests.ChannelEngineTests testOpeningPersistsEnforceableCommitmentBeforeBroadcast]' passed (0.039 seconds).
+2026-09-27T21:36:21.7373480Z Test Case '-[LightningCoreTests.ChannelEngineTests testOpeningRejectionCannotDiscardEnforceableChannel]' started.
+2026-09-27T21:36:21.7374260Z Test Case '-[LightningCoreTests.ChannelEngineTests testOpeningRejectionCannotDiscardEnforceableChannel]' passed (0.031 seconds).
+2026-09-27T21:36:21.7375160Z Test Case '-[LightningCoreTests.ChannelEngineTests testReestablishmentAcceptsOnlyOriginalFundingIdentity]' started.
+2026-09-27T21:36:21.7375980Z Test Case '-[LightningCoreTests.ChannelEngineTests testReestablishmentAcceptsOnlyOriginalFundingIdentity]' passed (0.034 seconds).
+2026-09-27T21:36:21.7376790Z Test Case '-[LightningCoreTests.ChannelEngineTests testRegistrationOrderingDuplicateHeldAndExpiredPath]' started.
+2026-09-27T21:36:21.7377670Z Test Case '-[LightningCoreTests.ChannelEngineTests testRegistrationOrderingDuplicateHeldAndExpiredPath]' passed (0.128 seconds).
+2026-09-27T21:36:21.7378520Z Test Case '-[LightningCoreTests.ChannelEngineTests testTaprootRecoveryDoesNotRequirePeerSupportButCooperativeCloseDoes]' started.
+2026-09-27T21:36:21.7379480Z Test Case '-[LightningCoreTests.ChannelEngineTests testTaprootRecoveryDoesNotRequirePeerSupportButCooperativeCloseDoes]' passed (0.063 seconds).
+2026-09-27T21:36:21.7380320Z Test Suite 'ChannelEngineTests' passed at 2026-09-27 21:36:21.642.
+2026-09-27T21:36:21.7380830Z 	 Executed 19 tests, with 0 failures (0 unexpected) in 1.358 (1.360) seconds
+2026-09-27T21:36:21.7381300Z Test Suite 'InvoiceRoutingTests' started at 2026-09-27 21:36:21.642.
+2026-09-27T21:36:21.7382000Z Test Case '-[LightningCoreTests.InvoiceRoutingTests testInvoiceRequiresVerifiedPositionAndSignedCurrentPrivateChannelPolicy]' started.
+2026-09-27T21:36:21.7383000Z Test Case '-[LightningCoreTests.InvoiceRoutingTests testInvoiceRequiresVerifiedPositionAndSignedCurrentPrivateChannelPolicy]' passed (0.019 seconds).
+2026-09-27T21:36:21.7383960Z Test Case '-[LightningCoreTests.InvoiceRoutingTests testOlderJournalWithoutFundingPositionRequestsRescanAndOffersNoCapacity]' started.
+2026-09-27T21:36:21.7384910Z Test Case '-[LightningCoreTests.InvoiceRoutingTests testOlderJournalWithoutFundingPositionRequestsRescanAndOffersNoCapacity]' passed (0.010 seconds).
+2026-09-27T21:36:21.7385830Z Test Case '-[LightningCoreTests.InvoiceRoutingTests testUnfundedAndRejectedRequestsIgnoreUnrelatedRoutingUpdates]' started.
+2026-09-27T21:36:21.7386740Z Test Case '-[LightningCoreTests.InvoiceRoutingTests testUnfundedAndRejectedRequestsIgnoreUnrelatedRoutingUpdates]' passed (0.006 seconds).
+2026-09-27T21:36:21.7387360Z Test Suite 'InvoiceRoutingTests' passed at 2026-09-27 21:36:21.677.
+2026-09-27T21:36:21.7387840Z 	 Executed 3 tests, with 0 failures (0 unexpected) in 0.035 (0.035) seconds
+2026-09-27T21:36:21.7388240Z Test Suite 'InvoiceSendingTests' started at 2026-09-27 21:36:21.677.
+2026-09-27T21:36:21.7388850Z Test Case '-[LightningCoreTests.InvoiceSendingTests testAmountlessFeaturesNetworkAndExpiryValidation]' started.
+2026-09-27T21:36:21.7389630Z Test Case '-[LightningCoreTests.InvoiceSendingTests testAmountlessFeaturesNetworkAndExpiryValidation]' passed (0.014 seconds).
+2026-09-27T21:36:21.7390380Z Test Case '-[LightningCoreTests.InvoiceSendingTests testGossipRangeCoverageAndBoundedBatching]' started.
+2026-09-27T21:36:21.7391140Z Test Case '-[LightningCoreTests.InvoiceSendingTests testGossipRangeCoverageAndBoundedBatching]' passed (0.000 seconds).
+2026-09-27T21:36:21.7391800Z Test Case '-[LightningCoreTests.InvoiceSendingTests testHintFeesCLTVAndEveryOnionHop]' started.
+2026-09-27T21:36:21.7392480Z Test Case '-[LightningCoreTests.InvoiceSendingTests testHintFeesCLTVAndEveryOnionHop]' passed (0.021 seconds).
+2026-09-27T21:36:21.7393180Z Test Case '-[LightningCoreTests.InvoiceSendingTests testPreciseSatsConversionHasNoRoundingOrOverflow]' started.
+2026-09-27T21:36:21.7394050Z Test Case '-[LightningCoreTests.InvoiceSendingTests testPreciseSatsConversionHasNoRoundingOrOverflow]' passed (0.002 seconds).
+2026-09-27T21:36:21.7394700Z Test Suite 'InvoiceSendingTests' passed at 2026-09-27 21:36:21.714.
+2026-09-27T21:36:21.7395320Z 	 Executed 4 tests, with 0 failures (0 unexpected) in 0.037 (0.038) seconds
+2026-09-27T21:36:21.7395770Z Test Suite 'LiquidityTests' started at 2026-09-27 21:36:21.714.
+2026-09-27T21:36:21.7396370Z Test Case '-[LightningCoreTests.LiquidityTests testProviderRequestsRequireConfirmedPrivateChannelWithinLimits]' started.
+2026-09-27T21:36:21.7397240Z Test Case '-[LightningCoreTests.LiquidityTests testProviderRequestsRequireConfirmedPrivateChannelWithinLimits]' passed (0.001 seconds).
+2026-09-27T21:36:21.7398010Z Test Case '-[LightningCoreTests.LiquidityTests testQuoteRejectsMismatchedAmountNetworkTermsAndExpiry]' started.
+2026-09-27T21:36:21.7398840Z Test Case '-[LightningCoreTests.LiquidityTests testQuoteRejectsMismatchedAmountNetworkTermsAndExpiry]' passed (0.006 seconds).
+2026-09-27T21:36:21.7399600Z Test Case '-[LightningCoreTests.LiquidityTests testResponseMatchesIdAndHandlesNullErrorAndExplicitRefusal]' started.
+2026-09-27T21:36:21.7400470Z Test Case '-[LightningCoreTests.LiquidityTests testResponseMatchesIdAndHandlesNullErrorAndExplicitRefusal]' passed (0.000 seconds).
+2026-09-27T21:36:21.7401170Z Test Suite 'LiquidityTests' passed at 2026-09-27 21:36:21.723.
+2026-09-27T21:36:21.7401740Z 	 Executed 3 tests, with 0 failures (0 unexpected) in 0.008 (0.009) seconds
+2026-09-27T21:36:21.7402250Z Test Suite 'OnionMessageTests' started at 2026-09-27 21:36:21.723.
+2026-09-27T21:36:23.2769310Z Test Case '-[LightningCoreTests.OnionMessageTests testBlindedRoutePrefixLargePacketAndAuthenticatedReply]' started.
+2026-09-27T21:36:23.2770870Z Test Case '-[LightningCoreTests.OnionMessageTests testBlindedRoutePrefixLargePacketAndAuthenticatedReply]' passed (0.266 seconds).
+2026-09-27T21:36:23.2771850Z Test Case '-[LightningCoreTests.OnionMessageTests testKnowingNodeAndContextDoesNotAuthorizeForgedReply]' started.
+2026-09-27T21:36:23.2772710Z Test Case '-[LightningCoreTests.OnionMessageTests testKnowingNodeAndContextDoesNotAuthorizeForgedReply]' passed (0.011 seconds).
+2026-09-27T21:36:23.2773450Z Test Suite 'OnionMessageTests' passed at 2026-09-27 21:36:22.001.
+2026-09-27T21:36:23.2773900Z 	 Executed 2 tests, with 0 failures (0 unexpected) in 0.277 (0.278) seconds
+2026-09-27T21:36:23.2774380Z Test Suite 'OnionTests' started at 2026-09-27 21:36:22.001.
+2026-09-27T21:36:23.2774900Z Test Case '-[LightningCoreTests.OnionTests testChaCha20PublishedZeroKeyStream]' started.
+2026-09-27T21:36:23.2775620Z Test Case '-[LightningCoreTests.OnionTests testChaCha20PublishedZeroKeyStream]' passed (0.000 seconds).
+2026-09-27T21:36:23.2776370Z Test Case '-[LightningCoreTests.OnionTests testIndependentCoreLightningPacket]' started.
+2026-09-27T21:36:23.2777010Z Test Case '-[LightningCoreTests.OnionTests testIndependentCoreLightningPacket]' passed (0.019 seconds).
+2026-09-27T21:36:23.2777720Z Test Case '-[LightningCoreTests.OnionTests testPaymentSecretAmountAndExpiryAreBoundTogether]' started.
+2026-09-27T21:36:23.2778420Z Test Case '-[LightningCoreTests.OnionTests testPaymentSecretAmountAndExpiryAreBoundTogether]' passed (0.000 seconds).
+2026-09-27T21:36:23.2779220Z Test Case '-[LightningCoreTests.OnionTests testVariableHopPayloadsAuthenticationAndForwarding]' started.
+2026-09-27T21:36:23.2780070Z Test Case '-[LightningCoreTests.OnionTests testVariableHopPayloadsAuthenticationAndForwarding]' passed (0.033 seconds).
+2026-09-27T21:36:23.2781650Z Test Suite 'OnionTests' passed at 2026-09-27 21:36:22.053.
+2026-09-27T21:36:23.2782070Z 	 Executed 4 tests, with 0 failures (0 unexpected) in 0.052 (0.052) seconds
+2026-09-27T21:36:23.2782560Z Test Suite 'PeerNoticeTests' started at 2026-09-27 21:36:22.053.
+2026-09-27T21:36:23.2783180Z Test Case '-[LightningCoreTests.PeerNoticeTests testRejectedOpeningDoesNotReplayAfterReconnectOrRestart]' started.
+2026-09-27T21:36:23.2784020Z Test Case '-[LightningCoreTests.PeerNoticeTests testRejectedOpeningDoesNotReplayAfterReconnectOrRestart]' passed (0.010 seconds).
+2026-09-27T21:36:23.2785540Z Test Case '-[LightningCoreTests.PeerNoticeTests testTruncatedPeerNoticeIsRejected]' started.
+2026-09-27T21:36:23.2786220Z Test Case '-[LightningCoreTests.PeerNoticeTests testTruncatedPeerNoticeIsRejected]' passed (0.000 seconds).
+2026-09-27T21:36:23.2787020Z Test Case '-[LightningCoreTests.PeerNoticeTests testUnknownChannelNoticeIsIgnoredAndTemporaryChannelIsRecognized]' started.
+2026-09-27T21:36:23.2788080Z Test Case '-[LightningCoreTests.PeerNoticeTests testUnknownChannelNoticeIsIgnoredAndTemporaryChannelIsRecognized]' passed (0.005 seconds).
+2026-09-27T21:36:23.2789070Z Test Case '-[LightningCoreTests.PeerNoticeTests testUntrustedProviderTextIsBoundedAndNonPrintableDataIsHidden]' started.
+2026-09-27T21:36:23.2789990Z Test Case '-[LightningCoreTests.PeerNoticeTests testUntrustedProviderTextIsBoundedAndNonPrintableDataIsHidden]' passed (0.000 seconds).
+2026-09-27T21:36:23.2791070Z Test Case '-[LightningCoreTests.PeerNoticeTests testWarningIsRecordedWithoutThrowingAndErrorRetainsProviderReason]' started.
+2026-09-27T21:36:23.2792070Z Test Case '-[LightningCoreTests.PeerNoticeTests testWarningIsRecordedWithoutThrowingAndErrorRetainsProviderReason]' passed (0.001 seconds).
+2026-09-27T21:36:23.2792780Z Test Suite 'PeerNoticeTests' passed at 2026-09-27 21:36:22.070.
+2026-09-27T21:36:23.2793170Z 	 Executed 5 tests, with 0 failures (0 unexpected) in 0.017 (0.017) seconds
+2026-09-27T21:36:23.2793980Z Test Suite 'PeerSessionTests' started at 2026-09-27 21:36:22.070.
+2026-09-27T21:36:23.2794650Z Test Case '-[LightningCoreTests.PeerSessionTests testCanceledRouteQueryDrainsAndKeepsPingAliveBeforeAnotherQuery]' started.
+2026-09-27T21:36:23.2795560Z Test Case '-[LightningCoreTests.PeerSessionTests testCanceledRouteQueryDrainsAndKeepsPingAliveBeforeAnotherQuery]' passed (0.149 seconds).
+2026-09-27T21:36:23.2796510Z Test Case '-[LightningCoreTests.PeerSessionTests testChainScanKeepsControlTrafficAliveAndDefersChannelProcessing]' started.
+2026-09-27T21:36:23.2797360Z Test Case '-[LightningCoreTests.PeerSessionTests testChainScanKeepsControlTrafficAliveAndDefersChannelProcessing]' passed (0.429 seconds).
+2026-09-27T21:36:23.2798060Z Test Suite 'PeerSessionTests' passed at 2026-09-27 21:36:22.649.
+2026-09-27T21:36:23.2798470Z 	 Executed 2 tests, with 0 failures (0 unexpected) in 0.577 (0.578) seconds
+2026-09-27T21:36:23.2798840Z Test Suite 'RevocationTests' started at 2026-09-27 21:36:22.649.
+2026-09-27T21:36:23.2799310Z Test Case '-[LightningCoreTests.RevocationTests testAllPublishedStorageVectors]' started.
+2026-09-27T21:36:23.2799880Z Test Case '-[LightningCoreTests.RevocationTests testAllPublishedStorageVectors]' passed (0.011 seconds).
+2026-09-27T21:36:23.2800550Z Test Case '-[LightningCoreTests.RevocationTests testOutOfOrderAndInvalidSecretsDoNotAdvanceState]' started.
+2026-09-27T21:36:23.2801230Z Test Case '-[LightningCoreTests.RevocationTests testOutOfOrderAndInvalidSecretsDoNotAdvanceState]' passed (0.186 seconds).
+2026-09-27T21:36:23.2801800Z Test Suite 'RevocationTests' passed at 2026-09-27 21:36:22.847.
+2026-09-27T21:36:23.2802200Z 	 Executed 2 tests, with 0 failures (0 unexpected) in 0.197 (0.198) seconds
+2026-09-27T21:36:23.2802580Z Test Suite 'RoutingGraphTests' started at 2026-09-27 21:36:22.847.
+2026-09-27T21:36:23.2803160Z Test Case '-[LightningCoreTests.RoutingGraphTests testAllAnnouncementSignaturesAndPolicyDirectionAreValidated]' started.
+2026-09-27T21:36:23.2803960Z Test Case '-[LightningCoreTests.RoutingGraphTests testAllAnnouncementSignaturesAndPolicyDirectionAreValidated]' passed (0.021 seconds).
+2026-09-27T21:36:23.2804740Z Test Case '-[LightningCoreTests.RoutingGraphTests testReverseSearchHonorsFeesAndDisabledEdges]' started.
+2026-09-27T21:36:23.2805440Z Test Case '-[LightningCoreTests.RoutingGraphTests testReverseSearchHonorsFeesAndDisabledEdges]' passed (0.025 seconds).
+2026-09-27T21:36:23.2806010Z Test Suite 'RoutingGraphTests' passed at 2026-09-27 21:36:22.893.
+2026-09-27T21:36:23.2806410Z 	 Executed 2 tests, with 0 failures (0 unexpected) in 0.046 (0.046) seconds
+2026-09-27T21:36:23.2806900Z Test Suite 'SighashTests' started at 2026-09-27 21:36:22.893.
+2026-09-27T21:36:23.2807390Z Test Case '-[LightningCoreTests.SighashTests testAmountsAndSignaturesCannotBeSubstituted]' started.
+2026-09-27T21:36:23.2808020Z Test Case '-[LightningCoreTests.SighashTests testAmountsAndSignaturesCannotBeSubstituted]' passed (0.004 seconds).
+2026-09-27T21:36:23.2808630Z Test Case '-[LightningCoreTests.SighashTests testBOLT3KeyDerivations]' started.
+2026-09-27T21:36:23.2809140Z Test Case '-[LightningCoreTests.SighashTests testBOLT3KeyDerivations]' passed (0.005 seconds).
+2026-09-27T21:36:23.2809790Z Test Case '-[LightningCoreTests.SighashTests testHTLCResolutionRejectsWrongPreimagesAndSignatures]' started.
+2026-09-27T21:36:23.2810580Z Test Case '-[LightningCoreTests.SighashTests testHTLCResolutionRejectsWrongPreimagesAndSignatures]' passed (0.014 seconds).
+2026-09-27T21:36:23.2811270Z Test Case '-[LightningCoreTests.SighashTests testInvalidSighashInputsRejectWithoutTrapping]' started.
+2026-09-27T21:36:23.2811990Z Test Case '-[LightningCoreTests.SighashTests testInvalidSighashInputsRejectWithoutTrapping]' passed (0.000 seconds).
+2026-09-27T21:36:23.2812590Z Test Case '-[LightningCoreTests.SighashTests testPublishedBIP143Digests]' started.
+2026-09-27T21:36:23.2813130Z Test Case '-[LightningCoreTests.SighashTests testPublishedBIP143Digests]' passed (0.002 seconds).
+2026-09-27T21:36:23.2813760Z Test Suite 'SighashTests' passed at 2026-09-27 21:36:22.918.
+2026-09-27T21:36:23.2814130Z 	 Executed 5 tests, with 0 failures (0 unexpected) in 0.025 (0.025) seconds
+2026-09-27T21:36:23.2814530Z Test Suite 'VectorTests' started at 2026-09-27 21:36:22.918.
+2026-09-27T21:36:23.2815000Z Test Case '-[LightningCoreTests.VectorTests testAllBOLT3CommitmentAndHTLCVectors]' started.
+2026-09-27T21:36:23.2815610Z Test Case '-[LightningCoreTests.VectorTests testAllBOLT3CommitmentAndHTLCVectors]' passed (0.159 seconds).
+2026-09-27T21:36:23.2816220Z Test Case '-[LightningCoreTests.VectorTests testBOLT3SecretGenerationVectors]' started.
+2026-09-27T21:36:23.2816790Z Test Case '-[LightningCoreTests.VectorTests testBOLT3SecretGenerationVectors]' passed (0.001 seconds).
+2026-09-27T21:36:23.2817360Z Test Case '-[LightningCoreTests.VectorTests testBOLT8PublishedHandshakeVectors]' started.
+2026-09-27T21:36:23.2817930Z Test Case '-[LightningCoreTests.VectorTests testBOLT8PublishedHandshakeVectors]' passed (0.035 seconds).
+2026-09-27T21:36:23.2818530Z Test Case '-[LightningCoreTests.VectorTests testBOLT8PublishedMessageRotationVectors]' started.
+2026-09-27T21:36:23.2819170Z Test Case '-[LightningCoreTests.VectorTests testBOLT8PublishedMessageRotationVectors]' passed (0.017 seconds).
+2026-09-27T21:36:23.2819790Z Test Case '-[LightningCoreTests.VectorTests testCoalescedFramesAndHeaderAuthentication]' started.
+2026-09-27T21:36:23.2820440Z Test Case '-[LightningCoreTests.VectorTests testCoalescedFramesAndHeaderAuthentication]' passed (0.000 seconds).
+2026-09-27T21:36:23.2821080Z Test Case '-[LightningCoreTests.VectorTests testTransportFragmentationAndAuthenticationFailure]' started.
+2026-09-27T21:36:23.2821770Z Test Case '-[LightningCoreTests.VectorTests testTransportFragmentationAndAuthenticationFailure]' passed (0.049 seconds).
+2026-09-27T21:36:23.2822420Z Test Case '-[LightningCoreTests.VectorTests testTwoFreshPeersAuthenticateBothIdentities]' started.
+2026-09-27T21:36:23.2823070Z Test Case '-[LightningCoreTests.VectorTests testTwoFreshPeersAuthenticateBothIdentities]' passed (0.009 seconds).
+2026-09-27T21:36:23.2823600Z Test Suite 'VectorTests' passed at 2026-09-27 21:36:23.190.
+2026-09-27T21:36:23.2823960Z 	 Executed 7 tests, with 0 failures (0 unexpected) in 0.270 (0.271) seconds
+2026-09-27T21:36:23.2824350Z Test Suite 'WireTests' started at 2026-09-27 21:36:23.190.
+2026-09-27T21:36:23.2824790Z Test Case '-[LightningCoreTests.WireTests testBigSizeBoundariesAndCanonicalEncoding]' started.
+2026-09-27T21:36:23.2825350Z Test Case '-[LightningCoreTests.WireTests testBigSizeBoundariesAndCanonicalEncoding]' passed (0.000 seconds).
+2026-09-27T21:36:23.2825950Z Test Case '-[LightningCoreTests.WireTests testFeaturesAndSlicedMessages]' started.
+2026-09-27T21:36:23.2826420Z Test Case '-[LightningCoreTests.WireTests testFeaturesAndSlicedMessages]' passed (0.000 seconds).
+2026-09-27T21:36:23.2827020Z Test Case '-[LightningCoreTests.WireTests testShutdownWitnessProgramsRespectNegotiationAndExactPushLength]' started.
+2026-09-27T21:36:23.2827730Z Test Case '-[LightningCoreTests.WireTests testShutdownWitnessProgramsRespectNegotiationAndExactPushLength]' passed (0.000 seconds).
+2026-09-27T21:36:23.2828410Z Test Case '-[LightningCoreTests.WireTests testTLVRejectsUnknownRequiredDuplicatesOrderAndOverflow]' started.
+2026-09-27T21:36:23.2829050Z Test Case '-[LightningCoreTests.WireTests testTLVRejectsUnknownRequiredDuplicatesOrderAndOverflow]' passed (0.000 seconds).
+2026-09-27T21:36:23.2829540Z Test Suite 'WireTests' passed at 2026-09-27 21:36:23.191.
+2026-09-27T21:36:23.2829850Z 	 Executed 4 tests, with 0 failures (0 unexpected) in 0.001 (0.002) seconds
+2026-09-27T21:36:23.2830210Z Test Suite 'WinnowPackageTests.xctest' passed at 2026-09-27 21:36:23.191.
+2026-09-27T21:36:23.2830570Z 	 Executed 90 tests, with 0 failures (0 unexpected) in 5.280 (5.293) seconds
+2026-09-27T21:36:23.2830980Z Test Suite 'Selected tests' passed at 2026-09-27 21:36:23.191.
+2026-09-27T21:36:23.2831350Z 	 Executed 90 tests, with 0 failures (0 unexpected) in 5.280 (5.297) seconds
+2026-09-27T21:36:23.2909570Z ◇ Test run started.
+2026-09-27T21:36:23.2909820Z ↳ Testing Library Version: 1902
+2026-09-27T21:36:23.2910150Z ↳ Target Platform: arm64e-apple-macos14.0
+2026-09-27T21:36:23.2910470Z ✔ Test run with 0 tests in 0 suites passed after 0.001 seconds.
+2026-09-27T21:36:23.2990610Z

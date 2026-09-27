@@ -3,17 +3,17 @@
     {
       "device": {
         "architecture": "arm64",
-        "deviceId": "B166304F-5BCC-486A-9B58-2D69557FB3F9",
-        "deviceName": "iPhone 18 Pro",
-        "modelName": "iPhone 18 Pro",
-        "osBuildNumber": "24A434",
-        "osVersion": "27.0",
+        "deviceId": "2421C3E5-2B36-4750-8E80-78FCCC08C9BD",
+        "deviceName": "iPhone 17 Pro",
+        "modelName": "iPhone 17 Pro",
+        "osBuildNumber": "23D8133",
+        "osVersion": "26.3.1",
         "platform": "iOS Simulator"
       },
       "expectedFailures": 0,
       "failedTests": 0,
-      "passedTests": 3,
-      "skippedTests": 0,
+      "passedTests": 4,
+      "skippedTests": 1,
       "testPlanConfiguration": {
         "configurationId": "1",
         "configurationName": "Test Scheme Action"
@@ -23,20 +23,24 @@
   "environmentDescription": "WinnowLightning \u00b7 Built with macOS 27.0",
   "expectedFailures": 0,
   "failedTests": 0,
-  "finishTime": 1790522467.359,
-  "passedTests": 3,
+  "finishTime": 1790546030.907,
+  "passedTests": 4,
   "result": "Passed",
   "runtimeWarnings": [
     {
       "issueType": "Runtime Warning",
       "message": "Invalid frame dimension (negative or non-finite)."
+    },
+    {
+      "issueType": "Runtime Warning",
+      "message": "Invalid frame dimension (negative or non-finite)."
     }
   ],
-  "skippedTests": 0,
-  "startTime": 1790521627.209,
+  "skippedTests": 1,
+  "startTime": 1790544982.344,
   "statistics": [],
   "testFailures": [],
   "title": "Test - WinnowLightning",
   "topInsights": [],
-  "totalTestCount": 3
+  "totalTestCount": 5
 }
