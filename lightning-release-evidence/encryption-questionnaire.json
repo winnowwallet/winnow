@@ -1,9 +1,9 @@
 {
   "app_id": "6815392502",
   "bundle": "com.btcswift.lightning",
-  "source": "b3bb94a6870b286ab11dbf7a201cdd8e357d738f",
+  "source": "248d31fdc6d7051ea8a01f23256b44824738c04b",
   "version": "0.3.0",
-  "build": "6",
+  "build": "7",
   "distribution_scope": "International internal TestFlight beta; no public App Store release requested",
   "technical_answers": {
     "uses_encryption": true,

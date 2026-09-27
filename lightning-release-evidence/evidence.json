@@ -1,5 +1,5 @@
 {
-  "source": "b3bb94a6870b286ab11dbf7a201cdd8e357d738f",
+  "source": "248d31fdc6d7051ea8a01f23256b44824738c04b",
   "bundle": "com.btcswift.lightning",
   "physical_device": false,
   "device_checks_deferred_to_testflight": true,
@@ -14,47 +14,75 @@
   "artifacts": [
     {
       "path": "app-state-before.json",
-      "sha256": "bb13316a720819e2448739814d8cf6202763455a4532ee723950e85fac9921c3"
+      "sha256": "e85249a2571755ab3b0b96820d6fc7f953b476560dc22054ae3177f23bcde185"
     },
     {
-      "path": "channel-protection-and-approval-tests.json",
-      "sha256": "89c0d82b0ed79d2d4957551092ba6901c3ef690b8e2f286fea566f73049b7c40"
+      "path": "connection-regression.json",
+      "sha256": "3d9496da57b194e20f83b7d443236bae24637734e817a2b000082b2fa0fd1e26"
+    },
+    {
+      "path": "core-tests.log",
+      "sha256": "66cb6feb7d66391d3f76e7e0a87c8b293ecac9f454147253a07b850e2f54a1f0"
+    },
+    {
+      "path": "app-receiving-tests.log",
+      "sha256": "5c3e471872327e13fb361c46c848aa625f3e66b38720fee64b40eca816a9f22a"
+    },
+    {
+      "path": "olympus-rejection-reconnect.log",
+      "sha256": "d38015322048bf795ccee308290609229b87889a6ae98929fd2b83c7437659ec"
+    },
+    {
+      "path": "public-provider-connections.json",
+      "sha256": "d96af87236085527e6a2e55b08e10607473be0b45d44b592b8b51c5499ecb719"
+    },
+    {
+      "path": "olympus-fresh-connection.log",
+      "sha256": "ee6a24d60f9cfdefd0c8dde1014b7a303fbbc294c52f41cd2637f0a259210eb3"
+    },
+    {
+      "path": "megalith-fresh-connection.log",
+      "sha256": "bb00c4f8f1f0af5ad1f8ba775a81e55546abc53a40cd3f55d4478458613a8af8"
     },
     {
       "path": "crypto-comparison.json",
-      "sha256": "7d11c53a9f0ae35f7154a47a2d1987438aaf670d95dfa0f2a011a410dc95d05e"
+      "sha256": "d505266398572603f70779876aadbfa1b64a9d7be6f4788c64107ed0ea811f0a"
     },
     {
       "path": "encryption-inventory.md",
-      "sha256": "69b00a6fe780e233f148b302e2703b1960f695eb9bcec7bc73ea5752e3da7f71"
+      "sha256": "80dae2cb0c13feb5a3780d492a9f13022db0ac5054b19ef3d0eebb235aaac4fd"
     },
     {
       "path": "encryption-questionnaire.json",
-      "sha256": "4ba0cc44d2aa6e88dd04db3002c4ed5359af299c36a962f2fdeaf8c9a6590949"
-    },
-    {
-      "path": "ipad-independent-receipt.json",
-      "sha256": "366aab4dc2b8551621b032122e3065a2644afbab3de5eb5fa21e0607a5064a6e"
+      "sha256": "a6dc05bad7b8c84f93ad3ee8a622ea585813ffc9235b67def160a3d415593f9d"
     },
     {
       "path": "ipad-journey.json",
-      "sha256": "6a4d9fad0b6c978c5061a3f76164a6203e279e108199911dfff3ca5174ac4030"
+      "sha256": "1e76892eb25f3d07e187a9af50b79115619a42a6584786ff379f680979f1b19b"
     },
     {
-      "path": "large-text-independent-receipt.json",
-      "sha256": "b9b27169d030c466dca2de797b15b47ef4ba7f8897689e548b6389e9f8ca9ed3"
+      "path": "ipad-independent-receipt.json",
+      "sha256": "1f9aa8281df72de60824af7d529cc91c97c8c18191de79ee32fa212a651d523d"
+    },
+    {
+      "path": "ipad-test-summary.json",
+      "sha256": "a6784edbdc784b14c73ae773c1c7204757a76b7690c2a092f815037afc16d78f"
     },
     {
       "path": "large-text-journey.json",
-      "sha256": "144e01e8370717cdfaad86ec14e79b87ba4705be3eb8798e002a3ce1931cc9f8"
+      "sha256": "11c2f9b317fa19cb7d54c711eb9b5fbce972f10b6cf5e10d68ef358eaa067e9e"
     },
     {
-      "path": "public-provider-quotes.json",
-      "sha256": "3e57df8b25d65075853ff463b8cadf0074dcf4f093d6d10ca570028cc48d1913"
+      "path": "large-text-independent-receipt.json",
+      "sha256": "bb332722a58b541962fedc81b3df1a3ff62632a69327481ea31bf2411ad54a1a"
+    },
+    {
+      "path": "large-text-test-summary.json",
+      "sha256": "2d0be76863865575cddfc62fd6f2b5252cd78c6c9d290d6582462da237abb938"
     },
     {
       "path": "what-to-test.txt",
-      "sha256": "6572eae57fb2d53c1a7abc34c5217d644c1221e8f7c4b9bd5d27293125328da8"
+      "sha256": "10f045def1d5f29631eb6906e54e5e064407ddf9653d71509fc57956c6dc81b8"
     }
   ],
   "encryption": {
@@ -62,8 +90,10 @@
     "artifact": "encryption-inventory.md"
   },
   "notes": [
-    "Exact-source recorded iPad and maximum-accessibility journeys passed. The pinned CI run gates archive and upload.",
-    "Physical authentication, sharing and locked storage checks remain pending through the existing internal TestFlight group.",
-    "Provider fee quotes were validated without sending real bitcoin. No funded mainnet channel or payment is claimed."
+    "Exact-source iPad and maximum-accessibility recordings each passed all three UI tests; original videos and independent receipts retained locally.",
+    "CI run 36327707050 must pass this exact source before archive and upload; the workflow verifies head SHA then waits with failure propagation.",
+    "Physical authentication, cancellation, sharing and locked-storage checks remain pending through internal TestFlight.",
+    "Fresh authenticated Olympus and Megalith connections remained open for 60 seconds. Olympus refused an unfunded temporary outbound opening and the same identity reconnected without replay. No funding or payment was authorized or sent.",
+    "Funded channel/payment/recovery validation uses regtest. Funded mainnet receiving remains unverified. The original phone opening request origin is unknown."
   ]
 }

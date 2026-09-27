@@ -1,0 +1,10 @@
+{
+  "source": "248d31fdc6d7051ea8a01f23256b44824738c04b",
+  "result": "passed",
+  "core_tests": 81,
+  "app_receiving_tests": 3,
+  "scope": "Local runtime regression tests and authenticated Olympus unfunded refusal/reconnect; no funded mainnet test",
+  "funds_authorized_or_sent": false,
+  "physical_device": false,
+  "phone_opening_request_origin": "unknown"
+}

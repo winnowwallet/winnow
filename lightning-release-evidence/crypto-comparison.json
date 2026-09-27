@@ -1,6 +1,6 @@
 {
-  "previous_source": "1cab34cdeee3426393a1487339f005eaf8857aae",
-  "source": "b3bb94a6870b286ab11dbf7a201cdd8e357d738f",
+  "previous_source": "b3bb94a6870b286ab11dbf7a201cdd8e357d738f",
+  "source": "248d31fdc6d7051ea8a01f23256b44824738c04b",
   "unchanged_crypto_and_dependency_files": [
     {
       "path": "Package.resolved",
@@ -29,58 +29,31 @@
     {
       "path": "Sources/LightningCore/LightningJournal.swift",
       "sha256": "1f6eeeaf397c7fc601470ec3b95d2c4d4dc590e31dd756d3fb0ea0cbf1eb33da"
+    },
+    {
+      "path": "Package.swift",
+      "sha256": "7fac92704aa7b03ff726f6fe10e45fbe20a8f690e6b034852ee1e31f57135f17"
     }
   ],
   "wallet_core_unchanged": true,
   "changed_paths": [
-    "AppTests/ChannelProtectionTests.swift",
-    "AppTests/LightningReceivingTests.swift",
-    "Package.swift",
-    "Sources/LightningCore/Bolt11Decoding.swift",
-    "Sources/LightningCore/Bolt11Invoice.swift",
-    "Sources/LightningCore/Bolt11Signature.swift",
-    "Sources/LightningCore/ChannelState.swift",
-    "Sources/LightningCore/LightningChain.swift",
-    "Sources/LightningCore/LightningChainMonitor.swift",
-    "Sources/LightningCore/LightningEngine.swift",
+    "Sources/LightningCore/LightningAppState.swift",
     "Sources/LightningCore/LightningInvoiceRouting.swift",
-    "Sources/LightningCore/LightningLiquidity.swift",
-    "Sources/LightningCore/LightningLiquidityHTTP.swift",
-    "Sources/LightningCore/LightningLiquiditySession.swift",
-    "Sources/LightningCore/LightningPayments.swift",
+    "Sources/LightningCore/LightningPeerNotice.swift",
     "Sources/LightningCore/LightningPeerSession.swift",
-    "Sources/WinnowApp/AppModel.swift",
-    "Sources/WinnowApp/BackgroundSyncStatusView.swift",
-    "Sources/WinnowApp/BeginnerHomeView.swift",
-    "Sources/WinnowApp/ChannelProtection.swift",
-    "Sources/WinnowApp/ChannelProtectionView.swift",
-    "Sources/WinnowApp/HomeView.swift",
     "Sources/WinnowApp/LightningAppController.swift",
+    "Sources/WinnowApp/LightningAppFunding.swift",
     "Sources/WinnowApp/LightningAppReceiving.swift",
-    "Sources/WinnowApp/LightningInputViews.swift",
-    "Sources/WinnowApp/LightningLiquidityView.swift",
-    "Sources/WinnowApp/LightningProfile.swift",
-    "Sources/WinnowApp/LightningProviders.swift",
     "Sources/WinnowApp/LightningReceiveView.swift",
     "Sources/WinnowApp/LightningView.swift",
-    "Sources/WinnowApp/ReceiveEntryView.swift",
-    "Sources/WinnowApp/WinnowApp.swift",
-    "Tests/LightningCoreTests/Bolt11Tests.swift",
-    "Tests/LightningCoreTests/ChainRecoveryTests.swift",
     "Tests/LightningCoreTests/ChannelEngineTests.swift",
     "Tests/LightningCoreTests/InvoiceRoutingTests.swift",
-    "Tests/LightningCoreTests/LiquidityTests.swift",
+    "Tests/LightningCoreTests/PeerNoticeTests.swift",
+    "Tests/LightningCoreTests/PeerSessionTests.swift",
     "Tools/LightningPeerFixture/LiquidityProbe.swift",
     "Tools/LightningPeerFixture/PeerFixture.swift",
     "UITests/LightningAppUITests.swift",
-    "UITests/TestHelpers.swift",
-    "docs/engineering/lightning-receiving.md",
-    "scripts/ci-lightning-peer"
+    "docs/engineering/lightning-receiving.md"
   ],
-  "change": "BOLT11 recoverable ECDSA via existing libsecp256k1; LSPS1 via existing Noise or OS HTTPS; no new algorithm or third-party dependency.",
-  "new_signature_call_sites": [
-    "Sources/LightningCore/Bolt11Invoice.swift",
-    "Sources/LightningCore/Bolt11Signature.swift"
-  ],
-  "channel_check_reminders": "Apple UserNotifications and local UserDefaults metadata; no new cryptography"
+  "change": "Peer keepalive and queued message handling, provider notices and rejection lifecycle, truthful unfunded channel display; no new algorithm, signature implementation or dependency."
 }

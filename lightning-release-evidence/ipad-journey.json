@@ -1,11 +1,11 @@
 {
   "result": "passed",
   "manifest": {
-    "source": "b3bb94a6870b286ab11dbf7a201cdd8e357d738f",
+    "source": "248d31fdc6d7051ea8a01f23256b44824738c04b",
     "dirty": false,
     "simulator": "4BAD1D04-0D01-45E2-8D56-327276D3D967",
     "bundle": "com.btcswift.lightning",
-    "executable_sha256": "c0dae26302028fab84e91d84694181756775a6a1f1dac25cb3904d86bd3578c8",
+    "executable_sha256": "134f4d6b1cdf4fd79b7f3ff42ee438557db9afb0ee8048de259e51c4a65f1df5",
     "xcode": "Xcode 27.0\nBuild version 27A266a",
     "device": {
       "name": "iPad Pro 13-inch (M5)",
@@ -15,6 +15,6 @@
     "content_size": "large",
     "scope": "ResearchDebug regtest fixture; physical authentication is a separate release gate"
   },
-  "video_sha256": "c40f540c305386319070394ff6dcef6f4043d9cd585438cd47205f7fb2336486",
-  "independent_receipt_sha256": "366aab4dc2b8551621b032122e3065a2644afbab3de5eb5fa21e0607a5064a6e"
+  "video_sha256": "6979f3608b06e51f8422b4b4acba10123778c85805ded341c346292ebc610ca1",
+  "independent_receipt_sha256": "1f9aa8281df72de60824af7d529cc91c97c8c18191de79ee32fa212a651d523d"
 }

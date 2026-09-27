@@ -1,11 +1,11 @@
 {
   "result": "passed",
   "manifest": {
-    "source": "b3bb94a6870b286ab11dbf7a201cdd8e357d738f",
+    "source": "248d31fdc6d7051ea8a01f23256b44824738c04b",
     "dirty": false,
     "simulator": "B166304F-5BCC-486A-9B58-2D69557FB3F9",
     "bundle": "com.btcswift.lightning",
-    "executable_sha256": "c0dae26302028fab84e91d84694181756775a6a1f1dac25cb3904d86bd3578c8",
+    "executable_sha256": "134f4d6b1cdf4fd79b7f3ff42ee438557db9afb0ee8048de259e51c4a65f1df5",
     "xcode": "Xcode 27.0\nBuild version 27A266a",
     "device": {
       "name": "iPhone 18 Pro",
@@ -15,6 +15,6 @@
     "content_size": "accessibility-extra-extra-extra-large",
     "scope": "ResearchDebug regtest fixture; physical authentication is a separate release gate"
   },
-  "video_sha256": "53e746e3497da1498e3a2b46eadc4bebf7ab69889781c4ec913be76f79f4c174",
-  "independent_receipt_sha256": "b9b27169d030c466dca2de797b15b47ef4ba7f8897689e548b6389e9f8ca9ed3"
+  "video_sha256": "24d5ba251b7848196e89da98e49547df803c74a85e2796de9e1fc536b1100041",
+  "independent_receipt_sha256": "bb332722a58b541962fedc81b3df1a3ff62632a69327481ea31bf2411ad54a1a"
 }
