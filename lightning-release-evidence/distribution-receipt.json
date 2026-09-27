@@ -1,0 +1,51 @@
+{
+  "source": "1cab34cdeee3426393a1487339f005eaf8857aae",
+  "ci_run": 36287084416,
+  "bundle": "com.btcswift.lightning",
+  "version": "0.3.0",
+  "build": "5",
+  "ipa_sha256": "710e8911bb036ab7ce989f1fc88f1d7e54f18e4d73bfae856afedee384dd80be",
+  "evidence_sha256": "61f23578f81e3071645e1cc915617555073b853db5207becbdafa64774e9de62",
+  "encryption": {
+    "mode": "pending",
+    "artifact": "encryption-inventory.md"
+  },
+  "release_tooling_source": "1cab34cdeee3426393a1487339f005eaf8857aae",
+  "device_checks_deferred_to_testflight": true,
+  "uploaded": true,
+  "processed": true,
+  "available_to_internal_testers": true,
+  "app_store_connect_build": "ac764d08-76e2-49c5-a77e-607852564e33",
+  "distribution_scope": "International internal TestFlight beta; no public App Store release requested",
+  "declaration": null,
+  "questionnaire_answers": {
+    "appDescription": "Internal TestFlight Swift Bitcoin and Lightning wallet. Uses published AES-GCM, ChaCha20-Poly1305, ChaCha20, HMAC/SHA-256, secp256k1 ECDH, ECDSA and Schnorr via CryptoKit, libsecp256k1 and Swift. International beta; no public App Store release requested.",
+    "availableOnFrenchStore": false,
+    "containsProprietaryCryptography": false,
+    "containsThirdPartyCryptography": true
+  },
+  "apple_no_document_response": {
+    "http_status": 409,
+    "response": {
+      "errors": [
+        {
+          "id": "564fefa8-2cdf-47c1-ab64-5848f9e086a3",
+          "status": "409",
+          "code": "ENTITY_ERROR.ATTRIBUTE.INVALID",
+          "title": "An attribute value is invalid.",
+          "detail": "Cannot create appEncryptionDeclarations unless either containsProprietaryCryptography is True or containsThirdPartyCryptography and availableOnFrenchStore are both True",
+          "source": {
+            "pointer": "/data/attributes/containsProprietaryCryptography, containsThirdPartyCryptography and availableOnFrenchStore"
+          }
+        }
+      ]
+    }
+  },
+  "documentation_basis": "https://developer.apple.com/help/app-store-connect/reference/app-information/export-compliance-documentation-for-encryption/",
+  "internal_group": "PQLN Regtest Internal",
+  "apple_encryption_determination": {
+    "exempt_from_documentation": true,
+    "declaration_id": null,
+    "state": "DOCUMENTATION_NOT_REQUIRED"
+  }
+}
