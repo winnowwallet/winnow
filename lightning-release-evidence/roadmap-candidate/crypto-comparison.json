@@ -1,5 +1,5 @@
 {
-  "source": "7ceba20bc3d214cfaff6a53fd5f955be5740bc14",
+  "source": "3064377d4c9fa3b1670148832321cc4ed18aac53",
   "previous_source": "1f1bfdd956c84765c444ed6b0667806b20626c55",
   "observed_implementation_source": "2acfa08bd04ab9883a1e36c2b65d14a49b66e47e",
   "sources_identical_to_observed": true,
@@ -228,5 +228,7 @@
     "Sources/WinnowApp/WalletImportMetadata.swift",
     "Sources/WinnowApp/WinnowApp.swift"
   ],
-  "review_status": "Technical inventory only; exact-head CI/display proof and responsible facts review remain pending"
+  "review_status": "Technical inventory only; exact-head CI/display proof and responsible facts review remain pending",
+  "previous_review_source": "7ceba20bc3d214cfaff6a53fd5f955be5740bc14",
+  "app_tests_dependencies_and_project_unchanged_from_previous_review": true
 }
