@@ -45,8 +45,10 @@ requires the existing publisher signature, freshness and clearnet diversity
 checks. No overlay candidates are bundled.
 
 Peer-list downloads and explorer requests use direct HTTP when clearnet is
-selected, SOCKS through Tor otherwise, and are disabled for I2P-only routing.
-Preload the signed census before selecting I2P alone, or add I2P peers manually.
+selected and SOCKS through Tor otherwise. I2P-only routing fetches the signed
+census from its I2P mirror through the I2P gateway and refuses every public
+host, so explorer requests stay off. The census signature is checked as usual;
+the mirror is not trusted.
 Corrupt saved routing settings keep networking offline until replaced.
 
 ## Validation

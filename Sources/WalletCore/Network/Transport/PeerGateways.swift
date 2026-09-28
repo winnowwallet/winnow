@@ -64,7 +64,14 @@ public struct PeerGatewayConfiguration: Codable, Equatable, Sendable {
     }
 
     public var permitsPublicHTTP: Bool { isValid && (networks.contains(.clearnet) || networks.contains(.tor)) }
-    public var httpProxy: PeerEndpoint? { networks.contains(.clearnet) ? nil : torProxy }
+    public var httpProxy: PeerEndpoint? {
+        networks.contains(.clearnet) ? nil : networks.contains(.tor) ? torProxy : i2pProxy
+    }
+    /// I2P alone reaches only I2P sites: its gateway must never be asked for a
+    /// public host, which an outproxy could carry. The census has an I2P mirror.
+    public var httpNetwork: PeerNetwork? { permitsPublicHTTP ? nil : .i2p }
+    public var permitsHTTP: Bool { permitsPublicHTTP || (isValid && networks.contains(.i2p)) }
+    public var censusEndpoint: URL? { permitsPublicHTTP ? CensusCatalog.endpoint : CensusCatalog.i2pMirror }
 
     public enum Invalid: Error, LocalizedError {
         case configuration, address

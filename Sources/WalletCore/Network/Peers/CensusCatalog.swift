@@ -26,6 +26,9 @@ public struct CensusCatalog: Codable, Equatable, Sendable {
         self.schemaVersion = schemaVersion; self.date = date; self.tip = tip; self.networks = networks
     }
     public static let endpoint = URL(string: "https://census.winnowwallet.com/census/peers.json")!
+    /// The same signed files served as an I2P site, for I2P-only routing.
+    /// The signature, not the mirror, is what the wallet trusts.
+    public static let i2pMirror: URL? = URL(string: "http://yts2d2oyrsz2eytnofuutgnsixymdkj2nmcmmpfv3aofzsnjt4eq.b32.i2p/census/peers.json")
     public static let maximumBytes = 4 * 1_024 * 1_024
     public static let maximumEntries = 65_536
     public static let maximumAgeDays = 7

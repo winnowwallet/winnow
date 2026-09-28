@@ -76,6 +76,16 @@ struct TailnetGatewayDiscoveryTests {
         _ = try #require(config.torProxy)
         _ = try #require(config.i2pProxy)
         print("Discovered gateways: \(config.torProxy?.description ?? "none"), \(config.i2pProxy?.description ?? "none")")
+        // I2P alone reaches the census only through its I2P mirror, and the
+        // signed download must verify exactly as the public copy does.
+        let i2pOnly = PeerGatewayConfiguration(networks: [.i2p], i2pProxy: config.i2pProxy)
+        let mirror = try #require(i2pOnly.censusEndpoint)
+        let client = RoutedHTTPClient(gateways: i2pOnly)
+        defer { client.cancel() }
+        let data = try await client.get(mirror, maximumBytes: CensusCatalog.maximumBytes)
+        let signature = try await client.get(CensusSignature.endpoint(for: mirror), maximumBytes: CensusSignature.maximumBytes)
+        try CensusPublisher.verify(data, signature: signature, trusting: CensusPublisher.trustedKeys)
+        print("Live I2P census mirror: \(data.count) bytes, signature verified")
         if let path = ProcessInfo.processInfo.environment["WINNOW_LIVE_CENSUS"] {
             let catalog = try #require(CensusCatalogStore(url: URL(filePath: path)).load()?.catalog)
             await withTaskGroup(of: Void.self) { group in

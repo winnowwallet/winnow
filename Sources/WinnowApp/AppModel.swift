@@ -445,7 +445,7 @@ final class AppModel {
         gatewaySettings = initialGatewaySettings
         let initialGateways = initialGatewaySettings.mode == .manual ? initialGatewaySettings.manual : PeerGatewayConfiguration()
         activePeerGateways = initialGateways
-        httpClient = RoutedHTTPClient(proxy: initialGateways.httpProxy, enabled: initialGateways.permitsPublicHTTP)
+        httpClient = RoutedHTTPClient(gateways: initialGateways)
         // 0.7.0 and earlier shipped an opt-in Tor route (`torEnabled`). It
         // is gone with 0.7.1; an installation that had it on is told once
         // rather than silently connecting directly.
@@ -602,7 +602,7 @@ final class AppModel {
         scheduleAutomaticCloudPreparation()
         let epoch = networkGeneration
         if httpClient.isCancelled {
-            httpClient = RoutedHTTPClient(proxy: activePeerGateways.httpProxy, enabled: activePeerGateways.permitsPublicHTTP)
+            httpClient = RoutedHTTPClient(gateways: activePeerGateways)
         }
         await buildStackIfNeeded()
         guard epoch == networkGeneration, isActive else { return }
@@ -2645,7 +2645,7 @@ final class AppModel {
         if activePeerGateways == config, !httpClient.isCancelled { return }
         activePeerGateways = config
         httpClient.cancel()
-        httpClient = RoutedHTTPClient(proxy: config.httpProxy, enabled: config.permitsPublicHTTP)
+        httpClient = RoutedHTTPClient(gateways: config)
     }
 
     func setPeerGatewaySettings(_ settings: PeerGatewaySettings) async throws {
@@ -2715,7 +2715,9 @@ final class AppModel {
         let epoch = networkGeneration
         defer { refreshingCatalog = false }
         do {
-            let catalogURL = e2e?.censusURL ?? CensusCatalog.endpoint
+            guard let catalogURL = e2e?.censusURL ?? activePeerGateways.censusEndpoint else {
+                throw RoutedHTTPClient.Failure.unavailable
+            }
             let data = try await httpClient.get(catalogURL, maximumBytes: CensusCatalog.maximumBytes) { [weak self] bytes in
                 Task { @MainActor in if self?.networkGeneration == epoch { self?.catalogBytes = bytes } }
             }

@@ -41,13 +41,19 @@ public final class RoutedHTTPClient: Sendable {
     private let session: URLSession
     public let proxy: PeerEndpoint?
     public let enabled: Bool
+    /// When set, only hosts on this overlay are fetched at all.
+    public let network: PeerNetwork?
     private struct Requests {
         var closed = false
         var tasks: [UUID: Task<Data, Error>] = [:]
     }
     private let requests = OSAllocatedUnfairLock(initialState: Requests())
-    public init(proxy: PeerEndpoint? = nil, enabled: Bool = true) {
+    public convenience init(gateways: PeerGatewayConfiguration) {
+        self.init(proxy: gateways.httpProxy, enabled: gateways.permitsHTTP, network: gateways.httpNetwork)
+    }
+    public init(proxy: PeerEndpoint? = nil, enabled: Bool = true, network: PeerNetwork? = nil) {
         self.proxy = proxy
+        self.network = network
         self.enabled = enabled && (proxy == nil || PeerGatewayConfiguration.validProxy(proxy))
         let config = URLSessionConfiguration.ephemeral
         config.httpShouldSetCookies = false
@@ -77,7 +83,8 @@ public final class RoutedHTTPClient: Sendable {
     }
     public func get(_ url: URL, maximumBytes: Int, accept: String? = nil,
                     progress: (@Sendable (Int) -> Void)? = nil) async throws -> Data {
-        guard enabled, Self.permits(url), maximumBytes > 0 else { throw Failure.unavailable }
+        guard enabled, Self.permits(url), maximumBytes > 0,
+              network == nil || PeerNetwork(host: url.host ?? "") == network else { throw Failure.unavailable }
         let id = UUID()
         // Admit and register the owned task under the same lock used by
         // cancel(). Invalidate URLSession only at deinit: Foundation raises an

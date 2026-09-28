@@ -25,12 +25,16 @@ struct PeerGatewayTests {
             #expect(candidates.allSatisfy { networks.contains(PeerNetwork(host: $0.host)) })
             #expect(config.httpProxy == (networks.contains(.clearnet) ? nil : proxy))
             #expect(config.permitsPublicHTTP == !networks.isDisjoint(with: [.clearnet, .tor]))
+            #expect(config.permitsHTTP)
+            #expect(config.httpNetwork == (config.permitsPublicHTTP ? nil : .i2p))
+            #expect(config.censusEndpoint == (config.permitsPublicHTTP ? CensusCatalog.endpoint : CensusCatalog.i2pMirror))
         }
         for config in [PeerGatewayConfiguration(networks: []), .init(networks: [.tor]), .init(networks: [.i2p])] {
             #expect(!config.isValid)
             #expect(!config.permits(direct))
             #expect(!config.permits(onion))
             #expect(!config.permitsPublicHTTP)
+            #expect(!config.permitsHTTP)
         }
         #expect(!PeerGatewayConfiguration().permits(onion))
         #expect(!PeerGatewayConfiguration().permits(.init(host: "unusable.ONION.", port: 8333)))
