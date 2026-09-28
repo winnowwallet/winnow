@@ -1,0 +1,13 @@
+{
+  "source": "7e1177f8aeaf8c33f5977da8439b0ff7adc3d9e5",
+  "dirty": false,
+  "built_epoch": 1790601423.550257,
+  "bundle": "com.btcswift.lightning",
+  "executable_sha256": "2e0ea4f24dc4ff0ccb119d6bdc6b482f2d96f33566c7b491c6b28a35d6b7828a",
+  "app_binary_inventory": {
+    "WinnowApp": "2e0ea4f24dc4ff0ccb119d6bdc6b482f2d96f33566c7b491c6b28a35d6b7828a",
+    "__preview.dylib": "d0f11ea426ca21351f2b5d6b263768881f27b587d4229b9575b2e527034a70b1",
+    "WinnowApp.debug.dylib": "094d1eb2467314ea6d02eb7ebeaeb432aa39f05108c1ef2a1ea143fa55771fba"
+  },
+  "ui_test_binary_sha256": "2af16f61f2dc945504a48cfc76e82656b91152c11c5e4fdf2b4dd55c46a3312a"
+}

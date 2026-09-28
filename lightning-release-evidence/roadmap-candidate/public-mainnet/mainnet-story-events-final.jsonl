@@ -1,0 +1,18 @@
+{"fields":{"network":"mainnet","processID":"16363"},"timestamp":"2026-09-28T13:17:28Z","version":1,"name":"app.initialized"}
+{"fields":{"phase":"inactive"},"timestamp":"2026-09-28T13:17:30Z","name":"app.scenePhase","version":1}
+{"version":1,"timestamp":"2026-09-28T13:17:30Z","fields":{"phase":"active"},"name":"app.scenePhase"}
+{"timestamp":"2026-09-28T13:17:30Z","version":1,"name":"app.booted","fields":{"stage":"onboarding","walletID":""}}
+{"fields":{"rejected":"","exhausted":"false","peers":"","dialing":"true","target":"3","connected":"0"},"timestamp":"2026-09-28T13:17:31Z","version":1,"name":"peers.status"}
+{"timestamp":"2026-09-28T13:17:32Z","name":"peers.catalogRefreshed","version":1,"fields":{"sha256":"cec282a3ad5e9af72436d5fc004175434186ed7a0f8ce21ec679439cd7b764d7","date":"2026-09-28"}}
+{"name":"peers.status","version":1,"timestamp":"2026-09-28T13:17:32Z","fields":{"exhausted":"false","target":"3","dialing":"true","connected":"2","peers":"86.23.185.23:8333 \/Satoshi:31.1.0\/,95.33.101.8:8333 \/Satoshi:31.1.0\/","rejected":""}}
+{"fields":{"replacements":"","utxoCount":"0","confirmedTransactions":"","historyCount":"0","nextScanHeight":"968500","tipHeight":"959616","balance":"0","peerCount":"3","pendingTransactions":"","vaults":"","walletID":"dbe8ea92"},"version":1,"timestamp":"2026-09-28T13:17:33Z","name":"wallet.snapshot"}
+{"timestamp":"2026-09-28T13:17:33Z","name":"wallet.created","fields":{"walletID":"dbe8ea92","headersContinueInBackground":"true","height":"968500"},"version":1}
+{"version":1,"name":"import.onboardingCompleted","timestamp":"2026-09-28T13:17:33Z","fields":{"walletID":"dbe8ea92"}}
+{"version":1,"name":"wallet.ready","timestamp":"2026-09-28T13:17:33Z","fields":{"utxoCount":"0","walletID":"dbe8ea92","nextScanHeight":"968500","balance":"0","historyCount":"0"}}
+{"name":"peers.status","version":1,"fields":{"dialing":"false","target":"3","rejected":"","peers":"161.82.69.19:8333 \/Satoshi:29.3.0(Satoshi)\/Knots:20260507\/,86.23.185.23:8333 \/Satoshi:31.1.0\/,95.33.101.8:8333 \/Satoshi:31.1.0\/","exhausted":"false","connected":"3"},"timestamp":"2026-09-28T13:17:33Z"}
+{"fields":{"enabled":"false"},"name":"setting.advancedMode","timestamp":"2026-09-28T13:17:35Z","version":1}
+{"version":1,"timestamp":"2026-09-28T13:18:13Z","fields":{"connection":"Ready to connect","connecting":"false","chainCurrent":"true"},"name":"lightning.resume"}
+{"version":1,"timestamp":"2026-09-28T13:18:13Z","name":"wallet.snapshot","fields":{"tipHeight":"969000","utxoCount":"0","balance":"0","historyCount":"0","peerCount":"3","confirmedTransactions":"","nextScanHeight":"969001","walletID":"dbe8ea92","vaults":"","pendingTransactions":"","replacements":""}}
+{"version":1,"timestamp":"2026-09-28T13:18:16Z","name":"lightning.resume","fields":{"connecting":"false","chainCurrent":"true","connection":"Connected"}}
+{"name":"lightning.resume","fields":{"chainCurrent":"true","connecting":"false","connection":"Connected"},"version":1,"timestamp":"2026-09-28T13:18:18Z"}
+{"name":"lightning.resume","version":1,"fields":{"chainCurrent":"true","connecting":"false","connection":"Connected"},"timestamp":"2026-09-28T13:18:24Z"}

@@ -36,6 +36,94 @@
     {
       "path": "encryption-facts-review.json",
       "sha256": "34ef180cc0f70e0de9d3898d2caa4c33a62dc8025bc1ae1ee03d6df06500953f"
+    },
+    {
+      "path": "public-mainnet/frozen-inventory.json",
+      "sha256": "82e6f7013f70e6c2104aa8c143f182b889a33a85356dd031f09ec26c2e5935b9"
+    },
+    {
+      "path": "public-mainnet/import-verification.json",
+      "sha256": "e4dd87fe33c164fba5991702ac3e243b5fc5ee78c58ca448ed5e14bbd2c77903"
+    },
+    {
+      "path": "public-mainnet/journey.json",
+      "sha256": "2f80fdf7dcd4ae373a6c8dffd8d4a51c6c99638b4cd354bc1a45b5db92eb32ff"
+    },
+    {
+      "path": "public-mainnet/mainnet-story-events-final.jsonl",
+      "sha256": "b81afbc6097d0a4038db05c1f90eb717c338d1cfd11c8be2f59100055b7b03cc"
+    },
+    {
+      "path": "public-mainnet/mainnet-test.log",
+      "sha256": "0a8e51d8d96922f30cb52831efe2e5f530ec977333a52a19751f44d45c96d760"
+    },
+    {
+      "path": "public-mainnet/mainnet-validation.json",
+      "sha256": "f23186f3dd1561af68962c7ce680a02884ee32d7ef3fd5f25d5e67de98f19520"
+    },
+    {
+      "path": "public-mainnet/manifest.json",
+      "sha256": "63376fef5f0a24ff8ab16b493ec80518578e38421f41bcf5f534f8c87c9bc8df"
+    },
+    {
+      "path": "public-mainnet/media-retention.json",
+      "sha256": "6f715086a147b563c4a2c73b3bddfae876d90e1437b48e65f701041928630f2e"
+    },
+    {
+      "path": "public-mainnet/reference-inventory.json",
+      "sha256": "1244309da03eb1935ac050a1bdd31ac18fe0f30eb193adc3a26bc8337bef29dc"
+    },
+    {
+      "path": "public-mainnet/research-product.json",
+      "sha256": "65ee4114d9792cc7e7caecddf1f7696e8f11c9011c8419991325b7e194638013"
+    },
+    {
+      "path": "public-mainnet/root-public-mainnet-review-20260928.json",
+      "sha256": "cf33c0be0947c0adf6357a210e53b5f454e1a99e8af6d2928400497073418d04"
+    },
+    {
+      "path": "public-mainnet/screenshot-timing.json",
+      "sha256": "6dd87c6ad33480ae2bfe6aa5fa0346468bab2b2d4cc0a96bb036c6eb11fda0eb"
+    },
+    {
+      "path": "public-mainnet/screenshots/live-mainnet-provider-options.png",
+      "sha256": "8a6a7574291637f7dc0b8c75c2369d0cae7898a7c46ce2f006caa29978785092"
+    },
+    {
+      "path": "public-mainnet/screenshots/live-mainnet-synced.png",
+      "sha256": "4ffba66ac9a403edb4b2626c37c639ed2157c7fa9c0e9327c5b633176cc71b6d"
+    },
+    {
+      "path": "public-mainnet/screenshots/live-mainnet-unpaid-quote.png",
+      "sha256": "f0ffec3f0ac518824750be3015f5c30581c4e1318a19d5ccfbad3d1568610aa1"
+    },
+    {
+      "path": "public-mainnet/source-manifest.json",
+      "sha256": "85f98df7828b6d1575b8225022f37429231bba266b096cb26531e6f008902d10"
+    },
+    {
+      "path": "public-mainnet/summary.json",
+      "sha256": "7ba5815818e5f98f7f31191bd47f8ae04d6592326b0ddca43a4380686499e918"
+    },
+    {
+      "path": "public-mainnet/tests.json",
+      "sha256": "8034f07ecdb78df978d310b4665d13f74e37be1d8097cec07a88e1b552d76f01"
+    },
+    {
+      "path": "public-mainnet/video-codec-decode.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "public-mainnet/video-codec-verification.json",
+      "sha256": "273bb6c3a1119765a6567310aad33cdeca91e53ea2d832ef279758e733ba545b"
+    },
+    {
+      "path": "public-mainnet/video-metadata.json",
+      "sha256": "c52d90683a3a183d60edd782efc2b4e801dd11e06629c65e22f5cad67e5a5183"
+    },
+    {
+      "path": "public-mainnet/video.log",
+      "sha256": "c4fef61b0e5c56c23dbd4a40cfae9080bd93d4787bed46692db4783c102892e5"
     }
   ],
   "encryption": {
@@ -46,6 +134,15 @@
     "Pending exact-source successful CI for 7e1177f8aeaf8c33f5977da8439b0ff7adc3d9e5.",
     "Pending current-source iPad and maximum accessibility text recorded journeys; older source receipts are historical.",
     "Physical device checks are explicitly deferred to internal TestFlight and remain pending.",
-    "Funded automated evidence uses regtest; funded mainnet remains unverified."
-  ]
+    "Funded automated evidence uses regtest; funded mainnet remains unverified.",
+    "Current-source public mainnet iPhone smoke passed with three connected peers, verified sync and an unpaid quote; original video is retained outside Git. One runtime warning remains."
+  ],
+  "public_mainnet_evidence": {
+    "result": "passed",
+    "scope": "Unfunded public mainnet iPhone smoke; funded mainnet remains unverified.",
+    "journey": "public-mainnet/journey.json",
+    "validation": "public-mainnet/mainnet-validation.json",
+    "media_retention": "public-mainnet/media-retention.json",
+    "import_verification": "public-mainnet/import-verification.json"
+  }
 }
