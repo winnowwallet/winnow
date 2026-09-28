@@ -1,6 +1,6 @@
 {
-  "source": "7e1177f8aeaf8c33f5977da8439b0ff7adc3d9e5",
-  "reviewed_at_utc": "2026-09-28T13:17:29.148284+00:00",
+  "source": "5420cbea1de9b5cff26e22c09d76d3392c9556aa",
+  "reviewed_at_utc": "2026-09-28T14:05:17.320715+00:00",
   "status": "facts-reviewed",
   "reviewed_by": "Codex root, with independent Codex anchors and metrics_backup source reviews",
   "scope": "Technical source algorithms and implementation facts only. Not an export classification, Apple approval, security audit, runtime conformance or physical-device verification.",
@@ -159,30 +159,42 @@
   ],
   "apple_documentation": "https://developer.apple.com/help/app-store-connect/reference/app-information/export-compliance-documentation-for-encryption/",
   "source_binding_review": {
-    "source": "7e1177f8aeaf8c33f5977da8439b0ff7adc3d9e5",
-    "previous_review_source": "3064377d4c9fa3b1670148832321cc4ed18aac53",
-    "previous_reviewed_at_utc": "2026-09-28T12:37:49.798270+00:00",
-    "verified_at_utc": "2026-09-28T13:17:29.148284+00:00",
-    "verified_by": "Codex control_current; root independently confirmed unchanged app Sources, dependencies and project configuration plus the two test-only changes",
-    "method": "Verify the complete committed diff is exactly the two recorded test files; verify no app Sources/dependency/project/resource changes; SHA-256 all 23 retained technical source-evidence files and all 22 crypto-comparison files against new committed blobs.",
+    "source": "5420cbea1de9b5cff26e22c09d76d3392c9556aa",
+    "previous_review_source": "7e1177f8aeaf8c33f5977da8439b0ff7adc3d9e5",
+    "previous_reviewed_at_utc": "2026-09-28T13:17:29.148284+00:00",
+    "verified_at_utc": "2026-09-28T14:05:17.320715+00:00",
+    "verified_by": "Codex control_current; Codex root independently verified all45 committed source hashes, four changed test/host paths, all27 artifact hashes and unchanged production source/dependency/project scope",
+    "method": "Verify complete committed diff is exactly the four recorded test/host files; verify no production Sources/resource/dependency/project changes; SHA-256 all 23 technical source-evidence files and 22 comparison files against new committed blobs. Preserve earlier source-binding audits and original native receipts.",
     "source_evidence_files_verified": 23,
     "crypto_comparison_files_verified": 22,
     "changed_app_or_dependency_paths": [],
-    "changed_test_paths": [
-      {
-        "path": "Tests/WalletCoreTests/Network/FilterSyncTests.swift",
-        "previous_sha256": "dcbb3fbe670ebe47e037ba77bcb59cad6f658bcdcd7c416d2c80d156d635ebe4",
-        "current_sha256": "e9e363f81fd27a3cc870d1a191d4a68b3b7c3a221564b376f12fc117688d67f5",
-        "scope": "Test failure diagnostics only; exact 30-second peer dial timeout and fatal failed-handshake requirement retained."
-      },
+    "changed_test_and_host_paths": [
       {
         "path": "UITests/LightningAppUITests.swift",
-        "previous_sha256": "76fbca9208f53e5199eb90a384ddd1239144cef28e068bb7c9782e12bb0a04b8",
-        "current_sha256": "1d127de23c431c7f944e82d075b033cb64e71924dd999486d21c37482298bc33",
-        "scope": "Read-only public-mainnet quote review scrolls the lazy Form to verify the existing enabled approval button; no approval tap or financial action."
+        "previous_sha256": "1d127de23c431c7f944e82d075b033cb64e71924dd999486d21c37482298bc33",
+        "current_sha256": "d1ff5ea4a54d2d8f298f332f80fa46a89a0833e9a9502991d307feab1d3936fa",
+        "scope": "UI test-only iPad keyboard dismissal uses the app Done button at most twice under the existing strict 10-second deadline; keyboard node absence remains required."
+      },
+      {
+        "path": "scripts/ci-lightning-async",
+        "previous_sha256": "5d6c0294d1c6e36170e90cc95d6537a45216eda2c9faac29821f7e0b7c4830bc",
+        "current_sha256": "651fde34219b5de08eddc4e1f466bb311f7a570f7ec5bedfe64b34a967ac40cf",
+        "scope": "Host test fixture diagnostics add bounded RPC timings/partial failure output and Core RPC logging; successful output and arguments are omitted, the exact 20-second CLI timeout and original failure behavior remain unchanged."
+      },
+      {
+        "path": "scripts/ci-lightning-peer",
+        "previous_sha256": "f577b775751c5486dd46a0981914aae27b5b37008afa444ff2b93c86c51c4829",
+        "current_sha256": "3cc86dd30dc038e20bcc6278470f4721e5ca1516eacf55d658f5dce5d56f7330",
+        "scope": "Host stock-peer fixture classifies only the observed macOS routed-recipient exit before funding_signed/broadcast, matched to both peer IDs/funding txid and pending channel state; original 20-second timeout is retained, existing two-fresh-attempt limit stays fixed, unknown/protocol/post-signature failures remain fatal. Underlying child-exit cause is unproven."
+      },
+      {
+        "path": "scripts/tests/test_lightning_peer.py",
+        "previous_sha256": "4120a4d15121b44dc21e061d6ffa93511a7779e0cbb938ac636f8d7d265ae2a9",
+        "current_sha256": "1bb2ac2a0f09042028dbbe8bccaf29c9c409083685efb50517eebbdf3c9fff66",
+        "scope": "Host tests cover exact routed-startup classification and retained failures, rejecting wrong peer/state/txid, signatures/broadcast, HSM/protocol errors, unrelated bounds/platforms and failed diagnostics; no third attempt or receipt is permitted."
       }
     ],
-    "scope": "Bind unchanged production technical facts to the new test-only commit. The previous 7ceba20-to-3064377 binding audit is preserved in source_binding_history; previous native/CI receipts remain historical and are not relabeled."
+    "scope": "Bind unchanged production technical facts to the new test/host-fixture commit. All earlier native/CI receipts stay historical, including the unchanged 7e public-mainnet recording. No runtime success or Apple determination is asserted."
   },
   "source_binding_history": [
     {
@@ -195,6 +207,32 @@
       "scope": "Binding the existing technical facts review to byte-identical app sources at the new host/CI/gallery commit. Earlier native or CI receipts are not relabeled and remain historical.",
       "previous_reviewed_at_utc": "2026-09-28T02:03:47.647623+00:00",
       "source": "3064377d4c9fa3b1670148832321cc4ed18aac53"
+    },
+    {
+      "source": "7e1177f8aeaf8c33f5977da8439b0ff7adc3d9e5",
+      "previous_review_source": "3064377d4c9fa3b1670148832321cc4ed18aac53",
+      "previous_reviewed_at_utc": "2026-09-28T12:37:49.798270+00:00",
+      "verified_at_utc": "2026-09-28T13:17:29.148284+00:00",
+      "verified_by": "Codex control_current; root independently confirmed unchanged app Sources, dependencies and project configuration plus the two test-only changes",
+      "method": "Verify the complete committed diff is exactly the two recorded test files; verify no app Sources/dependency/project/resource changes; SHA-256 all 23 retained technical source-evidence files and all 22 crypto-comparison files against new committed blobs.",
+      "source_evidence_files_verified": 23,
+      "crypto_comparison_files_verified": 22,
+      "changed_app_or_dependency_paths": [],
+      "changed_test_paths": [
+        {
+          "path": "Tests/WalletCoreTests/Network/FilterSyncTests.swift",
+          "previous_sha256": "dcbb3fbe670ebe47e037ba77bcb59cad6f658bcdcd7c416d2c80d156d635ebe4",
+          "current_sha256": "e9e363f81fd27a3cc870d1a191d4a68b3b7c3a221564b376f12fc117688d67f5",
+          "scope": "Test failure diagnostics only; exact 30-second peer dial timeout and fatal failed-handshake requirement retained."
+        },
+        {
+          "path": "UITests/LightningAppUITests.swift",
+          "previous_sha256": "76fbca9208f53e5199eb90a384ddd1239144cef28e068bb7c9782e12bb0a04b8",
+          "current_sha256": "1d127de23c431c7f944e82d075b033cb64e71924dd999486d21c37482298bc33",
+          "scope": "Read-only public-mainnet quote review scrolls the lazy Form to verify the existing enabled approval button; no approval tap or financial action."
+        }
+      ],
+      "scope": "Bind unchanged production technical facts to the new test-only commit. The previous 7ceba20-to-3064377 binding audit is preserved in source_binding_history; previous native/CI receipts remain historical and are not relabeled."
     }
   ]
 }

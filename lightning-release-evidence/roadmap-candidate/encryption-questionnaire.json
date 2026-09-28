@@ -1,7 +1,7 @@
 {
   "app_id": "6815392502",
   "bundle": "com.btcswift.lightning",
-  "source": "7e1177f8aeaf8c33f5977da8439b0ff7adc3d9e5",
+  "source": "5420cbea1de9b5cff26e22c09d76d3392c9556aa",
   "version": "0.4.0",
   "build": "9",
   "distribution_scope": "International internal TestFlight beta; no public App Store release requested",
@@ -16,12 +16,12 @@
     "basis": "Candidate international internal TestFlight only. Before submitting facts, recheck that every current public-store version is PREPARE_FOR_SUBMISSION; otherwise stop for a new distribution review. No assumptions about testers' locations and no availability changes."
   },
   "facts_review": {
-    "source": "7e1177f8aeaf8c33f5977da8439b0ff7adc3d9e5",
+    "source": "5420cbea1de9b5cff26e22c09d76d3392c9556aa",
     "reviewed_by": "Codex root, with independent Codex anchors and metrics_backup source reviews",
     "status": "facts-reviewed",
     "evidence_artifact": "encryption-facts-review.json",
     "scope": "Technical source algorithms and implementation facts only. Not an export classification, Apple approval, security audit, runtime conformance or physical-device verification.",
-    "source_binding": "All 23 retained source-fact hashes and 22 crypto-comparison hashes match the new committed blobs; production Sources/dependencies/project are unchanged from 3064377. Two test-only changes are explicitly recorded and the earlier 7ceba20-to-3064377 audit is retained in encryption-facts-review.json. Previous native/CI receipts remain historical."
+    "source_binding": "All 23 retained source-fact hashes and 22 comparison hashes match committed 5420cbe blobs; production Sources/resources/dependencies/project are unchanged from 7e1177f. Four changed UI-test/host-fixture/test files have both committed hashes and scope recorded. Earlier audits and 7e native/public-mainnet receipts remain unchanged and historical; root independently verified the binding."
   },
   "apple_review_status": "Technical source facts reviewed. Live distribution check and Apple new-build determination remain pending; no approved declaration or exemption determination claimed."
 }

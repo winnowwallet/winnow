@@ -2,12 +2,12 @@
   "repository": "posix4e/winnow-lightning",
   "app_id": "6815392502",
   "bundle": "com.btcswift.lightning",
-  "source": "7e1177f8aeaf8c33f5977da8439b0ff7adc3d9e5",
-  "release_tooling_source": "03142383a4346d26ad06672a7af16eab4d76b702",
+  "source": "5420cbea1de9b5cff26e22c09d76d3392c9556aa",
+  "release_tooling_source": "14a5491e97409520b2c9b9b9dba117d2dce39f6c",
   "ci_run": null,
   "version": "0.4.0",
   "build": "9",
   "evidence": "lightning-release-evidence/roadmap-candidate/evidence.json",
   "distribution_scope": "International internal TestFlight beta; no public App Store release requested",
-  "notes": "Tested app source remains 7e1177f; production Sources/dependencies/project are byte-identical to 3064377. Separate committed release tooling 0314238 corrects source-repository attribution and verifies source/builder/IPA provenance before upload; its focused local tests pass and hosted CI remains pending. App-source technical facts/questionnaire/native evidence remain bound to 7e1177f. Exact successful app CI, current-source iPad/max accessibility evidence and fresh Apple new-build/distribution/determination checks remain pending."
+  "notes": "App source 5420cbe and separate release tooling 14a5491 are published immutable commits. Production Sources/resources/dependencies/project are byte-identical to 7e1177f; four UI-test/host-fixture/test changes are SHA-recorded. The tooling metadata patch is unchanged from 0314238 and remains separate from tested app source. Previous 7e public-mainnet proof stays historical. Exact successful app CI, current-source public/iPad/max journeys, fresh Apple new-build/distribution/determination checks remain pending."
 }
