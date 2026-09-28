@@ -66,9 +66,10 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(self.run_evidence(), (self.folder / 'evidence.json').resolve())
         API['validate_apple'](self.candidate, self.apple(), 'upload')
 
-    def test_committed_candidate_fails_closed_on_pending_exact_ci(self):
-        with self.assertRaisesRegex(ValueError, '(release_tooling_source|Exact CI run) is pending'):
-            API['load_candidate'](ROOT)
+    def test_pending_exact_ci_fails_closed(self):
+        self.write('lightning-release-candidate.json', dict(self.candidate, ci_run=None), self.root)
+        with self.assertRaisesRegex(ValueError, 'Exact CI run is pending'):
+            API['load_candidate'](self.root)
 
     def test_tester_notes_cannot_be_unhashed(self):
         self.evidence['artifacts'] = [a for a in self.evidence['artifacts'] if a['path'] != 'what-to-test.txt']
