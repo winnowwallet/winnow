@@ -19,7 +19,7 @@
   "artifacts": [
     {
       "path": "encryption-inventory.md",
-      "sha256": "6aa0c88aba4d327929cfa10f3fe4a7705febb55591c5bcc3b29523e344ff9519"
+      "sha256": "939a18444d2c1f19430b475011da1b2d083be86858510b9879aaa6f3400d4a28"
     },
     {
       "path": "crypto-comparison.json",
@@ -27,11 +27,15 @@
     },
     {
       "path": "encryption-questionnaire.json",
-      "sha256": "13e082cc86eec4987133f4e1522d0caec6133804218145ea2484f611a8792992"
+      "sha256": "54d8958a58f3b2ea19b5d6bf02048066f1cada58b1bcf93c3d76f21f2a454880"
     },
     {
       "path": "what-to-test.txt",
       "sha256": "215ce792ddeeb8e9da9738496f30f858bcd475605575a178b7c943ba3991bd60"
+    },
+    {
+      "path": "encryption-facts-review.json",
+      "sha256": "7a98c42b13c2e285a0f4c367aae5bb8d591ce8f40c5d8a1a41f0d7b4f9bd3bbb"
     }
   ],
   "encryption": {

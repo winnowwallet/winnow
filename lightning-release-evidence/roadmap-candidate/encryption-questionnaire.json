@@ -17,8 +17,10 @@
   },
   "facts_review": {
     "source": "7ceba20bc3d214cfaff6a53fd5f955be5740bc14",
-    "reviewed_by": null,
-    "status": "pending"
+    "reviewed_by": "Codex root, with independent Codex anchors and metrics_backup source reviews",
+    "status": "facts-reviewed",
+    "evidence_artifact": "encryption-facts-review.json",
+    "scope": "Technical source algorithms and implementation facts only. Not an export classification, Apple approval, security audit, runtime conformance or physical-device verification."
   },
-  "apple_review_status": "Candidate facts pending final-source review. No approved declaration or exemption determination claimed."
+  "apple_review_status": "Technical source facts reviewed. Live distribution check and Apple new-build determination remain pending; no approved declaration or exemption determination claimed."
 }

@@ -9,5 +9,5 @@
   "build": "9",
   "evidence": "lightning-release-evidence/roadmap-candidate/evidence.json",
   "distribution_scope": "International internal TestFlight beta; no public App Store release requested",
-  "notes": "Final source/tooling bound. Exact green CI, current-source iPad/max accessibility evidence, technical facts review and live Apple next-build check remain pending."
+  "notes": "Final source/tooling and technical source-facts review bound. Exact green CI, current-source iPad/max accessibility evidence and live Apple next-build/distribution/determination checks remain pending."
 }
