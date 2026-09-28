@@ -124,6 +124,118 @@
     {
       "path": "public-mainnet/video.log",
       "sha256": "c4fef61b0e5c56c23dbd4a40cfae9080bd93d4787bed46692db4783c102892e5"
+    },
+    {
+      "path": "public-mainnet-5420cbe/frozen-inventory.json",
+      "sha256": "668b7de07aed855f3b8d2f2ef3b7720e2dddb236ad83f3f584315788eabc712b"
+    },
+    {
+      "path": "public-mainnet-5420cbe/import-verification.json",
+      "sha256": "7c156926f74410d6034302d5baaaa5c633fca2d427123a3ac9a9e782654546cf"
+    },
+    {
+      "path": "public-mainnet-5420cbe/invalid-frame-log-collection.json",
+      "sha256": "4d4a34f0c896d31d8c534bbc90d282ee83dba7a229e7bcd7ebb89bf1435c7169"
+    },
+    {
+      "path": "public-mainnet-5420cbe/invalid-frame-unified-log.json",
+      "sha256": "3e1b47d382ea5ff006c7a5ac244a6abb3c6a49cb5f75a223e78cc9a4c70e3b8e"
+    },
+    {
+      "path": "public-mainnet-5420cbe/journey.json",
+      "sha256": "254221b73e5d6fc0d4cfa0f00652034ab8ae0ae60ba1482eb1308d979d7b5078"
+    },
+    {
+      "path": "public-mainnet-5420cbe/mainnet-story-events-during-wait.jsonl",
+      "sha256": "2783b7aafacedd1814f7765b8e597227cd08519c4444cc2d272e39735c126c8c"
+    },
+    {
+      "path": "public-mainnet-5420cbe/mainnet-story-events-final.jsonl",
+      "sha256": "446d0ad0843aa816de3467904a0daf6db896de5cfc27c0d37eac1766a3bddf90"
+    },
+    {
+      "path": "public-mainnet-5420cbe/mainnet-test.log",
+      "sha256": "c96dfc3f0882148879496c90bd121b6eda49e1cf1dacd7e000eb07af1c7591d9"
+    },
+    {
+      "path": "public-mainnet-5420cbe/mainnet-validation.json",
+      "sha256": "9e31457f87d382e1dce63ff6469cbb16afc6a878c48826008e0d95879ded8751"
+    },
+    {
+      "path": "public-mainnet-5420cbe/manifest.json",
+      "sha256": "4ff0d0a87f268d8ec64963d6ec610ac023aa1e747ce05dd10151e3b83a92e937"
+    },
+    {
+      "path": "public-mainnet-5420cbe/media-retention.json",
+      "sha256": "1a177b378550f099626d517b01700a9b4b8741f1a4e141b44edb1fa2c10d5bbc"
+    },
+    {
+      "path": "public-mainnet-5420cbe/public-progress-sample.json",
+      "sha256": "a55d68a98698bb06f4a940642052cb2b0163c132998efaea597cc9e5cb414eb1"
+    },
+    {
+      "path": "public-mainnet-5420cbe/reference-inventory.json",
+      "sha256": "1244309da03eb1935ac050a1bdd31ac18fe0f30eb193adc3a26bc8337bef29dc"
+    },
+    {
+      "path": "public-mainnet-5420cbe/research-product.json",
+      "sha256": "ba972dc756ce5010b44e72bf1a63bd088f4f7b1cc5f8a53095e2038a8ade2fb9"
+    },
+    {
+      "path": "public-mainnet-5420cbe/root-public-mainnet-review-5420cbe-20260928.json",
+      "sha256": "99074ceade1542be6f7ceecf6b25db42667a601db58e86974941176073026823"
+    },
+    {
+      "path": "public-mainnet-5420cbe/screenshot-timing.json",
+      "sha256": "d26dbb2fce49598b4b1de7523e82f7a57b174b55239f99f2ed98d6ec5ba8413f"
+    },
+    {
+      "path": "public-mainnet-5420cbe/screenshots/live-mainnet-provider-options.png",
+      "sha256": "7e7dbf2f67d45ba34536c06294ad30e3d8d0e89896d85c6a58667ac531d502d6"
+    },
+    {
+      "path": "public-mainnet-5420cbe/screenshots/live-mainnet-synced.png",
+      "sha256": "b82cbe295988fdbaeef823fa45e72e07b36bea347592c3ba8512f774f7c70bf9"
+    },
+    {
+      "path": "public-mainnet-5420cbe/screenshots/live-mainnet-unpaid-quote.png",
+      "sha256": "2c53e9b9acf2880ccd293a4646bded61b8c7f276f2c6edb7da880eb89e995ca9"
+    },
+    {
+      "path": "public-mainnet-5420cbe/source-manifest.json",
+      "sha256": "a1b272534d70ad6d2dd64d8b67e90b2293a6665fc958d275f1abc159d0c1eac3"
+    },
+    {
+      "path": "public-mainnet-5420cbe/summary.json",
+      "sha256": "6cb506c1ba653d71351c74ea18abc55a04a67466b770f9aee831fbe108dc155b"
+    },
+    {
+      "path": "public-mainnet-5420cbe/tests.json",
+      "sha256": "73fbf31f15a3e34edb7025b0b4e8f2d57a958dd3712e0045c98ca70a5576d2e0"
+    },
+    {
+      "path": "public-mainnet-5420cbe/video-codec-decode.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "public-mainnet-5420cbe/video-codec-verification.json",
+      "sha256": "ef327909782b73d02ec197d7502b46fde6392f31fe7af15d5b8a25b7c871fcb1"
+    },
+    {
+      "path": "public-mainnet-5420cbe/video-metadata.json",
+      "sha256": "a867f17009067e95fe1a104e54213ed21aad221557486e5e3bf284cf928485ed"
+    },
+    {
+      "path": "public-mainnet-5420cbe/video.log",
+      "sha256": "551f33ad6277e7db038dc7372b0ccd03f040a58b97a5c689edc2e5c55324b795"
+    },
+    {
+      "path": "public-mainnet-5420cbe/waiting-mainnet-185s.png",
+      "sha256": "5543fcc499c226a5808e21e701bc5b9769bba372cae780001b44e0f4d4e622b0"
+    },
+    {
+      "path": "public-mainnet-5420cbe/waiting-mainnet-sample.json",
+      "sha256": "48e8adc68847b298cd77cbe6c14ac76c066738a31f245adb6488d47735e05273"
     }
   ],
   "encryption": {
@@ -132,10 +244,11 @@
   },
   "notes": [
     "Pending exact-source successful CI for 5420cbea1de9b5cff26e22c09d76d3392c9556aa.",
-    "Pending current-source public-mainnet, iPad and maximum accessibility text recorded journeys; older source receipts are historical.",
+    "Pending current-source iPad and maximum accessibility text recorded journeys; earlier source receipts remain historical.",
     "Physical device checks are explicitly deferred to internal TestFlight and remain pending.",
     "Funded automated evidence uses regtest; funded mainnet remains unverified.",
-    "The unchanged 7e public-mainnet iPhone proof remains historical with its original source/movie/XCTest/screenshot hashes and preserved runtime warning; it is not relabeled as 5420cbe."
+    "The unchanged 7e public-mainnet iPhone proof remains historical with its original source/movie/XCTest/screenshot hashes and preserved runtime warning; it is not relabeled as 5420cbe.",
+    "Clean 5420cbe public-mainnet iPhone smoke passed with three peers, a cold 9,389-block scan (Up to date at 621.3465 seconds), and an unpaid 6,750 sat quote. One distinct runtime issue/two unified log records are retained; cause unproven, no funding or approval occurred."
   ],
   "historical_public_mainnet_evidence": [
     {
@@ -151,7 +264,15 @@
   ],
   "public_mainnet_evidence": {
     "source": "5420cbea1de9b5cff26e22c09d76d3392c9556aa",
-    "result": "pending",
-    "scope": "Fresh clean-source public mainnet iPhone smoke is pending. The original 7e proof remains historical in public-mainnet/."
+    "result": "passed",
+    "scope": "Unfunded public-mainnet iPhone cold scan and unpaid quote; funded mainnet remains unverified.",
+    "journey": "public-mainnet-5420cbe/journey.json",
+    "validation": "public-mainnet-5420cbe/mainnet-validation.json",
+    "media_retention": "public-mainnet-5420cbe/media-retention.json",
+    "import_verification": "public-mainnet-5420cbe/import-verification.json",
+    "cold_scan_blocks": 9389,
+    "up_to_date_observed_seconds": 621.3465030193329,
+    "runtime_warning_issues": 1,
+    "unified_warning_records": 2
   }
 }

@@ -1,0 +1,40 @@
+{
+  "result": "passed",
+  "source": "5420cbea1de9b5cff26e22c09d76d3392c9556aa",
+  "source_dirty": false,
+  "namespace": "BTCSwiftE2E-live-mainnet-A257C764-35C3-4692-87FD-D466B83043BD",
+  "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+  "public_connected_peers": 3,
+  "final_wallet_snapshot": {
+    "name": "wallet.snapshot",
+    "version": 1,
+    "fields": {
+      "utxoCount": "0",
+      "replacements": "",
+      "nextScanHeight": "969006",
+      "tipHeight": "969005",
+      "walletID": "dbe8ea92",
+      "peerCount": "3",
+      "historyCount": "0",
+      "vaults": "",
+      "balance": "0",
+      "confirmedTransactions": "",
+      "pendingTransactions": ""
+    },
+    "timestamp": "2026-09-28T14:13:11Z"
+  },
+  "provider_setup_enabled_seconds": 608.4005990028381,
+  "up_to_date_observed_seconds": 621.3465030193329,
+  "setup_fee_label": "Setup fee, 6750 sats",
+  "setup_fee_sats": 6750,
+  "payable_invoice_exposed": false,
+  "approval_tapped": false,
+  "financial_actions": "none",
+  "runtime_warnings": [
+    {
+      "issueType": "Runtime Warning",
+      "message": "Invalid frame dimension (negative or non-finite)."
+    }
+  ],
+  "physical_checks": "Simulator proof only; physical authentication, locked-device storage and actual messenger sharing deferred."
+}

@@ -1,0 +1,491 @@
+[{
+  "timezoneName" : "",
+  "messageType" : "Fault",
+  "eventType" : "logEvent",
+  "source" : null,
+  "launchPersonaName" : "",
+  "formatString" : "Invalid frame dimension (negative or non-finite).",
+  "userID" : 501,
+  "activityIdentifier" : 8860675,
+  "subsystem" : "com.apple.runtime-issues",
+  "category" : "SwiftUI",
+  "personaType" : -1,
+  "threadID" : 2082458,
+  "launchPersonaType" : -1,
+  "senderImageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23",
+  "launchPersonaID" : 4294967295,
+  "backtrace" : {
+    "frames" : [
+      {
+        "imageOffset" : 9053084,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 9043420,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 12065900,
+        "imageUUID" : "480EC830-2694-3017-BEA4-230C8818DDED"
+      },
+      {
+        "imageOffset" : 4606312,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 4604856,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 4606492,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 5911060,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 5910176,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 3053356,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 49460,
+        "imageUUID" : "2B62913E-C889-35F4-98D9-FAC049B8284A"
+      },
+      {
+        "imageOffset" : 51236,
+        "imageUUID" : "2B62913E-C889-35F4-98D9-FAC049B8284A"
+      },
+      {
+        "imageOffset" : 82064,
+        "imageUUID" : "2B62913E-C889-35F4-98D9-FAC049B8284A"
+      },
+      {
+        "imageOffset" : 179672,
+        "imageUUID" : "2B62913E-C889-35F4-98D9-FAC049B8284A"
+      },
+      {
+        "imageOffset" : 1843268,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 2021636,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 49460,
+        "imageUUID" : "2B62913E-C889-35F4-98D9-FAC049B8284A"
+      },
+      {
+        "imageOffset" : 51236,
+        "imageUUID" : "2B62913E-C889-35F4-98D9-FAC049B8284A"
+      },
+      {
+        "imageOffset" : 79896,
+        "imageUUID" : "2B62913E-C889-35F4-98D9-FAC049B8284A"
+      },
+      {
+        "imageOffset" : 180460,
+        "imageUUID" : "2B62913E-C889-35F4-98D9-FAC049B8284A"
+      },
+      {
+        "imageOffset" : 13212540,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 13170708,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 13170976,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 13164352,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 21735432,
+        "imageUUID" : "E9CBEBE9-BFEE-3385-AF52-D32C606E46BE"
+      },
+      {
+        "imageOffset" : 14700840,
+        "imageUUID" : "480EC830-2694-3017-BEA4-230C8818DDED"
+      },
+      {
+        "imageOffset" : 14700928,
+        "imageUUID" : "480EC830-2694-3017-BEA4-230C8818DDED"
+      },
+      {
+        "imageOffset" : 18611364,
+        "imageUUID" : "E9CBEBE9-BFEE-3385-AF52-D32C606E46BE"
+      },
+      {
+        "imageOffset" : 12064988,
+        "imageUUID" : "480EC830-2694-3017-BEA4-230C8818DDED"
+      },
+      {
+        "imageOffset" : 455976,
+        "imageUUID" : "E9CBEBE9-BFEE-3385-AF52-D32C606E46BE"
+      },
+      {
+        "imageOffset" : 10657260,
+        "imageUUID" : "E9CBEBE9-BFEE-3385-AF52-D32C606E46BE"
+      },
+      {
+        "imageOffset" : 6557216,
+        "imageUUID" : "E9CBEBE9-BFEE-3385-AF52-D32C606E46BE"
+      },
+      {
+        "imageOffset" : 6551156,
+        "imageUUID" : "E9CBEBE9-BFEE-3385-AF52-D32C606E46BE"
+      },
+      {
+        "imageOffset" : 6553612,
+        "imageUUID" : "E9CBEBE9-BFEE-3385-AF52-D32C606E46BE"
+      },
+      {
+        "imageOffset" : 18229352,
+        "imageUUID" : "E9CBEBE9-BFEE-3385-AF52-D32C606E46BE"
+      },
+      {
+        "imageOffset" : 6553436,
+        "imageUUID" : "E9CBEBE9-BFEE-3385-AF52-D32C606E46BE"
+      },
+      {
+        "imageOffset" : 6549572,
+        "imageUUID" : "E9CBEBE9-BFEE-3385-AF52-D32C606E46BE"
+      },
+      {
+        "imageOffset" : 18229352,
+        "imageUUID" : "E9CBEBE9-BFEE-3385-AF52-D32C606E46BE"
+      },
+      {
+        "imageOffset" : 6549360,
+        "imageUUID" : "E9CBEBE9-BFEE-3385-AF52-D32C606E46BE"
+      },
+      {
+        "imageOffset" : 97676,
+        "imageUUID" : "93342EF4-EB31-31A0-AC66-5CB93CF2E67F"
+      },
+      {
+        "imageOffset" : 6554820,
+        "imageUUID" : "E9CBEBE9-BFEE-3385-AF52-D32C606E46BE"
+      },
+      {
+        "imageOffset" : 6554900,
+        "imageUUID" : "E9CBEBE9-BFEE-3385-AF52-D32C606E46BE"
+      },
+      {
+        "imageOffset" : 6541856,
+        "imageUUID" : "E9CBEBE9-BFEE-3385-AF52-D32C606E46BE"
+      },
+      {
+        "imageOffset" : 11243920,
+        "imageUUID" : "E9CBEBE9-BFEE-3385-AF52-D32C606E46BE"
+      },
+      {
+        "imageOffset" : 114616,
+        "imageUUID" : "A0EA2486-B842-3BA5-AEDF-210E821D01F7"
+      },
+      {
+        "imageOffset" : 24696,
+        "imageUUID" : "A0EA2486-B842-3BA5-AEDF-210E821D01F7"
+      },
+      {
+        "imageOffset" : 102496,
+        "imageUUID" : "A0EA2486-B842-3BA5-AEDF-210E821D01F7"
+      },
+      {
+        "imageOffset" : 68660,
+        "imageUUID" : "A0EA2486-B842-3BA5-AEDF-210E821D01F7"
+      },
+      {
+        "imageOffset" : 68000,
+        "imageUUID" : "A0EA2486-B842-3BA5-AEDF-210E821D01F7"
+      },
+      {
+        "imageOffset" : 631524,
+        "imageUUID" : "D2C8AA56-482C-35EA-B4D3-54C2B5F58ADC"
+      },
+      {
+        "imageOffset" : 627964,
+        "imageUUID" : "D2C8AA56-482C-35EA-B4D3-54C2B5F58ADC"
+      },
+      {
+        "imageOffset" : 606272,
+        "imageUUID" : "D2C8AA56-482C-35EA-B4D3-54C2B5F58ADC"
+      },
+      {
+        "imageOffset" : 10668,
+        "imageUUID" : "B5C0C276-A8C5-3E18-895F-2E4DBDA804A8"
+      },
+      {
+        "imageOffset" : 26439216,
+        "imageUUID" : "E9CBEBE9-BFEE-3385-AF52-D32C606E46BE"
+      },
+      {
+        "imageOffset" : 8460552,
+        "imageUUID" : "480EC830-2694-3017-BEA4-230C8818DDED"
+      },
+      {
+        "imageOffset" : 8460164,
+        "imageUUID" : "480EC830-2694-3017-BEA4-230C8818DDED"
+      },
+      {
+        "imageOffset" : 5830480,
+        "imageUUID" : "480EC830-2694-3017-BEA4-230C8818DDED"
+      },
+      {
+        "imageOffset" : 5622264,
+        "imageUUID" : "C7A55008-5293-37DA-975F-BBED61CB5812"
+      },
+      {
+        "imageOffset" : 5658396,
+        "imageUUID" : "C7A55008-5293-37DA-975F-BBED61CB5812"
+      },
+      {
+        "imageOffset" : 0,
+        "imageUUID" : "00000000-0000-0000-0000-000000000000"
+      }
+    ]
+  },
+  "bootUUID" : "70EA1FDC-146C-4AE7-8F70-7C1D2EE85A85",
+  "processImagePath" : "\/Users\/posix4e\/Library\/Developer\/CoreSimulator\/Devices\/757850D5-A6B8-4272-943E-67BD1DD3860A\/data\/Containers\/Bundle\/Application\/A97D90AF-69B7-4D4A-A5DB-E84E41F3FC6D\/WinnowApp.app\/WinnowApp",
+  "senderImagePath" : "\/System\/Library\/Frameworks\/SwiftUICore.framework\/SwiftUICore",
+  "personaID" : 4294967295,
+  "timestamp" : "2026-09-28 10:03:33.103983-0400",
+  "machTimestamp" : 2255712012100,
+  "personaName" : "",
+  "eventMessage" : "Invalid frame dimension (negative or non-finite).",
+  "processImageUUID" : "2452F605-356B-32E0-8033-3C4FE97E194F",
+  "traceID" : 551028361527628036,
+  "processID" : 26549,
+  "senderProgramCounter" : 9053084,
+  "parentActivityIdentifier" : 0
+},{
+  "timezoneName" : "",
+  "messageType" : "Fault",
+  "eventType" : "logEvent",
+  "source" : null,
+  "launchPersonaName" : "",
+  "formatString" : "Invalid frame dimension (negative or non-finite).",
+  "userID" : 501,
+  "activityIdentifier" : 8867577,
+  "subsystem" : "com.apple.runtime-issues",
+  "category" : "SwiftUI",
+  "personaType" : -1,
+  "threadID" : 2082458,
+  "launchPersonaType" : -1,
+  "senderImageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23",
+  "launchPersonaID" : 4294967295,
+  "backtrace" : {
+    "frames" : [
+      {
+        "imageOffset" : 9053084,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 9043420,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 12065900,
+        "imageUUID" : "480EC830-2694-3017-BEA4-230C8818DDED"
+      },
+      {
+        "imageOffset" : 4606312,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 4604856,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 4606492,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 5911060,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 5910176,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 3053356,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 49460,
+        "imageUUID" : "2B62913E-C889-35F4-98D9-FAC049B8284A"
+      },
+      {
+        "imageOffset" : 51236,
+        "imageUUID" : "2B62913E-C889-35F4-98D9-FAC049B8284A"
+      },
+      {
+        "imageOffset" : 82064,
+        "imageUUID" : "2B62913E-C889-35F4-98D9-FAC049B8284A"
+      },
+      {
+        "imageOffset" : 179672,
+        "imageUUID" : "2B62913E-C889-35F4-98D9-FAC049B8284A"
+      },
+      {
+        "imageOffset" : 10856040,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 3053356,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 49460,
+        "imageUUID" : "2B62913E-C889-35F4-98D9-FAC049B8284A"
+      },
+      {
+        "imageOffset" : 51236,
+        "imageUUID" : "2B62913E-C889-35F4-98D9-FAC049B8284A"
+      },
+      {
+        "imageOffset" : 82064,
+        "imageUUID" : "2B62913E-C889-35F4-98D9-FAC049B8284A"
+      },
+      {
+        "imageOffset" : 179672,
+        "imageUUID" : "2B62913E-C889-35F4-98D9-FAC049B8284A"
+      },
+      {
+        "imageOffset" : 1833944,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 1829488,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 2022456,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 49460,
+        "imageUUID" : "2B62913E-C889-35F4-98D9-FAC049B8284A"
+      },
+      {
+        "imageOffset" : 110936,
+        "imageUUID" : "2B62913E-C889-35F4-98D9-FAC049B8284A"
+      },
+      {
+        "imageOffset" : 8498248,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 13190656,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 13167872,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 13161820,
+        "imageUUID" : "F15F494F-B1FF-392B-B682-B2F2DD366E23"
+      },
+      {
+        "imageOffset" : 21731072,
+        "imageUUID" : "E9CBEBE9-BFEE-3385-AF52-D32C606E46BE"
+      },
+      {
+        "imageOffset" : 21698248,
+        "imageUUID" : "E9CBEBE9-BFEE-3385-AF52-D32C606E46BE"
+      },
+      {
+        "imageOffset" : 5792,
+        "imageUUID" : "A0EA2486-B842-3BA5-AEDF-210E821D01F7"
+      },
+      {
+        "imageOffset" : 114616,
+        "imageUUID" : "A0EA2486-B842-3BA5-AEDF-210E821D01F7"
+      },
+      {
+        "imageOffset" : 231568,
+        "imageUUID" : "A0EA2486-B842-3BA5-AEDF-210E821D01F7"
+      },
+      {
+        "imageOffset" : 69188,
+        "imageUUID" : "A0EA2486-B842-3BA5-AEDF-210E821D01F7"
+      },
+      {
+        "imageOffset" : 68000,
+        "imageUUID" : "A0EA2486-B842-3BA5-AEDF-210E821D01F7"
+      },
+      {
+        "imageOffset" : 631524,
+        "imageUUID" : "D2C8AA56-482C-35EA-B4D3-54C2B5F58ADC"
+      },
+      {
+        "imageOffset" : 627964,
+        "imageUUID" : "D2C8AA56-482C-35EA-B4D3-54C2B5F58ADC"
+      },
+      {
+        "imageOffset" : 606272,
+        "imageUUID" : "D2C8AA56-482C-35EA-B4D3-54C2B5F58ADC"
+      },
+      {
+        "imageOffset" : 10668,
+        "imageUUID" : "B5C0C276-A8C5-3E18-895F-2E4DBDA804A8"
+      },
+      {
+        "imageOffset" : 26439216,
+        "imageUUID" : "E9CBEBE9-BFEE-3385-AF52-D32C606E46BE"
+      },
+      {
+        "imageOffset" : 8460552,
+        "imageUUID" : "480EC830-2694-3017-BEA4-230C8818DDED"
+      },
+      {
+        "imageOffset" : 8460164,
+        "imageUUID" : "480EC830-2694-3017-BEA4-230C8818DDED"
+      },
+      {
+        "imageOffset" : 5830480,
+        "imageUUID" : "480EC830-2694-3017-BEA4-230C8818DDED"
+      },
+      {
+        "imageOffset" : 5622264,
+        "imageUUID" : "C7A55008-5293-37DA-975F-BBED61CB5812"
+      },
+      {
+        "imageOffset" : 5658396,
+        "imageUUID" : "C7A55008-5293-37DA-975F-BBED61CB5812"
+      },
+      {
+        "imageOffset" : 0,
+        "imageUUID" : "00000000-0000-0000-0000-000000000000"
+      },
+      {
+        "imageOffset" : 0,
+        "imageUUID" : "00000000-0000-0000-0000-000000000000"
+      }
+    ]
+  },
+  "bootUUID" : "70EA1FDC-146C-4AE7-8F70-7C1D2EE85A85",
+  "processImagePath" : "\/Users\/posix4e\/Library\/Developer\/CoreSimulator\/Devices\/757850D5-A6B8-4272-943E-67BD1DD3860A\/data\/Containers\/Bundle\/Application\/A97D90AF-69B7-4D4A-A5DB-E84E41F3FC6D\/WinnowApp.app\/WinnowApp",
+  "senderImagePath" : "\/System\/Library\/Frameworks\/SwiftUICore.framework\/SwiftUICore",
+  "personaID" : 4294967295,
+  "timestamp" : "2026-09-28 10:13:15.072278-0400",
+  "machTimestamp" : 2269679251194,
+  "personaName" : "",
+  "eventMessage" : "Invalid frame dimension (negative or non-finite).",
+  "processImageUUID" : "2452F605-356B-32E0-8033-3C4FE97E194F",
+  "traceID" : 551028361527628036,
+  "processID" : 26549,
+  "senderProgramCounter" : 9053084,
+  "parentActivityIdentifier" : 0
+}]

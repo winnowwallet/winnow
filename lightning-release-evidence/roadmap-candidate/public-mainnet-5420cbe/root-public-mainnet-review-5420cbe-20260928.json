@@ -1,0 +1,74 @@
+{
+  "reviewed_at": "2026-09-28T14:19:49.273940+00:00",
+  "source": "5420cbea1de9b5cff26e22c09d76d3392c9556aa",
+  "source_dirty": false,
+  "result": "passed",
+  "root_review": {
+    "frozen_inventory_entries_independently_hashed": 78,
+    "frozen_hash_mismatches": [],
+    "movie_bytes": 18917698,
+    "movie_sha256": "e57e3fc3ca81864674278f0bca45294112d409fa7851284f68d1ca759c562b5a",
+    "original_pngs_visually_reviewed": [
+      "screenshots/live-mainnet-provider-options.png",
+      "screenshots/live-mainnet-unpaid-quote.png",
+      "screenshots/live-mainnet-synced.png"
+    ],
+    "visual_findings": [
+      "Payment500sats distinguished from provider minimum100000sats.",
+      "Fee approval fully visible with6750sat label; no approval tapped.",
+      "Simple wallet shows0sats and Up to date."
+    ],
+    "committed_binding_inputs": {
+      "project.yml": "5847df017a07e1d8b291cbd02d776d3d83b200ddfe3c84d232ecaee5ffa9b6db",
+      "Package.swift": "7fac92704aa7b03ff726f6fe10e45fbe20a8f690e6b034852ee1e31f57135f17",
+      "Package.resolved": "8cd7fd20f40e99d1c1ec538942986a9ca53a4bbe0e687e65d1d47f0a15cd2e69"
+    },
+    "generated_binding_inputs": {
+      "WinnowApp.xcodeproj/project.pbxproj": {
+        "sha256": "8cf67bdd25c4f7961dfcc43e05bb6392fd6351e6bf8274b9a510cd491506dc77",
+        "current_file_matches": true,
+        "in_git_commit": false
+      }
+    }
+  },
+  "independent_agent_audit": {
+    "agent": "/root/anchors",
+    "source_blobs": 201,
+    "test_tool_blobs": 245,
+    "research_product_files": 4,
+    "mismatches": []
+  },
+  "runtime": {
+    "name": "iPhone 17 \u2014 Winnow iOS27",
+    "device_type": "com.apple.CoreSimulator.SimDeviceType.iPhone-17",
+    "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+  },
+  "xcode": "Xcode 27.0\nBuild version 27A266a",
+  "content_size": "large",
+  "public_peers": 3,
+  "provider_setup_enabled_seconds": 608.4005990028381,
+  "up_to_date_observed_seconds": 621.3465030193329,
+  "scan": {
+    "start_height": 959616,
+    "tip_height": 969005,
+    "blocks_scanned": 9389,
+    "creation_observed_no_peers": true,
+    "early_sync_timeout_recovered": true
+  },
+  "financial_actions": "none",
+  "payable_invoice_exposed": false,
+  "approval_tapped": false,
+  "warning_scope": {
+    "xctest_distinct_runtime_issues": 1,
+    "unified_log_records": 2,
+    "message": "Invalid frame dimension (negative or non-finite).",
+    "cause": "unproven; retained original records; no app layout frame identified"
+  },
+  "limitations": [
+    "Unfunded simulator diagnostic only; no funded mainnet Lightning proof.",
+    "Physical authentication, locked-device storage and actual messenger sharing remain deferred.",
+    "iPad/maximum-text/fullCI/TestFlight remain pending.",
+    "Generated pbxproj is hashed locally but is not a tracked git blob."
+  ],
+  "native_proof_path": "/Users/posix4e/Documents/Codex/2026-09-24/i-x20/outputs/winnow-lightning/native-head5420cbe-20260928/live-mainnet"
+}

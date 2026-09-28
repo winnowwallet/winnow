@@ -1,0 +1,13 @@
+{
+  "source": "5420cbea1de9b5cff26e22c09d76d3392c9556aa",
+  "source_dirty": false,
+  "bundle": "com.btcswift.lightning",
+  "files": {
+    "ResearchDebug-iphonesimulator/WinnowApp.app/WinnowApp": "6ab10a340fdd46235ba2129e520d5f51a0ff1cdafc0a510cdbd7c9c06116b9b3",
+    "ResearchDebug-iphonesimulator/WinnowApp.app/__preview.dylib": "d0f11ea426ca21351f2b5d6b263768881f27b587d4229b9575b2e527034a70b1",
+    "ResearchDebug-iphonesimulator/WinnowApp.app/WinnowApp.debug.dylib": "094d1eb2467314ea6d02eb7ebeaeb432aa39f05108c1ef2a1ea143fa55771fba",
+    "ResearchDebug-iphonesimulator/WinnowAppUITests-Runner.app/PlugIns/WinnowAppUITests.xctest/WinnowAppUITests": "83a9ec973a5bbfcba222c1dc0dc4afd86a989cf6f4c718ef2ddcf1c161ac1c7e"
+  },
+  "test_specification": "/tmp/winnow-bolt11-final-derived/Build/Products/WinnowLightning_iphonesimulator27.0-arm64.xctestrun",
+  "temporary_diagnostic_source_methods_absent": true
+}

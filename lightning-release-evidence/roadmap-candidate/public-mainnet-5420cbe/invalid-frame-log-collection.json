@@ -1,0 +1,22 @@
+{
+  "source": "5420cbea1de9b5cff26e22c09d76d3392c9556aa",
+  "exit_code": 0,
+  "stderr": "getpwuid_r did not find a match for uid 501\n",
+  "command": [
+    "xcrun",
+    "simctl",
+    "spawn",
+    "757850D5-A6B8-4272-943E-67BD1DD3860A",
+    "log",
+    "show",
+    "--start",
+    "2026-09-28 10:02:34",
+    "--end",
+    "2026-09-28 10:13:30",
+    "--style",
+    "json",
+    "--predicate",
+    "process == \"WinnowApp\" AND eventMessage == \"Invalid frame dimension (negative or non-finite).\""
+  ],
+  "scope": "Exact runtime warning records in source-run time interval; no claim of app/platform causality"
+}

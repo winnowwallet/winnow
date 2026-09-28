@@ -1,0 +1,17 @@
+{
+  "source": "5420cbea1de9b5cff26e22c09d76d3392c9556aa",
+  "dirty": false,
+  "simulator": "757850D5-A6B8-4272-943E-67BD1DD3860A",
+  "bundle": "com.btcswift.lightning",
+  "executable_sha256": "6ab10a340fdd46235ba2129e520d5f51a0ff1cdafc0a510cdbd7c9c06116b9b3",
+  "xcode": "Xcode 27.0\nBuild version 27A266a",
+  "device": {
+    "name": "iPhone 17 \u2014 Winnow iOS27",
+    "device_type": "com.apple.CoreSimulator.SimDeviceType.iPhone-17",
+    "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
+  },
+  "content_size": "large",
+  "scope": "Explicit public mainnet diagnostic: public peer discovery, verified sync and unpaid LSPS1 quote; no fee approval, channel funding or payment. Fixed debug seed must never be funded.",
+  "test": "LightningAppUITests.testLiveMainnetSyncAndUnpaidReceivingQuote",
+  "runner_live_mainnet": "1"
+}
