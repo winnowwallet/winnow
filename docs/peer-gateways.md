@@ -48,7 +48,9 @@ Peer-list downloads and explorer requests use direct HTTP when clearnet is
 selected and SOCKS through Tor otherwise. I2P-only routing fetches the signed
 census from its I2P mirror through the I2P gateway and refuses every public
 host, so explorer requests stay off. The census signature is checked as usual;
-the mirror is not trusted.
+the mirror is not trusted. The mirror runs on the I2P gateway, copies the
+signed files from the public census every 30 minutes, and serves them at
+`CensusCatalog.i2pMirror`.
 Corrupt saved routing settings keep networking offline until replaced.
 
 ## Validation
@@ -62,13 +64,14 @@ Advanced controls and relaunch persistence with a disposable wallet.
 To opt into a read-only check of the two named gateways on the connected tailnet:
 
 ```sh
-WINNOW_LIVE_GATEWAYS=1 swift test --filter TailnetGatewayDiscoveryTests.deployedMagicDNSGateways
+scripts/check-live-gateways [peers.json]
 ```
 
-Set `WINNOW_LIVE_CENSUS` to a current local `peers.json` file with its
-`peers.json.sig` beside it to additionally verify the publisher signature and
-perform Bitcoin handshakes through both discovered gateways. The check sends
-no wallet addresses or transactions.
+It discovers both gateways, then fetches the census from its I2P mirror through
+the I2P gateway and verifies the publisher signature. Given a current local
+`peers.json` with its `peers.json.sig` beside it, it also performs Bitcoin
+handshakes through both gateways. The check sends no wallet addresses or
+transactions. CI has no tailnet, so this check is manual.
 
 A successful greeting is not proof of Tor/I2P reachability. A physical iPhone
 with the Tailscale VPN enabled remains part of device acceptance testing.

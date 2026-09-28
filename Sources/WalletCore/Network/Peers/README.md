@@ -11,6 +11,9 @@ here so discovery and admission follow one policy.
 The pool tries manual peers, previously connected peers, a fresh signed census,
 and DNS seeds. Mainnet automatically downloads the census when its cache is
 missing or expired. Advanced → Refresh peer list remains available.
+Under I2P-only routing the census comes from its I2P mirror
+(`CensusCatalog.i2pMirror`) through the I2P gateway; the signature check is
+unchanged.
 There is no bundled list. Fresh installs start DNS discovery independently of
 the automatic download. Invalid or expired census caches do not prevent DNS
 bootstrap. DNS uses DoH first, with system DNS when DoH yields no usable

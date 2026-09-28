@@ -29,3 +29,8 @@ through MagicDNS or accept manual gateway settings; see
 Tor/I2P routers. PeerPool applies a network allowlist before selecting a proxy. Loopback coverage
 in [SOCKS tests](../../../../Tests/WalletCoreTests/Network/SocksProxyTests.swift)
 checks routing, refusal, malformed replies, timeout, cancellation, and direct TCP.
+
+`RoutedHTTPClient(gateways:)` takes the same routing decision for HTTP: direct
+with clearnet, the Tor gateway without it, and for I2P alone the I2P gateway
+restricted to `.i2p` hosts, so a public URL is refused before any request.
+[Routing tests](../../../../Tests/WalletCoreTests/Network/RoutingTests.swift) cover the refusal.
