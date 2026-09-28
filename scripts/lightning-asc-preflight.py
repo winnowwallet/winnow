@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 
 APP = '6815392502'
 ROOT = Path(__file__).resolve().parent.parent
@@ -24,6 +25,39 @@ def get(path, optional=False):
         raise RuntimeError(f'App Store Connect returned HTTP {error.code}') from None
 
 
+def all_build_numbers():
+    path = '/builds?filter[app]=' + APP + '&limit=200'
+    rows, visited = [], set()
+    while path:
+        if path in visited:
+            raise RuntimeError('Apple build pagination repeated')
+        visited.add(path)
+        page = get(path)
+        rows.extend(page['data'])
+        link = page.get('links', {}).get('next')
+        path = next_build_page(link)
+    return [int(row['attributes']['version']) for row in rows if row['attributes']['version'].isdigit()]
+
+
+def next_build_page(link):
+    if link is None:
+        return None
+    base = 'https://api.appstoreconnect.apple.com/v1'
+    if not link.startswith(base + '/builds?'):
+        raise RuntimeError('Unexpected Apple build pagination URL')
+    return link[len(base):]
+
+
+def candidate_state():
+    candidate = json.loads((ROOT / 'lightning-release-candidate.json').read_text())
+    version, build = candidate['version'], candidate['build']
+    matching = get('/builds?filter[app]=' + APP + '&filter[version]=' + build +
+                   '&filter[preReleaseVersion.version]=' + version + '&limit=2')['data']
+    numbers = all_build_numbers()
+    return {'version': version, 'build': build, 'matching_build_ids': [row['id'] for row in matching],
+            'all_builds_read': True, 'highest_build_number': max(numbers, default=0)}
+
+
 app = get('/apps/' + APP)['data']
 assert app['attributes']['bundleId'] == 'com.btcswift.lightning'
 builds = get('/builds?filter[app]=' + APP + '&sort=-uploadedDate&limit=30&include=preReleaseVersion')
@@ -33,6 +67,7 @@ declarations = get('/appEncryptionDeclarations?filter[app]=' + APP + '&limit=200
 groups = get('/apps/' + APP + '/betaGroups?limit=200')
 store_versions = get('/apps/' + APP + '/appStoreVersions?limit=200')
 report = {'app': {'id': APP, 'bundle': app['attributes']['bundleId'], 'name': app['attributes']['name']},
+    'observed_at_utc': datetime.now(timezone.utc).isoformat(), 'candidate': candidate_state(),
     'builds': [], 'declarations_http_status': declarations.get('http_status', 200), 'declarations': [], 'groups': [],
     'app_store_versions': [{'version': row['attributes'].get('versionString'),
                             'state': row['attributes'].get('appStoreState')}

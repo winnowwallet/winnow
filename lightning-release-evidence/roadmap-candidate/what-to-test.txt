@@ -1,0 +1,9 @@
+BOLT11: In either wallet mode, open Send, paste or scan a fresh Lightning invoice, review amount, route fee, maximum fee and expiry. Cancel once and verify nothing was sent. Approve a small payment, compare both wallets' settled state, and reopen Winnow to check restored history.
+
+Standard BOLT12: Pay an ordinary lno offer or a DNSSEC-authenticated BIP353 name. Review the returned invoice and amount before approval. Reusable ordinary receiving offers are separate from async/offline offers. Automated direct/blinded send-and-receive interoperability uses stock peers on regtest; funded mainnet validation remains pending.
+
+Receiving: Choose Lightning in Receive, compare a provider's receiving-capacity setup fee, and complete setup from another wallet before requesting an invoice. LNServer uses its labeled website setup. Channel capacity is separate from wallet balance. Keep Winnow open while receiving an ordinary invoice.
+
+Recovery: Export the encrypted Lightning recovery file and retain its separate 24-word phrase safely. Imported Lightning backups are recovery-only and cannot resume ordinary spending. Review channel monitoring/offline warnings and pending fee-bump status. Background checks depend on iOS; they cannot run after force-quit or when the phone is off.
+
+Physical checks remain pending: camera scan, successful and canceled device-owner authentication, exact Share/Copy bytes, and protected storage while locked. Mainnet uses real bitcoin; start with a small amount. No funded mainnet proof is claimed by regtest runs.

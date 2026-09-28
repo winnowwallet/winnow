@@ -1,7 +1,9 @@
 """Submit source-grounded encryption facts and enable only the existing internal beta."""
 import json
+import hashlib
 import os
 from pathlib import Path
+import runpy
 import subprocess
 import urllib.error
 import urllib.request
@@ -11,13 +13,22 @@ if not __debug__:
 ROOT = Path(__file__).resolve().parent.parent
 APP = '6815392502'
 BUNDLE = 'com.btcswift.lightning'
-SOURCE = '1f1bfdd956c84765c444ed6b0667806b20626c55'
-receipt = json.loads((ROOT / 'lightning-release-evidence/upload-receipt.json').read_text())
+bindings = runpy.run_path(str(ROOT / 'scripts/lightning-release-candidate.py'))
+candidate = bindings['load_candidate'](ROOT)
+evidence_path = bindings['validate_evidence'](ROOT, candidate)
+bindings['verify_current_ci'](candidate)
+SOURCE, VERSION, BUILD = candidate['source'], candidate['version'], candidate['build']
+EVIDENCE = evidence_path.parent
+receipt = json.loads((EVIDENCE / 'upload-receipt.json').read_text())
 assert receipt['source'] == SOURCE and receipt['bundle'] == BUNDLE
-assert receipt['version'] == '0.3.0' and receipt['build'] == '8'
+assert receipt['version'] == VERSION and receipt['build'] == BUILD
+assert receipt['ci_run'] == candidate['ci_run']
+assert receipt['release_tooling_source'] == candidate['release_tooling_source']
+assert receipt['evidence_sha256'] == hashlib.sha256(evidence_path.read_bytes()).hexdigest(), 'evidence changed since upload'
 assert receipt['uploaded'] is True and receipt['processed'] is True
 build_id = receipt['app_store_connect_build']
-draft = json.loads((ROOT / 'lightning-release-evidence/encryption-questionnaire.json').read_text())
+draft = json.loads((EVIDENCE / 'encryption-questionnaire.json').read_text())
+bindings['validate_questionnaire_review'](candidate, draft)
 assert draft['source'] == SOURCE and draft['bundle'] == BUNDLE
 assert draft['version'] == receipt['version'] and draft['build'] == receipt['build']
 assert draft['distribution_scope'] == 'International internal TestFlight beta; no public App Store release requested'
@@ -45,7 +56,7 @@ def asc(method, endpoint, data=None):
 
 
 assert asc('GET', '/apps/' + APP)['data']['attributes']['bundleId'] == BUNDLE
-builds = asc('GET', '/builds?filter[app]=' + APP + '&filter[version]=8&filter[preReleaseVersion.version]=0.3.0&limit=2')['data']
+builds = asc('GET', '/builds?filter[app]=' + APP + '&filter[version]=' + BUILD + '&filter[preReleaseVersion.version]=' + VERSION + '&limit=2')['data']
 assert len(builds) == 1 and builds[0]['id'] == build_id and builds[0]['attributes']['processingState'] == 'VALID'
 # This is an internal beta, with no public App Store rollout. Do not infer the
 # French-store answer if the app has any submitted or released store version.
@@ -104,12 +115,12 @@ if nonexempt:
         {'data': {'type': 'appEncryptionDeclarations', 'id': declaration['id']}})
     assert asc('GET', '/builds/' + build_id + '/appEncryptionDeclaration')['data']['id'] == declaration['id']
 assert asc('GET', '/builds/' + build_id)['data']['attributes']['usesNonExemptEncryption'] is nonexempt
-environment = dict(os.environ, TESTFLIGHT_BUNDLE_ID=BUNDLE, TESTFLIGHT_MARKETING_VERSION='0.3.0',
-                   TESTFLIGHT_BUILD_NUMBER='8', TESTFLIGHT_BUILD_ID=build_id)
-environment['TESTFLIGHT_WHATS_NEW_FILE'] = str(ROOT / 'lightning-release-evidence/what-to-test.txt')
+environment = dict(os.environ, TESTFLIGHT_BUNDLE_ID=BUNDLE, TESTFLIGHT_MARKETING_VERSION=VERSION,
+                   TESTFLIGHT_BUILD_NUMBER=BUILD, TESTFLIGHT_BUILD_ID=build_id)
+environment['TESTFLIGHT_WHATS_NEW_FILE'] = str(EVIDENCE / 'what-to-test.txt')
 subprocess.run([str(ROOT.parent / 'tooling/scripts/testflight.sh'), 'notes'], env=environment, check=True)
 subprocess.run([str(ROOT.parent / 'tooling/scripts/testflight.sh'), 'internal'], env=environment, check=True)
 result.update(available_to_internal_testers=True, internal_group='PQLN Regtest Internal',
               apple_encryption_determination={'exempt_from_documentation': exempt, 'declaration_id': declaration['id'] if declaration else None, 'state': state})
 destination.write_text(json.dumps(result, indent=2) + '\n')
-print('Verified existing internal group can install version 0.3.0 build 8.')
+print('Verified existing internal group can install version ' + VERSION + ' build ' + BUILD + '.')

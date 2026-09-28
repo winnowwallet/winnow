@@ -1,0 +1,24 @@
+{
+  "app_id": "6815392502",
+  "bundle": "com.btcswift.lightning",
+  "source": "7ceba20bc3d214cfaff6a53fd5f955be5740bc14",
+  "version": "0.4.0",
+  "build": "9",
+  "distribution_scope": "International internal TestFlight beta; no public App Store release requested",
+  "technical_answers": {
+    "uses_encryption": true,
+    "containsProprietaryCryptography": false,
+    "containsThirdPartyCryptography": true
+  },
+  "app_description": "Internal Swift Bitcoin/Lightning wallet: published AES-GCM, ChaCha20-Poly1305/ChaCha20, HMAC/HKDF, secp256k1 signatures/ECDH via Swift/libsecp256k1/CryptoKit; DNSSEC RSA/ECDSA/Ed25519 verification via OS APIs. International TestFlight only; no public App Store release.",
+  "french_store_answer": {
+    "value": false,
+    "basis": "Candidate international internal TestFlight only. Before submitting facts, recheck that every current public-store version is PREPARE_FOR_SUBMISSION; otherwise stop for a new distribution review. No assumptions about testers' locations and no availability changes."
+  },
+  "facts_review": {
+    "source": "7ceba20bc3d214cfaff6a53fd5f955be5740bc14",
+    "reviewed_by": null,
+    "status": "pending"
+  },
+  "apple_review_status": "Candidate facts pending final-source review. No approved declaration or exemption determination claimed."
+}
