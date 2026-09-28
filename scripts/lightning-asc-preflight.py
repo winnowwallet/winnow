@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import runpy
 import subprocess
 import urllib.error
 import urllib.request
@@ -9,6 +10,7 @@ from datetime import datetime, timezone
 
 APP = '6815392502'
 ROOT = Path(__file__).resolve().parent.parent
+read_collection = runpy.run_path(str(ROOT / 'scripts/lightning-release-candidate.py'))['read_apple_collection']
 token = subprocess.check_output(['swift', str(ROOT / 'scripts/asc-jwt.swift'), os.environ['ASC_KEY_PATH'],
     os.environ['ASC_KEY_ID'], os.environ['ASC_ISSUER_ID']], text=True).strip()
 
@@ -64,14 +66,15 @@ builds = get('/builds?filter[app]=' + APP + '&sort=-uploadedDate&limit=30&includ
 versions = {row['id']: row['attributes'].get('version') for row in builds.get('included', [])
             if row['type'] == 'preReleaseVersions'}
 declarations = get('/appEncryptionDeclarations?filter[app]=' + APP + '&limit=200', optional=True)
-groups = get('/apps/' + APP + '/betaGroups?limit=200')
-store_versions = get('/apps/' + APP + '/appStoreVersions?limit=200')
+declarations['data'] = read_collection(get, '/appEncryptionDeclarations?filter[app]=' + APP + '&limit=200', first_page=declarations)
+groups = read_collection(get, '/apps/' + APP + '/betaGroups?limit=200')
+store_versions = read_collection(get, '/apps/' + APP + '/appStoreVersions?limit=200')
 report = {'app': {'id': APP, 'bundle': app['attributes']['bundleId'], 'name': app['attributes']['name']},
     'observed_at_utc': datetime.now(timezone.utc).isoformat(), 'candidate': candidate_state(),
     'builds': [], 'declarations_http_status': declarations.get('http_status', 200), 'declarations': [], 'groups': [],
     'app_store_versions': [{'version': row['attributes'].get('versionString'),
                             'state': row['attributes'].get('appStoreState')}
-                           for row in store_versions['data']]}
+                           for row in store_versions]}
 for row in builds['data']:
     attributes = row['attributes']
     version = row.get('relationships', {}).get('preReleaseVersion', {}).get('data') or {}
@@ -87,7 +90,7 @@ for row in declarations['data']:
     allowed = {'appEncryptionDeclarationState', 'usesEncryption', 'exempt', 'containsProprietaryCryptography',
                'containsThirdPartyCryptography', 'availableOnFrenchStore', 'appDescription', 'createdDate', 'platform'}
     report['declarations'].append({'id': row['id'], **{k: v for k, v in row['attributes'].items() if k in allowed}})
-for row in groups['data']:
+for row in groups:
     attributes = row['attributes']
     testers = get('/betaGroups/' + row['id'] + '/relationships/betaTesters?limit=200')
     report['groups'].append({'id': row['id'], 'name': attributes['name'], 'internal': attributes.get('isInternalGroup'),

@@ -16,6 +16,34 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def read_apple_collection(get, path, *, first_page=None, max_pages=100):
+    """Read one complete Apple collection; reject ambiguous or unbounded paging."""
+    base = 'https://api.appstoreconnect.apple.com/v1'
+    require(path.startswith('/') and not path.startswith('//'), 'Expected relative Apple collection path')
+    collection = path.split('?', 1)[0]
+    rows, visited = [], set()
+    while path:
+        require(path not in visited, 'Apple collection pagination repeated')
+        require(len(visited) < max_pages, 'Apple collection pagination limit exceeded')
+        visited.add(path)
+        page = first_page if first_page is not None else get(path)
+        first_page = None
+        require(isinstance(page.get('data'), list), 'Invalid Apple collection page')
+        rows.extend(page['data'])
+        link = page.get('links', {}).get('next')
+        if link is None:
+            break
+        require(isinstance(link, str) and link.startswith(base + collection + '?'),
+                'Unexpected Apple collection pagination URL')
+        path = link[len(base):]
+    return rows
+
+
+def validate_internal_store_scope(versions):
+    require(all(row['attributes']['appStoreState'] == 'PREPARE_FOR_SUBMISSION' for row in versions),
+            'public store distribution needs a separate availability review')
+
+
 def contained(root, path):
     value = (root / path).resolve()
     require(value.is_relative_to(root.resolve()), 'Candidate path escapes control checkout')

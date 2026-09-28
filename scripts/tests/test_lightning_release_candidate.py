@@ -163,6 +163,56 @@ class CandidateTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'Unexpected Apple'):
             namespace['next_build_page']('https://example.com/v1/builds?cursor=second')
 
+    def test_apple_collection_reads_every_version_before_french_store_answer(self):
+        path = '/apps/6815392502/appStoreVersions?limit=200'
+        second = '/apps/6815392502/appStoreVersions?cursor=second'
+        draft = {'attributes': {'appStoreState': 'PREPARE_FOR_SUBMISSION'}}
+        released = {'attributes': {'appStoreState': 'READY_FOR_SALE'}}
+        pages = {path: {'data': [draft], 'links': {'next': 'https://api.appstoreconnect.apple.com/v1' + second}},
+                 second: {'data': [released], 'links': {'next': None}}}
+        versions = API['read_apple_collection'](pages.__getitem__, path)
+        self.assertEqual(versions, [draft, released])
+        with self.assertRaisesRegex(ValueError, 'public store distribution'):
+            API['validate_internal_store_scope'](versions)
+        API['validate_internal_store_scope']([draft])
+        API['validate_internal_store_scope']([])
+
+    def test_apple_collection_preserves_later_matching_declaration(self):
+        path = '/appEncryptionDeclarations?filter[app]=6815392502&limit=200'
+        second = '/appEncryptionDeclarations?cursor=second'
+        rows = [{'id': 'first', 'attributes': {'containsThirdPartyCryptography': True}},
+                {'id': 'second', 'attributes': {'containsThirdPartyCryptography': True}}]
+        first = {'data': rows[:1], 'links': {'next': 'https://api.appstoreconnect.apple.com/v1' + second}}
+        requested = []
+        def get(page):
+            requested.append(page)
+            self.assertEqual(page, second)
+            return {'data': rows[1:], 'links': {}}
+        self.assertEqual(API['read_apple_collection'](get, path, first_page=first), rows)
+        self.assertEqual(requested, [second])
+
+    def test_apple_collection_rejects_cycles_limits_and_unrelated_urls(self):
+        path = '/apps/6815392502/appStoreVersions?limit=200'
+        base = 'https://api.appstoreconnect.apple.com/v1'
+        with self.assertRaisesRegex(ValueError, 'pagination repeated'):
+            API['read_apple_collection'](lambda _: {'data': [], 'links': {'next': base + path}}, path)
+        for link in ['https://example.com/v1' + path, 'http://api.appstoreconnect.apple.com/v1' + path,
+                     base + '/apps/another/appStoreVersions?cursor=second', '/apps/6815392502/appStoreVersions?cursor=second']:
+            with self.subTest(link=link), self.assertRaisesRegex(ValueError, 'Unexpected Apple'):
+                API['read_apple_collection'](lambda _: {'data': [], 'links': {'next': link}}, path)
+        count = 0
+        def endless(_):
+            nonlocal count
+            count += 1
+            return {'data': [], 'links': {'next': base + '/apps/6815392502/appStoreVersions?cursor=' + str(count)}}
+        with self.assertRaisesRegex(ValueError, 'pagination limit exceeded'):
+            API['read_apple_collection'](endless, path, max_pages=2)
+        self.assertEqual(count, 2)
+
+    def test_apple_collection_rejects_noncollection_data(self):
+        with self.assertRaisesRegex(ValueError, 'Invalid Apple collection page'):
+            API['read_apple_collection'](lambda _: {'data': {'id': 'single-object'}}, '/appEncryptionDeclarations?limit=200')
+
 
 if __name__ == '__main__':
     unittest.main()

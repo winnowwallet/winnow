@@ -60,14 +60,15 @@ builds = asc('GET', '/builds?filter[app]=' + APP + '&filter[version]=' + BUILD +
 assert len(builds) == 1 and builds[0]['id'] == build_id and builds[0]['attributes']['processingState'] == 'VALID'
 # This is an internal beta, with no public App Store rollout. Do not infer the
 # French-store answer if the app has any submitted or released store version.
-versions = asc('GET', '/apps/' + APP + '/appStoreVersions?limit=200')['data']
-assert all(v['attributes']['appStoreState'] == 'PREPARE_FOR_SUBMISSION' for v in versions), 'public store distribution needs a separate availability review'
+collection = lambda path: bindings['read_apple_collection'](lambda page: asc('GET', page), path)
+versions = collection('/apps/' + APP + '/appStoreVersions?limit=200')
+bindings['validate_internal_store_scope'](versions)
 attributes = dict(appDescription=draft['app_description'], availableOnFrenchStore=False,
                   containsProprietaryCryptography=False, containsThirdPartyCryptography=True)
 assert len(attributes['appDescription']) <= 300
 assert draft['french_store_answer']['value'] is False
 assert draft['technical_answers'] == dict(uses_encryption=True, containsProprietaryCryptography=False, containsThirdPartyCryptography=True)
-existing = asc('GET', '/appEncryptionDeclarations?filter[app]=' + APP + '&limit=200')['data']
+existing = collection('/appEncryptionDeclarations?filter[app]=' + APP + '&limit=200')
 matching = [d for d in existing if all(d['attributes'].get(k) == v for k, v in attributes.items())]
 assert len(matching) <= 1, 'ambiguous existing declaration'
 no_document_response = None
