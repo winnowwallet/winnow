@@ -1,6 +1,6 @@
 {
-  "source": "3064377d4c9fa3b1670148832321cc4ed18aac53",
-  "reviewed_at_utc": "2026-09-28T12:37:49.798270+00:00",
+  "source": "7e1177f8aeaf8c33f5977da8439b0ff7adc3d9e5",
+  "reviewed_at_utc": "2026-09-28T13:17:29.148284+00:00",
   "status": "facts-reviewed",
   "reviewed_by": "Codex root, with independent Codex anchors and metrics_backup source reviews",
   "scope": "Technical source algorithms and implementation facts only. Not an export classification, Apple approval, security audit, runtime conformance or physical-device verification.",
@@ -159,13 +159,42 @@
   ],
   "apple_documentation": "https://developer.apple.com/help/app-store-connect/reference/app-information/export-compliance-documentation-for-encryption/",
   "source_binding_review": {
-    "previous_review_source": "7ceba20bc3d214cfaff6a53fd5f955be5740bc14",
-    "verified_at_utc": "2026-09-28T12:37:49.798270+00:00",
-    "verified_by": "Codex control_current; root independently confirmed unchanged Swift Sources, tests, dependencies and project configuration",
-    "method": "git diff --name-only of Sources, Tests, UITests, Package.swift, Package.resolved and project.yml; SHA-256 of every retained technical source-evidence file against the new committed blob",
+    "source": "7e1177f8aeaf8c33f5977da8439b0ff7adc3d9e5",
+    "previous_review_source": "3064377d4c9fa3b1670148832321cc4ed18aac53",
+    "previous_reviewed_at_utc": "2026-09-28T12:37:49.798270+00:00",
+    "verified_at_utc": "2026-09-28T13:17:29.148284+00:00",
+    "verified_by": "Codex control_current; root independently confirmed unchanged app Sources, dependencies and project configuration plus the two test-only changes",
+    "method": "Verify the complete committed diff is exactly the two recorded test files; verify no app Sources/dependency/project/resource changes; SHA-256 all 23 retained technical source-evidence files and all 22 crypto-comparison files against new committed blobs.",
     "source_evidence_files_verified": 23,
+    "crypto_comparison_files_verified": 22,
     "changed_app_or_dependency_paths": [],
-    "scope": "Binding the existing technical facts review to byte-identical app sources at the new host/CI/gallery commit. Earlier native or CI receipts are not relabeled and remain historical.",
-    "previous_reviewed_at_utc": "2026-09-28T02:03:47.647623+00:00"
-  }
+    "changed_test_paths": [
+      {
+        "path": "Tests/WalletCoreTests/Network/FilterSyncTests.swift",
+        "previous_sha256": "dcbb3fbe670ebe47e037ba77bcb59cad6f658bcdcd7c416d2c80d156d635ebe4",
+        "current_sha256": "e9e363f81fd27a3cc870d1a191d4a68b3b7c3a221564b376f12fc117688d67f5",
+        "scope": "Test failure diagnostics only; exact 30-second peer dial timeout and fatal failed-handshake requirement retained."
+      },
+      {
+        "path": "UITests/LightningAppUITests.swift",
+        "previous_sha256": "76fbca9208f53e5199eb90a384ddd1239144cef28e068bb7c9782e12bb0a04b8",
+        "current_sha256": "1d127de23c431c7f944e82d075b033cb64e71924dd999486d21c37482298bc33",
+        "scope": "Read-only public-mainnet quote review scrolls the lazy Form to verify the existing enabled approval button; no approval tap or financial action."
+      }
+    ],
+    "scope": "Bind unchanged production technical facts to the new test-only commit. The previous 7ceba20-to-3064377 binding audit is preserved in source_binding_history; previous native/CI receipts remain historical and are not relabeled."
+  },
+  "source_binding_history": [
+    {
+      "previous_review_source": "7ceba20bc3d214cfaff6a53fd5f955be5740bc14",
+      "verified_at_utc": "2026-09-28T12:37:49.798270+00:00",
+      "verified_by": "Codex control_current; root independently confirmed unchanged Swift Sources, tests, dependencies and project configuration",
+      "method": "git diff --name-only of Sources, Tests, UITests, Package.swift, Package.resolved and project.yml; SHA-256 of every retained technical source-evidence file against the new committed blob",
+      "source_evidence_files_verified": 23,
+      "changed_app_or_dependency_paths": [],
+      "scope": "Binding the existing technical facts review to byte-identical app sources at the new host/CI/gallery commit. Earlier native or CI receipts are not relabeled and remain historical.",
+      "previous_reviewed_at_utc": "2026-09-28T02:03:47.647623+00:00",
+      "source": "3064377d4c9fa3b1670148832321cc4ed18aac53"
+    }
+  ]
 }

@@ -1,5 +1,5 @@
 {
-  "source": "3064377d4c9fa3b1670148832321cc4ed18aac53",
+  "source": "7e1177f8aeaf8c33f5977da8439b0ff7adc3d9e5",
   "ci_run": null,
   "bundle": "com.btcswift.lightning",
   "physical_device": false,
@@ -19,15 +19,15 @@
   "artifacts": [
     {
       "path": "encryption-inventory.md",
-      "sha256": "853f404c32487c84f0c2035be0fc11ad74d8f59f5cf5adf9591c186804795e02"
+      "sha256": "7605cab3498c0cfd410efe7431c3971e27c521507acbc992971c13906c90f0c4"
     },
     {
       "path": "crypto-comparison.json",
-      "sha256": "48967b8093a6270eb60f6b4e974fb38222eaedd6b7711921f14248535408806d"
+      "sha256": "3d09880b61fc25dfe3c76fe46c506da8ac447dce04d561ef0d3e7999d78f9a18"
     },
     {
       "path": "encryption-questionnaire.json",
-      "sha256": "3bf779bc69a25f9b59bf85b045cae684f84063ff32914a14df1ed77a9d812962"
+      "sha256": "dfc97c05f9314156d22f5dbd181ed989e49f50b545118cbab8cb07df9d4103af"
     },
     {
       "path": "what-to-test.txt",
@@ -35,7 +35,7 @@
     },
     {
       "path": "encryption-facts-review.json",
-      "sha256": "1c816d8563dfa0b956f1337d7e8610727a3c7d0c71837f2db27e9f957df8f18f"
+      "sha256": "34ef180cc0f70e0de9d3898d2caa4c33a62dc8025bc1ae1ee03d6df06500953f"
     }
   ],
   "encryption": {
@@ -43,7 +43,7 @@
     "artifact": "encryption-inventory.md"
   },
   "notes": [
-    "Pending exact-source successful CI for 3064377d4c9fa3b1670148832321cc4ed18aac53.",
+    "Pending exact-source successful CI for 7e1177f8aeaf8c33f5977da8439b0ff7adc3d9e5.",
     "Pending current-source iPad and maximum accessibility text recorded journeys; older source receipts are historical.",
     "Physical device checks are explicitly deferred to internal TestFlight and remain pending.",
     "Funded automated evidence uses regtest; funded mainnet remains unverified."

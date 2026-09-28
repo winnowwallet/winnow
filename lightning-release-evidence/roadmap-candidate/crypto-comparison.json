@@ -1,5 +1,5 @@
 {
-  "source": "3064377d4c9fa3b1670148832321cc4ed18aac53",
+  "source": "7e1177f8aeaf8c33f5977da8439b0ff7adc3d9e5",
   "previous_source": "1f1bfdd956c84765c444ed6b0667806b20626c55",
   "observed_implementation_source": "2acfa08bd04ab9883a1e36c2b65d14a49b66e47e",
   "sources_identical_to_observed": true,
@@ -228,7 +228,29 @@
     "Sources/WinnowApp/WalletImportMetadata.swift",
     "Sources/WinnowApp/WinnowApp.swift"
   ],
-  "review_status": "Technical inventory only; exact-head CI/display proof and responsible facts review remain pending",
-  "previous_review_source": "7ceba20bc3d214cfaff6a53fd5f955be5740bc14",
-  "app_tests_dependencies_and_project_unchanged_from_previous_review": true
+  "review_status": "Technical source facts reviewed and SHA-bound; exact-head CI/display proof and Apple determination remain pending.",
+  "previous_review_source": "3064377d4c9fa3b1670148832321cc4ed18aac53",
+  "app_tests_dependencies_and_project_unchanged_from_previous_review": false,
+  "source_binding_history": [
+    {
+      "source": "3064377d4c9fa3b1670148832321cc4ed18aac53",
+      "previous_review_source": "7ceba20bc3d214cfaff6a53fd5f955be5740bc14",
+      "app_tests_dependencies_and_project_unchanged_from_previous_review": true
+    }
+  ],
+  "app_sources_dependencies_and_project_unchanged_from_previous_review": true,
+  "test_changes_from_previous_review": [
+    {
+      "path": "Tests/WalletCoreTests/Network/FilterSyncTests.swift",
+      "previous_sha256": "dcbb3fbe670ebe47e037ba77bcb59cad6f658bcdcd7c416d2c80d156d635ebe4",
+      "current_sha256": "e9e363f81fd27a3cc870d1a191d4a68b3b7c3a221564b376f12fc117688d67f5",
+      "scope": "Test failure diagnostics only; exact 30-second peer dial timeout and fatal failed-handshake requirement retained."
+    },
+    {
+      "path": "UITests/LightningAppUITests.swift",
+      "previous_sha256": "76fbca9208f53e5199eb90a384ddd1239144cef28e068bb7c9782e12bb0a04b8",
+      "current_sha256": "1d127de23c431c7f944e82d075b033cb64e71924dd999486d21c37482298bc33",
+      "scope": "Read-only public-mainnet quote review scrolls the lazy Form to verify the existing enabled approval button; no approval tap or financial action."
+    }
+  ]
 }
