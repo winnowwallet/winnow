@@ -1,6 +1,6 @@
 {
-  "source": "5420cbea1de9b5cff26e22c09d76d3392c9556aa",
-  "ci_run": null,
+  "source": "26e35021b545764a1dcb9358c0d284b869b6844c",
+  "ci_run": 36438491196,
   "bundle": "com.btcswift.lightning",
   "physical_device": false,
   "device_checks_deferred_to_testflight": true,
@@ -19,15 +19,15 @@
   "artifacts": [
     {
       "path": "encryption-inventory.md",
-      "sha256": "d45b9215b58380677dee2200c8f362902395bcd140f97cb5aea9e5213a512a09"
+      "sha256": "e901e562f1cbabba6fa56aa82d7aaee3ac7982c1ce120d8e89b670805c7d3166"
     },
     {
       "path": "crypto-comparison.json",
-      "sha256": "2166acb3efd65354f3fb8ea919bb1b918d807a4090cdc8223d493f50d8bbb9b8"
+      "sha256": "83b1c0e3f609f289624075f09d64ea1de4ac0eb4b54807afd1ca469fd46d995b"
     },
     {
       "path": "encryption-questionnaire.json",
-      "sha256": "5b08e5e96dd0a99527f6b2224f7e3766bbbed6efbe1f5df54e6a2b881f92a6d7"
+      "sha256": "e1c8daeedd31f08a54209357e6ecf150c93da22d49788965bb8427d3bb81d7df"
     },
     {
       "path": "what-to-test.txt",
@@ -35,7 +35,7 @@
     },
     {
       "path": "encryption-facts-review.json",
-      "sha256": "f597a0de7cd19f9bd064ddb8330a90e0819b280a620b1947ea0685faf3155174"
+      "sha256": "dcb3e0d99a4dfd04c6ec80296e8afc40b19ffb4acf1b73973e7af7b580fce6b7"
     },
     {
       "path": "public-mainnet/frozen-inventory.json",
@@ -243,12 +243,12 @@
     "artifact": "encryption-inventory.md"
   },
   "notes": [
-    "Pending exact-source successful CI for 5420cbea1de9b5cff26e22c09d76d3392c9556aa.",
-    "Pending current-source iPad and maximum accessibility text recorded journeys; earlier source receipts remain historical.",
+    "Exact app CI 36438491196 is pending for 26e35021b545764a1dcb9358c0d284b869b6844c; no whole-run success is claimed.",
+    "Current-source full iPad, maximum accessibility text and unfunded public-mainnet recorded journeys are in progress/pending. Earlier 5420/7e recordings remain unchanged and historical.",
+    "Seven actual funding readiness regressions and fresh BOLT11 cancellation/settlement/restart passed in the explicitly dirty precommit diagnostic. Its original source, binaries, video and runtime warning are retained outside this final evidence; it is not a substitute for clean-head full journeys.",
     "Physical device checks are explicitly deferred to internal TestFlight and remain pending.",
     "Funded automated evidence uses regtest; funded mainnet remains unverified.",
-    "The unchanged 7e public-mainnet iPhone proof remains historical with its original source/movie/XCTest/screenshot hashes and preserved runtime warning; it is not relabeled as 5420cbe.",
-    "Clean 5420cbe public-mainnet iPhone smoke passed with three peers, a cold 9,389-block scan (Up to date at 621.3465 seconds), and an unpaid 6,750 sat quote. One distinct runtime issue/two unified log records are retained; cause unproven, no funding or approval occurred."
+    "Historical 5420 hosted CI passed; its peer recorded-app step failed, with original cause/log retrieval pending. No new TestFlight upload occurred."
   ],
   "historical_public_mainnet_evidence": [
     {
@@ -260,19 +260,25 @@
       "import_verification": "public-mainnet/import-verification.json",
       "source": "7e1177f8aeaf8c33f5977da8439b0ff7adc3d9e5",
       "historical": true
+    },
+    {
+      "source": "5420cbea1de9b5cff26e22c09d76d3392c9556aa",
+      "result": "passed",
+      "scope": "Unfunded public-mainnet iPhone cold scan and unpaid quote; funded mainnet remains unverified.",
+      "journey": "public-mainnet-5420cbe/journey.json",
+      "validation": "public-mainnet-5420cbe/mainnet-validation.json",
+      "media_retention": "public-mainnet-5420cbe/media-retention.json",
+      "import_verification": "public-mainnet-5420cbe/import-verification.json",
+      "cold_scan_blocks": 9389,
+      "up_to_date_observed_seconds": 621.3465030193329,
+      "runtime_warning_issues": 1,
+      "unified_warning_records": 2,
+      "historical": true
     }
   ],
   "public_mainnet_evidence": {
-    "source": "5420cbea1de9b5cff26e22c09d76d3392c9556aa",
-    "result": "passed",
-    "scope": "Unfunded public-mainnet iPhone cold scan and unpaid quote; funded mainnet remains unverified.",
-    "journey": "public-mainnet-5420cbe/journey.json",
-    "validation": "public-mainnet-5420cbe/mainnet-validation.json",
-    "media_retention": "public-mainnet-5420cbe/media-retention.json",
-    "import_verification": "public-mainnet-5420cbe/import-verification.json",
-    "cold_scan_blocks": 9389,
-    "up_to_date_observed_seconds": 621.3465030193329,
-    "runtime_warning_issues": 1,
-    "unified_warning_records": 2
+    "source": "26e35021b545764a1dcb9358c0d284b869b6844c",
+    "result": "pending",
+    "scope": "Fresh unfunded public-mainnet smoke remains pending for this clean source."
   }
 }

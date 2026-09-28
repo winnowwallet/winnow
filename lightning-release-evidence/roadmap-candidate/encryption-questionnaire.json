@@ -1,7 +1,7 @@
 {
   "app_id": "6815392502",
   "bundle": "com.btcswift.lightning",
-  "source": "5420cbea1de9b5cff26e22c09d76d3392c9556aa",
+  "source": "26e35021b545764a1dcb9358c0d284b869b6844c",
   "version": "0.4.0",
   "build": "9",
   "distribution_scope": "International internal TestFlight beta; no public App Store release requested",
@@ -16,12 +16,12 @@
     "basis": "Candidate international internal TestFlight only. Before submitting facts, recheck that every current public-store version is PREPARE_FOR_SUBMISSION; otherwise stop for a new distribution review. No assumptions about testers' locations and no availability changes."
   },
   "facts_review": {
-    "source": "5420cbea1de9b5cff26e22c09d76d3392c9556aa",
-    "reviewed_by": "Codex root, with independent Codex anchors and metrics_backup source reviews",
+    "source": "26e35021b545764a1dcb9358c0d284b869b6844c",
+    "reviewed_by": "Codex root, with independent Codex anchors source and cryptographic-facts audit",
     "status": "facts-reviewed",
     "evidence_artifact": "encryption-facts-review.json",
     "scope": "Technical source algorithms and implementation facts only. Not an export classification, Apple approval, security audit, runtime conformance or physical-device verification.",
-    "source_binding": "All 23 retained source-fact hashes and 22 comparison hashes match committed 5420cbe blobs; production Sources/resources/dependencies/project are unchanged from 7e1177f. Four changed UI-test/host-fixture/test files have both committed hashes and scope recorded. Earlier audits and 7e native/public-mainnet receipts remain unchanged and historical; root independently verified the binding."
+    "source_binding": "All 23 technical and 22 comparison hashes match the committed 26e3502 tree. Production Sources differs in the reviewed LightningAppFunding adapter; cryptographic primitives, package pins and project.yml are unchanged. New regression tests, UI rejection diagnostics and the Research CI selector are recorded with committed hashes. Earlier 5420/7e native and CI receipts remain historical."
   },
   "apple_review_status": "Technical source facts reviewed. Live distribution check and Apple new-build determination remain pending; no approved declaration or exemption determination claimed."
 }
