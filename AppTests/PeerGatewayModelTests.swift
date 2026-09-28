@@ -22,7 +22,10 @@ final class PeerGatewayModelTests: XCTestCase {
         model.setAdvancedMode(false)
         let relaunched = makeModel(defaults: defaults)
         XCTAssertEqual(relaunched.gatewaySettings, .init(mode: .manual, manual: config))
-        XCTAssertFalse(relaunched.httpClient.enabled)
+        // I2P alone reaches only I2P sites (the census mirror) through its gateway.
+        XCTAssertTrue(relaunched.httpClient.enabled)
+        XCTAssertEqual(relaunched.httpClient.network, .i2p)
+        XCTAssertEqual(relaunched.httpClient.proxy, config.i2pProxy)
         do {
             try await model.setPeerGatewaySettings(.init(mode: .manual, manual: .init(networks: [])))
             XCTFail("Invalid edit must not overwrite settings")
