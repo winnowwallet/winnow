@@ -24,7 +24,7 @@
   <h1 id="a-private-bitcoin-wallet-on-a-phone">The wallet on your phone</h1>
   <p class="lede">Your phone matches payments locally, keeps its keys in the device keychain, and connects directly to Bitcoin peers while the app is open.</p>
   <nav class="contents" aria-label="On this page"><a href="#what-a-phone-actually-is">Device constraints</a><a href="#the-four-jobs-and-two-more">How the pieces fit</a><a href="#what-the-device-forces-onto-the-wallet">Wallet behavior</a><a href="#trust-on-a-phone">Trust limits</a><a href="#how-the-implementation-is-checked">Checks</a></nav>
-  <h2 id="the-constraint">What this means for you</h2><p>Unexpected payments may appear on the next sync. Fees are estimates, and recovery needs a backup file as well as signing keys. Direct connections expose your IP address to peers. The <a href="/read-side">read guide</a>, <a href="/write-side">payment guide</a> and <a href="/import">recovery guide</a> explain these tradeoffs.</p>
+  <h2 id="the-constraint">What this means for you</h2><p>Unexpected payments may appear on the next sync. Fees are estimates, and a backup restores signing only when it holds this phone’s words, which the iCloud copy always does; see <a href="/import#cannot-restore">what a backup cannot restore</a>. Direct connections expose your IP address to peers. The <a href="/read-side">read guide</a>, <a href="/write-side">payment guide</a> and <a href="/import">recovery guide</a> explain these tradeoffs.</p>
   <h2 id="what-a-phone-actually-is">2. What a phone actually is</h2>
   <p>Constraints that are load-bearing, not stylistic:</p>
   <ul>

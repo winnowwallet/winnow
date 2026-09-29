@@ -29,6 +29,18 @@
   <ol><li>Wait for pending sends to confirm, then choose <strong>Back up wallet</strong> and save a fresh file.</li><li>Keep recovery words separately. The default file excludes them; choosing <strong>Include recovery phrase</strong> creates a file containing your phone’s signing secret.</li><li>Back up every other signer separately. Your file includes shared accounts and tracked funds, but not another signer’s private key.</li><li>Import a file from your own trusted wallet. Review the catch-up report and keep the original backup until the restored wallet is checked.</li></ol>
   <p><strong>On a replacement device, a backup without recovery words restores a watch-only wallet.</strong> The manual JSON import screen does not accept the words separately. To restore signing through this screen, the imported backup must include them. You can create that file with <strong>Include recovery phrase</strong> on the original phone; protect it like the words themselves.</p>
   <p>Winnow scans forward from the file’s recorded height. It does not search the entire past chain from a recovery phrase. Older files may omit shared accounts, so make a fresh backup after creating one.</p>
+  <h3 id="cannot-restore">What a backup cannot restore</h3>
+  <ul>
+  <li><strong>Other signers’ keys.</strong> Neither the iCloud copy nor a file holds a Core cosigner’s, extra device’s or other owner’s key. Back each one up separately.</li>
+  <li><strong>Signing from a file without words.</strong> It restores a watch-only wallet; the import screen has no separate word entry.</li>
+  <li><strong>Coins from words alone.</strong> Winnow scans forward from a backup’s recorded height and never searches the past chain from a phrase.</li>
+  <li><strong>A send still pending.</strong> Manual export is refused until it confirms, and iCloud updates wait for it, so the saved date can lag.</li>
+  <li><strong>Approvals in progress.</strong> MuSig2 nonce and signing sessions are not saved; start a new exchange after recovery.</li>
+  <li><strong>App context in a file.</strong> Saved people, payment cards, sender names and receive labels are only in the iCloud copy.</li>
+  <li><strong>Watch-only and xprv-only wallets in iCloud.</strong> Automatic backup needs recovery words; use a file for these.</li>
+  <li><strong>Device settings.</strong> Peer routing, manual peers and the explorer choice stay on the old device.</li>
+  <li><strong>Another Apple Account.</strong> A cloud backup stays with the first Apple Account that received it; later account changes cannot overwrite it.</li>
+  </ul>
   <aside class="guide-summary"><p><strong>A catch-up scan is not proof of the backup’s past.</strong> It can find later payments and spends. It cannot independently establish every older coin’s existence, amount, or unspent status. Never accept a stranger’s file as proof of funds.</p></aside>
   <h2 id="format-version-2">Backup file format</h2>
 <details><summary>JSON schema and validation rules</summary>
