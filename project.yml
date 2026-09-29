@@ -31,6 +31,12 @@ targets:
       properties:
         LSMinimumSystemVersion: "14.0"
         NSLocalNetworkUsageDescription: "Winnow checks your Tailscale gateways and connects to Bitcoin nodes you configure."
+        # Background chain checks (BackgroundSyncScheduler). iOS decides when
+        # they run; each is one bounded scan with the foreground's routing.
+        UIBackgroundModes: [fetch, processing]
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.btcswift.winnow.chain-refresh
+          - com.btcswift.winnow.chain-processing
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
           # The census I2P mirror (CensusCatalog.i2pMirror) speaks plain HTTP:

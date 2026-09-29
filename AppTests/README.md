@@ -31,3 +31,7 @@ changes; `CloudAppStateTests` checks complete context recovery and safe contact 
 `WalletStartupTests` covers automatic creation and migration from the old phrase checklist.
 [Peer gateway model tests](PeerGatewayModelTests.swift) check routing persistence,
 corrupt preferences and stale discovery after backgrounding or a settings change.
+[Background sync tests](BackgroundSyncTests.swift) check that a background check completes
+once, cannot report success after iOS expires it, never runs beside foreground networking,
+and does not connect directly after Automatic routing last used a gateway; they also cover
+which peer errors Simple mode waits out.
