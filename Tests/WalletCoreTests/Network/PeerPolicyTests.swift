@@ -27,8 +27,8 @@ struct PeerPolicyTests {
     // The owner decision this backs (2026-08-23) was to accept single-peer
     // operation rather than fail closed, with peer diversity as the mitigation.
 
-    private func policy(_ peerCount: Int = 3, clearnetSelected: Bool = true) -> DiversityPolicy {
-        DiversityPolicy(peerCount: peerCount, clearnetSelected: clearnetSelected)
+    private func policy(_ peerCount: Int = 3, clearnetSelected: Bool = true, overlayMix: Bool = false) -> DiversityPolicy {
+        DiversityPolicy(peerCount: peerCount, clearnetSelected: clearnetSelected, overlayMix: overlayMix)
     }
 
     private func candidate(_ host: String, _ source: PeerSource) -> PeerCandidate {
@@ -145,6 +145,26 @@ struct PeerPolicyTests {
         let seated = [candidate(onions[0], .persisted), candidate(onions[1], .persisted)]
         #expect(policy(clearnetSelected: false).admits(candidate(onions[2], .census), given: seated))
         #expect(policy(clearnetSelected: false).admits(candidate(onions[2], .persisted), given: seated) == false)
+    }
+
+    /// Automatic without clearnet: two onions leave the third slot to I2P.
+    @Test("with Tor and I2P both selected, neither may hold every slot")
+    func overlayMixRequired() {
+        let mix = policy(clearnetSelected: false, overlayMix: true)
+        let seated = [candidate(onions[0], .census), candidate(onions[1], .persisted)]
+        #expect(mix.admits(candidate(onions[2], .dnsSeed), given: seated) == false)
+        #expect(mix.admits(candidate(i2p, .census), given: seated))
+        let i2pSeated = [candidate(i2p, .census), candidate(String(repeating: "b", count: 52) + ".b32.i2p", .persisted)]
+        #expect(mix.admits(candidate(String(repeating: "c", count: 52) + ".b32.i2p", .dnsSeed), given: i2pSeated) == false)
+        #expect(mix.admits(candidate(onions[0], .census), given: i2pSeated))
+    }
+
+    /// The pool relaxes the mix after a round that could not fill, so a dry
+    /// overlay leaves three peers from the other rather than two.
+    @Test("a relaxed mix lets one overlay fill the pool")
+    func overlayMixRelaxed() {
+        let seated = [candidate(onions[0], .census), candidate(onions[1], .persisted)]
+        #expect(policy(clearnetSelected: false, overlayMix: false).admits(candidate(onions[2], .dnsSeed), given: seated))
     }
 
     @Test("manual overlay peers are exempt from the overlay rule")

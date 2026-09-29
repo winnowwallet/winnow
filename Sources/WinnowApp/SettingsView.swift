@@ -25,6 +25,15 @@ struct SettingsView: View {
         let startHeight: Int32
         /// BIP133 feefilter (sat/kvB).
         let feeFilter: Int64?
+        let network: PeerNetwork
+
+        var networkLabel: String {
+            switch network {
+            case .clearnet: "Clearnet · sees your IP"
+            case .tor: "Tor"
+            case .i2p: "I2P"
+            }
+        }
     }
 
     var body: some View {
@@ -154,6 +163,10 @@ struct SettingsView: View {
                 Section("Connected peers") {
                     ForEach(connectedPeers) { peer in
                         VStack(alignment: .leading, spacing: 2) {
+                            Text(peer.networkLabel)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(peer.network == .clearnet ? .orange : .green)
+                                .accessibilityIdentifier("peerNetwork")
                             Text(peer.endpoint)
                                 .font(.system(.footnote, design: .monospaced))
                                 .accessibilityIdentifier("peerEndpoint")
@@ -208,7 +221,7 @@ struct SettingsView: View {
                     } header: {
                         Text("Danger zone")
                     } footer: {
-                        Text("Removes this \(model.network.rawValue) wallet and its shared savings so you can create or import another. The key is deleted from this device — without your recovery phrase the money is gone. People you added stay on this phone, and block headers are kept, so the next wallet does not re-sync the chain.")
+                        Text("Removes this \(model.network.rawValue) wallet and its shared savings so you can create or import another. The key is deleted from this device; restore it from your iCloud backup or a backup file that includes the recovery phrase, or the money is gone. People you added stay on this phone, and block headers are kept, so the next wallet does not re-sync the chain.")
                     }
                 }
             }
@@ -260,10 +273,12 @@ struct SettingsView: View {
         }
         var infos: [PeerInfo] = []
         for peer in await pool.connectedPeers() {
-            infos.append(PeerInfo(endpoint: await peer.endpoint.description,
+            let endpoint = await peer.endpoint
+            infos.append(PeerInfo(endpoint: endpoint.description,
                                   userAgent: await peer.peerUserAgent,
                                   startHeight: await peer.peerStartHeight,
-                                  feeFilter: await peer.feeFilter))
+                                  feeFilter: await peer.feeFilter,
+                                  network: PeerNetwork(host: endpoint.host)))
         }
         connectedPeers = infos
     }
