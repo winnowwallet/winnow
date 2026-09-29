@@ -71,7 +71,8 @@ It discovers both gateways, then fetches the census from its I2P mirror through
 the I2P gateway and verifies the publisher signature. Given a current local
 `peers.json` with its `peers.json.sig` beside it, it also performs Bitcoin
 handshakes through both gateways. The check sends no wallet addresses or
-transactions. CI has no tailnet, so this check is manual.
+transactions. CI has no tailnet, so this check is manual; the
+[2026-09-29 run](security/evidence/live-gateways-2026-09-29.md) is recorded.
 
 A successful greeting is not proof of Tor/I2P reachability. A physical iPhone
 with the Tailscale VPN enabled remains part of device acceptance testing.
