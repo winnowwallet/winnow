@@ -8,6 +8,10 @@ With Tailscale connected on the iPhone and gateways named winnow-tor-gateway (po
 
 Choose Manual, enable only Tor peers, enter the Tor gateway, and tap Apply routing. Connected peers should become .onion addresses. Repeat with only I2P peers: tap Refresh peer list and check that it succeeds (it downloads from the I2P mirror), then check for .b32.i2p peers. Turn Tailscale off while in a Tor-only or I2P-only mode: the wallet should stop connecting rather than use ordinary peers. Choose Automatic again to restore ordinary peers.
 
+Peer mix
+
+In Automatic with both gateways active, Tor and I2P peers can fill at most two of the three slots: at least one connected peer should stay an ordinary address, not .onion or .b32.i2p. Tor-only and I2P-only modes are unaffected. With clearnet off, the block explorer warning should say the browser does not use your Tor or I2P gateways.
+
 Connections
 
 Check a fresh install and an existing wallet: both should connect and sync. In Advanced settings, use "Refresh peer list" and check the reported observation date and candidate count. Report any connection failure with the network, routing mode and app version.
@@ -15,6 +19,10 @@ Check a fresh install and an existing wallet: both should connect and sync. In A
 Payments and shared accounts
 
 On signet, receive and send an ordinary payment, then receive and send with a MuSig2 shared account and a script-path 2-of-3 account. Check the recipient, amount, fee, approvals, and confirmed balance.
+
+Backup wording
+
+The Backup screen and the delete-wallet alert now say Winnow restores from iCloud backup or a backup file that includes the recovery phrase, not from the words alone. Check the wording reads clearly.
 
 Upgrading from an older version
 

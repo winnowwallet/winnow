@@ -25,7 +25,9 @@ extension. Manual gateways support DNS names and bracketed IPv6 addresses.
 Automatic always keeps clearnet eligible and adds each available overlay.
 It is a resilience mode, not a promise of anonymous traffic. Selected networks
 are eligible; the pool does not guarantee a slot on every network. Existing
-peer provenance and address diversity checks remain in force. Gateways see
+peer provenance and address diversity checks remain in force, and while
+clearnet is selected automatic Tor and I2P peers together may not take every
+slot, since onion and I2P names have no address block to limit. Gateways see
 the destinations clients ask them to reach; Bitcoin peers still undergo the
 normal version, compact-filter, header and chain checks.
 
