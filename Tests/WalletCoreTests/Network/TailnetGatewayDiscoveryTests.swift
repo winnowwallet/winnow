@@ -69,6 +69,32 @@ struct TailnetGatewayDiscoveryTests {
         #expect(query.addresses(in: wrongOwner).isEmpty, "A compression loop cannot supply an address")
     }
 
+    /// The fuzz harness cannot reach this internal parser, so mutate a valid
+    /// reply here: flips, insertions and deletions must never trap, and any
+    /// address that survives must still be a tailnet IPv4 address.
+    @Test func mutatedDNSRepliesNeverTrapOrLeaveTheTailnet() {
+        let query = GatewayDNSQuery(host: "winnow-i2p-gateway", id: 0xbeef)
+        let valid = Array(answer(query, ip: [100, 74, 30, 8]))
+        var state: UInt64 = 0x5eed
+        func next(_ bound: Int) -> Int {
+            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return Int((state >> 33) % UInt64(bound))
+        }
+        for _ in 0..<20_000 {
+            var bytes = valid
+            for _ in 0...next(4) {
+                switch next(3) {
+                case 0: bytes[next(bytes.count)] = UInt8(next(256))
+                case 1: bytes.insert(UInt8(next(256)), at: next(bytes.count + 1))
+                default: if bytes.count > 1 { bytes.remove(at: next(bytes.count)) }
+                }
+            }
+            for address in query.addresses(in: Data(bytes)) {
+                #expect(TailnetGatewayDiscovery.isTailnetIPv4(address), "\(address)")
+            }
+        }
+    }
+
     @Test(.enabled(if: ProcessInfo.processInfo.environment["WINNOW_LIVE_GATEWAYS"] == "1"))
     func deployedMagicDNSGateways() async throws {
         let config = await TailnetGatewayDiscovery().discover()

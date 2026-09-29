@@ -15,3 +15,7 @@ For a new run, use the [debugging runbook](../../../Tools/Debug/README.md) and k
 the revision, command, network, time interval, and resulting JSONL together.
 Add a new dated record instead of overwriting these files.
 They are historical evidence, not a live health check or an automated test fixture.
+
+[Live gateways, 2026-09-29](live-gateways-2026-09-29.md) records a manual run of
+`scripts/check-live-gateways` and independent SOCKS, mirror and handshake
+checks through the project's Tor and I2P gateways.
