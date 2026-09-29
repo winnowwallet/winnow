@@ -1,0 +1,92 @@
+{
+  "result": "passed",
+  "hash": "f48540ce4d5b8252a1de73e7d13f2fc580e89d1cc29a662b314fae5a65af3cde",
+  "amount_msat": 5000000,
+  "provider_fees_msat": [
+    1000,
+    1000
+  ],
+  "timeline": [
+    {
+      "event": "recipient_started",
+      "monotonic_ns": 83395763625,
+      "pid": 18267,
+      "node": "03d4594f7d27cf88702bf16d56d1e29e6fa966f84e1c8d26c696e411d11c9a2424"
+    },
+    {
+      "event": "recipient_channel_confirmed",
+      "monotonic_ns": 134798641708,
+      "txid": "b65fb007fa5d8086fc305effa80a234ff0e6ba13d27b03458ee1ba9bcca1a6f9",
+      "channel": "f9a6a1cc9bbae18e45037bd213bae6f04f230aa8ff5e30fc86805dfa07b05fb7"
+    },
+    {
+      "event": "recipient_killed",
+      "monotonic_ns": 272415691166,
+      "pid": 18267,
+      "signal": "SIGKILL",
+      "running": false
+    },
+    {
+      "event": "sender_started",
+      "monotonic_ns": 304030212083,
+      "pid": 18635,
+      "node": "03c62e62665464815dd66520e06d55899cab5e6ebdcf99f295fa817b09f2ea6885"
+    },
+    {
+      "event": "canceled_funding_review_did_not_publish",
+      "monotonic_ns": 403065978000
+    },
+    {
+      "event": "sender_funding_confirmed",
+      "monotonic_ns": 428982976791,
+      "txid": "29bc2373b3be5d7974e75d77660f5fb150e7433bb595a466bf6940f731e8063c"
+    },
+    {
+      "event": "held_and_durably_notified",
+      "monotonic_ns": 472816788791,
+      "hash": "f48540ce4d5b8252a1de73e7d13f2fc580e89d1cc29a662b314fae5a65af3cde",
+      "amount_msat": 5002000,
+      "notification_sha256": "4fbc3b6f419bafe13708ee3aba88a0ebf8098b108b3fa3224e8ee584f7c37670"
+    },
+    {
+      "event": "sender_killed",
+      "monotonic_ns": 472874771708,
+      "pid": 18635,
+      "signal": "SIGKILL",
+      "running": false
+    },
+    {
+      "event": "recipient_started",
+      "monotonic_ns": 514862977375,
+      "pid": 18942,
+      "node": "03d4594f7d27cf88702bf16d56d1e29e6fa966f84e1c8d26c696e411d11c9a2424"
+    },
+    {
+      "event": "recipient_settled_while_sender_stopped",
+      "monotonic_ns": 552068146125,
+      "hash": "f48540ce4d5b8252a1de73e7d13f2fc580e89d1cc29a662b314fae5a65af3cde"
+    },
+    {
+      "event": "recipient_killed",
+      "monotonic_ns": 552298498083,
+      "pid": 18942,
+      "signal": "SIGKILL",
+      "running": false
+    },
+    {
+      "event": "sender_started",
+      "monotonic_ns": 592444573083,
+      "pid": 19044,
+      "node": "03c62e62665464815dd66520e06d55899cab5e6ebdcf99f295fa817b09f2ea6885"
+    }
+  ],
+  "ldk_commit": "0a2b003e7e1602df8933b15b7563ba8b6e198391",
+  "bitcoin_core_version": 310100,
+  "swift_source": "1f1bfdd956c84765c444ed6b0667806b20626c55",
+  "source_dirty": false,
+  "reference_binary_sha256": "505309420476d576cb6ecba4dc655452f9a5f0ce2ce04081484ebf3ec6010fee",
+  "funding_fee_sat": 770,
+  "close_fee_sat": 905,
+  "returned_wallet_balance_sat": 1993323,
+  "close_transaction": "a93c5b0de94c43a5a85ad33ed9fdafaff4ca5d9458c3dab14d98d4593da09262"
+}

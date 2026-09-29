@@ -115,6 +115,12 @@ jobs:
           "$CI_RESULTS/production-build"
           "$CI_RESULTS/production-build.log"
 
+      - name: Validate Swift Lightning transactions with Bitcoin Core
+        if: steps.validate_media.outcome != 'success'
+        run: |
+          command -v bitcoind >/dev/null || brew install bitcoin
+          scripts/ci-lightning | tee "$CI_RESULTS/lightning-regtest.log"
+
       - name: Exercise release debugging commands
         if: steps.validate_media.outcome != 'success'
         run: |
@@ -127,11 +133,13 @@ jobs:
         run: |
           scripts/generate-supply-chain-metadata \
             --output-dir "$CI_RESULTS/supply-chain" \
+            --source-repository "https://github.com/$GITHUB_REPOSITORY" \
             --subject "$CI_RESULTS/production-build/release/winnow-debug" \
             --subject-name winnow-debug \
             --builder-id "https://github.com/${{ github.repository }}/.github/workflows/ci.yml@${{ github.workflow_sha }}"
           scripts/generate-supply-chain-metadata \
             --output-dir "$CI_RESULTS/supply-chain-replay" \
+            --source-repository "https://github.com/$GITHUB_REPOSITORY" \
             --subject "$CI_RESULTS/production-build/release/winnow-debug" \
             --subject-name winnow-debug \
             --builder-id "https://github.com/${{ github.repository }}/.github/workflows/ci.yml@${{ github.workflow_sha }}"
@@ -238,7 +246,7 @@ jobs:
 
       - name: Recorded signet UI journey
         if: steps.validate_media.outcome != 'success' && env.RUN_UI_JOURNEY == 'true'
-        timeout-minutes: 15
+        timeout-minutes: 20
         run: scripts/ci-ui-journey "$APP_RESULTS/journey" --skip-build
 
       - name: Stop the trusted run's simulator and fixture

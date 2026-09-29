@@ -1,0 +1,26 @@
+{"timestamp":"2026-09-28T14:03:14Z","name":"app.initialized","fields":{"processID":"26549","network":"mainnet"},"version":1}
+{"version":1,"name":"app.scenePhase","fields":{"phase":"inactive"},"timestamp":"2026-09-28T14:03:17Z"}
+{"version":1,"name":"app.scenePhase","fields":{"phase":"active"},"timestamp":"2026-09-28T14:03:17Z"}
+{"name":"app.booted","timestamp":"2026-09-28T14:03:17Z","fields":{"stage":"onboarding","walletID":""},"version":1}
+{"version":1,"name":"peers.status","timestamp":"2026-09-28T14:03:18Z","fields":{"peers":"","rejected":"","exhausted":"false","dialing":"true","target":"3","connected":"0"}}
+{"fields":{"date":"2026-09-28","sha256":"cec282a3ad5e9af72436d5fc004175434186ed7a0f8ce21ec679439cd7b764d7"},"timestamp":"2026-09-28T14:03:21Z","version":1,"name":"peers.catalogRefreshed"}
+{"timestamp":"2026-09-28T14:03:22Z","name":"wallet.snapshot","version":1,"fields":{"balance":"0","nextScanHeight":"959616","confirmedTransactions":"","vaults":"","historyCount":"0","replacements":"","walletID":"dbe8ea92","pendingTransactions":"","peerCount":"0","tipHeight":"959616","utxoCount":"0"}}
+{"timestamp":"2026-09-28T14:03:22Z","name":"wallet.created","version":1,"fields":{"height":"959616","headersContinueInBackground":"true","walletID":"dbe8ea92"}}
+{"fields":{"walletID":"dbe8ea92"},"version":1,"name":"import.onboardingCompleted","timestamp":"2026-09-28T14:03:22Z"}
+{"version":1,"name":"wallet.ready","fields":{"nextScanHeight":"959616","walletID":"dbe8ea92","utxoCount":"0","balance":"0","historyCount":"0"},"timestamp":"2026-09-28T14:03:22Z"}
+{"name":"wallet.syncFailed","version":1,"fields":{"error":"noPeers"},"timestamp":"2026-09-28T14:03:23Z"}
+{"fields":{"enabled":"false"},"timestamp":"2026-09-28T14:03:27Z","version":1,"name":"setting.advancedMode"}
+{"timestamp":"2026-09-28T14:03:29Z","version":1,"fields":{"error":"noPeers"},"name":"wallet.syncFailed"}
+{"fields":{"connected":"2","rejected":"","exhausted":"false","peers":"157.211.193.101:8333 \/Satoshi:31.1.0\/,76.181.138.83:8333 \/Satoshi:31.1.0\/","dialing":"true","target":"3"},"name":"peers.status","version":1,"timestamp":"2026-09-28T14:03:33Z"}
+{"name":"peers.status","version":1,"fields":{"rejected":"","peers":"157.211.193.101:8333 \/Satoshi:31.1.0\/,68.191.106.173:8333 \/Satoshi:31.1.0\/,76.181.138.83:8333 \/Satoshi:31.1.0\/","dialing":"false","exhausted":"false","connected":"3","target":"3"},"timestamp":"2026-09-28T14:03:36Z"}
+{"fields":{"peers":"157.211.193.101:8333 \/Satoshi:31.1.0\/,217.173.236.25:8333 \/Satoshi:29.4.0\/,76.181.138.83:8333 \/Satoshi:31.1.0\/","connected":"3","exhausted":"false","rejected":"68.191.106.173:8333: The connection to the peer was not open.","dialing":"false","target":"3"},"version":1,"name":"peers.status","timestamp":"2026-09-28T14:03:44Z"}
+{"version":1,"timestamp":"2026-09-28T14:04:06Z","fields":{"rejected":"68.191.106.173:8333: The connection to the peer was not open.","dialing":"false","target":"3","peers":"157.211.193.101:8333 \/Satoshi:31.1.0\/,76.181.138.83:8333 \/Satoshi:31.1.0\/,99.190.4.224:8333 \/Satoshi:31.1.0\/","connected":"3","exhausted":"false"},"name":"peers.status"}
+{"timestamp":"2026-09-28T14:05:53Z","name":"peers.status","fields":{"exhausted":"false","target":"3","dialing":"true","peers":"157.211.193.101:8333 \/Satoshi:31.1.0\/,99.190.4.224:8333 \/Satoshi:31.1.0\/","connected":"2","rejected":"68.191.106.173:8333: The connection to the peer was not open. | 76.181.138.83:8333: The peer did not answer in time."},"version":1}
+{"timestamp":"2026-09-28T14:06:03Z","name":"wallet.syncFailed","fields":{"error":"timeout"},"version":1}
+{"version":1,"timestamp":"2026-09-28T14:06:03Z","fields":{"utxoCount":"0","peerCount":"3","pendingTransactions":"","confirmedTransactions":"","vaults":"","historyCount":"0","tipHeight":"969005","walletID":"dbe8ea92","nextScanHeight":"961616","replacements":"","balance":"0"},"name":"wallet.snapshot"}
+{"timestamp":"2026-09-28T14:06:04Z","fields":{"connected":"3","exhausted":"false","target":"3","peers":"157.211.193.101:8333 \/Satoshi:31.1.0\/,87.162.193.51:8333 \/Satoshi:31.1.0\/,99.190.4.224:8333 \/Satoshi:31.1.0\/","rejected":"68.191.106.173:8333: The connection to the peer was not open. | 76.181.138.83:8333: The peer did not answer in time.","dialing":"false"},"name":"peers.status","version":1}
+{"name":"lightning.resume","fields":{"connecting":"false","connection":"Ready to connect","chainCurrent":"true"},"timestamp":"2026-09-28T14:13:11Z","version":1}
+{"name":"wallet.snapshot","version":1,"fields":{"utxoCount":"0","replacements":"","nextScanHeight":"969006","tipHeight":"969005","walletID":"dbe8ea92","peerCount":"3","historyCount":"0","vaults":"","balance":"0","confirmedTransactions":"","pendingTransactions":""},"timestamp":"2026-09-28T14:13:11Z"}
+{"fields":{"connection":"Connected","connecting":"false","chainCurrent":"true"},"name":"lightning.resume","version":1,"timestamp":"2026-09-28T14:13:14Z"}
+{"name":"lightning.resume","version":1,"fields":{"connection":"Connected","chainCurrent":"true","connecting":"false"},"timestamp":"2026-09-28T14:13:17Z"}
+{"version":1,"name":"lightning.resume","fields":{"connection":"Connected","chainCurrent":"true","connecting":"false"},"timestamp":"2026-09-28T14:13:23Z"}

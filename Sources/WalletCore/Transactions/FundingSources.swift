@@ -182,39 +182,22 @@ public enum FundingSources {
     /// multisig dummy); any other opcode means the shape is not ours to read,
     /// and a truncated push means malformed — both come back nil.
     private static func pushedItems(_ script: Data) -> [Data]? {
-        var items: [Data] = []
-        var index = script.startIndex
-        func take(_ count: Int) -> Data? {
-            guard script.endIndex - index >= count else { return nil }
-            defer { index += count }
-            return script.subdata(in: index ..< index + count)
-        }
-        while index < script.endIndex {
-            let opcode = script[index]
-            index += 1
-            switch opcode {
-            case 0x00:
-                items.append(Data())
-            case 0x01 ... 0x4B:
-                guard let item = take(Int(opcode)) else { return nil }
-                items.append(item)
-            case 0x4C:
-                guard let count = take(1), let item = take(Int(count[0])) else { return nil }
-                items.append(item)
-            case 0x4D:
-                guard let count = take(2), let item = take(Int(UInt16(count[0]) | UInt16(count[1]) << 8))
-                else { return nil }
-                items.append(item)
-            case 0x4E:
-                guard let count = take(4) else { return nil }
-                let length = UInt32(count[0]) | UInt32(count[1]) << 8
-                    | UInt32(count[2]) << 16 | UInt32(count[3]) << 24
-                guard let item = take(Int(length)) else { return nil }
-                items.append(item)
-            default:
-                return nil
+        var items: [Data] = [], reader = ByteReader(script)
+        do {
+            while reader.remaining > 0 {
+                let opcode = try reader.readUInt8(), count = try pushLength(opcode, reader: &reader)
+                items.append(try reader.readBytes(count))
             }
+            return items
+        } catch { return nil }
+    }
+    private static func pushLength(_ opcode: UInt8, reader: inout ByteReader) throws -> Int {
+        switch opcode {
+        case 0x00 ... 0x4B: return Int(opcode)
+        case 0x4C: return Int(try reader.readUInt8())
+        case 0x4D: return Int(try reader.readUInt16())
+        case 0x4E: return Int(try reader.readUInt32())
+        default: throw WireError.malformed("scriptSig contains a non-push opcode")
         }
-        return items
     }
 }

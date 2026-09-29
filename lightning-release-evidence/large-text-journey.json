@@ -1,0 +1,20 @@
+{
+  "result": "passed",
+  "manifest": {
+    "source": "1f1bfdd956c84765c444ed6b0667806b20626c55",
+    "dirty": false,
+    "simulator": "2421C3E5-2B36-4750-8E80-78FCCC08C9BD",
+    "bundle": "com.btcswift.lightning",
+    "executable_sha256": "b86d33e911346c0fc79aab8bf2d3c646cf623768187f5b594faeb84461157e15",
+    "xcode": "Xcode 27.0\nBuild version 27A266a",
+    "device": {
+      "name": "iPhone 17 Pro",
+      "device_type": "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+      "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-3"
+    },
+    "content_size": "accessibility-extra-extra-extra-large",
+    "scope": "ResearchDebug regtest fixture; physical authentication is a separate release gate"
+  },
+  "video_sha256": "119b4ed5f812ca8112a0b05b64853f47f1dd1c20616a4f140d052378aed597c2",
+  "independent_receipt_sha256": "479719fe3f2e1b85ae8870183a56ad436069cdccbf957b071ee0b89d544d40c7"
+}

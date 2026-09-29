@@ -21,6 +21,37 @@ import TestSupport
 @Suite("FilterSync")
 struct FilterSyncTests {
 
+    @Test("a stalled filter download cools its peer and resumes saved progress with an honest peer")
+    func stalledFiltersRecoverWithAnotherPeer() async throws {
+        let synthetic = makeSyntheticChain(length: 1_001, watchHeight: 1_001)
+        let slow = LoopbackNode(params: synthetic.params, chain: synthetic.blocks, withholdFiltersFromHeight: 1_001)
+        let honest = LoopbackNode(params: synthetic.params, chain: synthetic.blocks, versionDelay: .milliseconds(200))
+        try await slow.start(); try await honest.start()
+        let slowEndpoint = await slow.endpoint
+        let pool = PeerPool(params: synthetic.params, peerCount: 2,
+            manualPeers: [slowEndpoint, await honest.endpoint])
+        defer { Task { await pool.stop(); await slow.stop(); await honest.stop() } }
+        await pool.start()
+        #expect(await pool.connectedPeers().first?.endpoint == slowEndpoint)
+        let file = tempFileURL("filter-timeout-progress.json")
+        let headers = try HeaderChain(params: synthetic.params)
+        let filters = try FilterSync(pool: pool, chain: headers, startHeight: 1, storageURL: file)
+        let matches = MatchCollector()
+        await #expect(throws: PeerError.timeout) {
+            try await filters.sync(watchScripts: [synthetic.watchScript]) { matches.add($0) }
+        }
+        #expect(matches.matches.isEmpty)
+        #expect(await filters.nextScanHeight == 1_001)
+        #expect(try JSONDecoder().decode(FilterSync.Progress.self, from: Data(contentsOf: file)).nextScanHeight == 1_001)
+        #expect(await pool.coolingEndpoints.contains(slowEndpoint))
+        var connected: [PeerEndpoint] = []
+        for peer in await pool.connectedPeers() { connected.append(await peer.endpoint) }
+        #expect(!connected.contains(slowEndpoint))
+        try await filters.sync(watchScripts: [synthetic.watchScript]) { matches.add($0) }
+        #expect(matches.matches.map(\.height) == [1_001])
+        #expect(await filters.nextScanHeight == 1_002)
+    }
+
     // MARK: - Loopback peers
 
     /// Loopback integration: real NWConnection transport against a fake node.
@@ -642,12 +673,22 @@ struct FilterSyncTests {
                                 chain: Array(synthetic.blocks.prefix(nodeTip + 1)))
         try await node.start()
         defer { Task { await node.stop() } }
+        let endpoint = await node.endpoint
         let pool = PeerPool(params: synthetic.params, peerCount: 1,
-                            manualPeers: [await node.endpoint],
+                            manualPeers: [endpoint],
                             peersFileURL: tempFileURL("peers.json"), dialTimeout: .seconds(30))
         await pool.start()
         defer { Task { await pool.stop() } }
-        try #require(await pool.connectedPeers().count == 1, "the filter fixture must complete its handshake")
+        let connected = await pool.connectedPeers().count
+        if connected != 1 {
+            let status = await pool.connectionStatus
+            let activeConnections = await node.activeConnectionCount
+            let clientRelay = await node.clientRelay
+            let commands = await node.receivedMessages.map(\.command).joined(separator: ",")
+            let rejections = await pool.rejectionReasons.map { "\($0.key.description): \($0.value)" }.sorted().joined(separator: " | ")
+            try #require(connected == 1,
+                "the filter fixture must complete its handshake: nodeTip=\(nodeTip), endpoint=\(endpoint.description), activeConnections=\(activeConnections), clientRelay=\(String(describing: clientRelay)), commands=[\(commands)], connected=\(status.connected), target=\(status.target), dialing=\(status.dialing), attempts=\(status.attempts), exhausted=\(status.exhausted), rejections=[\(rejections)]")
+        }
         let chain = try HeaderChain(params: synthetic.params)
         let sync = try FilterSync(pool: pool, chain: chain, startHeight: 999,
                                   storageURL: progressFile, requiredCheckpointPeers: 1)

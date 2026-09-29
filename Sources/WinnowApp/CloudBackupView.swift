@@ -1,4 +1,5 @@
 import SwiftUI
+import WalletCore
 
 /// Advanced controls; beginner mode only displays the backup status.
 struct CloudBackupView: View {
@@ -94,15 +95,23 @@ struct CloudRestoreView: View {
             do {
                 let report = try await model.restoreCloudBackup(id)
                 try Task.checkCancellation()
-                restored = true
-                if let report, !report.matchesBundle {
-                    error = "Some payments changed since this backup. Winnow updated the wallet from the network; review the restored balances."
-                } else if report == nil {
-                    error = "Restored. Network verification will resume when peers are reachable."
-                }
-            } catch is CancellationError { }
-            catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+                installRestoreReport(report)
+            } catch { recordRestoreError(error) }
         }
+    }
+
+    private func installRestoreReport(_ report: ImportReport?) {
+        restored = true
+        if let report, !report.matchesBundle {
+            error = "Some payments changed since this backup. Winnow updated the wallet from the network; review the restored balances."
+        } else if report == nil {
+            error = "Restored. Network verification will resume when peers are reachable."
+        }
+    }
+
+    private func recordRestoreError(_ error: Error) {
+        guard !(error is CancellationError), !Task.isCancelled else { return }
+        self.error = error.localizedDescription
     }
 
     private func cancel() {

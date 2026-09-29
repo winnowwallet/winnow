@@ -158,6 +158,7 @@ jobs:
         run: >-
           scripts/generate-supply-chain-metadata
           --output-dir build/supply-chain
+          --source-repository "https://github.com/$GITHUB_REPOSITORY"
           --subject build/export/WinnowApp.ipa
           --subject-name WinnowApp.ipa
           --builder-id https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.workflow_sha }}

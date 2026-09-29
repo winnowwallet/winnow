@@ -1,0 +1,51 @@
+{
+  "source": "5420cbea1de9b5cff26e22c09d76d3392c9556aa",
+  "source_dirty": false,
+  "bundle": "com.btcswift.lightning",
+  "scope": "Unfunded public-mainnet iPhone diagnostic; cold 9,389-block scan, public peer discovery and unpaid receiving-capacity quote. No fee approval, channel funding or payment.",
+  "raw_movie": {
+    "path": "/Users/posix4e/Documents/Codex/2026-09-24/i-x20/outputs/winnow-lightning/native-head5420cbe-20260928/live-mainnet/journey.mp4",
+    "sha256": "e57e3fc3ca81864674278f0bca45294112d409fa7851284f68d1ca759c562b5a",
+    "bytes": 18917698,
+    "duration_seconds": 653.745,
+    "codec": "h264",
+    "retained_outside_git": true,
+    "original_unchanged": true
+  },
+  "full_xcresult": {
+    "path": "/Users/posix4e/Documents/Codex/2026-09-24/i-x20/outputs/winnow-lightning/native-head5420cbe-20260928/live-mainnet/LiveMainnet.xcresult",
+    "file_hash_inventory": "frozen-inventory.json",
+    "file_hash_inventory_sha256": "668b7de07aed855f3b8d2f2ef3b7720e2dddb236ad83f3f584315788eabc712b"
+  },
+  "codec_receipt": {
+    "path": "video-codec-verification.json",
+    "sha256": "ef327909782b73d02ec197d7502b46fde6392f31fe7af15d5b8a25b7c871fcb1",
+    "scope": "All original frames decode with -xerror. Decoder output timestamps alone are normalized for the null sink; original video is unchanged. This is not a claim that original timestamp/mux timing is warning-free."
+  },
+  "root_review": {
+    "path": "root-public-mainnet-review-5420cbe-20260928.json",
+    "sha256": "99074ceade1542be6f7ceecf6b25db42667a601db58e86974941176073026823"
+  },
+  "transport": "Small original files copied byte-for-byte; original movie and full xcresult retained once in durable workspace outputs, without duplication or upload.",
+  "performance": {
+    "scan_start_height": 959616,
+    "scan_tip_height": 969005,
+    "blocks_scanned": 9389,
+    "provider_setup_enabled_seconds": 608.4005990028381,
+    "up_to_date_observed_seconds": 621.3465030193329,
+    "initial_no_peers_and_timeout_recovered": true
+  },
+  "warnings": {
+    "distinct_xctest_issues": 1,
+    "unified_log_records": 2,
+    "message": "Invalid frame dimension (negative or non-finite).",
+    "cause": "unproven; original records retained"
+  },
+  "limitations": [
+    "Unfunded simulator evidence does not prove funded mainnet Lightning payments.",
+    "Physical authentication, locked-device storage and actual messenger sharing remain deferred.",
+    "This iPhone run does not satisfy pending iPad or maximum accessibility text gates.",
+    "The cold scan took approximately 621 seconds; no fast-sync claim is made.",
+    "Original screenshot-timing.json has no populated attachment capture times; screenshots are hash-bound and no video offset is inferred."
+  ]
+}

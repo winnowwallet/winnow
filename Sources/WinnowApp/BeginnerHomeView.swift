@@ -5,7 +5,7 @@ import SwiftUI
 /// the wallet is up to date, Receive and Send, what happened, shared savings
 /// once there are any, and the backup. Everything technical — fees, peers,
 /// block heights, signing tools, every setting — is Advanced mode, which is
-/// the three-tab interface behind the toolbar button. Settings made there
+/// the tab interface behind the toolbar button. Settings made there
 /// stay in effect here; they are just not shown.
 struct BeginnerHomeView: View {
     @Environment(AppModel.self) private var model
@@ -31,7 +31,7 @@ struct BeginnerHomeView: View {
                         HStack(spacing: 8) {
                             status
                             if model.network != .mainnet {
-                                Text("Signet · test coins")
+                                Text("\(model.network.rawValue.capitalized) · test coins")
                                     .font(.caption)
                                     .padding(.horizontal, 8)
                                     .padding(.vertical, 2)
@@ -48,7 +48,7 @@ struct BeginnerHomeView: View {
                         }
                         .accessibilityIdentifier("retryPeersButton")
                     }
-                    if let error = model.status.lastSyncError {
+                    if let error = model.status.syncErrorForDisplay(phase: model.syncPhase) {
                         Text(error)
                             .font(.footnote)
                             .foregroundStyle(.red)
@@ -141,9 +141,11 @@ struct BeginnerHomeView: View {
                 Button("Turn on") { model.setAdvancedMode(true) }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("The app changes to three tabs — Wallet, Send and Settings — with fee controls, network settings, signing tools and technical details. Simple, on the Wallet tab, brings this screen back and keeps every setting you changed.")
+                Text(model.lightning == nil
+                    ? "The app changes to three tabs — Wallet, Send and Settings — with fee controls, network settings, signing tools and technical details. Simple, on the Wallet tab, brings this screen back and keeps every setting you changed."
+                    : "The app changes to four tabs — Lightning, Wallet, Send and Settings — with Lightning payments, fee controls, network settings, signing tools and technical details. Simple, on the Wallet tab, brings this screen back and keeps every setting you changed.")
             }
-            .sheet(isPresented: $showReceive) { ReceiveView() }
+            .sheet(isPresented: $showReceive) { ReceiveEntryView() }
             .sheet(isPresented: $showSend, onDismiss: {
                 sendAccountID = nil
                 sendPersonID = nil

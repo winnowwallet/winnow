@@ -1,4 +1,5 @@
 @testable import WinnowApp
+import TestSupport
 import WalletCore
 import XCTest
 
@@ -89,6 +90,26 @@ final class AdvancedModeTests: XCTestCase {
             return XCTFail("E2E mode should resolve")
         }
         XCTAssertTrue(advanced.advancedMode)
+    }
+
+    func testLightningHonorsSavedSimpleAndAdvancedChoices() throws {
+        guard case let .active(e2e) = E2EMode.resolve(environment: [
+            "WINNOW_E2E": "1", "WINNOW_E2E_RUN": "lightning-mode-\(UUID())",
+            "WINNOW_E2E_NETWORK": "regtest",
+            "WINNOW_E2E_ENTROPY": String(repeating: "00", count: 16),
+        ]) else { return XCTFail("E2E mode should resolve") }
+        defer { e2e.defaults.removePersistentDomain(forName: e2e.defaultsSuiteName) }
+        func reopen() -> AppModel {
+            AppModel(deviceAuthenticator: SilentAuthenticator(), e2e: e2e,
+                     storeKeys: InMemoryStoreKeyVault(), keyStore: InMemoryKeyStore())
+        }
+        let model = reopen()
+        XCTAssertNotNil(model.lightning)
+        XCTAssertTrue(model.advancedMode, "a fresh Lightning install shows its tab")
+        model.setAdvancedMode(false)
+        XCTAssertFalse(reopen().advancedMode, "Lightning must respect a persisted false")
+        model.setAdvancedMode(true)
+        XCTAssertTrue(reopen().advancedMode)
     }
 }
 

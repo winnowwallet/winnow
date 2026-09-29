@@ -4,10 +4,12 @@
 
 The [recording page](https://winnowwallet.com/recording) presents one continuous
 journey video with its source provenance.
-The recorded ordinary, MuSig2, and script-path 2-of-3 payment journey retained
-16 checkpoint screenshots as secondary run artifacts. The homepage keeps the
-overview and signing illustrations; detailed recording and test evidence live
-on separate pages. CI replaces these 16 images in each deployed artifact with
+The current ordinary, MuSig2, and script-path 2-of-3 payment journey retains
+17 checkpoint screenshots as secondary run artifacts. Sixteen repository
+reference stills accompany the September 17 recording; the high-fee review
+is a separately dated September 28 capture. The homepage keeps the overview
+and signing illustrations; detailed recording and test evidence live on
+separate pages. CI replaces these 17 images in each deployed artifact with
 new or validated cached journey captures. The deployment’s `/recording` page
 identifies their source run; the dated notes below describe repository assets,
 not necessarily the images on the live site.
@@ -17,6 +19,7 @@ not necessarily the images on the live site.
 | `01-onboarding` | Before creating the wallet. |
 | `03-receive` | The receive address after skipping the optional label. |
 | `56-home-beginner` | The funded one-screen wallet. |
+| `05-high-fee-review` | The disproportionate-fee warning before cancelling without a broadcast. |
 | `06-send-review` | The destination, amount, fee, and total before sending. |
 | `08-send-confirmed` | The receipt after confirmation. |
 | `09-home-after-send` | Wallet history after the payment. |
@@ -31,7 +34,7 @@ not necessarily the images on the live site.
 | `15-approval-sent` | The 2-of-3 payment sent, before confirmation. |
 | `28-savings-confirmed` | The 2-of-3 account’s remaining confirmed balance. |
 
-The checked-in reference stills share the [repository recording’s provenance](../videos/README.md):
+The sixteen September 17 reference stills share the [repository recording’s provenance](../videos/README.md):
 `test01CreateReceiveSendConfirm`, source
 [`809c383`](https://github.com/winnowwallet/winnow/commit/809c38313c1262b0526e24870bea2d144a37771b),
 iPhone 17 Pro simulator running iOS 26.5, 2026-09-17. The test passed with zero
@@ -56,10 +59,35 @@ and unresolved pointers before publishing. Follow the
 [screenshot guidance](../../.github/internal/app-store-screenshots.md) when
 selecting images.
 
+## High-fee review capture — 2026-09-28
+
+`05-high-fee-review.png` comes from clean source
+[`7ceba20`](https://github.com/posix4e/winnow-lightning/commit/7ceba20bc3d214cfaff6a53fd5f955be5740bc14),
+from the normal-wallet `test01CreateReceiveSendConfirm` journey in
+[CI run 36415103694](https://github.com/posix4e/winnow-lightning/actions/runs/36415103694).
+That UI test passed, including cancellation without broadcasting the reviewed
+500-sat payment whose fee exceeded the amount. The hosted app unit/UI and
+Release checks passed; site packaging later failed on its obsolete 16-capture
+inventory. **The overall CI run is not green.** This still is evidence of the
+successful test's recorded moment, not a successful whole workflow or release.
+
+The original PNG, test log and result bundle are in
+[app artifact 10967668756](https://github.com/posix4e/winnow-lightning/actions/runs/36415103694/artifacts/10967668756),
+under `journey/node-screenshots/05-high-fee-review.png`.
+PNG SHA-256: `d8b374be5cf1a68b3fea0706c13013bcef1ee21faa2662f91f1d13719ab6cca9`.
+The retained artifact ZIP SHA-256 is
+`536da97c57924a401a9f795d78e788d98e18d2f4cd41697dfb52f7dc4f6e7278`.
+
+Adding this dated still does not replace or relabel the repository's September
+17 reference movie. That original movie does not include this new high-fee
+cancellation case; its source, timing, hash and sixteen accompanying stills
+remain documented in [the recording notes](../videos/README.md).
+
 ## Historical capture provenance
 
-The records below describe earlier suites. The 16 exact filenames listed above
-in this repository use the September 17 recording; other images retain their earlier provenance.
+The records below describe earlier suites. The sixteen filenames listed above
+other than `05-high-fee-review` use the September 17 recording; other images
+retain their earlier provenance.
 Historical `store-*.png` candidates
 were retired with the 0.7.0 one-screen interface and showed the four-tab layout.
 

@@ -1,0 +1,34 @@
+{
+  "source": "5420cbea1de9b5cff26e22c09d76d3392c9556aa",
+  "source_dirty": false,
+  "original_video_sha256": "e57e3fc3ca81864674278f0bca45294112d409fa7851284f68d1ca759c562b5a",
+  "original_video_bytes": 18917698,
+  "duration_seconds": 653.745,
+  "original_video_unchanged": true,
+  "strict_codec_decode": {
+    "result": "passed",
+    "exit_code": 0,
+    "diagnostic_log_empty": true,
+    "command": [
+      "ffmpeg",
+      "-v",
+      "error",
+      "-xerror",
+      "-i",
+      "/Users/posix4e/Documents/Codex/2026-09-24/i-x20/outputs/winnow-lightning/native-head5420cbe-20260928/live-mainnet/journey.mp4",
+      "-vf",
+      "setpts=N/(60*TB)",
+      "-fps_mode",
+      "passthrough",
+      "-enc_time_base",
+      "1:60",
+      "-an",
+      "-f",
+      "null",
+      "-"
+    ],
+    "started_epoch": 1790604868.311842,
+    "completed_epoch": 1790604869.160208,
+    "scope": "All original frames decode with -xerror. Decoder output timestamps alone are normalized for the null sink; original video is unchanged. This is not a claim that original timestamp/mux timing is warning-free."
+  }
+}

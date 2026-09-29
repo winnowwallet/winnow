@@ -25,8 +25,22 @@ cd "$(dirname "$0")/.."
 KEY_ID="${ASC_KEY_ID:?set ASC_KEY_ID}"
 ISSUER="${ASC_ISSUER_ID:?set ASC_ISSUER_ID}"
 KEY_PATH="${ASC_KEY_PATH:-$HOME/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8}"
-BUNDLE_ID="com.btcswift.app"
+BUNDLE_ID="${TESTFLIGHT_BUNDLE_ID:-com.btcswift.app}"
 APP_NAME="Winnow"
+case "$BUNDLE_ID" in
+  com.btcswift.app) ;;
+  com.btcswift.lightning)
+    APP_NAME="Winnow Lightning"
+    # Research releases update the existing app and internal group only.
+    case "${1:-all}" in
+      wait-processing|notes|internal|status) ;;
+      *) echo 'Use the verified Lightning release workflow for research uploads; no app creation or public distribution.' >&2; exit 2 ;;
+    esac
+    : "${TESTFLIGHT_MARKETING_VERSION:?research release requires an exact version}"
+    : "${TESTFLIGHT_BUILD_NUMBER:?research release requires an exact build}"
+    ;;
+  *) echo 'Unsupported TestFlight bundle identifier' >&2; exit 2 ;;
+esac
 API="https://api.appstoreconnect.apple.com/v1"
 PUBLIC_LINK_ID="${TESTFLIGHT_PUBLIC_LINK_ID:-83djpNE7}"
 WHATS_NEW_FILE="${TESTFLIGHT_WHATS_NEW_FILE:-docs/testflight-what-to-test.txt}"
@@ -73,9 +87,14 @@ step_upload() {
     -f build/WinnowApp.ipa -t ios --apiKey "$KEY_ID" --apiIssuer "$ISSUER"
 }
 
-app_id() { asc GET "/apps?filter[bundleId]=$BUNDLE_ID" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"][0]["id"])'; }
+app_id() { asc GET "/apps?filter[bundleId]=$BUNDLE_ID" | python3 -c 'import json,sys; rows=json.load(sys.stdin)["data"]; assert len(rows)==1; print(rows[0]["id"])'; }
 build_id() {
   if [ -n "${TESTFLIGHT_BUILD_ID:-}" ]; then
+    if [ "$BUNDLE_ID" = com.btcswift.lightning ]; then
+      local exact
+      exact=$(asc GET "/builds?filter[app]=$(app_id)&filter[version]=$EXPECTED_BUILD_NUMBER&filter[preReleaseVersion.version]=$EXPECTED_MARKETING_VERSION&limit=2")
+      printf '%s' "$exact" | python3 -c 'import json,sys; rows=json.load(sys.stdin)["data"]; assert len(rows)==1 and rows[0]["id"]==sys.argv[1], "explicit build does not match research app/version/build"' "$TESTFLIGHT_BUILD_ID"
+    fi
     printf '%s\n' "$TESTFLIGHT_BUILD_ID"
     return
   fi
@@ -172,6 +191,19 @@ step_internal() {
   # verify Apple's state instead of issuing a PATCH that returns 409 once set.
   local id detail state
   id=$(build_id)
+  if [ "$BUNDLE_ID" = com.btcswift.lightning ]; then
+    local group payload
+    group=$(asc GET "/apps/$(app_id)/betaGroups?limit=200" | python3 -c '
+import json, sys
+groups = [g for g in json.load(sys.stdin)["data"] if g["attributes"]["name"] == "PQLN Regtest Internal" and g["attributes"]["isInternalGroup"]]
+assert len(groups) == 1, "expected the existing research internal group"
+print(groups[0]["id"])
+')
+    payload=$(python3 -c 'import json,sys; print(json.dumps({"data":[{"type":"builds","id":sys.argv[1]}]}))' "$id")
+    asc POST "/betaGroups/$group/relationships/builds" "$payload" >/dev/null
+    asc GET "/betaGroups/$group/builds?limit=200" | python3 -c 'import json,sys; assert any(b["id"]==sys.argv[1] for b in json.load(sys.stdin)["data"]), "build is absent from internal group"' "$id"
+    asc GET "/betaGroups/$group/betaTesters?limit=200" | python3 -c 'import json,sys; assert json.load(sys.stdin)["data"], "internal group has no testers"'
+  fi
   detail=$(asc GET "/builds/$id/buildBetaDetail")
   state=$(printf '%s' "$detail" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["attributes"]["internalBuildState"])')
   case "$state" in

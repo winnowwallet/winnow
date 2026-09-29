@@ -42,6 +42,11 @@ struct ICloudBackupKeys: ICloudBackupKeyStoring {
     let service = "com.btcswift.app.cloud-backup-key.v1"
 
     func load(_ id: UUID) throws -> SymmetricKey {
+        let item = try matchingKey(id)
+        guard let data = item as? Data, data.count == 32 else { throw ICloudBackupError.invalidBackup }
+        return SymmetricKey(data: data)
+    }
+    private func matchingKey(_ id: UUID) throws -> CFTypeRef? {
         var query = query(id)
         query[kSecReturnData] = true
         query[kSecMatchLimit] = kSecMatchLimitOne
@@ -49,8 +54,7 @@ struct ICloudBackupKeys: ICloudBackupKeyStoring {
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         if status == errSecItemNotFound { throw ICloudBackupError.keyUnavailable }
         guard status == errSecSuccess else { throw KeyStoreError.keychain(status) }
-        guard let data = item as? Data, data.count == 32 else { throw ICloudBackupError.invalidBackup }
-        return SymmetricKey(data: data)
+        return item
     }
 
     func create(_ id: UUID) throws -> SymmetricKey {
@@ -103,7 +107,7 @@ actor ICloudBackupStore: ICloudBackupStoring {
     }
 
     func save(_ backup: CloudWalletBackup, account expectedAccount: String) async throws {
-        guard try await account() == expectedAccount else { throw ICloudBackupError.accountChanged }
+        try await requireAccount(expectedAccount)
         try Task.checkCancellation()
         let directory = FileManager.default.temporaryDirectory.appending(path: "cloud-backup-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -114,25 +118,37 @@ actor ICloudBackupStore: ICloudBackupStoring {
         record["network"] = backup.network
         record["savedAt"] = backup.savedAt
         record["payload"] = CKAsset(fileURL: file)
+        try await upload(record)
+        try await requireAccount(expectedAccount)
+    }
+    private func upload(_ record: CKRecord) async throws {
         let result = try await container.privateCloudDatabase.modifyRecords(saving: [record], deleting: [],
             savePolicy: .changedKeys, atomically: true)
         guard let saved = result.saveResults[record.recordID] else { throw ICloudBackupError.invalidBackup }
         _ = try saved.get()
-        guard try await account() == expectedAccount else { throw ICloudBackupError.accountChanged }
     }
 
     func load(_ id: UUID, account expectedAccount: String) async throws -> CloudWalletBackup {
-        guard try await account() == expectedAccount else { throw ICloudBackupError.accountChanged }
+        try await requireAccount(expectedAccount)
         let record = try await container.privateCloudDatabase.record(for: CKRecord.ID(recordName: id.uuidString))
+        let backup = try readBackup(record, id: id)
+        try await requireAccount(expectedAccount)
+        return backup
+    }
+    private func requireAccount(_ expectedAccount: String) async throws {
+        guard try await account() == expectedAccount else { throw ICloudBackupError.accountChanged }
+    }
+    private func payloadURL(_ record: CKRecord) throws -> URL {
         guard let asset = record["payload"] as? CKAsset, let url = asset.fileURL else {
             throw ICloudBackupError.invalidBackup
         }
         let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max
         guard size <= CloudWalletBackup.maximumBytes else { throw ICloudBackupError.invalidBackup }
-        let backup = try CloudWalletBackup.decode(Data(contentsOf: url))
-        guard backup.id == id, try await account() == expectedAccount else {
-            throw ICloudBackupError.accountChanged
-        }
+        return url
+    }
+    private func readBackup(_ record: CKRecord, id: UUID) throws -> CloudWalletBackup {
+        let backup = try CloudWalletBackup.decode(Data(contentsOf: payloadURL(record)))
+        guard backup.id == id else { throw ICloudBackupError.accountChanged }
         return backup
     }
 }

@@ -1,0 +1,31 @@
+{
+  "source": "1f1bfdd956c84765c444ed6b0667806b20626c55",
+  "core_tests": {
+    "passed": 90,
+    "failed": 0,
+    "ci_run": 36351005332,
+    "attempt": 1,
+    "job": 108709554196,
+    "step_result": "passed",
+    "workflow_result": "UI preflight failed before app launch"
+  },
+  "ci_gate": 36353224497,
+  "app_tests": {
+    "passed": 19,
+    "skipped": 1,
+    "failed": 0,
+    "source": "1f1bfdd956c84765c444ed6b0667806b20626c55",
+    "executable_sha256": "b86d33e911346c0fc79aab8bf2d3c646cf623768187f5b594faeb84461157e15",
+    "skip": "Physical file protection unavailable in simulator"
+  },
+  "display_runs": {
+    "ipad": {
+      "passed": 4,
+      "skipped": 1
+    },
+    "large_text": {
+      "passed": 4,
+      "skipped": 1
+    }
+  }
+}

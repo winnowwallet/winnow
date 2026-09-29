@@ -44,10 +44,12 @@ enum StoreKeyVaultError: Error, Equatable, LocalizedError {
 /// synchronised; readable once the device has been unlocked since boot, which
 /// is the same window as the files they seal.
 struct KeychainStoreKeyVault: StoreKeyVault {
+    enum Protection: Sendable { case afterFirstUnlock, whenUnlocked }
     static let accountPrefix = "store-key."
     static let keyBytes = 32
 
     let service: String
+    var protection: Protection = .afterFirstUnlock
 
     func key(for account: String) throws -> SymmetricKey? {
         var query = baseQuery(account)
@@ -65,7 +67,8 @@ struct KeychainStoreKeyVault: StoreKeyVault {
         let key = SymmetricKey(size: .bits256)
         var query = baseQuery(account)
         query[kSecValueData] = key.withUnsafeBytes { Data($0) }
-        query[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        query[kSecAttrAccessible] = protection == .whenUnlocked
+            ? kSecAttrAccessibleWhenUnlockedThisDeviceOnly : kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let status = SecItemAdd(query as CFDictionary, nil)
         if status == errSecDuplicateItem { throw StoreKeyVaultError.alreadyEstablished(account) }
         guard status == errSecSuccess else { throw StoreKeyVaultError.keychain(status) }

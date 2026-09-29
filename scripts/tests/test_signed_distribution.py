@@ -86,6 +86,48 @@ class SignedAppTests(unittest.TestCase):
             with self.subTest(architecture=architecture), self.assertRaises(AssertionError):
                 self.verify(architectures=architecture)
 
+    def test_research_distribution_requires_reviewed_encryption_and_no_cloud(self):
+        self.info['CFBundleIdentifier'] = 'com.btcswift.lightning'
+        self.entitlements = {'application-identifier': '2858MX5336.com.btcswift.lightning',
+                             'com.apple.developer.team-identifier': '2858MX5336', 'get-task-allow': False}
+        with patch.dict(os.environ, TESTFLIGHT_BUNDLE_ID='com.btcswift.lightning', LIGHTNING_NONEXEMPT_ENCRYPTION='', LIGHTNING_ENCRYPTION_COMPLIANCE_CODE='approved-code'):
+            with self.assertRaises(AssertionError):
+                self.verify(True)
+            for value in (True, False):
+                self.info['ITSAppUsesNonExemptEncryption'] = value
+                self.info['ITSEncryptionExportComplianceCode'] = 'approved-code'
+                os.environ['LIGHTNING_NONEXEMPT_ENCRYPTION'] = 'YES' if value else 'NO'
+                self.verify(True)
+                self.info['ITSAppUsesNonExemptEncryption'] = not value
+                with self.assertRaises(AssertionError):
+                    self.verify(True)
+            os.environ['LIGHTNING_NONEXEMPT_ENCRYPTION'] = 'YES'
+            self.info['ITSAppUsesNonExemptEncryption'] = True
+            for code in ('', 'different-code'):
+                self.info['ITSEncryptionExportComplianceCode'] = code
+                with self.subTest(code=code), self.assertRaises(AssertionError):
+                    self.verify(True)
+            os.environ['LIGHTNING_NONEXEMPT_ENCRYPTION'] = 'NO'
+            self.info['ITSAppUsesNonExemptEncryption'] = False
+            self.entitlements['com.apple.developer.icloud-services'] = ['CloudKit']
+            with self.assertRaises(AssertionError):
+                self.verify(True)
+
+    def test_pending_questionnaire_cannot_claim_exemption_or_approved_code(self):
+        self.info['CFBundleIdentifier'] = 'com.btcswift.lightning'
+        self.entitlements = {'application-identifier': '2858MX5336.com.btcswift.lightning',
+                             'com.apple.developer.team-identifier': '2858MX5336', 'get-task-allow': False}
+        with patch.dict(os.environ, TESTFLIGHT_BUNDLE_ID='com.btcswift.lightning', LIGHTNING_NONEXEMPT_ENCRYPTION='PENDING'):
+            self.verify(True)
+            for value in (True, False, ''):
+                self.info['ITSAppUsesNonExemptEncryption'] = value
+                with self.subTest(value=value), self.assertRaises(AssertionError):
+                    self.verify(True)
+            self.info.pop('ITSAppUsesNonExemptEncryption')
+            self.info['ITSEncryptionExportComplianceCode'] = 'unreviewed-code'
+            with self.assertRaises(AssertionError):
+                self.verify(True)
+
 
 class UploadIntegrityTests(unittest.TestCase):
     def test_upload_only_accepts_the_verified_ipa_bytes(self):
@@ -133,4 +175,4 @@ class UploadIntegrityTests(unittest.TestCase):
         self.assertIn('<string>Production</string>', workflow)
         verifier = (ROOT / 'scripts/verify-exported-ipa').read_text()
         self.assertIn('--distribution', verifier)
-        self.assertIn('scripts/verify-release-e2e-exclusion', verifier)
+        self.assertIn('"$script_dir/verify-release-e2e-exclusion"', verifier)

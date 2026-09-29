@@ -2,6 +2,21 @@
 import XCTest
 
 final class SyncPhaseDisplayTests: XCTestCase {
+    func testReconnectedPeerStatusDoesNotDisplayOldNoPeersFailure() {
+        var status = AppModel.Status()
+        status.lastSyncError = "No Bitcoin peers are available for compact-filter synchronization."
+        XCTAssertNotNil(status.syncErrorForDisplay(phase: .peerDiscoveryFailed))
+        XCTAssertNil(status.syncErrorForDisplay(phase: .connecting(connected: 3, target: 3)))
+        XCTAssertNil(status.syncErrorForDisplay(phase: .filters(scanned: 100, tip: 200)))
+        XCTAssertNotNil(status.lastSyncError, "presentation must retain the failed attempt for diagnostics")
+        status.lastSyncError = "Bitcoin peers disagreed about compact-filter checkpoints."
+        XCTAssertNotNil(status.syncErrorForDisplay(phase: .connecting(connected: 3, target: 3)),
+                        "reconnection must not conceal a verification failure")
+        status.syncing = true
+        XCTAssertNil(status.syncErrorForDisplay(phase: .filters(scanned: 100, tip: 200)))
+        status.syncing = false
+        XCTAssertNotNil(status.syncErrorForDisplay(phase: .filters(scanned: 100, tip: 200)))
+    }
     func testFilterScanTextUsesLivePhaseInsteadOfStaleWalletSnapshot() {
         let scanned: UInt32 = 162_000
         let tip: UInt32 = 963_221

@@ -68,22 +68,41 @@ extension XCTestCase {
     @MainActor
     @discardableResult
     func scrollUntilExists(_ app: XCUIApplication, _ element: XCUIElement,
-                           maxSwipes: Int = 16, up: Bool = false, fullyVisible: Bool = false) -> Bool {
+                           maxSwipes: Int = 16, up: Bool = false, fullyVisible: Bool = false,
+                           dragX: CGFloat = 0.5) -> Bool {
         for _ in 0 ..< maxSwipes {
             // Long enough for a row to materialise after a drag animates on
             // a slow CI VM, short enough that a row several drags down does
             // not cost many seconds of waiting per drag.
             if element.appears(within: 1.5) {
                 guard fullyVisible else { return true }
-                return reveal(app, element, fullyVisible: fullyVisible)
+                return reveal(app, element, fullyVisible: fullyVisible, dragX: dragX)
             }
-            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: up ? 0.25 : 0.75))
-            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: up ? 0.75 : 0.25))
+            guard let appFrame = usableFrame(app), let frame = scrollingFrame(app, within: appFrame),
+                  let band = clearBand(app, in: frame) else { return false }
+            let reach = band.upperBound - band.lowerBound
+            let origin = app.coordinate(withNormalizedOffset: .zero)
+            let start = origin.withOffset(CGVector(dx: frame.minX + frame.width * dragX - appFrame.minX,
+                dy: band.lowerBound + reach * (up ? 0.25 : 0.75) - appFrame.minY))
+            let end = origin.withOffset(CGVector(dx: frame.minX + frame.width * dragX - appFrame.minX,
+                dy: band.lowerBound + reach * (up ? 0.75 : 0.25) - appFrame.minY))
             start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0.25)
         }
         guard element.appears(within: 1.5) else { return false }
         guard fullyVisible else { return true }
-        return reveal(app, element, fullyVisible: fullyVisible)
+        return reveal(app, element, fullyVisible: fullyVisible, dragX: dragX)
+    }
+
+    /// The last Form belongs to the presented navigation stack. On iPad its
+    /// sheet occupies only part of the window; drags outside it hit the dimmed
+    /// wallet instead of scrolling the form.
+    @MainActor
+    private func scrollingFrame(_ app: XCUIApplication, within frame: CGRect) -> CGRect? {
+        guard let snapshot = try? app.snapshot() else { return nil }
+        func forms(_ node: XCUIElementSnapshot) -> [CGRect] {
+            (node.elementType == .collectionView ? [node.frame] : []) + node.children.flatMap(forms)
+        }
+        return forms(snapshot).last.map { $0.intersection(frame) } ?? frame
     }
 
     /// The vertical band a row is tappable in: below the lowest navigation
@@ -97,12 +116,16 @@ extension XCTestCase {
             XCTFail("could not snapshot the app's navigation bars")
             return nil
         }
-        let top = max(frame.minY, navigationBarBottom(snapshot) ?? frame.minY)
-        var bottom = frame.maxY
+        var top = max(frame.minY, navigationBarBottom(snapshot) ?? frame.minY)
+        // A tall accessibility row can use the entire drag band. Keep its
+        // starting point above the home indicator, where a swipe exits the
+        // app instead of scrolling a modal sheet.
+        var bottom = frame.maxY - 34
         // A sheet covers the underlying tab bar; that bar must not shrink
         // the sheet's usable area and cause repeated ineffective drags.
         for cover in [app.tabBars.firstMatch, app.keyboards.firstMatch] where cover.exists && cover.isHittable {
-            bottom = min(bottom, cover.frame.minY)
+            if cover.frame.maxY < frame.midY { top = max(top, cover.frame.maxY) }
+            else { bottom = min(bottom, cover.frame.minY) }
         }
         return top ... max(top, bottom)
     }
@@ -119,12 +142,12 @@ extension XCTestCase {
     /// Wait for lazy-row geometry before another gesture. An extra downward
     /// drag at the top of a form can dismiss its sheet and abandon signing.
     @MainActor
-    private func reveal(_ app: XCUIApplication, _ element: XCUIElement, fullyVisible: Bool) -> Bool {
+    private func reveal(_ app: XCUIApplication, _ element: XCUIElement, fullyVisible: Bool, dragX: CGFloat) -> Bool {
         let margin: CGFloat = 8
         guard let appFrame = usableFrame(app) else { return false }
         // Each AX frame read resolves the element again. Reuse this geometry
         // within the reveal; the moving row is still reread after every drag.
-        guard let band = clearBand(app, in: appFrame) else { return false }
+        guard let viewport = scrollingFrame(app, within: appFrame), let band = clearBand(app, in: viewport) else { return false }
         let reach = band.upperBound - band.lowerBound - 2 * margin
         guard reach.isFinite, reach > 0 else { return false }
         for attempt in 0 ... 3 {
@@ -133,13 +156,13 @@ extension XCTestCase {
             if shift == 0 {
                 // XCTest can reject a valid visible button's activation point.
                 // Verify its bounds here; the shared journey taps its center.
-                return !fullyVisible || (frame.minX >= appFrame.minX && frame.maxX <= appFrame.maxX
+                return !fullyVisible || (frame.minX >= viewport.minX && frame.maxX <= viewport.maxX
                     && frame.minY >= band.lowerBound + margin && frame.maxY <= band.upperBound - margin)
             }
             guard attempt < 3 else { return false }
             let midY = (band.lowerBound + band.upperBound) / 2
             let start = app.coordinate(withNormalizedOffset: .zero)
-                .withOffset(CGVector(dx: appFrame.width / 2, dy: midY - shift / 2 - appFrame.minY))
+                .withOffset(CGVector(dx: viewport.minX + viewport.width * dragX - appFrame.minX, dy: midY - shift / 2 - appFrame.minY))
             start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: shift)),
                         withVelocity: .default, thenHoldForDuration: 0.25)
         }
@@ -165,11 +188,22 @@ extension XCTestCase {
     /// AX element during a button-relative tap, turning a valid center into
     /// the row's corner. Anchor the event to the stable app using fresh bounds.
     @MainActor
-    func tapVisibleCenter(_ app: XCUIApplication, _ element: XCUIElement) -> Bool {
-        guard let appFrame = usableFrame(app), let frame = usableFrame(element),
-              appFrame.contains(frame) else { return false }
+    func tapVisibleCenter(_ app: XCUIApplication, _ element: XCUIElement, excludingBars: Bool = false) -> Bool {
+        guard let appFrame = usableFrame(app), let frame = usableFrame(element) else { return false }
+        var viewport = appFrame
+        if excludingBars {
+            guard let form = scrollingFrame(app, within: appFrame), let band = clearBand(app, in: form) else { return false }
+            viewport = CGRect(x: form.minX, y: band.lowerBound,
+                              width: form.width, height: band.upperBound - band.lowerBound)
+        }
+        let visible = frame.intersection(viewport)
+        guard !visible.isNull, visible.width > 0,
+              visible.height >= min(frame.height, 24) else {
+            print("Tap target outside visible area: app=\(appFrame), target=\(frame), viewport=\(viewport)")
+            return false
+        }
         app.coordinate(withNormalizedOffset: .zero)
-            .withOffset(CGVector(dx: frame.midX - appFrame.minX, dy: frame.midY - appFrame.minY))
+            .withOffset(CGVector(dx: visible.midX - appFrame.minX, dy: visible.midY - appFrame.minY))
             .tap()
         return true
     }
@@ -207,8 +241,8 @@ extension XCTestCase {
 }
 
 extension XCUIApplication {
-    /// Types into a field (TextField or TextEditor) and dismisses the
-    /// software keyboard afterwards.
+    /// Types into a field (TextField or TextEditor). Callers that use a
+    /// specific keyboard accessory can dismiss it themselves afterwards.
     ///
     /// A tap that lands while the previous field's keyboard is still on its
     /// way out can leave nothing focused, and typing then fails with
@@ -216,7 +250,7 @@ extension XCUIApplication {
     /// hosted runners, #84). So the tap is repeated until the field has
     /// the keyboard, and dismissal waits for the keyboard to be gone.
     @MainActor
-    func typeInto(_ identifier: String, _ text: String) {
+    func typeInto(_ identifier: String, _ text: String, dismissKeyboardAfterTyping: Bool = true) {
         var field = textFields[identifier]
         if !field.exists { field = textViews[identifier] }
         XCTAssertTrue(field.appears(within: 20), "no text field \(identifier)")
@@ -227,7 +261,7 @@ extension XCUIApplication {
         }
         XCTAssertTrue(focused, "\(identifier) never took keyboard focus")
         field.typeText(text)
-        dismissKeyboard()
+        if dismissKeyboardAfterTyping { dismissKeyboard() }
     }
 
     @MainActor

@@ -1,0 +1,13 @@
+{
+  "repository": "posix4e/winnow-lightning",
+  "app_id": "6815392502",
+  "bundle": "com.btcswift.lightning",
+  "source": "26e35021b545764a1dcb9358c0d284b869b6844c",
+  "release_tooling_source": "0228118d8b47d4377a1eae7ef9695c9ca0b8fea3",
+  "ci_run": 36438491196,
+  "version": "0.4.0",
+  "build": "9",
+  "evidence": "lightning-release-evidence/roadmap-candidate/evidence.json",
+  "distribution_scope": "International internal TestFlight beta; no public App Store release requested",
+  "notes": "Clean app 26e3502 and separate tooling 0228118 are published. Production funding adapter now waits for active verified scans; cryptographic primitive/dependency/project hashes are unchanged. Seven actual native readiness cases and one stock-peer BOLT11 flow passed in the retained dirty precommit snapshot; they are not final clean-head display proof. Required exact-source CI, iPad/max/public journeys and Apple signed-build/distribution/determination checks remain pending. Original 5420 and 7e public proof stays historical. Candidate 0.4.0(9) remains subject to fresh Apple next-build checks; no upload is claimed."
+}

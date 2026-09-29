@@ -38,7 +38,7 @@ public enum TxBroadcasterStorageError: LocalizedError, Equatable, Sendable {
 }
 
 /// P2P transaction relay (docs/write-side.md §7): announce via
-/// `inv(MSG_WITNESS_TX)` to connected peers (pool default: 3), answer
+/// `inv(MSG_TX)` to connected peers (pool default: 3), answer witness-aware
 /// `getdata` with the raw transaction, and re-announce on an exponential
 /// backoff until the caller reports confirmation (observed via FilterSync
 /// block matches) or cancels. Pending transactions persist as JSON — raw tx,
@@ -92,6 +92,7 @@ public actor TxBroadcaster {
         var state: PeerAnnouncementState
         var announcements: Int
         var lastAnnouncedAt: Date
+        var servings = 0
     }
 
     private struct Pending {
@@ -271,6 +272,33 @@ public actor TxBroadcaster {
         await checkFeeFloors()
         scheduleRebroadcast()
         return txid
+    }
+
+    /// Register both signed transactions before announcing the child. Core's
+    /// opportunistic 1p1c relay can then request its missing low-fee parent.
+    /// This does not imply acceptance; callers verify confirmation separately.
+    public func broadcastPackage(parent rawParent: Data, child rawChild: Data) async throws -> [Data] {
+        guard !stopped else { throw TxBroadcasterError.stopped }
+        let parent = try Self.validatedTransaction(rawParent), child = try Self.validatedTransaction(rawChild)
+        guard parent.txid != child.txid, child.inputs.contains(where: { $0.previousOutput.txid == parent.txid }) else {
+            throw WireError.malformed("package child does not spend parent")
+        }
+        var candidate = pending
+        for (raw, transaction) in [(rawParent, parent), (rawChild, child)] {
+            if let existing = candidate[transaction.txid] {
+                guard existing.rawTx == raw else { throw WireError.malformed("package changed an existing transaction") }
+            } else {
+                candidate[transaction.txid] = Pending(rawTx: raw, transaction: transaction, feeRateSatPerVByte: nil,
+                    attempt: 0, nextAttemptAt: now() + Self.timeInterval(backoffInterval(attempt: 0)))
+            }
+        }
+        try persist(candidate)
+        pending = candidate; persistenceBlocked = false
+        await ensurePeerListeners()
+        await announce(txid: child.txid)
+        await announce(txid: parent.txid)
+        scheduleRebroadcast()
+        return [parent.txid, child.txid]
     }
 
     /// Called when the tx is seen in a matched block (or otherwise confirmed).
@@ -588,7 +616,8 @@ public actor TxBroadcaster {
     private func announce(txid: Data) async {
         guard pending[txid] != nil else { return }
         let peers = await pool.connectedPeers()
-        let announcement = PeerMessage.inv(InventoryPayload([InventoryVector(type: .witnessTx, hash: txid)]))
+        // BIP144's witness flag belongs in getdata, not inv announcements.
+        let announcement = PeerMessage.inv(InventoryPayload([InventoryVector(type: .tx, hash: txid)]))
         var announced = 0
         for peer in peers {
             // BIP133: a peer whose fee filter is above this transaction's
@@ -804,16 +833,16 @@ public actor TxBroadcaster {
 
     private func serve(_ payload: InventoryPayload, to peer: PeerConnection) async {
         let key = peer.endpoint.description
-        // One transaction per request, and one serving per peer: a getdata
-        // that names a txid 50,000 times, or asks again for what it already
-        // holds, must not multiply the bytes and events it costs us.
+        // Deduplicate each request and bound responses per peer. Only a known
+        // parent can be supplied once more per already-served signed child,
+        // as required for opportunistic package relay after a fee rejection.
         var seen = Set<Data>()
         for vector in payload.vectors where vector.type.baseType == .tx {
             guard pending[vector.hash] != nil, seen.insert(vector.hash).inserted else { continue }
             var relay = pending[vector.hash]?.peers[key] ?? PeerRelay(state: .announced,
                                                                       announcements: 0,
                                                                       lastAnnouncedAt: now())
-            guard relay.state != .served else { continue }
+            guard canServe(vector.hash, relay: relay, peer: key) else { continue }
             relay.state = .requested
             pending[vector.hash]?.peers[key] = relay
             emit(.requested(txid: vector.hash, peer: peer.endpoint))
@@ -821,6 +850,7 @@ public actor TxBroadcaster {
             do {
                 try await peer.send(.tx(transaction))
                 relay.state = .served
+                relay.servings += 1
                 if pending[vector.hash]?.served != true {
                     pending[vector.hash]?.served = true
                     // Best effort for this historical hint. If saving fails,
@@ -835,6 +865,17 @@ public actor TxBroadcaster {
                 emit(.failed(txid: vector.hash, peer: peer.endpoint, reason: "serve failed"))
             }
         }
+    }
+
+    private func canServe(_ txid: Data, relay: PeerRelay, peer: String) -> Bool {
+        guard relay.state == .served else { return true }
+        let servedChildren = pending.values.filter { child in
+            child.peers[peer]?.state == .served && child.transaction.inputs.contains { $0.previousOutput.txid == txid }
+        }.count
+        // Each distinct signed child permits one parent reconsideration.
+        // A later approved replacement can rescue a rejected first package,
+        // while repeated getdata for the same child stays bounded.
+        return relay.servings <= servedChildren
     }
 
     private func persist(_ state: [Data: Pending]) throws {

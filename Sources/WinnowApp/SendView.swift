@@ -25,6 +25,41 @@ struct SendReviewInputs: Equatable {
     var amount: Int64? { Int64(amountText) }
 }
 
+/// Progress for one reviewed, broadcast transaction. Peer echoes and
+/// broadcaster requests share the same set, so each relay is shown once.
+struct SendRelayProgress: Equatable {
+    var log: [String] = []
+    var peers: Set<String> = []
+    var feeFloorNotice = false
+    var confirmedHeight: UInt32?
+
+    /// Returns true at confirmation even if history still has its pending
+    /// height; the subsequent model refresh supplies the actual block number.
+    mutating func apply(_ event: TxBroadcaster.Event, txid: Data, confirmationHeight: UInt32?) -> Bool {
+        switch event {
+        case let .announced(id, count) where id == txid:
+            log.append("Announced to \(count) peer(s)")
+        case let .requested(id, peer) where id == txid:
+            recordRelay(peer)
+        case let .feeFloorExceeded(id, _) where id == txid:
+            feeFloorNotice = true
+        case let .confirmed(id) where id == txid:
+            recordConfirmation(confirmationHeight)
+            return true
+        default: break
+        }
+        return false
+    }
+
+    private mutating func recordRelay(_ peer: PeerEndpoint) {
+        if peers.insert(peer.description).inserted { log.append("Relayed to \(peer)") }
+    }
+
+    private mutating func recordConfirmation(_ height: UInt32?) {
+        if let height, height > 0 { confirmedHeight = height }
+    }
+}
+
 /// Send to any standard address: fee
 /// selection (FeePolicy presets + the peers' feefilter floor + override), a
 /// review step, then sign + broadcast via TxBroadcaster. Relay status comes
@@ -50,6 +85,7 @@ struct SendView: View {
 
     @State private var selectedPersonID: String?
     @State private var showRecipients = false
+    @State private var showLightning = false
     @State private var destination = ""
     @State private var amountText = ""
     @State private var priority: FeePolicy.Priority = .medium
@@ -62,10 +98,7 @@ struct SendView: View {
     @State private var sentTxid: Data?
     /// Hex of the signed transaction, while it is still pending.
     @State private var rawTransaction: String?
-    @State private var relayLog: [String] = []
-    @State private var relayedPeers: Set<String> = []
-    @State private var feeFloorNotice = false
-    @State private var confirmedHeight: UInt32?
+    @State private var relayProgress = SendRelayProgress()
     private enum Field { case destination, amount, fee }
     @FocusState private var focusedField: Field?
 
@@ -131,6 +164,9 @@ struct SendView: View {
                     }
                 }
             }
+            .sheet(isPresented: $showLightning) {
+                if let controller = model.lightning { LightningInvoiceSendView(controller: controller) }
+            }
             .sheet(isPresented: $showRecipients) {
                 SavedRecipientsView { person in
                     selectedPersonID = person.id
@@ -167,16 +203,19 @@ struct SendView: View {
                 if let accountID, !ids.contains(accountID) { self.accountID = nil }
             }
             .onChange(of: model.status.history) { _, history in
-                guard let sentTxid, confirmedHeight == nil,
+                guard let sentTxid, relayProgress.confirmedHeight == nil,
                       let entry = history.first(where: { $0.txid == sentTxid }), entry.height > 0
                 else { return }
-                confirmedHeight = entry.height
+                relayProgress.confirmedHeight = entry.height
             }
         }
     }
 
     private var paymentForm: some View {
         Group {
+            if model.lightning != nil, accountID == nil, selectedPerson == nil {
+                Section { Button("Pay Lightning invoice") { showLightning = true }.accessibilityIdentifier("sendLightning") }
+            }
             if !model.vaults.isEmpty {
                 Section("From") {
                     Picker("Account", selection: $accountID) {
@@ -333,6 +372,15 @@ struct SendView: View {
 
     private func reviewWarnings(_ preview: AppModel.SendPreview) -> some View {
         Group {
+            recipientWarnings(preview)
+            transactionWarnings(preview)
+        }
+        .font(.footnote)
+        .foregroundStyle(.orange)
+    }
+
+    private func recipientWarnings(_ preview: AppModel.SendPreview) -> some View {
+        Group {
             if let recipient = preview.recipient, recipient.hasUnverifiedFundingDestination {
                 Section {
                     Label("This destination was inferred from transaction funding. Winnow has not verified that it belongs to \(recipient.name). Confirm it with them before sending.", systemImage: "exclamationmark.triangle")
@@ -345,6 +393,11 @@ struct SendView: View {
                         .accessibilityIdentifier("addressReuseWarning")
                 }
             }
+        }
+    }
+
+    private func transactionWarnings(_ preview: AppModel.SendPreview) -> some View {
+        Group {
             if let proportion = preview.feeProportion {
                 Section {
                     Label(proportion.message(sats: satsText), systemImage: "exclamationmark.triangle")
@@ -358,14 +411,12 @@ struct SendView: View {
                 }
             }
         }
-        .font(.footnote)
-        .foregroundStyle(.orange)
     }
 
     private func paymentStatus(_ txid: Data) -> some View {
         Group {
             Section {
-                if confirmedHeight != nil {
+                if relayProgress.confirmedHeight != nil {
                     Label("Payment confirmed", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                         .accessibilityIdentifier("broadcastConfirmed")
@@ -378,7 +429,7 @@ struct SendView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                if feeFloorNotice {
+                if relayProgress.feeFloorNotice {
                     Label("The network now requires a higher fee. This payment may be delayed. Advanced mode lets you raise its fee in Wallet.", systemImage: "exclamationmark.triangle")
                         .font(.footnote)
                         .foregroundStyle(.orange)
@@ -396,7 +447,7 @@ struct SendView: View {
                         CopyableIdentifier(value: txid.displayHex,
                                            accessibilityID: "copyBroadcastTransactionIDButton")
                         // Keep signed bytes available if peer relay fails.
-                        if let rawTransaction, confirmedHeight == nil {
+                        if let rawTransaction, relayProgress.confirmedHeight == nil {
                             CopyableIdentifier(value: rawTransaction, abbreviated: true,
                                                label: "Copy raw transaction",
                                                accessibilityID: "copyRawTransactionButton")
@@ -406,14 +457,14 @@ struct SendView: View {
                             url: model.esploraTransactionURL(txid),
                             exposedItem: "transaction ID",
                             accessibilityID: "explorerBroadcastButton")
-                        if !relayedPeers.isEmpty {
-                            Text("Relayed to \(relayedPeers.count) peer(s)")
+                        if !relayProgress.peers.isEmpty {
+                            Text("Relayed to \(relayProgress.peers.count) peer(s)")
                                 .accessibilityIdentifier("relayedCount")
                         }
-                        ForEach(Array(relayLog.enumerated()), id: \.offset) { _, line in
+                        ForEach(Array(relayProgress.log.enumerated()), id: \.offset) { _, line in
                             Text(line).font(.footnote)
                         }
-                        if let confirmedHeight {
+                        if let confirmedHeight = relayProgress.confirmedHeight {
                             LabeledContent("Block", value: "\(confirmedHeight)")
                         }
                     }
@@ -508,10 +559,7 @@ struct SendView: View {
         preview = nil
         sentTxid = nil
         rawTransaction = nil
-        relayLog = []
-        relayedPeers = []
-        feeFloorNotice = false
-        confirmedHeight = nil
+        relayProgress = SendRelayProgress()
         error = nil
     }
 
@@ -538,12 +586,12 @@ struct SendView: View {
             Task {
                 for await event in await window.events() {
                     guard case let .txidEchoed(txid, peer) = event, txid == sentTxid else { continue }
-                    relayedPeers.insert(peer.description)
+                    relayProgress.peers.insert(peer.description)
                 }
             }
         }
         for await event in await broadcaster.events() {
-            if apply(event, sentTxid: sentTxid, window: window, echoTask: echoTask) {
+            if apply(event, sentTxid: sentTxid) {
                 break
             }
         }
@@ -551,36 +599,13 @@ struct SendView: View {
         await window?.stop()
     }
 
-    /// Applies one broadcaster event to the send screen's relay narrative.
-    /// Returns true when propagation tracking is finished (confirmation).
-    private func apply(_ event: TxBroadcaster.Event, sentTxid: Data,
-                       window: MempoolWindow?, echoTask: Task<Void, Never>?) -> Bool {
-            switch event {
-            case let .announced(txid, peerCount) where txid == sentTxid:
-                relayLog.append("Announced to \(peerCount) peer(s)")
-            case let .requested(txid, peer) where txid == sentTxid:
-                if relayedPeers.insert(peer.description).inserted {
-                    relayLog.append("Relayed to \(peer)")
-                }
-            case let .feeFloorExceeded(txid, _) where txid == sentTxid:
-                feeFloorNotice = true
-            case let .confirmed(txid) where txid == sentTxid:
-                // The history snapshot here can still hold the pending
-                // (height 0) entry — the post-sync refresh lands the real
-                // height, and the onChange below then fills it in.
-                if let height = model.status.history.first(where: { $0.txid == txid })?.height,
-                   height > 0 {
-                    confirmedHeight = height
-                }
-                // Propagation tracking ends at confirmation.
-                echoTask?.cancel()
-                if let window { Task { await window.stop() } }
-                return true
-            default:
-                break
-            }
-        return false
+    /// The relay reducer owns transaction matching and duplicate events. The
+    /// tracking loop owns cancellation and stops its mempool window on exit.
+    private func apply(_ event: TxBroadcaster.Event, sentTxid: Data) -> Bool {
+        relayProgress.apply(event, txid: sentTxid,
+                            confirmationHeight: model.status.history.first(where: { $0.txid == sentTxid })?.height)
     }
+
 }
 
 /// Addresses must wrap literally: prose layout can insert a visible hyphen

@@ -27,7 +27,8 @@ UI_XCODE_ARGS=(
   -project WinnowApp.xcodeproj -scheme WinnowApp -configuration Debug
   -destination "platform=iOS Simulator,id=$UI_SIMULATOR_ID"
   -derivedDataPath "$UI_DERIVED_DATA"
-  -only-testing:WinnowAppUITests
+  -only-testing:WinnowAppUITests/WinnowAppUITests
+  -enableCodeCoverage "${WINNOW_UI_CODE_COVERAGE:-NO}"
   -skipPackagePluginValidation -skipMacroValidation
 )
 if [[ "$UI_SKIP_BUILD" != true ]]; then
@@ -150,9 +151,11 @@ fi
 phase recording-ready
 
 xcodebuild test-without-building -xctestrun "${UI_TEST_RUNS[0]}" \
+  -derivedDataPath "$UI_DERIVED_DATA" \
   -destination "platform=iOS Simulator,id=$UI_SIMULATOR_ID" \
-  -only-testing:WinnowAppUITests \
-  -test-timeouts-enabled YES -maximum-test-execution-time-allowance 600 \
+  -only-testing:WinnowAppUITests/WinnowAppUITests \
+  -enableCodeCoverage "${WINNOW_UI_CODE_COVERAGE:-NO}" \
+  -test-timeouts-enabled YES -maximum-test-execution-time-allowance 900 \
   -resultBundlePath "$UI_RESULTS/NodeUI.xcresult" \
   2>&1 | tee "$UI_RESULTS/node-ui.log"
 phase tests-finished

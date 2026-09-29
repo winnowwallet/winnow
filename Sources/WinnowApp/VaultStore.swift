@@ -98,6 +98,19 @@ actor VaultStore {
         }
     }
 
+    /// Completes an interrupted same-wallet restore without replacing a live
+    /// account's coins, pending reservations, birthday or address cursors.
+    func mergeMissingRecoveryRecords(_ restored: [VaultRecord]) throws {
+        try Self.validate(restored, network: network)
+        let existing = Set(records.map(\.id))
+        let missing = restored.filter { !existing.contains($0.id) }
+        guard !missing.isEmpty else { return }
+        let candidate = records + missing
+        try Self.validate(candidate, network: network)
+        try persist(candidate)
+        records = candidate
+    }
+
     func record(id: String) -> VaultRecord? {
         records.first { $0.id == id }
     }
@@ -313,69 +326,54 @@ actor VaultStore {
                      changeIndex: UInt32) throws -> Bool {
         guard let index = records.firstIndex(where: { $0.id == id }) else { return false }
         let vault = try Vault(records[index].descriptor, network: network)
-        if let changeScriptPubKey {
-            guard changeIndex <= Self.maximumNextIndex,
-                  try vault.scriptPubKey(index: changeIndex, choice: AddressChain.change.rawValue)
-                    == changeScriptPubKey
-            else {
-                throw VaultStorageError.invalidState("vault change output does not belong to this vault")
-            }
-            let matches = transaction.outputs.enumerated().filter {
-                $0.element.scriptPubKey == changeScriptPubKey
-            }
-            guard matches.count == 1,
-                  matches[0].offset <= Int(UInt32.max),
-                  matches[0].element.value > 0,
-                  matches[0].element.value <= BitcoinAmount.maximum
-            else {
-                throw VaultStorageError.invalidState("vault change output is missing or invalid")
-            }
-        }
-        let spendsKnownInput = transaction.inputs.contains { input in
-            records[index].utxos.contains {
-                $0.txid == input.previousOutput.txid && $0.vout == input.previousOutput.vout
-            }
-        }
-        guard spendsKnownInput else { return false }
-        let oldRecords = records
-        do {
-            return try recordValidatedSpend(
-                recordIndex: index, transaction: transaction,
-                changeScriptPubKey: changeScriptPubKey, changeIndex: changeIndex)
-        } catch {
-            records = oldRecords
-            throw error
-        }
+        let change = try validatedSpendChange(transaction: transaction, vault: vault,
+                                               script: changeScriptPubKey, index: changeIndex)
+        let known = Set(records[index].utxos.map(\.outpoint))
+        guard !known.isDisjoint(with: transaction.inputs.map(\.previousOutput)) else { return false }
+        var candidate = records
+        candidate[index] = recordValidatedSpend(candidate[index], transaction: transaction, change: change)
+        try Self.validate(candidate, network: network)
+        try persist(candidate)
+        records = candidate
+        return true
     }
 
-    private func recordValidatedSpend(recordIndex index: Int, transaction: Transaction,
-                                      changeScriptPubKey: Data?, changeIndex: UInt32) throws -> Bool {
+    private func validatedSpendChange(transaction: Transaction, vault: Vault,
+                                      script: Data?, index: UInt32) throws -> WalletUTXO? {
+        guard let script else { return nil }
+        guard index <= Self.maximumNextIndex,
+              try vault.scriptPubKey(index: index, choice: AddressChain.change.rawValue) == script else {
+            throw VaultStorageError.invalidState("vault change output does not belong to this vault")
+        }
+        let matches = transaction.outputs.enumerated().filter { $0.element.scriptPubKey == script }
+        guard matches.count == 1, matches[0].offset <= Int(UInt32.max),
+              matches[0].element.value > 0, matches[0].element.value <= BitcoinAmount.maximum else {
+            throw VaultStorageError.invalidState("vault change output is missing or invalid")
+        }
+        return WalletUTXO(txid: transaction.txid, vout: UInt32(matches[0].offset), amount: matches[0].element.value,
+                          scriptPubKey: script, chain: .change, index: index, height: 0)
+    }
+
+    private func recordValidatedSpend(_ record: VaultRecord, transaction: Transaction,
+                                      change: WalletUTXO?) -> VaultRecord {
+        var candidate = record
+        markSpentInputs(in: &candidate, transaction: transaction)
+        if let change {
+            candidate.allUtxos.append(change)
+            candidate.nextChangeIndex = change.index + 1
+        }
+        return candidate
+    }
+
+    private func markSpentInputs(in record: inout VaultRecord, transaction: Transaction) {
+        let inputs = Set(transaction.inputs.map(\.previousOutput))
         let txid = transaction.txid
-        for input in transaction.inputs {
-            // No height: this spend exists only in the transaction we just
-            // signed. A rollback must leave these reserved while it restores
-            // confirmed spends, or the vault re-selects coins its own
-            // in-flight transaction already spends.
-            for position in records[index].allUtxos.indices
-            where !records[index].allUtxos[position].isSpent
-                && records[index].allUtxos[position].txid == input.previousOutput.txid
-                && records[index].allUtxos[position].vout == input.previousOutput.vout {
-                records[index].allUtxos[position].spent =
-                    WalletUTXO.SpentMarker(spentBy: txid, height: nil)
-            }
+        // Pending spends stay reserved across a reorg; only a matched block
+        // gives these tombstones a confirmation height.
+        for position in record.allUtxos.indices
+        where !record.allUtxos[position].isSpent && inputs.contains(record.allUtxos[position].outpoint) {
+            record.allUtxos[position].spent = WalletUTXO.SpentMarker(spentBy: txid, height: nil)
         }
-        if let changeScriptPubKey,
-           let vout = transaction.outputs.firstIndex(where: { $0.scriptPubKey == changeScriptPubKey }) {
-            let output = transaction.outputs[vout]
-            records[index].allUtxos.append(WalletUTXO(
-                txid: txid, vout: UInt32(vout), amount: output.value,
-                scriptPubKey: changeScriptPubKey, chain: .change,
-                index: changeIndex, height: 0))
-            records[index].nextChangeIndex = changeIndex + 1
-        }
-        try Self.validate(records, network: network)
-        try persist()
-        return true
     }
 
     /// Indices 0 ..< max(used receive, used change, 1) + 2 of lookahead.
@@ -477,30 +475,29 @@ actor VaultStore {
     /// `createdAtHeight` and the address indices are untouched -- a reorg must
     /// not cost a vault its address gap any more than it costs the wallet one.
     func rollBack(to forkHeight: UInt32) throws {
-        var candidate = records
-        for index in candidate.indices {
-            candidate[index].allUtxos.removeAll { $0.height > forkHeight }
-            for position in candidate[index].allUtxos.indices {
-                guard let height = candidate[index].allUtxos[position].spent?.height,
-                      height > forkHeight
-                else { continue }
-                candidate[index].allUtxos[position].spent = nil
-            }
-        }
+        let candidate = records.map { rolledBack($0, to: forkHeight) }
         guard candidate != records else { return }
-        let previous = records
+        try persist(candidate)
         records = candidate
-        do {
-            try persist()
-        } catch {
-            records = previous
-            throw error
+    }
+
+    private func rolledBack(_ record: VaultRecord, to forkHeight: UInt32) -> VaultRecord {
+        var candidate = record
+        candidate.allUtxos.removeAll { $0.height > forkHeight }
+        for position in candidate.allUtxos.indices {
+            guard let height = candidate.allUtxos[position].spent?.height, height > forkHeight else { continue }
+            candidate.allUtxos[position].spent = nil
         }
+        return candidate
     }
 
     private func persist() throws {
+        try persist(records)
+    }
+
+    private func persist(_ candidate: [VaultRecord]) throws {
         guard let storageURL else { return }
-        let data = try JSONEncoder().encode(records)
+        let data = try JSONEncoder().encode(candidate)
         try seal.write(data, network: network, to: storageURL, using: writeData)
     }
 }

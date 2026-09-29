@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""Exact-source internal TestFlight release using Winnow's signing/export checks."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import plistlib
+import re
+import subprocess
+import tempfile
+import urllib.request
+
+# All validation below must run even if the caller inherited Python settings.
+if not __debug__:
+    raise RuntimeError('Release validation requires Python assertions; remove -O or PYTHONOPTIMIZE')
+
+ROOT = Path(__file__).resolve().parent.parent
+DRIVER_ROOT = ROOT
+REPOSITORY = 'posix4e/winnow-lightning'
+BUNDLE = 'com.btcswift.lightning'
+APP_ID = '6815392502'
+
+
+def output(*args):
+    return subprocess.check_output(args, cwd=ROOT, text=True).strip()
+
+
+def check_evidence(path, source, *, allow_pending_encryption=False):
+    evidence = json.loads(path.read_text())
+    assert evidence['source'] == source and evidence['bundle'] == BUNDLE
+    device_checks = {'owner_authentication', 'cancelled_authentication', 'file_protection', 'exact_share'}
+    assert all(evidence['checks'].get(name) == 'passed' for name in {'ipad', 'large_text'}), 'display release checks are incomplete'
+    deferred = evidence.get('device_checks_deferred_to_testflight') is True
+    if deferred:
+        assert evidence['physical_device'] is False, 'deferred device checks must not claim physical verification'
+        assert all(evidence['checks'].get(name) == 'pending' for name in device_checks), 'deferred checks must remain pending, never passed or failed'
+    else:
+        assert evidence['physical_device'] is True, 'physical checks must pass or be explicitly deferred to internal TestFlight'
+        assert all(evidence['checks'].get(name) == 'passed' for name in device_checks), 'physical device checks are incomplete'
+    assert evidence['artifacts'], 'device/display evidence is missing'
+    for artifact in evidence['artifacts']:
+        file = (path.parent / artifact['path']).resolve()
+        assert file.is_relative_to(path.parent.resolve()), 'evidence path escapes its directory'
+        assert hashlib.sha256(file.read_bytes()).hexdigest() == artifact['sha256'], 'evidence artifact changed'
+    encryption = evidence['encryption']
+    if encryption['mode'] == 'pending':
+        assert allow_pending_encryption, 'unreviewed encryption permits upload only, never tester distribution'
+        assert encryption['artifact'] in {item['path'] for item in evidence['artifacts']}, 'retain the encryption inventory for review'
+        return evidence
+    assert encryption['mode'] in {'exempt', 'declaration'}, 'a reviewed encryption determination is required'
+    assert encryption['reviewed_by'].strip() and encryption['rationale'].strip()
+    assert encryption['artifact'] in {item['path'] for item in evidence['artifacts']}, 'encryption determination must be retained with evidence'
+    if encryption['mode'] == 'declaration':
+        assert re.fullmatch('[A-Za-z0-9-]+', encryption['declaration_id'])
+    return evidence
+
+
+def defer_encryption_questionnaire(project):
+    """Leave declaration keys absent so Apple asks its upload questionnaire."""
+    original = project.read_text()
+    updated, count = re.subn(r'^\s*INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = [^;]+;\n', '', original, flags=re.MULTILINE)
+    assert count, 'generated project has no encryption setting to defer'
+    assert 'INFOPLIST_KEY_ITSEncryptionExportComplianceCode' not in updated, 'pending review must not supply a declaration code'
+    project.write_text(updated)
+
+
+def check_supply_chain(directory, ipa, source, driver_source):
+    repository = f'https://github.com/{REPOSITORY}'
+    spdx = json.loads((directory / 'winnow.spdx.json').read_text())
+    root_packages = [item for item in spdx['packages'] if item['SPDXID'] == 'SPDXRef-Package-winnow']
+    assert len(root_packages) == 1, 'SBOM must identify exactly one app source package'
+    assert root_packages[0]['downloadLocation'] == repository, 'SBOM source repository mismatch'
+    assert root_packages[0]['versionInfo'] == source, 'SBOM source commit mismatch'
+    assert spdx['documentNamespace'] == f'{repository}/sbom/{source}', 'SBOM source namespace mismatch'
+    provenance = json.loads((directory / 'winnow-build-provenance.json').read_text())
+    expected_subject = dict(name=ipa.name, digest=dict(sha256=hashlib.sha256(ipa.read_bytes()).hexdigest()))
+    assert provenance['subject'] == [expected_subject], 'provenance package digest mismatch'
+    predicate = provenance['predicate']
+    sources = [item for item in predicate['buildDefinition']['resolvedDependencies'] if item['uri'].startswith('git+')]
+    assert sources == [dict(uri=f'git+{repository}.git', digest=dict(sha1=source))], 'provenance source repository or commit mismatch'
+    expected_builder = f'{repository}/blob/{driver_source}/scripts/release-lightning'
+    assert predicate['runDetails']['builder']['id'] == expected_builder, 'provenance release tooling mismatch'
+    assert predicate['runDetails']['metadata']['invocationId'] == source, 'provenance invocation source mismatch'
+
+
+def generate_supply_chain(destination, ipa, source, driver_source, run):
+    directory = destination / 'supply-chain'
+    run('provenance', [str(DRIVER_ROOT / 'scripts/generate-supply-chain-metadata'),
+                      '--output-dir', str(directory), '--source-repository', f'https://github.com/{REPOSITORY}',
+                      '--subject', str(ipa), '--subject-name', ipa.name,
+                      '--builder-id', f'https://github.com/{REPOSITORY}/blob/{driver_source}/scripts/release-lightning'])
+    check_supply_chain(directory, ipa, source, driver_source)
+
+
+def main():
+    global ROOT
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--commit', required=True)
+    parser.add_argument('--ci-run', type=int, help='Require this exact successful CI run for the app source')
+    parser.add_argument('--version', required=True)
+    parser.add_argument('--build', required=True)
+    parser.add_argument('--evidence', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--source-checkout', type=Path, default=ROOT, help='Clean checkout of the exact tested app source; release tooling may be newer')
+    uploads = parser.add_mutually_exclusive_group()
+    uploads.add_argument('--upload', action='store_true', help='Upload the verified IPA and enable the existing internal group')
+    uploads.add_argument('--upload-only', action='store_true', help='Upload and verify processing, leaving encryption review and tester assignment pending')
+    args = parser.parse_args()
+    ROOT = args.source_checkout.resolve()
+    assert re.fullmatch('[0-9a-f]{40}', args.commit) and output('git', 'rev-parse', 'HEAD') == args.commit
+    assert not output('git', 'status', '--porcelain'), 'release requires a clean exact-source checkout'
+    assert re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', args.version)
+    assert re.fullmatch('[1-9][0-9]*', args.build)
+    evidence = check_evidence(args.evidence.resolve(), args.commit, allow_pending_encryption=args.upload_only)
+    driver_source = subprocess.check_output(['git', '-C', str(DRIVER_ROOT), 'rev-parse', 'HEAD'], text=True).strip()
+    assert not subprocess.check_output(['git', '-C', str(DRIVER_ROOT), 'status', '--porcelain'], text=True).strip(), 'release tooling must be committed and clean'
+    runs = json.loads(output('gh', 'run', 'list', '-R', REPOSITORY, '--workflow', 'ci.yml', '--commit', args.commit,
+                             '--limit', '50', '--json', 'databaseId,headSha,conclusion,status'))
+    assert args.ci_run is None or args.ci_run > 0, 'CI run must be a positive database ID'
+    green = next((run for run in runs if run['headSha'] == args.commit and run['status'] == 'completed' and run['conclusion'] == 'success'
+                  and (args.ci_run is None or run['databaseId'] == args.ci_run)), None)
+    assert green, 'required CI has not passed for this commit'
+    environment = dict(os.environ, TESTFLIGHT_BUNDLE_ID=BUNDLE, TESTFLIGHT_MARKETING_VERSION=args.version,
+                       TESTFLIGHT_BUILD_NUMBER=args.build, TESTFLIGHT_WHATS_NEW_FILE=str(DRIVER_ROOT / 'docs/lightning-what-to-test.txt'))
+    environment.pop('TESTFLIGHT_BUILD_ID', None)
+    encryption = evidence['encryption']
+    environment['LIGHTNING_NONEXEMPT_ENCRYPTION'] = {'pending': 'PENDING', 'declaration': 'YES', 'exempt': 'NO'}[encryption['mode']]
+    key_id, issuer = environment['ASC_KEY_ID'], environment['ASC_ISSUER_ID']
+    key = Path(environment.get('ASC_KEY_PATH', str(Path.home() / f'.appstoreconnect/private_keys/AuthKey_{key_id}.p8'))).resolve()
+    environment['ASC_KEY_PATH'] = str(key)
+
+    def asc(method, endpoint, data=None):
+        token = output('swift', 'scripts/asc-jwt.swift', str(key), key_id, issuer)
+        request = urllib.request.Request('https://api.appstoreconnect.apple.com/v1' + endpoint,
+            data=json.dumps(data).encode() if data is not None else None, method=method,
+            headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
+        with urllib.request.urlopen(request, timeout=60) as response:
+            raw = response.read()
+            return json.loads(raw) if raw else None
+
+    app = asc('GET', '/apps/' + APP_ID)['data']
+    assert app['attributes']['bundleId'] == BUNDLE
+    declaration = encryption.get('declaration_id')
+    declaration_code = None
+    if encryption['mode'] == 'declaration':
+        approved = asc('GET', '/appEncryptionDeclarations/' + declaration)['data']
+        assert approved['attributes']['appEncryptionDeclarationState'] == 'APPROVED'
+        owner = asc('GET', '/appEncryptionDeclarations/' + declaration + '/app')['data']
+        assert owner['id'] == APP_ID, 'encryption declaration belongs to another app'
+        declaration_code = approved['attributes']['codeValue']
+        assert isinstance(declaration_code, str) and declaration_code.strip(), 'approved declaration has no export code'
+        environment['LIGHTNING_ENCRYPTION_COMPLIANCE_CODE'] = declaration_code
+    destination = args.output.resolve()
+    assert not any(destination.is_relative_to(path) for path in (ROOT, DRIVER_ROOT)), 'release output must be outside both clean checkouts'
+    destination.mkdir(parents=True, exist_ok=False)
+
+    def run(name, command):
+        with (destination / (name + '.log')).open('w') as log:
+            subprocess.run(command, cwd=ROOT, env=environment, stdout=log, stderr=subprocess.STDOUT, check=True)
+
+    run('project', ['xcodegen', 'generate'])
+    encryption_settings = []
+    if encryption['mode'] == 'pending':
+        defer_encryption_questionnaire(ROOT / 'WinnowApp.xcodeproj/project.pbxproj')
+    else:
+        encryption_settings.append('INFOPLIST_KEY_ITSAppUsesNonExemptEncryption=' + environment['LIGHTNING_NONEXEMPT_ENCRYPTION'])
+    if declaration_code:
+        encryption_settings.append('INFOPLIST_KEY_ITSEncryptionExportComplianceCode=' + declaration_code)
+    archive = destination / 'WinnowLightning.xcarchive'
+    derived = destination / 'derived-data'
+    signing = ['-allowProvisioningUpdates', '-authenticationKeyPath', str(key), '-authenticationKeyID', key_id,
+               '-authenticationKeyIssuerID', issuer, '-skipPackagePluginValidation', '-skipMacroValidation']
+    run('archive', ['xcodebuild', '-project', 'WinnowApp.xcodeproj', '-scheme', 'WinnowLightning', '-configuration', 'ResearchRelease',
+        '-destination', 'generic/platform=iOS', '-archivePath', str(archive), '-derivedDataPath', str(derived),
+        'MARKETING_VERSION=' + args.version, 'CURRENT_PROJECT_VERSION=' + args.build,
+        *encryption_settings, *signing, 'archive'])
+    application = archive / 'Products/Applications/WinnowApp.app'
+    run('archive-policy', [str(DRIVER_ROOT / 'scripts/verify-signed-archive'), str(application)])
+    run('release-exclusion', ['scripts/verify-release-e2e-exclusion', str(application)])
+    run('dependencies', ['scripts/check-dependencies', '--xcode', str(derived)])
+    options = destination / 'ExportOptions.plist'
+    options.write_bytes(plistlib.dumps(dict(method='app-store-connect', destination='export', signingStyle='automatic',
+                                          teamID='2858MX5336', manageAppVersionAndBuildNumber=False)))
+    exported = destination / 'export'
+    run('export', ['xcodebuild', '-exportArchive', '-archivePath', str(archive), '-exportOptionsPlist', str(options),
+                   '-exportPath', str(exported), *signing])
+    ipa = exported / 'WinnowApp.ipa'
+    run('ipa-policy', [str(DRIVER_ROOT / 'scripts/verify-exported-ipa'), str(ipa)])
+    generate_supply_chain(destination, ipa, args.commit, driver_source, run)
+    receipt = dict(source=args.commit, ci_run=green['databaseId'], bundle=BUNDLE, version=args.version, build=args.build,
+                   ipa_sha256=hashlib.sha256(ipa.read_bytes()).hexdigest(),
+                   evidence_sha256=hashlib.sha256(args.evidence.read_bytes()).hexdigest(), encryption=encryption,
+                   release_tooling_source=driver_source, device_checks_deferred_to_testflight=evidence.get('device_checks_deferred_to_testflight', False),
+                   uploaded=False, processed=False, available_to_internal_testers=False)
+    (destination / 'release.json').write_text(json.dumps(receipt, indent=2) + '\n')
+    if not (args.upload or args.upload_only):
+        print('Verified ResearchRelease archive and distribution package; no upload requested.')
+        return
+    assert not output('git', 'status', '--porcelain'), 'source changed during archive'
+    assert output('git', 'rev-parse', 'HEAD') == args.commit, 'checkout changed during archive'
+    check_evidence(args.evidence.resolve(), args.commit, allow_pending_encryption=args.upload_only)
+    run('upload-integrity', ['shasum', '-a', '256', '-c', str(ipa) + '.verified.sha256'])
+    assert hashlib.sha256(ipa.read_bytes()).hexdigest() == receipt['ipa_sha256'], 'package changed after verification'
+    check_supply_chain(destination / 'supply-chain', ipa, args.commit, driver_source)
+    # altool requires this exact filename, including when CI supplied AuthKey.p8.
+    with tempfile.TemporaryDirectory(prefix='winnow-lightning-upload-') as keys:
+        alias = Path(keys) / f'AuthKey_{key_id}.p8'
+        alias.symlink_to(key)
+        environment['API_PRIVATE_KEYS_DIR'] = keys
+        run('upload', ['xcrun', 'altool', '--upload-app', '-f', str(ipa), '-t', 'ios', '--apiKey', key_id, '--apiIssuer', issuer])
+    receipt['uploaded'] = True
+    (destination / 'release.json').write_text(json.dumps(receipt, indent=2) + '\n')
+    run('processing', ['scripts/testflight.sh', 'wait-processing'])
+    query = f'/builds?filter[app]={APP_ID}&filter[version]={args.build}&filter[preReleaseVersion.version]={args.version}&limit=2'
+    builds = asc('GET', query)['data']
+    assert len(builds) == 1 and builds[0]['attributes']['processingState'] == 'VALID'
+    build = builds[0]['id']
+    receipt.update(processed=True, app_store_connect_build=build)
+    (destination / 'release.json').write_text(json.dumps(receipt, indent=2) + '\n')
+    environment['TESTFLIGHT_BUILD_ID'] = build
+    run('notes', ['scripts/testflight.sh', 'notes'])
+    if args.upload_only:
+        print('Verified upload and processing. Encryption review and internal tester assignment remain pending.')
+        return
+    if encryption['mode'] == 'declaration':
+        asc('PATCH', '/builds/' + build + '/relationships/appEncryptionDeclaration',
+            {'data': {'type': 'appEncryptionDeclarations', 'id': declaration}})
+        assert asc('GET', '/builds/' + build + '/appEncryptionDeclaration')['data']['id'] == declaration
+    run('internal', [str(DRIVER_ROOT / 'scripts/testflight.sh'), 'internal'])
+    receipt.update(available_to_internal_testers=True, internal_group='PQLN Regtest Internal')
+    (destination / 'release.json').write_text(json.dumps(receipt, indent=2) + '\n')
+    print('Verified build processed and available to the existing Winnow Lightning internal testers.')
+
+
+if __name__ == '__main__':
+    main()

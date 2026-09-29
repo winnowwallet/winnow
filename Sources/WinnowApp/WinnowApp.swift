@@ -4,7 +4,23 @@ import UIKit
 
 @main
 struct WinnowApp: App {
-    @State private var model = AppModel()
+    @State private var model: AppModel
+
+    init() {
+        #if DEBUG
+        if E2EMode.current != nil,
+           UIDevice.current.userInterfaceIdiom == .phone {
+            // Use still UIKit transitions for phone UI fixtures.
+            UIView.setAnimationsEnabled(false)
+        }
+        #endif
+        let model = AppModel()
+        #if DEBUG
+        model.e2e?.journal("ui.animationPolicy", fields: ["uikitEnabled": String(UIView.areAnimationsEnabled)])
+        #endif
+        _model = State(initialValue: model)
+        BackgroundSyncScheduler.shared.register(model: model)
+    }
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -17,11 +33,14 @@ struct WinnowApp: App {
                     OnboardingView()
                 case .ready:
                     // Beginner mode is one screen; Advanced mode is the
-                    // three tabs. The switch lives in each one's toolbar.
-                    if model.advancedMode {
-                        MainTabView()
-                    } else {
-                        BeginnerHomeView()
+                    // tab interface. The switch lives in each one's toolbar.
+                    VStack(spacing: 0) {
+                        ChannelProtectionBanner()
+                        if model.advancedMode {
+                            MainTabView()
+                        } else {
+                            BeginnerHomeView()
+                        }
                     }
                 case let .storageDamaged(message):
                     StorageDamagedView(message: message)
@@ -53,6 +72,8 @@ struct WinnowApp: App {
 struct StorageDamagedView: View {
     let message: String
     @Environment(AppModel.self) private var model
+    @State private var showImport = false
+    @State private var showLightningRecovery = false
 
     private var otherNetwork: BitcoinNetwork {
         model.network == .mainnet ? .signet : .mainnet
@@ -69,12 +90,26 @@ struct StorageDamagedView: View {
             }
             .buttonStyle(.borderedProminent)
             .accessibilityIdentifier("retryDamagedWalletButton")
+            backupRecoveryActions
             Button("Open the \(otherNetwork.rawValue) wallet instead") {
                 Task { await model.switchNetwork(to: otherNetwork) }
             }
             .accessibilityIdentifier("switchFromDamagedWalletButton")
         }
         .padding()
+        .sheet(isPresented: $showImport) { ImportBundleView() }
+        .sheet(isPresented: $showLightningRecovery) { LightningBackupView() }
+    }
+
+    @ViewBuilder private var backupRecoveryActions: some View {
+        if model.hasPendingWalletImport {
+            Button("Retry import from matching backup") { showImport = true }
+                .accessibilityIdentifier("retryDamagedWalletImportButton")
+            if model.supportsLightning {
+                Button("Restore encrypted Lightning backup") { showLightningRecovery = true }
+                    .accessibilityIdentifier("restoreDamagedLightningBackupButton")
+            }
+        }
     }
 }
 
@@ -169,8 +204,9 @@ final class PrivacyShield {
 
 /// Advanced mode: Wallet, Send, and Settings.
 struct MainTabView: View {
+    @Environment(AppModel.self) private var model
     private enum Tab: String, Hashable {
-        case wallet, send, settings
+        case wallet, send, settings, lightning
     }
 
     @State private var selection: Tab
@@ -184,6 +220,12 @@ struct MainTabView: View {
 
     var body: some View {
         TabView(selection: $selection) {
+            if let lightning = model.lightning {
+                LightningView(controller: lightning)
+                    .id(model.network)
+                    .tabItem { Label("Lightning", systemImage: "bolt.circle") }
+                    .tag(Tab.lightning)
+            }
             HomeView(
                 sendFrom: { accountID in
                     sendAccountID = accountID

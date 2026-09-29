@@ -1,0 +1,7 @@
+BOLT11 invoice payments: In either wallet mode, open Send → Pay Lightning invoice. Paste or scan a fresh invoice, check amount, routing fee, maximum fee and expiry, cancel once, then approve. Check Settled in both wallets and restored history after reopening Winnow. Amountless invoices accept up to three decimals in sats.
+
+Receiving: choose Lightning from Receive, review a provider's inbound-capacity setup fee, complete its payment from another wallet, sync and wait for confirmed capacity before creating a receive invoice. Capacity and setup fees are separate from wallet balance.
+
+Mainnet uses real bitcoin. Funded automated interoperability and recorded payments use regtest. Keep checking funded channels. Background checks depend on iOS and cannot run after force-quit or while the phone is off.
+
+Physical checks still pending: camera QR scan, successful and canceled device-owner authentication, exact Share/Copy bytes, and protected storage while locked. This update retains the existing wallet and channel storage.

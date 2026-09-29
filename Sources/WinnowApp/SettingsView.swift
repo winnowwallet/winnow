@@ -40,13 +40,17 @@ struct SettingsView: View {
                         )) {
                             Text("Mainnet").tag(BitcoinNetwork.mainnet)
                             Text("Signet").tag(BitcoinNetwork.signet)
+                            if model.supportsLightning || model.network == .regtest {
+                                Text("Regtest").tag(BitcoinNetwork.regtest)
+                            }
                         }
-                        .disabled(model.e2e?.forcedNetwork != nil)
+                        .disabled(model.e2e?.forcedNetwork != nil || model.changingNetwork)
+                        .accessibilityIdentifier("networkPicker")
                     } footer: {
                         if model.e2e?.forcedNetwork != nil {
-                            Text("This debug session is locked to \(model.network == .mainnet ? "mainnet" : "public signet").")
+                            Text("This debug session is locked to \(model.network.rawValue).")
                         } else {
-                            Text("Each network has a separate wallet. Signet uses test coins with no value.")
+                            Text("Each network has a separate wallet. Mainnet uses real bitcoin; signet uses public test coins. Regtest requires a private test node.")
                         }
                     }
                 }
@@ -375,43 +379,48 @@ struct ExportBundleView: View {
         let seedBearing = includeMnemonic
         busy = true
         error = nil
-        exportTask = Task { @MainActor in
-            // Each operation owns its staging object. A cancelled, stale task
-            // can therefore delete only its own file, never a newer export.
-            let operationStaging = ExportStagingFile()
-            do {
-                let text = try await model.exportWalletBundle(includeMnemonic: seedBearing)
-                try Task.checkCancellation()
-                guard exportEpoch.accepts(
-                    token, whilePresentationIsAllowed: scenePhase != .background
-                ) else { return }
-                let name = "winnow-\(model.network.rawValue)-\(model.walletID ?? "wallet").json"
-                let url = try operationStaging.write(text, suggestedName: name)
-                guard exportEpoch.accepts(
-                    token, whilePresentationIsAllowed: scenePhase != .background
-                ) else {
-                    operationStaging.remove()
-                    return
-                }
-                staging.remove()
-                staging = operationStaging
-                fileURL = url
-            } catch is CancellationError {
-                operationStaging.remove()
-            } catch {
-                operationStaging.remove()
-                if exportEpoch.accepts(token, whilePresentationIsAllowed: scenePhase != .background) {
-                    fileURL = nil
-                    self.error = error.localizedDescription
-                }
-            }
-            guard exportEpoch.accepts(
-                token, whilePresentationIsAllowed: scenePhase != .background
-            ) else {
-                return
-            }
-            busy = false
-            exportTask = nil
-        }
+        exportTask = Task { @MainActor in await performExport(seedBearing: seedBearing, token: token) }
     }
+
+    private func performExport(seedBearing: Bool, token: SensitivePresentationEpoch.Token) async {
+        // A stale operation can delete only its own file, never a newer export.
+        let operationStaging = ExportStagingFile()
+        do {
+            let text = try await model.exportWalletBundle(includeMnemonic: seedBearing)
+            try Task.checkCancellation()
+            try installExport(text, staging: operationStaging, token: token)
+        } catch {
+            operationStaging.remove()
+            recordExportError(error, token: token)
+        }
+        finishExport(token)
+    }
+
+    private func installExport(_ text: String, staging operationStaging: ExportStagingFile,
+                               token: SensitivePresentationEpoch.Token) throws {
+        guard acceptsExport(token) else { return }
+        let name = "winnow-\(model.network.rawValue)-\(model.walletID ?? "wallet").json"
+        let url = try operationStaging.write(text, suggestedName: name)
+        guard acceptsExport(token) else { operationStaging.remove(); return }
+        staging.remove()
+        staging = operationStaging
+        fileURL = url
+    }
+
+    private func recordExportError(_ error: Error, token: SensitivePresentationEpoch.Token) {
+        guard !(error is CancellationError), acceptsExport(token) else { return }
+        fileURL = nil
+        self.error = error.localizedDescription
+    }
+
+    private func finishExport(_ token: SensitivePresentationEpoch.Token) {
+        guard acceptsExport(token) else { return }
+        busy = false
+        exportTask = nil
+    }
+
+    private func acceptsExport(_ token: SensitivePresentationEpoch.Token) -> Bool {
+        exportEpoch.accepts(token, whilePresentationIsAllowed: scenePhase != .background)
+    }
+
 }

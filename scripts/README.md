@@ -51,7 +51,7 @@ journey requires the signet fixture configuration described in
 
 [prepare-site-artifact](prepare-site-artifact) prepares a fresh static website
 from the current docs and either `--journey <results>` or `--media <bundle>`.
-`--media-output <directory>` saves the normalized movie, 16 checkpoint images,
+`--media-output <directory>` saves the normalized movie, 17 checkpoint images,
 and original recording provenance as a dedicated reusable bundle. The website
 job deploys the ready same-run artifact without checking out source or rebuilding.
 `--validate-media <bundle>` checks cached media before CI decides to skip wallet
@@ -109,7 +109,7 @@ publishing. The helper names below are not additional release pipelines.
 | Entry point | Inputs and purpose | Effects / caller |
 | --- | --- | --- |
 | [check-release-policy](check-release-policy) | `RELEASE_TAG=vMAJOR.MINOR.PATCH`; validate stable tag syntax. An unset value supports manual validation. | No network or source generation; release workflow. |
-| [generate-supply-chain-metadata](generate-supply-chain-metadata) | `--output-dir DIR`, optional `--subject PATH`, `--subject-name NAME`, `--builder-id ID`. | Writes SPDX/provenance JSON for a Git tree or built artifact; no upload or signing. CI and release retain it as artifacts. |
+| [generate-supply-chain-metadata](generate-supply-chain-metadata) | `--output-dir DIR`, optional `--subject PATH`, `--subject-name NAME`, `--builder-id ID`, `--source-repository HTTPS_URL`. | Writes SPDX/provenance JSON for the Git checkout in the current directory or its built artifact; no upload or signing. The source URL defaults to upstream Winnow for compatibility; fork CI/releases pass their actual repository. Tooling and app checkouts may differ; the source commit comes from the app checkout. CI and release retain it as artifacts. |
 | [ci-sign.sh](ci-sign.sh) | `ASC_PRIVATE_KEY`; write the API key file under runner/temp storage. | Writes sensitive signing material; release/recovery workflows provide and clean it up. Certificate import is a separate release step. |
 | [asc-jwt.swift](asc-jwt.swift) | `KEY_PATH KEY_ID ISSUER_ID`; create a short-lived App Store Connect token. | Reads a private key and prints a bearer token. Internal helper of `testflight.sh`; do not log its output. |
 | [testflight.sh](testflight.sh) | Explicit operation plus ASC credentials and build/version selectors; see below. | Reads or changes App Store Connect according to the operation. |
@@ -142,3 +142,19 @@ The old story/demo publisher, standalone differential launcher, LOC reporter,
 and bundled-peer generator/crawler are retired. Their replacement or historical
 status is documented in the [debug runbook](../Tools/Debug/README.md#removed-commands)
 and [test-suite map](../docs/security/test-suite-map.md).
+
+## Swift Lightning research checks
+
+The existing CI workflow also runs pinned, unmodified CLN/LDK reference peers,
+both async directions and provider restarts, the recipient-never-returns timeout,
+and `ci-lightning-ui`. That runner records the actual `com.btcswift.lightning`
+research app with distinct client namespaces and host-observed SIGKILLs. Use a
+fresh result directory; its final `journey.json` is written only after XCTest,
+independent receipts and video finalization succeed. Fixture state is disposable
+and is excluded from uploaded evidence.
+
+`release-lightning` reuses the signing, exported-IPA, dependency, test-hook and
+provenance checks for the existing internal TestFlight app. It requires exact
+source, green CI and reviewed device/display/encryption evidence. See the
+[release procedure](../docs/engineering/lightning-release.md) for commands and
+the evidence format. Do not use the ordinary app's tag release for this bundle.

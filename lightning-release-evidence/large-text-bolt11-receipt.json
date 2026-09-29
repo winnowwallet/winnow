@@ -1,0 +1,21 @@
+{
+  "result": "passed",
+  "scope": "App BOLT11 review cancellation, approval, settlement and restart",
+  "invoice": {
+    "label": "swift-ui-invoice",
+    "bolt11": "lnbcrt20u1p4tnrmpsp58a2c3xsfcsnf4d53aq05lwwajlmxv5qnjjftcrwvjtl6lhx3yjfspp5a4ucne0m22qhzqy30t602seuyq2jj5mjdujkx76tlj9v844tsrvsdp8faexg6twv9e8jgrfdemx76trv5s8qcted4jkuaqxqyjw5qcqp29qxpqysgqn7xnqrkwgavlrtqewm0aks7yzp64ravtmtq5f0tpu3kjvf4jfvph0rvus05rmfjv0qd2qx8qsf7n2n3ntuljqtswc0d0fsmc3rhfkhsqy73vck",
+    "payment_hash": "ed7989e5fb52817100917af4f5433c20152953726f25637b4bfc8ac3d6ab80d9",
+    "amount_msat": 2000000,
+    "status": "paid",
+    "pay_index": 1,
+    "amount_received_msat": 2000000,
+    "paid_at": 1790545841,
+    "payment_preimage": "7877572997072212feda57abafc9d59a34b0fc528eab83e9a5debc16012fc7de",
+    "description": "Ordinary invoice payment",
+    "expires_at": 1791150561,
+    "created_index": 1,
+    "updated_index": 1
+  },
+  "source": "1f1bfdd956c84765c444ed6b0667806b20626c55",
+  "source_dirty": false
+}

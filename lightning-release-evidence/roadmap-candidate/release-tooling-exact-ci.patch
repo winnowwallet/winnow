@@ -1,0 +1,21 @@
+--- a/scripts/release-lightning
++++ b/scripts/release-lightning
+@@ -69,6 +69,7 @@
+     global ROOT
+     parser = argparse.ArgumentParser()
+     parser.add_argument('--commit', required=True)
++    parser.add_argument('--ci-run', type=int, help='Require this exact successful CI run for the app source')
+     parser.add_argument('--version', required=True)
+     parser.add_argument('--build', required=True)
+     parser.add_argument('--evidence', type=Path, required=True)
+@@ -88,7 +89,9 @@
+     assert not subprocess.check_output(['git', '-C', str(DRIVER_ROOT), 'status', '--porcelain'], text=True).strip(), 'release tooling must be committed and clean'
+     runs = json.loads(output('gh', 'run', 'list', '-R', REPOSITORY, '--workflow', 'ci.yml', '--commit', args.commit,
+                              '--limit', '50', '--json', 'databaseId,headSha,conclusion,status'))
+-    green = next((run for run in runs if run['headSha'] == args.commit and run['status'] == 'completed' and run['conclusion'] == 'success'), None)
++    assert args.ci_run is None or args.ci_run > 0, 'CI run must be a positive database ID'
++    green = next((run for run in runs if run['headSha'] == args.commit and run['status'] == 'completed' and run['conclusion'] == 'success'
++                  and (args.ci_run is None or run['databaseId'] == args.ci_run)), None)
+     assert green, 'required CI has not passed for this commit'
+     environment = dict(os.environ, TESTFLIGHT_BUNDLE_ID=BUNDLE, TESTFLIGHT_MARKETING_VERSION=args.version,
+                        TESTFLIGHT_BUILD_NUMBER=args.build, TESTFLIGHT_WHATS_NEW_FILE=str(DRIVER_ROOT / 'docs/lightning-what-to-test.txt'))

@@ -25,11 +25,209 @@ jobs:
   tdx:
     if: vars.TDX_CI_ENABLED == 'true' && inputs.hosted != true && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     uses: ./.github/workflows/ci-tdx.yml
+  lightning:
+    name: Swift Lightning independent peers
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      RUSTUP_TOOLCHAIN: '1.89.0'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Use the same Python runtime as Winnow validation
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Research release evidence and signing policy tests
+        run: |
+          python3 -m unittest discover -s scripts/tests -p test_lightning_release.py
+          python3 -m unittest discover -s scripts/tests -p test_supply_chain_metadata.py
+          python3 -m unittest discover -s scripts/tests -p test_signed_distribution.py
+          python3 -m unittest discover -s scripts/tests -p test_lightning_references.py
+          python3 -m unittest discover -s scripts/tests -p test_lightning_peer.py
+          python3 -m unittest discover -s scripts/tests -p test_ci_lightning_async_lifecycle.py
+          python3 -m unittest discover -s scripts/tests -p test_ci_lightning_async_readiness.py
+          python3 -m unittest discover -s scripts/tests -p test_ci_lightning_async_observation.py
+          python3 -m unittest discover -s scripts/tests -p test_ci_lightning_async_peer_lifecycle.py
+          python3 -m unittest discover -s scripts/tests -p test_ci_lightning_ui.py
+          python3 -m unittest discover -s scripts/tests -p test_lightning_ui_fixture.py
+          python3 -m unittest discover -s scripts/tests -p 'test*crap.py'
+      - name: Prepare host-only reference tools
+        run: |
+          brew install autoconf automake libtool gnu-sed gettext libsodium lowdown pkgconf openssl@3 make sqlite uv bitcoin
+          rustup toolchain install 1.89.0 --profile minimal
+          mkdir -p "$RUNNER_TEMP/lightning-results"
+          {
+            echo "REFERENCE_DIR=$RUNNER_TEMP/lightning-references"
+            echo "WINNOW_LIGHTNING_RESULTS=$RUNNER_TEMP/lightning-results"
+            echo "WINNOW_BITCOIN_DIR=$(dirname "$(command -v bitcoind)")"
+            echo "WINNOW_CLN_DIR=$RUNNER_TEMP/lightning-references/cln"
+            echo "WINNOW_LDK_HARNESS=$RUNNER_TEMP/lightning-references/harness/target/debug/winnow-lightning-reference"
+            echo "CRAP_PACKAGE_BUILD=$RUNNER_TEMP/lightning-crap-build"
+            echo "CRAP_RESULTS=$RUNNER_TEMP/lightning-crap"
+          } >> "$GITHUB_ENV"
+      - name: Build released reference peers and labeled macOS UI HSM override
+        run: scripts/ci-lightning-references "$REFERENCE_DIR" > "$WINNOW_LIGHTNING_RESULTS/reference-build.log" 2>&1
+      - name: Install the audited CRAP decision counter
+        run: scripts/install-crap-swiftlint
+      - name: Capture source identity and run all package tests with coverage
+        run: |
+          scripts/check-crap snapshot --output "$CRAP_RESULTS/source-manifest.json"
+          swift test --enable-code-coverage --scratch-path "$CRAP_PACKAGE_BUILD"
+      - name: Upstream LDK offer, request and static-invoice checks
+        run: scripts/ci-lightning-offers
+      - name: Swift-to-LDK async settlement with both clients offline
+        run: scripts/ci-lightning-async --direction swift-to-ldk
+      - name: LDK-to-Swift async settlement with both clients offline
+        run: scripts/ci-lightning-async --direction ldk-to-swift
+      - name: Swift-to-LDK async settlement across provider crashes
+        run: scripts/ci-lightning-async --direction swift-to-ldk --restart-providers
+      - name: LDK-to-Swift async settlement across provider crashes
+        run: scripts/ci-lightning-async --direction ldk-to-swift --restart-providers
+      - name: Recipient never returns; Swift recovers without either provider
+        run: scripts/ci-lightning-timeout
+      - name: Stock-peer payments, process restart and force close
+        run: scripts/ci-lightning-peer --close force
+      - name: Stock-peer payments, process restart and cooperative close
+        run: scripts/ci-lightning-peer --close cooperative --offers
+      - name: Stock anchor peer, restart and bounded CPFP replacement
+        if: ${{ !cancelled() }}
+        run: WINNOW_LIGHTNING_RESULTS="$WINNOW_LIGHTNING_RESULTS/anchors" scripts/ci-lightning-peer --format anchors --close force
+      - name: Stale backup recovery from stock peer latest unilateral close
+        if: ${{ !cancelled() }}
+        run: scripts/ci-lightning-peer --format anchors --close recovery
+      - name: Preserve reference and interoperability evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: swift-lightning-peers
+          path: |
+            ${{ env.WINNOW_LIGHTNING_RESULTS }}
+            ${{ env.REFERENCE_DIR }}/reference-manifest.json
+            ${{ env.REFERENCE_DIR }}/cln-ui-manifest.json
+            ${{ env.REFERENCE_DIR }}/cln-ui-fd-probe*
+            ${{ env.REFERENCE_DIR }}/ldk-async-*.log
+          retention-days: 14
+      - name: Install pinned app project generator
+        if: ${{ !cancelled() }}
+        run: scripts/install-xcodegen
+      - name: Record Swift app sharing, offline payment, crashes and returned funds
+        if: ${{ !cancelled() }}
+        env:
+          DERIVED_DATA: ${{ runner.temp }}/lightning-app-build
+          WINNOW_CLN_UI_MANIFEST: ${{ runner.temp }}/lightning-references/cln-ui-manifest.json
+        run: scripts/ci-lightning-ui "$RUNNER_TEMP/lightning-ui"
+      - name: Exercise Research and normal wallet app tests with coverage
+        if: ${{ !cancelled() }}
+        run: |
+          simulator=$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/lightning-ui/manifest.json"))["simulator"])')
+          specs=("$RUNNER_TEMP/lightning-app-build"/Build/Products/WinnowLightning_*.xctestrun)
+          test "${#specs[@]}" = 1
+          xcodebuild test-without-building -xctestrun "${specs[0]}" \
+            -derivedDataPath "$RUNNER_TEMP/lightning-app-build" \
+            -destination "platform=iOS Simulator,id=$simulator" \
+            -only-testing:WinnowAppTests/LightningAppTests \
+            -only-testing:WinnowAppTests/LightningNetworkTests \
+            -only-testing:WinnowAppTests/LightningPreparationTests \
+            -only-testing:WinnowAppTests/LightningFundingReadinessTests \
+            -only-testing:WinnowAppTests/LightningReceivingTests \
+            -only-testing:WinnowAppTests/LightningRoadmapTests \
+            -only-testing:WinnowAppTests/BackgroundSyncTests \
+            -enableCodeCoverage YES -resultBundlePath "$CRAP_RESULTS/ResearchAppTests.xcresult" \
+            -collect-test-diagnostics never > "$CRAP_RESULTS/research-app-tests.log" 2>&1
+          xcodebuild build-for-testing -project WinnowApp.xcodeproj -scheme WinnowApp -configuration Debug \
+            -destination "platform=iOS Simulator,id=$simulator" \
+            -derivedDataPath "$RUNNER_TEMP/lightning-app-build" -enableCodeCoverage YES \
+            -skipPackagePluginValidation -skipMacroValidation -collect-test-diagnostics never \
+            > "$CRAP_RESULTS/normal-app-build.log" 2>&1
+          normal_specs=("$RUNNER_TEMP/lightning-app-build"/Build/Products/WinnowApp_*.xctestrun)
+          test "${#normal_specs[@]}" = 1
+          xcodebuild test-without-building -xctestrun "${normal_specs[0]}" \
+            -derivedDataPath "$RUNNER_TEMP/lightning-app-build" \
+            -destination "platform=iOS Simulator,id=$simulator" -only-testing:WinnowAppTests \
+            -enableCodeCoverage YES -collect-test-diagnostics never \
+            -resultBundlePath "$CRAP_RESULTS/NormalAppTests.xcresult" > "$CRAP_RESULTS/normal-app-tests.log" 2>&1
+      - name: Record normal Bitcoin and multisig UI journey with coverage
+        if: ${{ !cancelled() }}
+        timeout-minutes: 20
+        run: |
+          export SIMULATOR_ID=$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/lightning-ui/manifest.json"))["simulator"])')
+          export DERIVED_DATA="$RUNNER_TEMP/lightning-app-build"
+          export WINNOW_DATADIR="$CRAP_RESULTS/normal-ui/signet"
+          export WINNOW_NODE_HOST=127.0.0.1
+          export WINNOW_SCREENSHOT_DIR="$CRAP_RESULTS/normal-ui/node-screenshots"
+          export WINNOW_UI_CODE_COVERAGE=YES
+          read -r WINNOW_RPC_PORT WINNOW_P2P_PORT < <(python3 -c 'import socket; sockets=[socket.socket(),socket.socket()]; [s.bind(("127.0.0.1",0)) for s in sockets]; print(*(s.getsockname()[1] for s in sockets))')
+          export WINNOW_RPC_PORT WINNOW_P2P_PORT
+          test ! -e "$WINNOW_DATADIR"
+          test ! -e "$HOME/.winnow-node.env"
+          mkdir -p "$WINNOW_SCREENSHOT_DIR"
+          trap 'rm -f "$HOME/.winnow-node.env"; scripts/signet-fixture down' EXIT
+          scripts/signet-fixture up > "$CRAP_RESULTS/normal-ui/fixture.log" 2>&1
+          swift build --product winnow-fixture > "$CRAP_RESULTS/normal-ui/host-build.log" 2>&1
+          export WINNOW_FIXTURE_EXECUTABLE="$(swift build --show-bin-path)/winnow-fixture"
+          "$WINNOW_FIXTURE_EXECUTABLE" prepare-bank > "$CRAP_RESULTS/normal-ui/bank-setup.log" 2>&1
+          {
+            echo "WINNOW_NODE_HOST=$WINNOW_NODE_HOST"
+            echo "WINNOW_P2P_PORT=$WINNOW_P2P_PORT"
+            echo "WINNOW_RPC_PORT=$WINNOW_RPC_PORT"
+            echo "WINNOW_DATADIR=$WINNOW_DATADIR"
+            echo "WINNOW_SCREENSHOT_DIR=$WINNOW_SCREENSHOT_DIR"
+          } > "$HOME/.winnow-node.env"
+          scripts/ci-ui-journey "$CRAP_RESULTS/normal-ui" --skip-build
+      - name: Enforce CRAP at most 12 against package and app evidence
+        if: ${{ !cancelled() }}
+        run: |
+          scripts/ci-crap --package-build "$CRAP_PACKAGE_BUILD" \
+            --derived-data "$RUNNER_TEMP/lightning-app-build" --variant ResearchDebug \
+            --additional-app "$RUNNER_TEMP/lightning-app-build" Debug \
+            --app-result "$RUNNER_TEMP/lightning-ui/LightningUI.xcresult" \
+            --app-result "$CRAP_RESULTS/ResearchAppTests.xcresult" \
+            --app-result "$CRAP_RESULTS/NormalAppTests.xcresult" \
+            --app-result "$CRAP_RESULTS/normal-ui/NodeUI.xcresult" \
+            --manifest "$CRAP_RESULTS/source-manifest.json" --output "$CRAP_RESULTS/report"
+      - name: Compile the device research release and exclude test activation
+        if: ${{ !cancelled() }}
+        run: |
+          xcodebuild build -project WinnowApp.xcodeproj -scheme WinnowLightning -configuration ResearchRelease \
+            -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/lightning-app-build" \
+            -skipPackagePluginValidation -skipMacroValidation CODE_SIGNING_ALLOWED=NO \
+            > "$RUNNER_TEMP/lightning-ui/research-release-build.log" 2>&1
+          app="$RUNNER_TEMP/lightning-app-build/Build/Products/ResearchRelease-iphoneos/WinnowApp.app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")" = com.btcswift.lightning
+          test "$(lipo -archs "$app/WinnowApp")" = arm64
+          scripts/verify-release-e2e-exclusion "$app"
+          scripts/check-dependencies --xcode "$RUNNER_TEMP/lightning-app-build"
+      - name: Preserve app recording and independent evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: swift-lightning-app
+          path: |
+            ${{ runner.temp }}/lightning-ui/journey.mp4
+            ${{ runner.temp }}/lightning-ui/display-ready.png
+            ${{ runner.temp }}/lightning-ui/screenshots
+            ${{ runner.temp }}/lightning-ui/LightningUI.xcresult
+            ${{ runner.temp }}/lightning-ui/*.log
+            ${{ runner.temp }}/lightning-ui/manifest.json
+            ${{ runner.temp }}/lightning-ui/journey.json
+            ${{ runner.temp }}/lightning-ui/fixture/evidence
+          retention-days: 14
+      - name: Preserve method complexity and coverage evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: swift-crap
+          path: ${{ env.CRAP_RESULTS }}
+          retention-days: 14
   website:
     needs: [hosted, tdx]
     # Keep deployment secrets outside every validation workflow and guest.
     # Explicit status handling also permits intentionally skipped reuse lanes.
-    if: ${{ !cancelled() && (needs.hosted.result == 'success' || needs.tdx.result == 'success') && (github.workflow == 'CI' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.ref == 'refs/heads/main' && github.event_name != 'schedule') || github.event_name == 'workflow_dispatch')) }}
+    # Forks validate wallet/media artifacts but do not deploy the upstream site.
+    if: ${{ !cancelled() && (needs.hosted.result == 'success' || needs.tdx.result == 'success') && (github.repository == 'winnowwallet/winnow' && github.workflow == 'CI' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.ref == 'refs/heads/main' && github.event_name != 'schedule') || github.event_name == 'workflow_dispatch')) }}
     uses: ./.github/workflows/site.yml
     with:
       artifact-name: ${{ needs.tdx.outputs.website-artifact || needs.hosted.outputs.website-artifact }}
@@ -39,16 +237,18 @@ jobs:
       CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
   validation:
     if: always()
-    needs: [hosted, tdx, website]
+    needs: [hosted, tdx, lightning, website]
     runs-on: ubuntu-24.04
     steps:
       - env:
           HOSTED: ${{ needs.hosted.result }}
           TDX: ${{ needs.tdx.result }}
           WEBSITE: ${{ needs.website.result }}
-          DEPLOY: ${{ github.workflow == 'CI' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.ref == 'refs/heads/main' && github.event_name != 'schedule') || github.event_name == 'workflow_dispatch') }}
+          LIGHTNING: ${{ needs.lightning.result }}
+          DEPLOY: ${{ github.repository == 'winnowwallet/winnow' && github.workflow == 'CI' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.ref == 'refs/heads/main' && github.event_name != 'schedule') || github.event_name == 'workflow_dispatch') }}
         run: |
           [[ "$HOSTED:$TDX" == success:skipped || "$HOSTED:$TDX" == skipped:success ]] || exit 1
+          [[ "$LIGHTNING" == success ]] || exit 1
           if [[ "$DEPLOY" == true ]]; then
             [[ "$WEBSITE" == success ]] || exit 1
           else

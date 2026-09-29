@@ -1,0 +1,7 @@
+{
+  "observed_epoch": 1790604581.4292428,
+  "nextScanHeight": 964616,
+  "pinnedHeaderCount": 1620,
+  "progress_modified_epoch": 1790604561.9660556,
+  "scope": "Read-only public filters schema in isolated unfunded test namespace"
+}

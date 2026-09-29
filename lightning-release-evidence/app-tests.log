@@ -1,0 +1,72 @@
+Command line invocation:
+    /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test-without-building -xctestrun /tmp/winnow-bolt11-final-derived/Build/Products/WinnowLightning_iphonesimulator27.0-arm64.xctestrun -destination "platform=iOS Simulator,id=2421C3E5-2B36-4750-8E80-78FCCC08C9BD" "-only-testing:WinnowAppTests/LightningAppTests" "-only-testing:WinnowAppTests/LightningReceivingTests" "-only-testing:WinnowAppTests/SyncPhaseDisplayTests" -collect-test-diagnostics never -resultBundlePath /tmp/winnow-bolt11-1f-app-tests.xcresult
+
+Writing result bundle at path:
+	/tmp/winnow-bolt11-1f-app-tests.xcresult
+
+Test Suite 'Selected tests' started at 2026-09-27 17:54:43.415.
+Test Suite 'WinnowAppTests.xctest' started at 2026-09-27 17:54:43.416.
+Test Suite 'LightningAppTests' started at 2026-09-27 17:54:43.416.
+Test Case '-[WinnowAppTests.LightningAppTests testCancelledInvoiceAuthenticationCannotWritePayment]' started.
+Test Case '-[WinnowAppTests.LightningAppTests testCancelledInvoiceAuthenticationCannotWritePayment]' passed (0.191 seconds).
+Test Case '-[WinnowAppTests.LightningAppTests testCancelledPaymentDoesNotCreatePaymentOrPublishIntent]' started.
+Test Case '-[WinnowAppTests.LightningAppTests testCancelledPaymentDoesNotCreatePaymentOrPublishIntent]' passed (0.015 seconds).
+Test Case '-[WinnowAppTests.LightningAppTests testCancelledProviderReviewLeavesNoProfileOrJournalMutation]' started.
+Test Case '-[WinnowAppTests.LightningAppTests testCancelledProviderReviewLeavesNoProfileOrJournalMutation]' passed (0.014 seconds).
+Test Case '-[WinnowAppTests.LightningAppTests testDuplicatePaymentTapSharesWalletSpendingExclusion]' started.
+Test Case '-[WinnowAppTests.LightningAppTests testDuplicatePaymentTapSharesWalletSpendingExclusion]' passed (0.016 seconds).
+Test Case '-[WinnowAppTests.LightningAppTests testIdentityIsDurableBeforeProviderRegistrationAndStartsPaused]' started.
+Test Case '-[WinnowAppTests.LightningAppTests testIdentityIsDurableBeforeProviderRegistrationAndStartsPaused]' passed (0.018 seconds).
+Test Case '-[WinnowAppTests.LightningAppTests testInvalidOffersAndReviewBoundsFailBeforePayment]' started.
+Test Case '-[WinnowAppTests.LightningAppTests testInvalidOffersAndReviewBoundsFailBeforePayment]' passed (0.010 seconds).
+Test Case '-[WinnowAppTests.LightningAppTests testInvoiceAuthenticationCannotApproveAfterControllerStops]' started.
+Test Case '-[WinnowAppTests.LightningAppTests testInvoiceAuthenticationCannotApproveAfterControllerStops]' passed (0.017 seconds).
+Test Case '-[WinnowAppTests.LightningAppTests testJournalFileProtectionWhenPlatformRecordsIt]' started.
+/tmp/winnow-lightning-receive-20260927/AppTests/LightningAppTests.swift:146: -[WinnowAppTests.LightningAppTests testJournalFileProtectionWhenPlatformRecordsIt] : Test skipped - This simulator does not record file protection classes; verify on a physical device
+Test Case '-[WinnowAppTests.LightningAppTests testJournalFileProtectionWhenPlatformRecordsIt]' skipped (0.005 seconds).
+Test Case '-[WinnowAppTests.LightningAppTests testJournalKeyRequestsDeviceOnlyWhenUnlockedProtection]' started.
+Test Case '-[WinnowAppTests.LightningAppTests testJournalKeyRequestsDeviceOnlyWhenUnlockedProtection]' passed (0.008 seconds).
+Test Case '-[WinnowAppTests.LightningAppTests testMissingJournalOrKeyNeverCreatesReplacementIdentity]' started.
+Test Case '-[WinnowAppTests.LightningAppTests testMissingJournalOrKeyNeverCreatesReplacementIdentity]' passed (0.010 seconds).
+Test Case '-[WinnowAppTests.LightningAppTests testProviderAuthenticationCannotCompleteAfterTheControllerStops]' started.
+Test Case '-[WinnowAppTests.LightningAppTests testProviderAuthenticationCannotCompleteAfterTheControllerStops]' passed (0.013 seconds).
+Test Case '-[WinnowAppTests.LightningAppTests testResearchWalletCannotBeReplacedBeforeOrAfterBoot]' started.
+Test Case '-[WinnowAppTests.LightningAppTests testResearchWalletCannotBeReplacedBeforeOrAfterBoot]' passed (0.186 seconds).
+Test Suite 'LightningAppTests' passed at 2026-09-27 17:54:43.921.
+	 Executed 12 tests, with 1 test skipped and 0 failures (0 unexpected) in 0.502 (0.505) seconds
+Test Suite 'LightningReceivingTests' started at 2026-09-27 17:54:43.921.
+Test Case '-[WinnowAppTests.LightningReceivingTests testBuiltinProviderIdentityAndNetworkCannotBeReplacedInImportedProfile]' started.
+Test Case '-[WinnowAppTests.LightningReceivingTests testBuiltinProviderIdentityAndNetworkCannotBeReplacedInImportedProfile]' passed (0.001 seconds).
+Test Case '-[WinnowAppTests.LightningReceivingTests testCancelledSetupApprovalKeepsInvoiceUnapprovedAndAcceptedOrderSurvivesRelaunch]' started.
+Test Case '-[WinnowAppTests.LightningReceivingTests testCancelledSetupApprovalKeepsInvoiceUnapprovedAndAcceptedOrderSurvivesRelaunch]' passed (0.039 seconds).
+Test Case '-[WinnowAppTests.LightningReceivingTests testFreshMainnetHasDefaultAndThreeValidChoicesWithoutOpeningChannels]' started.
+Test Case '-[WinnowAppTests.LightningReceivingTests testFreshMainnetHasDefaultAndThreeValidChoicesWithoutOpeningChannels]' passed (0.016 seconds).
+Test Suite 'LightningReceivingTests' passed at 2026-09-27 17:54:43.979.
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.057 (0.058) seconds
+Test Suite 'SyncPhaseDisplayTests' started at 2026-09-27 17:54:43.979.
+Test Case '-[WinnowAppTests.SyncPhaseDisplayTests testFilterScanTextClampsCompletedSnapshotAfterSync]' started.
+Test Case '-[WinnowAppTests.SyncPhaseDisplayTests testFilterScanTextClampsCompletedSnapshotAfterSync]' passed (0.001 seconds).
+Test Case '-[WinnowAppTests.SyncPhaseDisplayTests testFilterScanTextClampsNextHeightAtTip]' started.
+Test Case '-[WinnowAppTests.SyncPhaseDisplayTests testFilterScanTextClampsNextHeightAtTip]' passed (0.000 seconds).
+Test Case '-[WinnowAppTests.SyncPhaseDisplayTests testFilterScanTextGivesNoNumberOutsideAScan]' started.
+Test Case '-[WinnowAppTests.SyncPhaseDisplayTests testFilterScanTextGivesNoNumberOutsideAScan]' passed (0.000 seconds).
+Test Case '-[WinnowAppTests.SyncPhaseDisplayTests testFilterScanTextUsesLivePhaseInsteadOfStaleWalletSnapshot]' started.
+Test Case '-[WinnowAppTests.SyncPhaseDisplayTests testFilterScanTextUsesLivePhaseInsteadOfStaleWalletSnapshot]' passed (0.000 seconds).
+Test Case '-[WinnowAppTests.SyncPhaseDisplayTests testReconnectedPeerStatusDoesNotDisplayOldNoPeersFailure]' started.
+Test Case '-[WinnowAppTests.SyncPhaseDisplayTests testReconnectedPeerStatusDoesNotDisplayOldNoPeersFailure]' passed (0.000 seconds).
+Test Suite 'SyncPhaseDisplayTests' passed at 2026-09-27 17:54:43.982.
+	 Executed 5 tests, with 0 failures (0 unexpected) in 0.002 (0.003) seconds
+Test Suite 'WinnowAppTests.xctest' passed at 2026-09-27 17:54:43.982.
+	 Executed 20 tests, with 1 test skipped and 0 failures (0 unexpected) in 0.561 (0.566) seconds
+Test Suite 'Selected tests' passed at 2026-09-27 17:54:43.982.
+	 Executed 20 tests, with 1 test skipped and 0 failures (0 unexpected) in 0.561 (0.567) seconds
+2026-09-27 17:54:44.279 xcodebuild[20216:905779] [MT] IDETestOperationsObserverDebug: 4.237 elapsed -- Testing started completed.
+2026-09-27 17:54:44.279 xcodebuild[20216:905779] [MT] IDETestOperationsObserverDebug: 0.000 sec, +0.000 sec -- start
+2026-09-27 17:54:44.279 xcodebuild[20216:905779] [MT] IDETestOperationsObserverDebug: 4.237 sec, +4.237 sec -- end
+
+Test session results, code coverage, and logs:
+	/tmp/winnow-bolt11-1f-app-tests.xcresult
+
+** TEST EXECUTE SUCCEEDED **
+
+Testing started

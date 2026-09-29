@@ -1,4 +1,5 @@
 import WalletCore
+import LightningCore
 import CryptoKit
 import Foundation
 import LocalAuthentication
@@ -109,6 +110,19 @@ final class AppModel {
         var nextScanHeight: UInt32 = 0
         var syncing = false
         var lastSyncError: String?
+        /// Retain the last failed attempt for diagnostics, but do not present
+        /// it as the current state while retrying or after peers reconnect.
+        func syncErrorForDisplay(phase: SyncPhase) -> String? {
+            guard !syncing else { return nil }
+            if lastSyncError == FilterSyncError.noPeers.errorDescription {
+                switch phase {
+                case .headers, .filters, .synced: return nil
+                case .connecting(let connected, _) where connected > 0: return nil
+                default: break
+                }
+            }
+            return lastSyncError
+        }
         /// A damaged relay store was set aside so sync could continue (#150).
         /// Distinct from `lastSyncError`: sync is fine, relay lost its queue.
         var relayStoreQuarantined: String?
@@ -309,9 +323,14 @@ final class AppModel {
     /// and when the app leaves the screen.
     let keychainAuthentication = KeychainAuthentication()
     let vaultStore: VaultStore
+    private let importMetadata: WalletImportMetadata
+    private var installingImportMetadata = false
     let peopleStore: PeopleStore
     let cloudBackups: CloudBackupController
-    private let allowsCloudBackup: Bool
+    private let lightningControllers: [BitcoinNetwork: LightningAppController]
+    var lightning: LightningAppController? { lightningControllers[network] }
+    var supportsLightning: Bool { !lightningControllers.isEmpty }
+    let allowsCloudBackup: Bool
     private var cloudPreparationTask: Task<Void, Never>?
     private var cloudPreparationEpoch = UUID()
     private var attemptedCloudPreparation: Set<String> = []
@@ -336,7 +355,7 @@ final class AppModel {
     /// an installation that had Tor on: it is about to connect directly for
     /// the first time and is told so. Cleared when the notice is dismissed.
     var torRemovedNotice = false
-    private var changingNetwork = false
+    private(set) var changingNetwork = false
     private var peersToAvoid: Set<PeerEndpoint> = []
     private(set) var refreshingCatalog = false
     private var automaticCatalogTask: Task<Void, Never>?
@@ -379,6 +398,15 @@ final class AppModel {
     private var phaseTask: Task<Void, Never>?
     private var broadcasterEventTask: Task<Void, Never>?
     private var isActive = false
+    private var bootTask: Task<Void, Never>?
+    private var backgroundRun: Task<Bool, Never>?
+    private var networkShutdown: Task<Void, Never>?
+    private(set) var backgroundRunning = false
+    var backgroundMonitor: LightningBackgroundMonitor?
+    private(set) var lastCompleteCheck: Date?
+    private(set) var backgroundSyncError: String?
+    let channelProtection: ChannelProtection
+
     private var buildingStack = false
     /// Prevents the E2E journal from repeating an identical wallet/vault
     /// snapshot every time SwiftUI asks for a refresh.
@@ -411,7 +439,7 @@ final class AppModel {
     }
 
     init(deviceAuthenticator: (any DeviceAuthenticating)? = nil,
-         e2e: E2EMode? = E2EMode.current, defaults: UserDefaults = .standard,
+         e2e: E2EMode? = E2EMode.current, defaults: UserDefaults? = nil,
          storeKeys: (any StoreKeyVault)? = nil, keyStore: (any KeyStore)? = nil,
          cloudBackups: CloudBackupController? = nil,
          discoverGateways: @escaping @Sendable () async -> PeerGatewayConfiguration = {
@@ -419,12 +447,23 @@ final class AppModel {
          }) {
         self.discoverGateways = discoverGateways
         self.cloudBackups = cloudBackups ?? CloudBackupController()
-        allowsCloudBackup = e2e == nil || cloudBackups != nil
+        allowsCloudBackup = cloudBackups != nil || (!LightningResearch.enabled(e2e: e2e) && e2e == nil)
         self.deviceAuthenticator = deviceAuthenticator
             ?? LocalDeviceAuthenticator(keychain: keychainAuthentication)
         self.e2e = e2e
         e2e?.wipeIfRequested()
-        let keychainService = e2e?.keychainService ?? KeychainStore.defaultService
+        let keychainService = e2e?.keychainService ?? (LightningResearch.isResearchApp ? LightningResearch.keychainService : KeychainStore.defaultService)
+        let lightningKeys = storeKeys ?? KeychainStoreKeyVault(service: keychainService, protection: .whenUnlocked)
+        lightningControllers = LightningResearch.enabled(e2e: e2e)
+            ? Dictionary(uniqueKeysWithValues: BitcoinNetwork.allCases.map {
+                ($0, LightningAppController(network: $0, keys: lightningKeys,
+                    backgroundKeys: storeKeys ?? KeychainStoreKeyVault(service: keychainService)))
+            }) : [:]
+        #if DEBUG
+        if e2e?.forcedNetwork == .regtest, let entropy = e2e?.entropy {
+            lightningControllers[.regtest]?.fixtureNodeSecret = Data(CryptoKit.SHA256.hash(data: Data("winnow-lightning-ui".utf8) + entropy))
+        }
+        #endif
         self.keyStore = keyStore ?? KeychainStore(
             service: keychainService,
             protection: e2e == nil ? .userPresence : .deviceOnly,
@@ -433,8 +472,10 @@ final class AppModel {
         // so the E2E wipe covers them along with the wallet secret.
         let storeKeys = storeKeys ?? KeychainStoreKeyVault(service: keychainService)
         vaultStore = VaultStore(keys: storeKeys)
+        importMetadata = WalletImportMetadata(keys: storeKeys)
         peopleStore = PeopleStore(keys: storeKeys)
-        let defaults = e2e?.defaults ?? defaults
+        let defaults = e2e?.defaults ?? defaults ?? (LightningResearch.isResearchApp
+            ? UserDefaults(suiteName: LightningResearch.keychainService + ".preferences")! : .standard)
         self.defaults = defaults
         let initialGatewaySettings: PeerGatewaySettings
         if defaults.object(forKey: "peerGatewaySettings") != nil {
@@ -446,6 +487,7 @@ final class AppModel {
         let initialGateways = initialGatewaySettings.mode == .manual ? initialGatewaySettings.manual : PeerGatewayConfiguration()
         activePeerGateways = initialGateways
         httpClient = RoutedHTTPClient(gateways: initialGateways)
+        channelProtection = ChannelProtection(defaults: defaults)
         // 0.7.0 and earlier shipped an opt-in Tor route (`torEnabled`). It
         // is gone with 0.7.1; an installation that had it on is told once
         // rather than silently connecting directly.
@@ -455,11 +497,14 @@ final class AppModel {
         }
         // Mainnet is the default (#9). The E2E harness is a custom-signet
         // fixture, so a test launch that names no network still gets signet.
+        let researchRoot = (try? FileManager.default.url(for: .applicationSupportDirectory,
+            in: .userDomainMask, appropriateFor: nil, create: false))?.appending(path: LightningResearch.storageName)
         let selectedNetwork = e2e?.forcedNetwork
             ?? BitcoinNetwork(rawValue: defaults.string(forKey: DefaultsKey.network) ?? "")
-            ?? (e2e != nil ? .signet : Self.defaultNetwork)
+            ?? (e2e != nil ? .signet : LightningResearch.isResearchApp
+                ? LightningResearch.initialNetwork(root: researchRoot) : Self.defaultNetwork)
         network = selectedNetwork
-        if e2e?.forcedNetwork != nil {
+        if e2e?.forcedNetwork != nil || LightningResearch.isResearchApp {
             defaults.set(selectedNetwork.rawValue, forKey: DefaultsKey.network)
         }
         Self.migrateLegacyNetworkSettings(defaults: defaults, into: selectedNetwork)
@@ -476,14 +521,24 @@ final class AppModel {
             explorerProvider = scoped.esploraURL.isEmpty ? .blockstream : .custom
         }
         verifyFromGenesis = defaults.bool(forKey: DefaultsKey.verifyFromGenesis)
-        advancedMode = defaults.bool(forKey: DefaultsKey.advancedMode) || e2e?.advancedMode == true
+        // Lightning starts with its tab visible, but a saved Simple choice
+        // must survive relaunch just like a saved Advanced choice.
+        advancedMode = e2e?.advancedMode == true
+            || (defaults.object(forKey: DefaultsKey.advancedMode) as? Bool
+                ?? LightningResearch.enabled(e2e: e2e))
         // Test mode preconfigures the local node as the (only) manual peer;
         // custom signets have no DNS seeds.
         if let peer = e2e?.peer, !manualPeers.contains(peer) {
             manualPeers = [peer]
             defaults.set(manualPeers, forKey: DefaultsKey.manualPeers(selectedNetwork))
         }
-        e2e?.journal("app.initialized", fields: ["network": network.rawValue])
+        e2e?.journal("app.initialized", fields: ["network": network.rawValue, "processID": String(ProcessInfo.processInfo.processIdentifier)])
+        for (network, controller) in lightningControllers {
+            controller.monitoringChanged = { [weak self] funded in
+                self?.channelProtection.channelState(network: network, funded: funded)
+            }
+            controller.recoveryRelayFailed = { [weak self] in self?.channelProtection.scanFailed(network: network) }
+        }
     }
 
     /// What a Paste button reads: the runner's control file under the UI
@@ -498,6 +553,14 @@ final class AppModel {
 
     /// Opens the persisted wallet for the current network, if any.
     func boot() async {
+        if let bootTask { await bootTask.value; return }
+        let opening = Task { await openWalletForBoot() }
+        bootTask = opening
+        await opening.value
+        bootTask = nil
+    }
+
+    private func openWalletForBoot() async {
         // A crash with the export sheet open skips its cleanup; the staging
         // file may carry the recovery phrase, so it does not wait for tmp.
         ExportStagingFile.sweep()
@@ -505,23 +568,38 @@ final class AppModel {
         if let clipboard = e2e?.clipboard {
             UIPasteboard.general.string = clipboard
         }
+        guard await openSavedWalletForCurrentNetwork() else { return }
+        e2e?.journal("app.booted", fields: [
+            "stage": stage == .ready ? "ready" : "onboarding",
+            "walletID": walletID ?? "",
+        ])
+        await refresh()
+        if isActive && !backgroundRunning { await activate() }
+    }
+
+    private func openSavedWalletForCurrentNetwork() async -> Bool {
         if case let .damaged(message) = await vaultStore.configure(
             storageURL: vaultsURL(), network: network)
         {
             stage = .storageDamaged(message)
-            return
+            return false
         }
         await configurePeople()
         guard let walletURL = walletURL() else {
             stage = .storageDamaged(
                 "Winnow could not access its protected local storage. No wallet files or keys were changed.")
-            return
+            return false
         }
         switch Self.openPersistedWallet(at: walletURL, keyStore: keyStore) {
         case let .opened(wallet):
             self.wallet = wallet
             walletID = await wallet.id
             walletDescriptor = await wallet.descriptor
+            do { try await finishImportedMetadata(descriptor: await wallet.descriptor.serialized()) }
+            catch {
+                stage = .storageDamaged("Winnow could not finish restoring shared accounts. Retry opening the wallet before syncing or spending.")
+                return false
+            }
             upgradeKeyProtection()
             defaults.removeObject(forKey: DefaultsKey.backupPending(walletID ?? ""))
             stage = .ready
@@ -529,14 +607,9 @@ final class AppModel {
             stage = .onboarding
         case let .damaged(details):
             stage = .storageDamaged(details)
-            return
+            return false
         }
-        e2e?.journal("app.booted", fields: [
-            "stage": stage == .ready ? "ready" : "onboarding",
-            "walletID": walletID ?? "",
-        ])
-        await refresh()
-        if isActive { await activate() }
+        return true
     }
 
     /// A wallet stored by 0.7.1 or earlier has its secret behind the
@@ -574,13 +647,17 @@ final class AppModel {
         await boot()
     }
 
-    /// Sync-while-active: the stack runs only while the scene is foreground.
+    /// Foreground networking and bounded background checks never overlap.
     func scenePhaseChanged(_ phase: ScenePhase) async {
         e2e?.journal("app.scenePhase", fields: ["phase": String(describing: phase)])
         switch phase {
         case .active:
             if !isActive { attemptedCloudPreparation.removeAll() }
             isActive = true
+            await cancelBackgroundSync()
+            await networkShutdown?.value
+            lastCompleteCheck = defaults.object(forKey: "sync.lastComplete.\(network.rawValue)") as? Date
+            await channelProtection.refreshPermission()
             await activate()
         case .background:
             isActive = false
@@ -588,8 +665,14 @@ final class AppModel {
             cloudPreparationTask = nil
             cloudBackups.suspend()
             keychainAuthentication.revoke()
+            BackgroundSyncScheduler.shared.schedule()
+            // A cold BGTask launch can deliver the initial scene phase after
+            // its handler started. That phase must not tear down its own scan.
+            if backgroundRun != nil { return }
             suspendNetworking()
-            await stopNetworking()
+            let shutdown = Task { await stopNetworking() }
+            networkShutdown = shutdown
+            await shutdown.value
         default:
             break // .inactive: still foreground — keep syncing
         }
@@ -597,13 +680,12 @@ final class AppModel {
 
     private func activate() async {
         // Boot must attach the saved wallet before a stack chooses its filters.
-        guard stage != .loading, isActive, !changingNetwork, storageDirectory() != nil else { return }
+        guard stage != .loading, isActive, !backgroundRunning, !changingNetwork,
+              !installingImportMetadata, storageDirectory() != nil else { return }
         if case .storageDamaged = stage { return }
         scheduleAutomaticCloudPreparation()
         let epoch = networkGeneration
-        if httpClient.isCancelled {
-            httpClient = RoutedHTTPClient(gateways: activePeerGateways)
-        }
+        resumeHTTPClient()
         await buildStackIfNeeded()
         guard epoch == networkGeneration, isActive else { return }
         schedulePeerCatalogRefresh()
@@ -624,6 +706,59 @@ final class AppModel {
         automaticCatalogTask = nil
         networkGeneration &+= 1
         httpClient.cancel()
+    }
+
+    private func resumeHTTPClient() {
+        if httpClient.isCancelled { httpClient = RoutedHTTPClient(gateways: activePeerGateways) }
+    }
+
+    /// Called only by the registered BGTask handler. Cold launches open the
+    /// watch-only wallet metadata; no spending key or full Lightning journal.
+    func runBackgroundSync() async -> Bool {
+        guard !isActive, !changingNetwork, backgroundRun == nil else { return false }
+        let run = Task { @MainActor in await runBackgroundCheck() }
+        backgroundRun = run
+        let complete = await run.value
+        backgroundRun = nil
+        return complete
+    }
+
+    private func runBackgroundCheck() async -> Bool {
+        await networkShutdown?.value
+        guard !isActive, !Task.isCancelled else { return false }
+        backgroundRunning = true
+        if stage == .loading { await boot() }
+        let complete = await scanInBackground()
+        await finishBackgroundCheck(complete: complete)
+        return complete
+    }
+
+    private func scanInBackground() async -> Bool {
+        guard stage == .ready, !Task.isCancelled else { return false }
+        resumeHTTPClient()
+        await buildStackIfNeeded()
+        guard !Task.isCancelled else { return false }
+        await stack?.pool.start()
+        return await syncOnce()
+    }
+
+    private func finishBackgroundCheck(complete: Bool) async {
+        backgroundSyncError = complete ? nil : status.lastSyncError ?? "Open Winnow to finish checking the chain."
+        if !complete, !isActive, !changingNetwork { channelProtection.scanFailed(network: network) }
+        await channelProtection.flushReminders()
+        await stopNetworking()
+        await backgroundMonitor?.finish()
+        backgroundMonitor = nil
+        backgroundRunning = false
+        e2e?.journal("background.completed", fields: ["complete": String(complete)])
+    }
+
+    func cancelBackgroundSync() async {
+        guard let run = backgroundRun else { return }
+        run.cancel()
+        // Closing sockets interrupts pending peer reads before the OS deadline.
+        await stack?.pool.stop()
+        _ = await run.value
     }
 
     /// Retries peer discovery after the pool reported exhaustion (the UI's
@@ -763,17 +898,14 @@ final class AppModel {
     }
 
     private func waitForStackBuild() async {
-        while stack == nil, buildingStack, !Task.isCancelled {
+        while buildingStack, !Task.isCancelled {
             try? await Task.sleep(for: .milliseconds(50))
         }
     }
 
     private func buildStackIfNeeded() async {
-        guard stack == nil, let dir = storageDirectory() else { return }
-        if buildingStack {
-            await waitForStackBuild()
-            return
-        }
+        await waitForStackBuild()
+        guard stack == nil, !Task.isCancelled, let dir = storageDirectory() else { return }
         let epoch = networkGeneration
         buildingStack = true
         defer { buildingStack = false }
@@ -797,7 +929,7 @@ final class AppModel {
             let chain = try await Task.detached(priority: .userInitiated) {
                 try Self.openOrRebuildChain(params: params, storageURL: headersURL, start: start)
             }.value
-            guard epoch == networkGeneration, isActive else { await pool.stop(); return }
+            guard epoch == networkGeneration, isActive || backgroundRunning else { await pool.stop(); return }
             let broadcaster = try makeBroadcaster(
                 pool: pool, storageURL: dir.appending(path: "broadcast.json"))
             var newStack = SyncStack(pool: pool, chain: chain, filters: nil, broadcaster: broadcaster)
@@ -805,7 +937,7 @@ final class AppModel {
                 newStack.filters = try await makeFilterSync(pool: pool, chain: chain,
                                                             startHeight: wallet.nextScanHeight)
             }
-            guard epoch == networkGeneration, isActive else {
+            guard epoch == networkGeneration, isActive || backgroundRunning else {
                 await pool.stop(); await broadcaster.shutdown(); return
             }
             stack = newStack
@@ -818,6 +950,11 @@ final class AppModel {
             // then scan on state already known to be stale, which is the one
             // thing every other damaged-state path in this app refuses to do.
             try await resumeInterruptedRollback()
+            if backgroundRunning {
+                backgroundMonitor = try lightning?.prepareBackground(directory: dir)
+            } else {
+                try await lightning?.prepare(directory: dir, headers: chain)
+            }
         } catch {
             status.lastSyncError = error.localizedDescription
             e2e?.journal("network.stackFailed", fields: ["error": error.localizedDescription])
@@ -1000,8 +1137,10 @@ final class AppModel {
         await syncOnce()
     }
 
-    private func syncOnce() async {
-        guard !status.syncing, let wallet, let stack, let filters = stack.filters else { return }
+    @discardableResult
+    private func syncOnce() async -> Bool {
+        guard !status.syncing, !installingImportMetadata, let wallet, let stack, let filters = stack.filters else { return false }
+        var complete = false
         status.syncing = true
         defer { status.syncing = false }
         do {
@@ -1010,23 +1149,12 @@ final class AppModel {
             let broadcaster = stack.broadcaster
             let network = network
             let vaultStore = vaultStore
-            try await filters.sync(watchScripts: scripts,
+            complete = try await syncWalletAndLightning(filters: filters, scripts: scripts,
                                    onReorg: { [weak self] forkHeight in
                 guard let self else { return }
                 try await self.rollBackStores(to: forkHeight)
             }) { match in
-                let walletEffect = try await wallet.apply(match: match)
-                for discarded in walletEffect.discardedReplacements {
-                    try await broadcaster.cancel(discarded)
-                }
-                try await vaultStore.apply(match: match, network: network)
-                let pending = await broadcaster.pendingTxids
-                for tx in match.block.transactions where pending.contains(tx.txid) {
-                    // The height rides along so the entry becomes a held
-                    // tombstone a reorg can resurrect, rather than being
-                    // deleted with its raw transaction (#157).
-                    try await broadcaster.markConfirmed(tx.txid, atHeight: match.height)
-                }
+                try await Self.applyScanMatch(match, wallet: wallet, vaultStore: vaultStore, network: network, broadcaster: broadcaster)
             }
             // apply() does not move the wallet frontier — FilterSync is
             // authoritative here. Persist it so exportBundle() and the next
@@ -1042,7 +1170,13 @@ final class AppModel {
             // it redone at the next launch.
             finishRollback()
             status.lastSyncError = nil
+            if complete {
+                lastCompleteCheck = Date()
+                defaults.set(lastCompleteCheck, forKey: "sync.lastComplete.\(network.rawValue)")
+                channelProtection.scanCompleted(network: network)
+            }
         } catch {
+            complete = false
             // A later batch may have thrown after earlier ones persisted
             // in FilterSync. Those earlier batches each passed their own
             // checkpoint comparison before anything above ran for them, so
@@ -1050,8 +1184,25 @@ final class AppModel {
             // threw applied nothing. Keep WalletState from lagging it.
             try? await wallet.recordScanHeight(await filters.nextScanHeight)
             status.lastSyncError = error.localizedDescription
+            if ChannelProtection.isFailedCheck(error, cancelled: Task.isCancelled) {
+                channelProtection.scanFailed(network: network)
+            }
+            e2e?.journal("wallet.syncFailed", fields: ["error": String(describing: error)])
         }
         await refresh()
+        return complete
+    }
+
+    private static func applyScanMatch(_ match: BlockMatch, wallet: Wallet, vaultStore: VaultStore, network: BitcoinNetwork, broadcaster: TxBroadcaster) async throws {
+        let walletEffect = try await wallet.apply(match: match)
+        for discarded in walletEffect.discardedReplacements { try await broadcaster.cancel(discarded) }
+        try await vaultStore.apply(match: match, network: network)
+        let pending = await broadcaster.pendingTxids
+        for tx in match.block.transactions where pending.contains(tx.txid) {
+            // Hold confirmation tombstones so a reorg can resurrect the raw
+            // transaction and resume its relay (#157).
+            try await broadcaster.markConfirmed(tx.txid, atHeight: match.height)
+        }
     }
 
     /// Keep replaced originals beside the payment that superseded them.
@@ -1165,12 +1316,18 @@ final class AppModel {
     /// Peer/header catch-up continues through the regular sync loop while the
     /// user backs up the phrase.
     func createWallet() async throws {
+        try await exclusively(.spending) { try await createProtectedWallet() }
+    }
+
+    private func createProtectedWallet() async throws {
+        try requireResearchWalletPreserved()
         try await authenticateSensitiveAction(reason: "Create and protect your wallet")
         defer { keychainAuthentication.revoke() }
         try Task.checkCancellation()
         await buildStackIfNeeded()
         guard stack != nil else { throw AppError.noStack }
         let knownHeight = await creationHeightForNewWallet()
+        try requireResearchWalletPreserved()
         guard let walletURL = walletURL() else { throw AppError.noWallet }
         let wallet = try Wallet.create(network: network, keyStore: keyStore,
                                        storageURL: walletURL, entropy: e2e?.entropy,
@@ -1194,13 +1351,18 @@ final class AppModel {
     /// were reachable yet — the regular sync loop covers the same ground.
     @discardableResult
     func importWallet(bundleJSON: String) async throws -> ImportReport? {
-        let bundle = try ImportBundle.decode(json: bundleJSON)
-        return try await importWallet(bundle: bundle, authenticate: true)
+        try await exclusively(.spending, repairingImport: true) {
+            let bundle = try ImportBundle.decode(json: bundleJSON)
+            return try await importWallet(bundle: bundle, authenticate: true,
+                resumingImport: hasPendingWalletImport && walletID != nil)
+        }
     }
 
-    private func importWallet(bundle: ImportBundle, authenticate: Bool,
+    private func importWallet(bundle: ImportBundle, authenticate: Bool, resumingImport: Bool = false,
                               afterCommit: (@MainActor (String) async throws -> Void)? = nil) async throws -> ImportReport? {
+        try requireWalletImportAllowed(bundle, resuming: resumingImport)
         try VaultStore.validate(bundle.vaults ?? [], network: network)
+        guard bundle.lastKnownHeight < UInt32.max else { throw WalletError.invalidBundle("Wallet scan height exceeds the supported range.") }
         guard bundle.network == network.rawValue else { throw AppError.wrongNetwork(bundle.network) }
         if authenticate, bundle.mnemonic != nil {
             try await authenticateSensitiveAction(
@@ -1210,6 +1372,7 @@ final class AppModel {
         // Do not cross the Keychain/storage commit boundary after the view
         // that requested a seed-bearing import has been invalidated.
         try Task.checkCancellation()
+        try requireWalletImportAllowed(bundle, resuming: resumingImport)
         e2e?.journal("import.started", fields: [
             "bundleVersion": String(bundle.version),
             "seedBearing": String(bundle.mnemonic != nil),
@@ -1218,17 +1381,79 @@ final class AppModel {
             "historyCount": String(bundle.transactions.count),
         ])
         guard let walletURL = walletURL() else { throw AppError.noWallet }
-        let wallet = try Wallet.importing(bundle, keyStore: keyStore, storageURL: walletURL)
+        let wallet = try await installImportedWallet(bundle, at: walletURL)
         // Verification below runs its own one-shot filter sync; the regular
         // sync loop must not run concurrently with it (two sync() passes on
         // the same FilterSync/HeaderChain race — crossed getheaders/getcfilter
         // responses on the shared peer). The loop starts on the way out.
-        try await adopt(wallet: wallet, startSync: false)
-        try await vaultStore.restore(bundle.vaults ?? [])
-        vaults = await vaultStore.all
         defer { if isActive { startSyncLoop() } }
         if let afterCommit { try await afterCommit(wallet.id) }
         else { await prepareImportedCloudBackup(bundle) }
+        return try await verifyImportedWallet(wallet, bundle: bundle)
+    }
+
+    var hasPendingWalletImport: Bool {
+        guard let directory = storageDirectory() else { return false }
+        return FileManager.default.fileExists(atPath: directory.appending(path: WalletImportMetadata.fileName).path)
+    }
+
+    private func requireWalletImportAllowed(_ bundle: ImportBundle, resuming: Bool) throws {
+        guard resuming else { try requireResearchWalletPreserved(importing: bundle.descriptor); return }
+        guard let descriptor = bundle.descriptor, descriptor == walletDescriptor?.serialized(),
+              let directory = storageDirectory() else { throw WalletError.descriptorMismatch }
+        try importMetadata.requireRetry(bundle: bundle, network: network, directory: directory)
+    }
+
+    /// WalletCore validates and derives an import without writing its secret.
+    /// This store is used only for preflight; the installed wallet uses Keychain.
+    private struct ImportValidationKeys: KeyStore {
+        func store(_ secret: WalletSecret, for walletID: String) throws {}
+        func delete(walletID: String) throws {}
+        func load(walletID: String) throws -> WalletSecret { throw KeyStoreError.notFound(walletID: walletID) }
+    }
+
+    /// The marker precedes the wallet commit. A crash cannot boot and advance
+    /// its scan frontier before all restored shared-account scripts are loaded.
+    private func installImportedWallet(_ bundle: ImportBundle, at walletURL: URL) async throws -> Wallet {
+        installingImportMetadata = true
+        defer { installingImportMetadata = false }
+        suspendNetworking()
+        await stopNetworking()
+        try Task.checkCancellation()
+        guard let directory = storageDirectory() else { throw AppError.noWallet }
+        // Validate the entire import with disposable keys before touching any
+        // real key or file, using WalletCore's existing import rules.
+        let validated = try Wallet.importing(bundle, keyStore: ImportValidationKeys())
+        var normalized = bundle
+        normalized.descriptor = await validated.descriptor.serialized()
+        try Task.checkCancellation()
+        try importMetadata.begin(bundle: normalized, network: network, directory: directory)
+        do {
+            try resetWalletBooks(in: directory)
+            let wallet = try Wallet.importing(bundle, keyStore: keyStore, storageURL: walletURL)
+            try await adopt(wallet: wallet, startSync: false)
+            try await finishImportedMetadata(descriptor: await wallet.descriptor.serialized())
+            finishRepairedImport()
+            resumeHTTPClient()
+            return wallet
+        } catch {
+            stage = .storageDamaged("Wallet import was interrupted. Retry opening it to finish restoring shared accounts before syncing or spending.")
+            throw error
+        }
+    }
+
+    private func finishRepairedImport() {
+        if case .storageDamaged = stage { stage = .ready }
+    }
+
+    private func finishImportedMetadata(descriptor: String) async throws {
+        guard let wallet, let directory = storageDirectory() else { throw AppError.noWallet }
+        try await importMetadata.complete(descriptor: descriptor, nextScanHeight: await wallet.nextScanHeight, network: network,
+            directory: directory, vaultStore: vaultStore)
+        vaults = await vaultStore.all
+    }
+
+    private func verifyImportedWallet(_ wallet: Wallet, bundle: ImportBundle) async throws -> ImportReport? {
         await buildStackIfNeeded()
         guard let filters = stack?.filters else {
             e2e?.journal("import.verificationWaiting", fields: ["reason": "sync stack unavailable"])
@@ -1262,6 +1487,19 @@ final class AppModel {
             "nextScanHeight": String(status.nextScanHeight),
         ])
         return report
+    }
+
+    /// Channel recovery destinations belong to this wallet's keys. Replacing
+    /// the wallet while retaining its channel journal can strand those funds.
+    /// Check the file as well as memory so this also holds before boot and
+    /// after another creation/import completes across an authentication await.
+    private func requireResearchWalletPreserved(importing descriptor: String? = nil) throws {
+        guard let lightning else { return }
+        let savedWallet = walletURL().map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+        guard walletID == nil, !savedWallet else {
+            throw AppError.storageDamaged("Keep this research wallet on the device: replacing it could lose the keys needed to recover Lightning channel funds.")
+        }
+        if let root = storageDirectory() { try lightning.requireRecoveryWalletMatch(root: root, importing: descriptor) }
     }
 
     /// Live wallet as a v2 import-bundle JSON string (docs/import.html).
@@ -1311,11 +1549,7 @@ final class AppModel {
         // people.json is deliberately not in this list: the address book is
         // the user's, not one wallet's view of the chain, and holds only
         // public keys.
-        if let dir = storageDirectory() {
-            for name in ["filters.json", "broadcast.json", "vaults.json", "receive-labels.json", "cloud-backup.json"] {
-                try? FileManager.default.removeItem(at: dir.appending(path: name))
-            }
-        }
+        if let dir = storageDirectory() { try resetWalletBooks(in: dir) }
         if case let .damaged(message) = await vaultStore.configure(
             storageURL: vaultsURL(), network: network)
         {
@@ -1353,6 +1587,13 @@ final class AppModel {
         }
         await refresh()
         if startSync, isActive { startSyncLoop() }
+    }
+
+    private func resetWalletBooks(in directory: URL) throws {
+        for name in ["filters.json", "broadcast.json", "vaults.json", "receive-labels.json", "cloud-backup.json"] {
+            let file = directory.appending(path: name)
+            if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
+        }
     }
 
     /// Installs a wallet and stack the way `adopt` does, without the storage
@@ -1426,6 +1667,9 @@ final class AppModel {
     /// Kept: headers and known peers. Those describe the chain, not the
     /// wallet, so a re-import does not pay for a fresh header sync.
     func destroyWallet() async throws {
+        guard lightning == nil else {
+            throw AppError.storageDamaged("Keep this research wallet on the device: its Lightning journal may still be needed to recover channel funds.")
+        }
         cloudBackups.suspend()
         guard let walletID else { throw AppError.noWallet }
         try await authenticateSensitiveAction(reason: "Delete this wallet from this device")
@@ -1472,7 +1716,7 @@ final class AppModel {
         stage = .onboarding
         e2e?.journal("wallet.destroyed", fields: ["walletID": walletID])
 
-        if isActive { await activate() }
+        if isActive && !backgroundRunning { await activate() }
         await refresh()
     }
 
@@ -1689,9 +1933,12 @@ final class AppModel {
         /// Whether `built` is the transaction that was reviewed.
         ///
         func authorizes(_ built: BuiltTransaction) -> Bool {
-            guard built.fee == fee,
-                  built.changeAmount == changeAmount,
-                  built.transaction.inputs.map({
+            authorizes(transaction: built.transaction, fee: built.fee, changeAmount: built.changeAmount)
+        }
+        func authorizes(transaction: WalletCore.Transaction, fee actualFee: Int64, changeAmount actualChange: Int64?) -> Bool {
+            guard actualFee == fee,
+                  actualChange == changeAmount,
+                  transaction.inputs.map({
                       ReviewedOutpoint(txid: $0.previousOutput.txid, vout: $0.previousOutput.vout)
                   }) == selectedOutpoints
             else { return false }
@@ -1713,9 +1960,9 @@ final class AppModel {
             // fingerprint, so nothing may assume payments-then-change.
             var expected = payments
             if let change { expected.append(change) }
-            guard built.transaction.outputs.count == expected.count else { return false }
+            guard transaction.outputs.count == expected.count else { return false }
 
-            var unmatched = built.transaction.outputs
+            var unmatched = transaction.outputs
             for payment in expected {
                 guard let index = unmatched.firstIndex(where: {
                     $0.value == payment.amount && $0.scriptPubKey == payment.scriptPubKey
@@ -1826,14 +2073,20 @@ final class AppModel {
     /// Runs `body` unless the same operation is already in flight. The check
     /// and the claim happen with no await between them, so two callers cannot
     /// both observe an idle gate.
-    func exclusively<T>(_ operation: ExclusiveOperation,
+    func exclusively<T>(_ operation: ExclusiveOperation, repairingImport: Bool = false,
                         _ body: () async throws -> T) async throws -> T {
-        guard !operationsInFlight.contains(operation) else {
+        try requireUsableWallet(repairingImport: repairingImport)
+        guard !changingNetwork, !operationsInFlight.contains(operation) else {
             throw AppError.spendAlreadyInFlight
         }
         operationsInFlight.insert(operation)
         defer { operationsInFlight.remove(operation) }
         return try await body()
+    }
+
+    private func requireUsableWallet(repairingImport: Bool) throws {
+        guard case let .storageDamaged(message) = stage else { return }
+        guard repairingImport && hasPendingWalletImport else { throw AppError.storageDamaged(message) }
     }
 
     func send(preview: SendPreview) async throws -> Data {
@@ -1888,8 +2141,7 @@ final class AppModel {
     /// relaying, preserving the same rollback boundary as a first send.
     func bumpFee(preview: FeeBumpPreview) async throws -> Data {
         try await exclusively(.spending) {
-        guard let wallet else { throw AppError.noWallet }
-        guard let broadcaster = stack?.broadcaster else { throw AppError.noStack }
+        let (wallet, broadcaster) = try walletRelayContext()
         try await authenticateSensitiveAction(reason: "Sign a replacement Bitcoin transaction")
         defer { keychainAuthentication.revoke() }
         let prepared = try await wallet.buildFeeBump(
@@ -1914,6 +2166,12 @@ final class AppModel {
         ])
         return replacementTxid
         }
+    }
+
+    private func walletRelayContext() throws -> (Wallet, TxBroadcaster) {
+        guard let wallet else { throw AppError.noWallet }
+        guard let broadcaster = stack?.broadcaster else { throw AppError.noStack }
+        return (wallet, broadcaster)
     }
 
     /// Broadcasts a fully-signed transaction via P2P relay. Block-explorer
@@ -2227,18 +2485,21 @@ final class AppModel {
 
     func loadPaymentDetails(_ entry: HistoryEntry) async throws {
         guard entry.rawTransaction == nil, let wallet, let stack else { return }
-        let transaction: WalletCore.Transaction
-        if let raw = await stack.broadcaster.rawTransaction(entry.txid) {
-            transaction = try WalletCore.Transaction.decode(raw)
-        } else if entry.height > 0, let filters = stack.filters {
-            transaction = try await filters.transaction(entry.txid, at: entry.height)
-        } else {
-            throw AppError.paymentDetailsUnavailable
-        }
+        let transaction = try await paymentTransaction(entry, stack: stack)
         try Task.checkCancellation()
         guard self.wallet === wallet else { return }
         try await wallet.rememberTransaction(transaction)
         await refresh()
+    }
+
+    private func paymentTransaction(_ entry: HistoryEntry, stack: SyncStack) async throws -> WalletCore.Transaction {
+        if let raw = await stack.broadcaster.rawTransaction(entry.txid) {
+            return try WalletCore.Transaction.decode(raw)
+        } else if entry.height > 0, let filters = stack.filters {
+            return try await filters.transaction(entry.txid, at: entry.height)
+        } else {
+            throw AppError.paymentDetailsUnavailable
+        }
     }
 
     /// The address the next payment to `person` derives, peeked without
@@ -2539,54 +2800,37 @@ final class AppModel {
         let settings = Self.networkScopedSettings(defaults: defaults, network: network)
         manualPeers = settings.manualPeers
         esploraURLString = settings.esploraURL
+        lastCompleteCheck = defaults.object(forKey: "sync.lastComplete.\(network.rawValue)") as? Date
+        backgroundSyncError = nil
     }
 
     func switchNetwork(to newNetwork: BitcoinNetwork) async {
+        guard canSwitchNetwork(to: newNetwork) else { return }
+        changingNetwork = true
+        defer { changingNetwork = false }
+        await cancelBackgroundSync()
         cloudBackups.suspend()
-        guard e2e?.forcedNetwork == nil || e2e?.forcedNetwork == newNetwork else { return }
-        guard newNetwork != network else { return }
         suspendNetworking()
-        syncTask?.cancel()
-        syncTask = nil
-        await stack?.pool.stop()
-        await stack?.broadcaster.shutdown()
-        broadcasterEventTask?.cancel()
-        broadcasterEventTask = nil
-        stack = nil
+        await stopNetworking()
         wallet = nil
         walletID = nil
         walletDescriptor = nil
         network = newNetwork
         defaults.set(newNetwork.rawValue, forKey: DefaultsKey.network)
         loadNetworkScopedSettings()
-        if case let .damaged(message) = await vaultStore.configure(
-            storageURL: vaultsURL(), network: network)
-        {
-            stage = .storageDamaged(message)
-            return
-        }
-        await configurePeople()
-        guard let walletURL = walletURL() else {
-            stage = .storageDamaged(
-                "Winnow could not access its protected local storage. No wallet files or keys were changed.")
-            return
-        }
-        switch Self.openPersistedWallet(at: walletURL, keyStore: keyStore) {
-        case let .opened(wallet):
-            self.wallet = wallet
-            walletID = await wallet.id
-            walletDescriptor = await wallet.descriptor
-            upgradeKeyProtection()
-            defaults.removeObject(forKey: DefaultsKey.backupPending(walletID ?? ""))
-            stage = .ready
-        case .missing:
-            stage = .onboarding
-        case let .damaged(details):
-            stage = .storageDamaged(details)
-            return
-        }
+        guard await openSavedWalletForCurrentNetwork() else { return }
         await refresh()
-        if isActive { await activate() }
+        changingNetwork = false
+        await activateInForeground()
+    }
+
+    private func canSwitchNetwork(to newNetwork: BitcoinNetwork) -> Bool {
+        guard e2e?.forcedNetwork == nil || e2e?.forcedNetwork == newNetwork else { return false }
+        return newNetwork != network && !changingNetwork && operationsInFlight.isEmpty
+    }
+
+    private func activateInForeground() async {
+        if isActive && !backgroundRunning { await activate() }
     }
 
     static func parsePeer(_ text: String) throws -> PeerEndpoint {
@@ -2610,6 +2854,9 @@ final class AppModel {
     }
 
     private func stopNetworking() async {
+        let previousSync = syncTask
+        previousSync?.cancel()
+        await lightning?.stop()
         syncTask?.cancel(); syncTask = nil
         phaseTask?.cancel(); phaseTask = nil
         broadcasterEventTask?.cancel(); broadcasterEventTask = nil
@@ -2617,6 +2864,12 @@ final class AppModel {
         stack = nil
         await previous?.pool.stop()
         await previous?.broadcaster.shutdown()
+        await previousSync?.value
+        // A manual Sync tap is not the periodic syncTask. Drain it, and any
+        // stack construction already in flight, before handing files/actors
+        // to a background monitor or a new foreground generation.
+        while status.syncing || buildingStack { await Task.yield() }
+        await lightning?.stop()
     }
 
     /// Resolve once per foreground generation. No address discovered on one
@@ -2666,6 +2919,7 @@ final class AppModel {
 
     /// Rebuilds the stack so changed peer settings take effect.
     func reconnect() async {
+        await cancelBackgroundSync()
         suspendNetworking()
         await stopNetworking()
         await activate()
@@ -2750,16 +3004,21 @@ final class AppModel {
         }
         suspendNetworking()
         await stopNetworking()
-        do {
-            if let pool { try await pool.forgetKnownGood() }
-            else if let dir = storageDirectory() {
-                let file = dir.appending(path: "peers.json")
-                if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
-            }
-        } catch { status.lastSyncError = error.localizedDescription; return }
+        do { try await forgetLearnedPeers(pool: pool) }
+        catch { status.lastSyncError = error.localizedDescription; return }
         e2e?.journal("peers.reset", fields: [:])
         await activate()
         await refresh()
+    }
+
+    private func forgetLearnedPeers(pool: PeerPool?) async throws {
+        if let pool { try await pool.forgetKnownGood(); return }
+        guard let dir = storageDirectory() else { return }
+        try removeStoredPeers(at: dir.appending(path: "peers.json"))
+    }
+
+    private func removeStoredPeers(at file: URL) throws {
+        if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
     }
 
     /// Switching where the chain starts cannot be applied to a chain already
@@ -2890,7 +3149,7 @@ final class AppModel {
                                                       in: .userDomainMask,
                                                       appropriateFor: nil, create: true)
         else { return nil }
-        var root = base.appending(path: e2e?.storageDirectoryName ?? "BTCSwift",
+        var root = base.appending(path: e2e?.storageDirectoryName ?? (LightningResearch.isResearchApp ? LightningResearch.storageName : "BTCSwift"),
                                   directoryHint: .isDirectory)
         let dir = root.appending(path: network.rawValue, directoryHint: .isDirectory)
         do {
@@ -2929,6 +3188,7 @@ extension AppModel {
     }
 
     func setAutomaticCloudBackup(_ enabled: Bool) async {
+        guard allowsCloudBackup else { return }
         guard let walletID else { return }
         cloudBackups.configure(directory: storageDirectory(), walletID: walletID)
         do {
@@ -2947,7 +3207,7 @@ extension AppModel {
 
     private func cloudContents(words: String, walletID: String) async throws -> CloudBackupContents {
         let selectedNetwork = network
-        var bundle = try ImportBundle.decode(json: await exportWalletBundle(includeMnemonic: false))
+        var bundle = try await backupWalletBundle()
         bundle.mnemonic = words
         let state = try await cloudAppState(for: bundle)
         try Task.checkCancellation()
@@ -3017,68 +3277,181 @@ extension AppModel {
     }
 
     func restoreCloudBackup(_ id: UUID) async throws -> ImportReport? {
-        guard walletID == nil, allowsCloudBackup else { throw AppError.noWallet }
+        try await exclusively(.spending, repairingImport: true) { try await restoreCloudContents(id) }
+    }
+
+    private func restoreCloudContents(_ id: UUID) async throws -> ImportReport? {
+        guard allowsCloudBackup else { throw AppError.noWallet }
         let selectedNetwork = network
         cloudRestoreNotice = nil
         try await authenticateSensitiveAction(reason: "Restore your wallet and signing key from iCloud")
         defer { keychainAuthentication.revoke() }
         try Task.checkCancellation()
         let restoration = try await cloudBackups.restoreContents(id)
-        let bundle = restoration.contents.bundle
-        var appState = try CloudAppState.decode(restoration.contents.appState, for: bundle)
-        if let saved = appState { appState?.people = try await peopleStore.planRestore(saved.people) }
+        let state = try await plannedCloudAppState(restoration.contents)
         try Task.checkCancellation()
-        guard walletID == nil, network == selectedNetwork else { throw CancellationError() }
-        let validatedState = appState
-        return try await importWallet(bundle: bundle, authenticate: false) { restoredID in
-            try Task.checkCancellation()
-            guard self.walletID == restoredID, self.network == selectedNetwork else { throw CancellationError() }
-            if let validatedState { try await self.applyCloudAppState(validatedState) }
-            else {
-                self.cloudRestoreNotice = "This older backup restores your wallet and key, but does not contain saved people or address labels."
-            }
-            self.cloudBackups.configure(directory: self.storageDirectory(), walletID: restoredID)
-            do {
-                let current = try await self.cloudAppState(for: bundle)
-                try self.cloudBackups.resume(contents: CloudBackupContents(bundle: bundle, appState: current.encoded()),
-                                             walletID: restoredID, account: restoration.account)
-            } catch { self.cloudBackups.reportResumeFailure(error) }
-            await self.refresh()
+        guard network == selectedNetwork else { throw CancellationError() }
+        return try await importCloudRestoration(restoration, state: state, network: selectedNetwork)
+    }
+
+    private func plannedCloudAppState(_ contents: CloudBackupContents) async throws -> CloudAppState? {
+        var state = try CloudAppState.decode(contents.appState, for: contents.bundle)
+        if let saved = state { state?.people = try await peopleStore.planRestore(saved.people) }
+        return state
+    }
+
+    private func importCloudRestoration(_ restoration: CloudBackupController.Restoration, state: CloudAppState?, network selectedNetwork: BitcoinNetwork) async throws -> ImportReport? {
+        let bundle = restoration.contents.bundle
+        if walletID != nil, !hasPendingWalletImport {
+            try await restoreExistingCloudContext(state, bundle: bundle)
+            return nil
+        }
+        // Commit the separate recovery-only journal before installing Bitcoin
+        // keys. A crash during the import can never boot a restored channel as
+        // an active channel; retry selects the same durable recovery namespace.
+        try requireWalletImportAllowed(bundle, resuming: walletID != nil)
+        try await restoreCloudLightning(state)
+        return try await importWallet(bundle: bundle, authenticate: false, resumingImport: walletID != nil) { restoredID in
+            try await self.completeCloudRestoration(restoration, state: state, walletID: restoredID, network: selectedNetwork)
         }
     }
 
+    private func restoreExistingCloudContext(_ state: CloudAppState?, bundle: ImportBundle) async throws {
+        guard walletDescriptor?.serialized() == bundle.descriptor, let state else { throw WalletError.descriptorMismatch }
+        try await applyCloudAppState(state)
+        try await restoreMissingVaults(bundle)
+    }
+
+    private func restoreCloudLightning(_ state: CloudAppState?) async throws {
+        if let state, let backup = state.lightning { try await restoreLightningPayload(backup, descriptor: state.descriptor) }
+    }
+
+    private func completeCloudRestoration(_ restoration: CloudBackupController.Restoration, state: CloudAppState?, walletID restoredID: String, network selectedNetwork: BitcoinNetwork) async throws {
+        try Task.checkCancellation()
+        guard walletID == restoredID, network == selectedNetwork else { throw CancellationError() }
+        try await restoreCloudContext(state)
+        cloudBackups.configure(directory: storageDirectory(), walletID: restoredID)
+        await resumeRestoredCloudBackup(restoration, walletID: restoredID)
+        await refresh()
+    }
+
+    private func restoreCloudContext(_ state: CloudAppState?) async throws {
+        if let state { try await applyCloudAppState(state) }
+        else { cloudRestoreNotice = "This older backup restores your wallet and key, but does not contain saved people or address labels." }
+    }
+
+    private func resumeRestoredCloudBackup(_ restoration: CloudBackupController.Restoration, walletID restoredID: String) async {
+        do {
+            let bundle = restoration.contents.bundle
+            let current = try await cloudAppState(for: bundle)
+            try cloudBackups.resume(contents: CloudBackupContents(bundle: bundle, appState: current.encoded()),
+                                   walletID: restoredID, account: restoration.account)
+        } catch { cloudBackups.reportResumeFailure(error) }
+    }
+
     private func scheduleCloudBackup() {
-        guard e2e == nil else { return }
+        guard allowsCloudBackup, e2e == nil else { return }
         cloudBackups.configure(directory: storageDirectory(), walletID: walletID)
         guard isActive, let walletID else { return }
         let selectedNetwork = network
         cloudBackups.schedule { [weak self] in
-            guard let self, self.walletID == walletID, self.network == selectedNetwork else {
-                throw CancellationError()
-            }
-            let bundle = try ImportBundle.decode(json: await self.exportWalletBundle(includeMnemonic: false))
-            let state = try await self.cloudAppState(for: bundle)
-            guard self.walletID == walletID, self.network == selectedNetwork else { throw CancellationError() }
-            return try CloudBackupContents(bundle: bundle, appState: state.encoded())
+            try await Self.scheduledCloudContents(model: self, walletID: walletID, network: selectedNetwork)
         }
+    }
+
+    private static func scheduledCloudContents(model: AppModel?, walletID: String, network: BitcoinNetwork) async throws -> CloudBackupContents {
+        guard let model, model.walletID == walletID, model.network == network else { throw CancellationError() }
+        let bundle = try await model.backupWalletBundle()
+        let state = try await model.cloudAppState(for: bundle)
+        guard model.walletID == walletID, model.network == network else { throw CancellationError() }
+        return try CloudBackupContents(bundle: bundle, appState: state.encoded())
     }
 
     private func cloudAppState(for bundle: ImportBundle) async throws -> CloudAppState {
         configureReceiveAddressLabels()
         guard let receiveLabelStore else { throw AppError.noWallet }
-        let state = try await CloudAppState(network: bundle.network, descriptor: bundle.descriptor,
+        var state = try await CloudAppState(network: bundle.network, descriptor: bundle.descriptor,
                                            people: peopleStore.backup(), receiveLabels: receiveLabelStore.backup(),
                                            ownDisplayName: ownDisplayName, advancedMode: advancedMode)
+        state.lightning = try await lightning?.recoveryPayload()
         try state.validate(for: bundle)
         return state
     }
 
     private func applyCloudAppState(_ state: CloudAppState) async throws {
+        if let recovery = state.lightning { try await restoreLightningPayload(recovery, descriptor: state.descriptor) }
         try await peopleStore.restore(state.people)
         configureReceiveAddressLabels()
         guard let receiveLabelStore else { throw AppError.noWallet }
         try receiveLabelStore.restore(state.receiveLabels)
         setOwnDisplayName(state.ownDisplayName)
         setAdvancedMode(state.advancedMode)
+    }
+
+    private func backupWalletBundle() async throws -> ImportBundle {
+        guard let wallet else { throw AppError.noWallet }
+        guard lightning != nil else { return try ImportBundle.decode(json: await exportWalletBundle(includeMnemonic: false)) }
+        var bundle = try await wallet.recoveryBundle()
+        bundle.vaults = try await vaultStore.backupRecords()
+        return bundle
+    }
+
+    private func restoreLightningPayload(_ backup: LightningRecoveryBackup, descriptor: String?) async throws {
+        guard let lightning, let root = storageDirectory() else { throw AppError.noStack }
+        guard let descriptor else { throw WalletError.invalidBundle("Lightning recovery requires its matching Bitcoin wallet descriptor.") }
+        let headers = try stack?.chain ?? HeaderChain(params: NetworkParams.params(for: network))
+        try await lightning.restoreRecovery(backup, root: root, headers: headers, walletDescriptor: descriptor)
+        cloudRestoreNotice = "Lightning is in recovery mode. Connect to the channel's counterparty and wait for it to close. Winnow will scan for returned funds; this backup cannot resume payments or publish an old commitment."
+    }
+
+    func portableLightningBackupContents() async throws -> CloudBackupContents {
+        guard let wallet, lightning != nil else { throw AppError.noWallet }
+        let selectedNetwork = network, selectedWallet = walletID
+        try await authenticateSensitiveAction(reason: "Export encrypted Bitcoin and Lightning recovery keys")
+        defer { keychainAuthentication.revoke() }
+        try Task.checkCancellation()
+        var bundle = try await wallet.recoveryBundle(includeMnemonic: true)
+        bundle.vaults = try await vaultStore.backupRecords()
+        let context = try await cloudAppState(for: bundle)
+        try Task.checkCancellation()
+        guard network == selectedNetwork, walletID == selectedWallet else { throw CancellationError() }
+        return try CloudBackupContents(bundle: bundle, appState: context.encoded())
+    }
+
+    func restorePortableLightningBackup(_ contents: CloudBackupContents) async throws -> ImportReport? {
+        try await exclusively(.spending, repairingImport: true) { try await restorePortableContents(contents) }
+    }
+
+    private func restorePortableContents(_ contents: CloudBackupContents) async throws -> ImportReport? {
+        guard let context = try CloudAppState.decode(contents.appState, for: contents.bundle), context.lightning != nil else {
+            throw WalletError.invalidBundle("This file has no Lightning recovery keys.")
+        }
+        let selectedNetwork = network
+        guard contents.bundle.network == selectedNetwork.rawValue else { throw AppError.wrongNetwork(contents.bundle.network) }
+        try await authenticateSensitiveAction(reason: "Restore encrypted Bitcoin and Lightning recovery keys")
+        defer { keychainAuthentication.revoke() }
+        try Task.checkCancellation()
+        guard network == selectedNetwork else { throw CancellationError() }
+        if walletID != nil, !hasPendingWalletImport {
+            guard walletDescriptor?.serialized() == contents.bundle.descriptor else { throw WalletError.descriptorMismatch }
+            try await applyCloudAppState(context)
+            try await restoreMissingVaults(contents.bundle)
+            finishOnboarding()
+            return nil
+        }
+        try requireWalletImportAllowed(contents.bundle, resuming: walletID != nil)
+        if let backup = context.lightning { try await restoreLightningPayload(backup, descriptor: contents.bundle.descriptor) }
+        let report = try await importWallet(bundle: contents.bundle, authenticate: false, resumingImport: walletID != nil) { restoredID in
+            guard self.walletID == restoredID, self.network == selectedNetwork else { throw CancellationError() }
+            try await self.applyCloudAppState(context)
+        }
+        finishOnboarding()
+        return report
+    }
+
+    private func restoreMissingVaults(_ bundle: ImportBundle) async throws {
+        guard let descriptor = bundle.descriptor else { throw WalletError.descriptorMismatch }
+        try await finishImportedMetadata(descriptor: descriptor)
+        await refresh()
     }
 }

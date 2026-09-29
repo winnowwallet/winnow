@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+"""Validate Swift channel transactions against a disposable Bitcoin Core regtest.
+
+Requires bitcoind/bitcoin-cli in PATH or WINNOW_BITCOIN_DIR. No optional skip:
+missing tools, unexpected acceptance/rejection or an RPC failure fail this check.
+"""
+import json
+import os
+from pathlib import Path
+import shutil
+import socket
+import subprocess
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def binary(name):
+    directory = os.environ.get('WINNOW_BITCOIN_DIR')
+    path = str(Path(directory) / name) if directory else shutil.which(name)
+    if not path or not os.access(path, os.X_OK):
+        raise SystemExit(f'{name} is required; set WINNOW_BITCOIN_DIR or install Bitcoin Core')
+    return path
+
+
+def port():
+    with socket.socket() as sock:
+        sock.bind(('127.0.0.1', 0))
+        return sock.getsockname()[1]
+
+
+def main():
+    daemon, cli = binary('bitcoind'), binary('bitcoin-cli')
+    subprocess.run(['swift', 'build', '--product', 'winnow-lightning-fixture'], cwd=ROOT, check=True)
+    products = subprocess.check_output(['swift', 'build', '--show-bin-path'], cwd=ROOT, text=True).strip()
+    fixture = str(Path(products) / 'winnow-lightning-fixture')
+
+    def swift(*arguments):
+        return json.loads(subprocess.check_output([fixture, *arguments], text=True))
+
+    with tempfile.TemporaryDirectory(prefix='winnow-lightning-regtest-') as directory:
+        rpc_port = port()
+        base = ['-regtest', f'-datadir={directory}', f'-rpcport={rpc_port}']
+        with open(Path(directory) / 'node.log', 'w') as log:
+            node = subprocess.Popen([daemon, *base, '-server=1', '-listen=0', '-connect=0',
+                                     '-dnsseed=0', '-discover=0', '-fallbackfee=0.00002',
+                                     '-rpcbind=127.0.0.1', '-rpcallowip=127.0.0.1'], stdout=log, stderr=log)
+            try:
+                def rpc(method, *arguments):
+                    result = subprocess.run([cli, *base, method, *map(str, arguments)],
+                                            capture_output=True, text=True, timeout=20, check=True)
+                    value = result.stdout.strip()
+                    try:
+                        return json.loads(value)
+                    except json.JSONDecodeError:
+                        return value
+
+                deadline = time.monotonic() + 30
+                while True:
+                    try:
+                        rpc('getblockcount')
+                        break
+                    except subprocess.CalledProcessError:
+                        if node.poll() is not None or time.monotonic() > deadline:
+                            raise RuntimeError(Path(directory, 'node.log').read_text())
+                        time.sleep(0.1)
+                rpc('createwallet', 'fixture')
+                address = rpc('getnewaddress')
+                destination = rpc('getaddressinfo', address)['scriptPubKey']
+                rpc('generatetoaddress', 101, address)
+                keys = swift('script')
+                descriptor = rpc('getdescriptorinfo', f"wsh(sortedmulti(2,{keys['local']},{keys['remote']}))")['descriptor']
+                funding_address = rpc('deriveaddresses', descriptor)[0]
+                accepted, rejected = [], []
+
+                def check(transactions, name, allowed):
+                    result = rpc('testmempoolaccept', json.dumps([transactions[name]]))[0]
+                    if result['allowed'] != allowed:
+                        raise AssertionError(f'{name}: expected allowed={allowed}: {result}')
+                    label = ('anchor_' if transactions.get('format') == 'anchors' else '') + name
+                    (accepted if allowed else rejected).append(label)
+
+                def send(transactions, name):
+                    check(transactions, name, True)
+                    rpc('sendrawtransaction', transactions[name])
+
+                def funded():
+                    txid = rpc('sendtoaddress', funding_address, '0.001')
+                    funding = rpc('gettransaction', txid)['hex']
+                    rpc('generatetoaddress', 1, address)
+                    return swift('transactions', funding, destination, str(rpc('getblockcount') + 3))
+
+                normal = funded()
+                check(normal, 'invalid_commitment', False)
+                send(normal, 'commitment')
+                rpc('generatetoaddress', 1, address)
+                check(normal, 'timeout', False)
+                check(normal, 'delayed', False)
+                send(normal, 'success')
+                rpc('generatetoaddress', 6, address)
+                send(normal, 'timeout')
+                send(normal, 'delayed')
+                send(normal, 'success_delayed')
+                check(normal, 'timeout_delayed', False)
+                rpc('generatetoaddress', 6, address)
+                send(normal, 'timeout_delayed')
+                rpc('generatetoaddress', 1, address)
+
+                revoked = funded()
+                send(revoked, 'commitment')
+                rpc('generatetoaddress', 1, address)
+                for name in ['penalty_delayed', 'penalty_timeout', 'penalty_success']:
+                    send(revoked, name)
+                rpc('generatetoaddress', 1, address)
+                remote = funded()
+                send(remote, 'commitment')
+                rpc('generatetoaddress', 1, address)
+                send(remote, 'remote_immediate')
+                send(remote, 'remote_success')
+                check(remote, 'remote_timeout', False)
+                rpc('generatetoaddress', 3, address)
+                send(remote, 'remote_timeout')
+                rpc('generatetoaddress', 1, address)
+
+                raced = funded()
+                send(raced, 'commitment')
+                rpc('generatetoaddress', 1, address)
+                send(raced, 'success')
+                rpc('generatetoaddress', 1, address)
+                send(raced, 'penalty_stage_success')
+                rpc('generatetoaddress', 3, address)
+                send(raced, 'timeout')
+                rpc('generatetoaddress', 1, address)
+                send(raced, 'penalty_stage_timeout')
+                rpc('generatetoaddress', 1, address)
+                # Anchor commitments retain both HTLC variants, use zero-fee
+                # second stages, and permit wallet-funded 0x83 augmentation.
+                def funded_anchor():
+                    txid = rpc('sendtoaddress', funding_address, '0.001')
+                    funding = rpc('gettransaction', txid)['hex']
+                    rpc('generatetoaddress', 1, address)
+                    return swift('anchor-transactions', funding, destination, str(rpc('getblockcount') + 3))
+
+                def augment(transactions, name):
+                    deposit = rpc('sendtoaddress', address, '0.002')
+                    rpc('generatetoaddress', 1, address)
+                    coin = next(coin for coin in rpc('listunspent') if coin['txid'] == deposit and coin['address'] == address)
+                    raw = swift('augment-htlc', transactions[name], deposit, str(coin['vout']), '200000', destination, '1000')['transaction']
+                    signed = rpc('signrawtransactionwithwallet', raw)
+                    assert signed['complete'], signed
+                    return signed['hex']
+
+                anchor = funded_anchor()
+                send(anchor, 'commitment')
+                check(anchor, 'remote_immediate', False)
+                rpc('generatetoaddress', 1, address)
+                send(anchor, 'remote_immediate')
+                check(anchor, 'success', False)  # Peer signatures valid, but no relay fee yet.
+                anchor['success'] = augment(anchor, 'success')
+                send(anchor, 'success')
+                rpc('generatetoaddress', 6, address)
+                anchor['timeout'] = augment(anchor, 'timeout')
+                send(anchor, 'timeout')
+                rpc('generatetoaddress', 1, address)
+                anchor_revoked = funded_anchor()
+                send(anchor_revoked, 'commitment')
+                rpc('generatetoaddress', 1, address)
+                for name in ['penalty_delayed', 'penalty_timeout', 'penalty_success']:
+                    send(anchor_revoked, name)
+                rpc('generatetoaddress', 1, address)
+                print(json.dumps({'bitcoin_core': rpc('getnetworkinfo')['subversion'],
+                                  'accepted': accepted, 'rejected': rejected, 'result': 'passed'}, indent=2))
+            finally:
+                if node.poll() is None:
+                    subprocess.run([cli, *base, 'stop'], capture_output=True, timeout=20)
+                    try:
+                        node.wait(timeout=20)
+                    except subprocess.TimeoutExpired:
+                        node.terminate()
+                        node.wait(timeout=10)
+
+
+if __name__ == '__main__':
+    main()

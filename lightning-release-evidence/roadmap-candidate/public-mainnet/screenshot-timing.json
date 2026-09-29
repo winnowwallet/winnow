@@ -1,0 +1,29 @@
+{
+  "capture_origin": "Direct native XCTest Screenshots.capture outputs retained unchanged",
+  "time_origin": "Start Test 2026-09-28 09:17:26.882 -0400; this is the XCTest clock, not the earlier video recording start",
+  "no_video_timestamp_inference": true,
+  "screenshots": [
+    {
+      "path": "screenshots/live-mainnet-provider-options.png",
+      "sha256": "8a6a7574291637f7dc0b8c75c2369d0cae7898a7c46ce2f006caa29978785092",
+      "bytes": 230604,
+      "test_relative_capture_seconds": 50.59,
+      "scope": "Actual public provider options after verified chain enabled setup."
+    },
+    {
+      "path": "screenshots/live-mainnet-unpaid-quote.png",
+      "sha256": "f0ffec3f0ac518824750be3015f5c30581c4e1318a19d5ccfbad3d1568610aa1",
+      "bytes": 397379,
+      "test_relative_capture_seconds": 58.13,
+      "scope": "Actual unaccepted public quote with approval fully visible; no invoice or funds exposed."
+    },
+    {
+      "path": "screenshots/live-mainnet-synced.png",
+      "sha256": "4ffba66ac9a403edb4b2626c37c639ed2157c7fa9c0e9327c5b633176cc71b6d",
+      "bytes": 190453,
+      "test_relative_capture_seconds": 59.75,
+      "scope": "Simple wallet shows 0 sats and Up to date; does not display peer count."
+    }
+  ],
+  "public_peer_count_proof": "mainnet-story-events-final.jsonl: peers.status connected=3; wallet.snapshot tipHeight=969000 nextScanHeight=969001"
+}

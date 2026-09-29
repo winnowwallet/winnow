@@ -1,0 +1,30 @@
+{
+  "source": "248d31fdc6d7051ea8a01f23256b44824738c04b",
+  "result": "passed",
+  "providers": [
+    {
+      "provider": "olympus",
+      "result": {
+        "channel_phase": "none",
+        "payment": "never authorized or sent",
+        "status": "connected-for-60-seconds"
+      },
+      "log": "olympus-fresh-connection.log",
+      "sha256": "ee6a24d60f9cfdefd0c8dde1014b7a303fbbc294c52f41cd2637f0a259210eb3"
+    },
+    {
+      "provider": "megalith",
+      "result": {
+        "channel_phase": "none",
+        "payment": "never authorized or sent",
+        "status": "connected-for-60-seconds"
+      },
+      "log": "megalith-fresh-connection.log",
+      "sha256": "bb00c4f8f1f0af5ad1f8ba775a81e55546abc53a40cd3f55d4478458613a8af8"
+    }
+  ],
+  "binary_sha256": "1e61de90627e4c1f36b801474f6353ad88a5c0891b1533581a395a8117b86668",
+  "scope": "Production Swift peer transport, temporary host identities and provider capability discovery; diagnostic chain readiness is synthetic, not a wallet mainnet synchronization receipt",
+  "funded_mainnet_receiving": "unverified",
+  "physical_device": false
+}

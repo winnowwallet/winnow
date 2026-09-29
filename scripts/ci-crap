@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+"""Export package and simulator evidence, then enforce the method CRAP cap.
+
+Call check-crap snapshot before instrumented builds. This collector never
+launches another test run, changes coverage, or assumes unmeasured code passed.
+"""
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def test_binary(bundle):
+    candidates = [bundle / 'Contents/MacOS' / bundle.stem, bundle / bundle.stem]
+    return next((path for path in candidates if path.is_file()), None)
+
+
+def package_inputs(build):
+    profiles = sorted({path.resolve() for path in build.rglob('default.profdata') if path.parent.name == 'codecov'})
+    if len(profiles) != 1:
+        raise ValueError(f'Expected one instrumented package coverage profile; found {len(profiles)}')
+    binaries = sorted({binary.resolve() for bundle in build.rglob('*.xctest') if (binary := test_binary(bundle))})
+    if not binaries:
+        raise ValueError('No compiled package test binaries')
+    return profiles[0], binaries
+
+
+def app_binaries(derived, variant):
+    products = derived / 'Build/Products' / f'{variant}-iphonesimulator'
+    app = products / 'WinnowApp.app'
+    if not (app / 'WinnowApp').is_file():
+        raise ValueError(f'Missing instrumented {variant} app executable')
+    binaries = [app / 'WinnowApp', app / 'WinnowApp.debug.dylib']
+    bundles = list(products.rglob('WinnowAppTests.xctest'))
+    binaries += [binary for bundle in bundles if (binary := test_binary(bundle))]
+    binaries = sorted({path.resolve() for path in binaries if path.is_file()})
+    return binaries
+
+
+def app_inputs(derived, variant):
+    binaries = app_binaries(derived, variant)
+    profiles = sorted({path.resolve() for path in (derived / 'Build/ProfileData').rglob('Coverage.profdata')})
+    if not profiles:
+        raise ValueError('Missing instrumented simulator app binaries or coverage profiles')
+    return profiles, binaries
+
+
+def export(profile, binaries, output):
+    command = [str(ROOT / 'scripts/check-crap'), 'export-llvm', '--profile', str(profile), '--output', str(output)]
+    for binary in binaries:
+        command += ['--binary', str(binary)]
+    subprocess.run(command, check=True)
+
+
+def validate_package_sources(lines, compiled_manifest, final_manifest):
+    """A package run can precede App-only edits; its own source must match."""
+    compiled = json.loads(compiled_manifest.read_text())['files']
+    final = json.loads(final_manifest.read_text())['files']
+    observed = set()
+    for record in lines.read_text().splitlines():
+        if not record.startswith('SF:'):
+            continue
+        parts = Path(record[3:]).parts
+        if 'Sources' not in parts:
+            continue
+        source = '/'.join(parts[parts.index('Sources'):])
+        if source in compiled or source in final:
+            observed.add(source)
+    changed = sorted(source for source in observed if compiled.get(source) != final.get(source))
+    if changed:
+        raise ValueError('Package coverage source manifest mismatch: ' + ', '.join(changed[:12]))
+    if not observed:
+        raise ValueError('Package coverage has no first-party Sources evidence')
+    return sorted(observed)
+
+
+def coverage_archives(metadata):
+    archives = []
+    for action in metadata.get('actions', {}).get('_values', []):
+        result = action.get('actionResult', {})
+        coverage = result.get('coverage', {})
+        if coverage.get('hasCoverageData', {}).get('_value') != 'true':
+            continue
+        if result.get('status', {}).get('_value') != 'succeeded':
+            raise ValueError('Result bundle coverage came from an unsuccessful test action')
+        identifier = coverage.get('archiveRef', {}).get('id', {}).get('_value')
+        if not identifier:
+            raise ValueError('Result bundle has no coverage archive reference')
+        archives.append(identifier)
+    if not archives:
+        raise ValueError('Result bundle has no successful test coverage archive')
+    return archives
+
+
+def archived_source_lines(data, source_manifest, root=ROOT):
+    """Keep every executable Swift line of known first-party source, including 0."""
+    if not isinstance(data, dict):
+        raise ValueError('Unexpected xccov archive line-record schema')
+    root = root.resolve()
+    expected = json.loads(source_manifest.read_text())['files']
+    output = []
+    observed = {}
+    for name, records in sorted(data.items()):
+        path = Path(name).resolve()
+        if not path.is_relative_to(root / 'Sources'):
+            parts = path.parts
+            relative = '/'.join(parts[parts.index('Sources'):]) if 'Sources' in parts else None
+            if relative in expected:
+                raise ValueError('Archive first-party source is outside the declared checkout: ' + name)
+            continue
+        if path.suffix != '.swift':
+            continue
+        relative = str(path.relative_to(root))
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        if expected.get(relative) != actual:
+            raise ValueError('Archive source manifest mismatch: ' + relative)
+        if not isinstance(records, list) or '\n' in name or '\r' in name:
+            raise ValueError('Unexpected xccov source-line records')
+        lines = {}
+        for record in records:
+            executable = record.get('isExecutable')
+            if executable is False:
+                continue
+            number, count = record.get('line'), record.get('executionCount')
+            if executable is not True or type(number) is not int or number < 1 or type(count) is not int or count < 0:
+                raise ValueError('Malformed xccov executable-line evidence: ' + relative)
+            lines[number] = max(lines.get(number, 0), count)
+        if lines:
+            output.append('SF:' + str(path))
+            output.extend(f'DA:{number},{count}' for number, count in sorted(lines.items()))
+            output.append('end_of_record')
+            observed[relative] = actual
+    if not observed:
+        raise ValueError('Coverage archive has no first-party executable source lines')
+    return '\n'.join(output) + '\n', observed
+
+
+def captured(command, log):
+    result = subprocess.run(command, capture_output=True, text=True)
+    log.write_text(result.stderr)
+    if result.returncode:
+        raise ValueError('Coverage export failed: ' + result.stderr[-2000:])
+    return result.stdout
+
+
+def export_app_result(result, output, source_manifest, allowed_products):
+    output.mkdir(parents=True, exist_ok=False)
+    root_command = ['xcrun', 'xcresulttool', 'get', 'object', '--legacy', '--path', str(result), '--format', 'json']
+    metadata = captured(root_command, output / 'metadata-export.log')
+    (output / 'metadata.json').write_text(metadata)
+    identifiers = coverage_archives(json.loads(metadata))
+    archive_paths, commands = [], [root_command]
+    for index, identifier in enumerate(identifiers):
+        archive = output / f'coverage-{index}.xccovarchive'
+        command = ['xcrun', 'xcresulttool', 'export', 'object', '--legacy', '--path', str(result), '--id', identifier,
+                   '--type', 'directory', '--output-path', str(archive)]
+        captured(command, output / f'archive-{index}-export.log')
+        archive_paths.append(str(archive)); commands.append(command)
+    command = ['xcrun', 'xccov', 'view', '--archive', '--json', str(result)]
+    raw = captured(command, output / 'xccov-lines.log'); commands.append(command)
+    (output / 'executable-lines.json').write_text(raw)
+    lines, source_hashes = archived_source_lines(json.loads(raw), source_manifest)
+    (output / 'coverage.lcov').write_text(lines)
+    command = ['xcrun', 'xccov', 'view', '--report', '--json', str(result)]
+    raw_report = captured(command, output / 'xccov-report.log'); commands.append(command)
+    (output / 'coverage-report.json').write_text(raw_report)
+    products = [Path(target['buildProductPath']).resolve() for target in json.loads(raw_report).get('targets', [])]
+    if not products or any(not any(path.is_relative_to(root) for root in allowed_products) for path in products):
+        raise ValueError('Coverage result build products do not match declared DerivedData')
+    return {'result_bundle': str(result), 'archive_ids': identifiers, 'retained_archives': archive_paths,
+            'source_hashes': source_hashes, 'build_product_paths': list(map(str, products)), 'commands': commands}
+
+
+def collect(args):
+    output = args.output.resolve(); output.mkdir(parents=True, exist_ok=True)
+    package_profile, package_binaries = package_inputs(args.package_build.resolve())
+    export(package_profile, package_binaries, output / 'package.lcov')
+    package_manifest = (args.package_manifest or args.manifest).resolve()
+    package_sources = validate_package_sources(output / 'package.lcov', package_manifest, args.manifest.resolve())
+    (output / 'package-source-manifest.json').write_bytes(package_manifest.read_bytes())
+    (output / 'final-source-manifest.json').write_bytes(args.manifest.read_bytes())
+    applications = [(args.derived_data, args.variant)] + [(Path(directory), variant)
+                     for directory, variant in args.additional_app]
+    app_receipts, coverage = [], [output / 'package.lcov']
+    if args.app_result:
+        allowed_products = [derived.resolve() / 'Build/Products' for derived, _ in applications]
+        for index, result in enumerate(args.app_result):
+            retained = output / f'app-result-{index}'
+            receipt = export_app_result(result.resolve(), retained, args.manifest.resolve(), allowed_products)
+            coverage.append(retained / 'coverage.lcov'); app_receipts.append(receipt)
+        for derived, variant in applications:
+            binaries = app_binaries(derived.resolve(), variant)
+            app_receipts.append({'variant': variant, 'derived_data': str(derived.resolve()),
+                                 'binary_hashes_at_collection': {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in binaries}})
+    for index, (derived, variant) in enumerate([] if args.app_result else applications):
+        app_profiles, binaries = app_inputs(derived.resolve(), variant)
+        merged = output / f'app-{index}.profdata'
+        subprocess.run(['xcrun', 'llvm-profdata', 'merge', '-sparse', '-o', str(merged),
+                        *map(str, app_profiles)], check=True)
+        lines = output / f'app-{index}.lcov'
+        export(merged, binaries, lines)
+        coverage.append(lines)
+        app_receipts.append({'variant': variant, 'derived_data': str(derived.resolve()),
+                             'profiles': list(map(str, app_profiles)), 'binaries': list(map(str, binaries))})
+    receipt = {'schema': 1, 'package_profile': str(package_profile), 'package_binaries': list(map(str, package_binaries)),
+               'package_source_manifest': str(package_manifest), 'package_source_files': package_sources,
+               'applications': app_receipts, 'source_manifest': str(args.manifest.resolve()),
+               'coverage_definition': 'Compiler executable lines; xccov isExecutable records retain zero counts and whole-line execution',
+               'tools': {'xcode': subprocess.check_output(['xcodebuild', '-version'], text=True).strip(),
+                         'xcresulttool': subprocess.check_output(['xcrun', 'xcresulttool', 'version'], text=True).strip()}}
+    (output / 'coverage-inputs.json').write_text(json.dumps(receipt, indent=2) + '\n')
+    command = [str(ROOT / 'scripts/check-crap'), 'report', '--manifest', str(args.manifest.resolve()),
+               '--output', str(output / 'report.json')]
+    for lines in coverage:
+        command += ['--coverage', str(lines)]
+    subprocess.run(command, check=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--package-build', type=Path, required=True)
+    parser.add_argument('--derived-data', type=Path, required=True)
+    parser.add_argument('--variant', default='ResearchDebug')
+    parser.add_argument('--additional-app', nargs=2, action='append', default=[], metavar=('DERIVED_DATA', 'VARIANT'),
+                        help='Union another instrumented app configuration; declared evidence must exist')
+    parser.add_argument('--app-result', type=Path, action='append', default=[],
+                        help='Retain and union successful xcresult executable-line archives instead of transient ProfileData')
+    parser.add_argument('--manifest', type=Path, required=True)
+    parser.add_argument('--package-manifest', type=Path,
+                        help='Original package-build snapshot when only uncompiled App sources changed afterward')
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args()
+    try:
+        collect(args)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        print('CRAP gate failed: ' + str(error), file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

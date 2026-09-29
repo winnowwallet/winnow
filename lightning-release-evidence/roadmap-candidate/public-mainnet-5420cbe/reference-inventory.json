@@ -1,0 +1,43 @@
+{
+  "ldk": {
+    "path": "/tmp/winnow-receive-references/ldk",
+    "commit": "0a2b003e7e1602df8933b15b7563ba8b6e198391",
+    "tracked_diff_empty": true
+  },
+  "cln": {
+    "path": "/tmp/winnow-receive-references/cln",
+    "commit": "6f741afc395c66d200429ea477d29df4d974748d",
+    "tracked_diff_empty": true
+  },
+  "harness_source": {
+    "path": "/tmp/winnow-receive-references/reference-source",
+    "commit": "ffaeefca9280cd4c674296cd2e2c4957cc44060f",
+    "tracked_diff_empty": true
+  },
+  "harness_build_copy": {
+    "path": "/tmp/winnow-receive-references/harness",
+    "binary_sha256": "505309420476d576cb6ecba4dc655452f9a5f0ce2ce04081484ebf3ec6010fee",
+    "source_files": {
+      "Cargo.lock": {
+        "sha256": "6b1abe19a8b8782bbdac486ba0784612f6185ed2c65d4d2c2a0808a008a3327f",
+        "equals_pinned_repository_file": true
+      },
+      "Cargo.toml": {
+        "sha256": "a210275875063103c60d5200281b5bfb24ec68ecf7cf1dca12435f103ed47322",
+        "equals_pinned_repository_file": true
+      },
+      "src/main.rs": {
+        "sha256": "074e0af4aa961706d9079813bba7c42291a84fef5043842d33bfabe7fb6f024a",
+        "equals_pinned_repository_file": true
+      },
+      "src/node.rs": {
+        "sha256": "c4bc18e9ba251853b241e31cd90c21ecbea3d5e8b65e31104556dc32bb4f060a",
+        "equals_pinned_repository_file": true
+      }
+    }
+  },
+  "bitcoin_core": {
+    "path": "/tmp/winnow-receive-bitcoin/bitcoin-31.1/bin",
+    "version": "Bitcoin Core daemon version v31.1.0 bitcoind"
+  }
+}

@@ -365,69 +365,69 @@ public enum PeerMessage: Equatable, Sendable {
     }
 
     public static func decode(command: String, payload: Data) throws -> PeerMessage {
-        switch command {
-        case "version": return .version(try VersionMessage.decode(payload))
-        case "verack":
-            try ByteReader(payload).requireEnd()
-            return .verack
-        case "ping":
-            var reader = ByteReader(payload)
-            let nonce = try reader.readUInt64()
-            try reader.requireEnd()
-            return .ping(nonce)
-        case "pong":
-            var reader = ByteReader(payload)
-            let nonce = try reader.readUInt64()
-            try reader.requireEnd()
-            return .pong(nonce)
-        case "sendheaders":
-            try ByteReader(payload).requireEnd()
-            return .sendheaders
-        case "getaddr":
-            try ByteReader(payload).requireEnd()
-            return .getaddr
-        case "addr":
-            var reader = ByteReader(payload)
-            let count = try reader.readVarInt()
-            guard count <= 1_000 else { throw WireError.malformed("addr count \(count)") }
-            var addresses: [PeerAddress] = []
-            addresses.reserveCapacity(Int(count))
-            for _ in 0 ..< count {
-                addresses.append(try PeerAddress.decode(from: &reader, includeTime: true))
-            }
-            try reader.requireEnd()
-            return .addr(addresses)
-        case "feefilter":
-            var reader = ByteReader(payload)
-            let feeRate = try reader.readInt64()
-            try reader.requireEnd()
-            return .feefilter(feeRate)
-        case "inv": return .inv(try InventoryPayload.decode(payload))
-        case "getdata": return .getdata(try InventoryPayload.decode(payload))
-        case "notfound": return .notfound(try InventoryPayload.decode(payload))
-        case "tx": return .tx(try Transaction.decode(payload))
-        case "block": return .block(try Block.decode(payload))
-        case "getheaders": return .getheaders(try GetHeadersMessage.decode(payload))
-        case "headers":
-            var reader = ByteReader(payload)
-            let count = try reader.readVarInt()
-            guard count <= 2_000 else { throw WireError.malformed("headers count \(count)") }
-            var headers: [BlockHeader] = []
-            headers.reserveCapacity(Int(count))
-            for _ in 0 ..< count {
-                headers.append(try BlockHeader.decode(from: &reader))
-                let txCount = try reader.readVarInt() // always zero
-                guard txCount == 0 else { throw WireError.malformed("headers txn_count \(txCount)") }
-            }
-            try reader.requireEnd()
-            return .headers(headers)
-        case "getcfilters": return .getcfilters(try GetCFiltersRequest.decode(payload))
-        case "cfilter": return .cfilter(try CFilterMessage.decode(payload))
-        case "getcfheaders": return .getcfheaders(try GetCFiltersRequest.decode(payload))
-        case "cfheaders": return .cfheaders(try CFHeadersMessage.decode(payload))
-        case "getcfcheckpt": return .getcfcheckpt(try GetCFCheckptRequest.decode(payload))
-        case "cfcheckpt": return .cfcheckpt(try CFCheckptMessage.decode(payload))
-        default: return .unknown(command: command, payload: payload)
+        guard let decoder = payloadDecoders[command] else { return .unknown(command: command, payload: payload) }
+        return try decoder(payload)
+    }
+
+    /// Known commands have exactly one typed decoder. Unknown extensions retain
+    /// their original bytes; strict payload/end checks stay with each decoder.
+    private static let payloadDecoders: [String: @Sendable (Data) throws -> PeerMessage] = [
+        "version": { .version(try VersionMessage.decode($0)) },
+        "verack": { try empty($0, message: .verack) },
+        "ping": { .ping(try nonce($0)) },
+        "pong": { .pong(try nonce($0)) },
+        "sendheaders": { try empty($0, message: .sendheaders) },
+        "getaddr": { try empty($0, message: .getaddr) },
+        "addr": { .addr(try addresses($0)) },
+        "feefilter": { .feefilter(try feeRate($0)) },
+        "inv": { .inv(try InventoryPayload.decode($0)) },
+        "getdata": { .getdata(try InventoryPayload.decode($0)) },
+        "notfound": { .notfound(try InventoryPayload.decode($0)) },
+        "tx": { .tx(try Transaction.decode($0)) },
+        "block": { .block(try Block.decode($0)) },
+        "getheaders": { .getheaders(try GetHeadersMessage.decode($0)) },
+        "headers": { .headers(try headers($0)) },
+        "getcfilters": { .getcfilters(try GetCFiltersRequest.decode($0)) },
+        "cfilter": { .cfilter(try CFilterMessage.decode($0)) },
+        "getcfheaders": { .getcfheaders(try GetCFiltersRequest.decode($0)) },
+        "cfheaders": { .cfheaders(try CFHeadersMessage.decode($0)) },
+        "getcfcheckpt": { .getcfcheckpt(try GetCFCheckptRequest.decode($0)) },
+        "cfcheckpt": { .cfcheckpt(try CFCheckptMessage.decode($0)) },
+    ]
+    private static func empty(_ payload: Data, message: PeerMessage) throws -> PeerMessage {
+        try ByteReader(payload).requireEnd()
+        return message
+    }
+    private static func nonce(_ payload: Data) throws -> UInt64 {
+        var reader = ByteReader(payload)
+        let value = try reader.readUInt64(); try reader.requireEnd()
+        return value
+    }
+    private static func feeRate(_ payload: Data) throws -> Int64 {
+        var reader = ByteReader(payload)
+        let value = try reader.readInt64(); try reader.requireEnd()
+        return value
+    }
+    private static func addresses(_ payload: Data) throws -> [PeerAddress] {
+        var reader = ByteReader(payload)
+        let count = try reader.readVarInt()
+        guard count <= 1_000 else { throw WireError.malformed("addr count \(count)") }
+        var addresses: [PeerAddress] = []; addresses.reserveCapacity(Int(count))
+        for _ in 0 ..< count { addresses.append(try PeerAddress.decode(from: &reader, includeTime: true)) }
+        try reader.requireEnd()
+        return addresses
+    }
+    private static func headers(_ payload: Data) throws -> [BlockHeader] {
+        var reader = ByteReader(payload)
+        let count = try reader.readVarInt()
+        guard count <= 2_000 else { throw WireError.malformed("headers count \(count)") }
+        var headers: [BlockHeader] = []; headers.reserveCapacity(Int(count))
+        for _ in 0 ..< count {
+            headers.append(try BlockHeader.decode(from: &reader))
+            let txCount = try reader.readVarInt()
+            guard txCount == 0 else { throw WireError.malformed("headers txn_count \(txCount)") }
         }
+        try reader.requireEnd()
+        return headers
     }
 }

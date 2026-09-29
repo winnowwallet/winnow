@@ -46,7 +46,7 @@ The `app-tests-<run-id>-<attempt>` artifact contains `debug-build.log`, `units/`
 Inspect the exact run and test-step conclusions; reused media is not fresh test evidence.
 
 [prepare-site-artifact](../../scripts/prepare-site-artifact) assembles the
-current website with a new journey or cached video and all 16 checkpoints,
+current website with a new journey or cached video and all 17 checkpoints,
 preserving the recording's source provenance. It also writes a dedicated
 reusable media bundle. [site.yml](site.yml) downloads the ready website artifact
 from the same run and deploys it without checkout, rebuilding, or testing.

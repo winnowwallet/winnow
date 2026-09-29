@@ -1,0 +1,49 @@
+{
+  "source": "b3bb94a6870b286ab11dbf7a201cdd8e357d738f",
+  "result": "passed",
+  "app_summary": {
+    "devicesAndConfigurations": [
+      {
+        "device": {
+          "architecture": "arm64",
+          "deviceId": "4BAD1D04-0D01-45E2-8D56-327276D3D967",
+          "deviceName": "iPad Pro 13-inch (M5)",
+          "modelName": "iPad Pro 13-inch (M5)",
+          "osBuildNumber": "24A434",
+          "osVersion": "27.0",
+          "platform": "iOS Simulator"
+        },
+        "expectedFailures": 0,
+        "failedTests": 0,
+        "passedTests": 20,
+        "skippedTests": 1,
+        "testPlanConfiguration": {
+          "configurationId": "1",
+          "configurationName": "Test Scheme Action"
+        }
+      }
+    ],
+    "environmentDescription": "WinnowLightning \u00b7 Built with macOS 27.0",
+    "expectedFailures": 0,
+    "failedTests": 0,
+    "finishTime": 1790516752.384,
+    "passedTests": 20,
+    "result": "Passed",
+    "runtimeWarnings": [],
+    "skippedTests": 1,
+    "startTime": 1790516748.734,
+    "statistics": [],
+    "testFailures": [],
+    "title": "Test - WinnowLightning",
+    "topInsights": [
+      {
+        "category": "Longest Test Runs",
+        "impact": "57% of duration",
+        "text": "1 longest test run with outlier durations exceeding 0.56s (three standard deviations)"
+      }
+    ],
+    "totalTestCount": 21
+  },
+  "lightning_core_tests": 73,
+  "physical_device": false
+}

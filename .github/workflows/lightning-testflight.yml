@@ -1,0 +1,134 @@
+name: Lightning TestFlight upload
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Inspect the existing app or release the validated candidate
+        type: choice
+        default: inspect
+        options:
+          - inspect
+          - upload
+          - declare-and-enable
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: ${{ inputs.operation == 'inspect' && 'lightning-testflight-inspect' || 'lightning-testflight-upload' }}
+  cancel-in-progress: false
+jobs:
+  upload:
+    runs-on: macos-latest
+    timeout-minutes: 120
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: control
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Validate final candidate and current-source release evidence
+        id: candidate
+        if: inputs.operation != 'inspect'
+        run: python3 control/scripts/lightning-release-candidate.py validate --github-output "$GITHUB_OUTPUT"
+      - name: Check out exact tested app source
+        if: inputs.operation != 'inspect'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: posix4e/winnow-lightning
+          ref: ${{ steps.candidate.outputs.source }}
+          path: app
+          persist-credentials: false
+      - name: Check out committed release tooling
+        if: inputs.operation != 'inspect'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: posix4e/winnow-lightning
+          ref: ${{ steps.candidate.outputs.release_tooling_source }}
+          path: tooling
+          persist-credentials: false
+      - name: Wait for the exact app source to pass required CI
+        if: inputs.operation != 'inspect'
+        run: |
+          gh run watch '${{ steps.candidate.outputs.ci_run }}' -R posix4e/winnow-lightning --exit-status --interval 30
+          python3 control/scripts/lightning-release-candidate.py ci
+      - name: Install pinned XcodeGen
+        if: inputs.operation == 'upload'
+        run: app/scripts/install-xcodegen
+      - name: Prepare existing API credential and read app state
+        env:
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+          ASC_KEY_PATH: ${{ runner.temp }}/lightning-asc/AuthKey.p8
+        run: |
+          umask 077
+          mkdir -p "$RUNNER_TEMP/lightning-asc"
+          printf '%s' "$ASC_PRIVATE_KEY" > "$ASC_KEY_PATH"
+          printf 'ASC_KEY_PATH=%s\n' "$ASC_KEY_PATH" >> "$GITHUB_ENV"
+          python3 control/scripts/lightning-asc-preflight.py
+          mv control/control-output/app-state.json control/control-output/app-state-before.json
+      - name: Check live Apple candidate identity and build availability
+        if: inputs.operation != 'inspect'
+        run: |
+          python3 control/scripts/lightning-release-candidate.py apple \
+            --apple-state control/control-output/app-state-before.json \
+            --release-operation '${{ inputs.operation }}'
+      - name: Import existing signing certificate
+        if: inputs.operation == 'upload'
+        env:
+          DEV_CERT_P12: ${{ secrets.DEV_CERT_P12 }}
+          DEV_CERT_P12_PASSWORD: ${{ secrets.DEV_CERT_P12_PASSWORD }}
+        run: |
+          umask 077
+          KC="$RUNNER_TEMP/lightning-ci.keychain-db"
+          KCPW="$(uuidgen)"
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          printf '%s' "$DEV_CERT_P12" | base64 -D > "$RUNNER_TEMP/lightning-dev.p12"
+          security import "$RUNNER_TEMP/lightning-dev.p12" -k "$KC" -P "$DEV_CERT_P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          rm "$RUNNER_TEMP/lightning-dev.p12"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KCPW" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" login.keychain
+      - name: Archive, verify, upload, and confirm Apple processing
+        if: inputs.operation == 'upload'
+        run: |
+          python3 tooling/scripts/release-lightning \
+            --source-checkout "$GITHUB_WORKSPACE/app" \
+            --commit '${{ steps.candidate.outputs.source }}' \
+            --ci-run '${{ steps.candidate.outputs.ci_run }}' \
+            --version '${{ steps.candidate.outputs.version }}' --build '${{ steps.candidate.outputs.build }}' \
+            --evidence "$GITHUB_WORKSPACE/control/${{ steps.candidate.outputs.evidence }}" \
+            --output "$RUNNER_TEMP/lightning-release" \
+            --upload-only
+      - name: Submit source-grounded encryption facts and verify existing internal access
+        if: inputs.operation == 'declare-and-enable'
+        run: python3 control/scripts/lightning-complete-testflight.py
+      - name: Read back existing app after upload
+        if: always() && env.ASC_KEY_PATH != ''
+        run: python3 control/scripts/lightning-asc-preflight.py
+      - name: Preserve release receipt, verified IPA, logs, and app state
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ steps.candidate.outputs.artifact_name || 'lightning-testflight-inspection' }}
+          path: |
+            control/lightning-release-candidate.json
+            control/control-output/*.json
+            ${{ runner.temp }}/lightning-release/*.log
+            ${{ runner.temp }}/lightning-release/release.json
+            ${{ runner.temp }}/lightning-release/ExportOptions.plist
+            ${{ runner.temp }}/lightning-release/export/*.ipa
+            ${{ runner.temp }}/lightning-release/export/*.verified.sha256
+            ${{ runner.temp }}/lightning-release/supply-chain/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove temporary credentials
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/lightning-ci.keychain-db" || true
+          rm -f "$RUNNER_TEMP/lightning-dev.p12" "$RUNNER_TEMP/lightning-asc/AuthKey.p8"

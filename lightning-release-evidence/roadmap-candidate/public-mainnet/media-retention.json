@@ -1,0 +1,36 @@
+{
+  "source": "7e1177f8aeaf8c33f5977da8439b0ff7adc3d9e5",
+  "source_dirty": false,
+  "bundle": "com.btcswift.lightning",
+  "scope": "Unfunded public mainnet peer discovery, verified chain scan and unpaid receiving-capacity quote; no fee approval, channel funding or payment.",
+  "raw_movie": {
+    "path": "/Users/posix4e/Documents/Codex/2026-09-24/i-x20/outputs/winnow-lightning/native-head7e1177f-20260928/live-mainnet/journey.mp4",
+    "sha256": "ea4abeca05a911d12a410f888db50dfeda54077e5fc000b6ac6dbb4165dc9719",
+    "bytes": 17194357,
+    "duration_seconds": 72.731667,
+    "codec": "h264",
+    "retained_outside_git": true,
+    "original_unchanged": true
+  },
+  "full_xcresult": {
+    "path": "/Users/posix4e/Documents/Codex/2026-09-24/i-x20/outputs/winnow-lightning/native-head7e1177f-20260928/live-mainnet/LiveMainnet.xcresult",
+    "file_hash_inventory": "frozen-inventory.json",
+    "file_hash_inventory_sha256": "82e6f7013f70e6c2104aa8c143f182b889a33a85356dd031f09ec26c2e5935b9"
+  },
+  "codec_receipt": {
+    "path": "video-codec-verification.json",
+    "sha256": "273bb6c3a1119765a6567310aad33cdeca91e53ea2d832ef279758e733ba545b",
+    "scope": "All original video frames decode with -xerror. Only decoder output timestamps are normalized for the null sink; original recording is unchanged. This does not assert original timestamp/mux timing is warning-free."
+  },
+  "root_review": {
+    "path": "root-public-mainnet-review-20260928.json",
+    "sha256": "cf33c0be0947c0adf6357a210e53b5f454e1a99e8af6d2928400497073418d04"
+  },
+  "transport": "Small proof files are copied byte-for-byte into control. Original movie and full xcresult remain once in durable workspace outputs; no media duplication or upload is claimed.",
+  "limitations": [
+    "Simulator evidence does not prove physical authentication or locked-device file protection.",
+    "Funded mainnet payments remain unverified.",
+    "One invalid-frame runtime warning is preserved in the original XCTest summary.",
+    "This public iPhone run does not satisfy the pending iPad or maximum accessibility text gates."
+  ]
+}

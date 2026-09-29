@@ -210,51 +210,44 @@ public struct Descriptor: Sendable, Equatable {
 
     /// Structural rules beyond the grammar (BIP387/BIP389/BIP390).
     private func validate() throws {
-        for key in allKeys() {
-            guard case let .musig(participants, derivation) = key else { continue }
-            // musig() derivation steps must be unhardened (BIP390).
-            for element in derivation.elements {
-                switch element {
-                case let .step(step) where step >= HDKey.hardenedOffset: throw DescriptorError.invalidMuSig
-                case let .multipath(values) where values.contains(where: { $0 >= HDKey.hardenedOffset }):
-                    throw DescriptorError.invalidMuSig
-                case .wildcard(hardened: true): throw DescriptorError.invalidMuSig
-                default: break
-                }
-            }
-            if !derivation.elements.isEmpty {
-                // With a musig() suffix, all participants must be xpubs without
-                // their own wildcard or multipath (BIP390).
-                for participant in participants {
-                    guard case .extended = participant.base,
-                          !participant.derivation.isRanged,
-                          participant.derivation.multipathCount == 1
-                    else { throw DescriptorError.invalidMuSig }
-                }
+        let keys = allKeys()
+        for key in keys { try validateMuSig(key) }
+        let counts = derivationChoiceCounts(keys).filter { $0 > 1 }
+        if let first = counts.first, counts.contains(where: { $0 != first }) { throw DescriptorError.invalidPath }
+    }
+    private func validateMuSig(_ key: KeyExpression) throws {
+        guard case let .musig(participants, derivation) = key else { return }
+        try validateMuSigDerivation(derivation)
+        if !derivation.elements.isEmpty { try validateMuSigParticipants(participants) }
+    }
+    private func validateMuSigDerivation(_ derivation: Derivation) throws {
+        // BIP390 aggregate suffixes cannot derive hardened children.
+        for element in derivation.elements {
+            switch element {
+            case let .step(step) where step >= HDKey.hardenedOffset: throw DescriptorError.invalidMuSig
+            case let .multipath(values) where values.contains(where: { $0 >= HDKey.hardenedOffset }):
+                throw DescriptorError.invalidMuSig
+            case .wildcard(hardened: true): throw DescriptorError.invalidMuSig
+            default: break
             }
         }
-        // All multipath elements in a descriptor must agree on the choice count (BIP389).
-        let counts = allKeys().flatMap { key -> [Int] in
+    }
+    private func validateMuSigParticipants(_ participants: [SingleKey]) throws {
+        for participant in participants {
+            guard case .extended = participant.base, !participant.derivation.isRanged,
+                  participant.derivation.multipathCount == 1 else { throw DescriptorError.invalidMuSig }
+        }
+    }
+    private func derivationChoiceCounts(_ keys: [KeyExpression]) -> [Int] {
+        keys.flatMap { key in
             switch key {
             case let .single(single): [single.derivation.multipathCount]
             case let .musig(participants, derivation):
                 participants.map { $0.derivation.multipathCount } + [derivation.multipathCount]
             }
-        }.filter { $0 > 1 }
-        if let first = counts.first, counts.contains(where: { $0 != first }) {
-            throw DescriptorError.invalidPath
         }
     }
-
-    private func multipathCount() -> Int {
-        allKeys().flatMap { key -> [Int] in
-            switch key {
-            case let .single(single): [single.derivation.multipathCount]
-            case let .musig(participants, derivation):
-                participants.map { $0.derivation.multipathCount } + [derivation.multipathCount]
-            }
-        }.max() ?? 1
-    }
+    private func multipathCount() -> Int { derivationChoiceCounts(allKeys()).max() ?? 1 }
 
     private func allKeys() -> [KeyExpression] {
         switch expression {

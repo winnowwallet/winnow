@@ -1,0 +1,328 @@
+{
+  "source": "26e35021b545764a1dcb9358c0d284b869b6844c",
+  "previous_source": "1f1bfdd956c84765c444ed6b0667806b20626c55",
+  "observed_implementation_source": "2acfa08bd04ab9883a1e36c2b65d14a49b66e47e",
+  "sources_identical_to_observed": false,
+  "dependencies_and_project_unchanged": true,
+  "files": [
+    {
+      "path": "Package.swift",
+      "previous_sha256": "7fac92704aa7b03ff726f6fe10e45fbe20a8f690e6b034852ee1e31f57135f17",
+      "current_sha256": "7fac92704aa7b03ff726f6fe10e45fbe20a8f690e6b034852ee1e31f57135f17",
+      "unchanged": true
+    },
+    {
+      "path": "Package.resolved",
+      "previous_sha256": "8cd7fd20f40e99d1c1ec538942986a9ca53a4bbe0e687e65d1d47f0a15cd2e69",
+      "current_sha256": "8cd7fd20f40e99d1c1ec538942986a9ca53a4bbe0e687e65d1d47f0a15cd2e69",
+      "unchanged": true
+    },
+    {
+      "path": "project.yml",
+      "previous_sha256": "5847df017a07e1d8b291cbd02d776d3d83b200ddfe3c84d232ecaee5ffa9b6db",
+      "current_sha256": "5847df017a07e1d8b291cbd02d776d3d83b200ddfe3c84d232ecaee5ffa9b6db",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/LightningCore/NoiseCrypto.swift",
+      "previous_sha256": "0e25e1a3756c4942ff0b858ecee794eb22cd1926e0f4a5a83f1d50bfd1af4cd1",
+      "current_sha256": "0e25e1a3756c4942ff0b858ecee794eb22cd1926e0f4a5a83f1d50bfd1af4cd1",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/LightningCore/LightningHandshake.swift",
+      "previous_sha256": "ebf016812d30dd0bb1bcb337db31e85c0ca04a9092c740920cb1353207be70c6",
+      "current_sha256": "ebf016812d30dd0bb1bcb337db31e85c0ca04a9092c740920cb1353207be70c6",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/LightningCore/LightningJournal.swift",
+      "previous_sha256": "1f6eeeaf397c7fc601470ec3b95d2c4d4dc590e31dd756d3fb0ea0cbf1eb33da",
+      "current_sha256": "1f6eeeaf397c7fc601470ec3b95d2c4d4dc590e31dd756d3fb0ea0cbf1eb33da",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/LightningCore/OnionPacket.swift",
+      "previous_sha256": "dc41b404464c24f0e262fea81d9757fcfb1916d535e5473c0b02e9721a8bfb1c",
+      "current_sha256": "dc41b404464c24f0e262fea81d9757fcfb1916d535e5473c0b02e9721a8bfb1c",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/LightningCore/ChannelKeys.swift",
+      "previous_sha256": "d361709e95d909ec1af9ead1867e6c3d4cf80e6031289c8ec0b4d0cadda8f961",
+      "current_sha256": "d361709e95d909ec1af9ead1867e6c3d4cf80e6031289c8ec0b4d0cadda8f961",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/LightningCore/Bolt12Encoding.swift",
+      "previous_sha256": "1dd770a4503e80a3712598433b1afc1955ad1233ed5e5c31d6651900070cd52c",
+      "current_sha256": "1dd770a4503e80a3712598433b1afc1955ad1233ed5e5c31d6651900070cd52c",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/WalletCore/Wallet/CloudWalletBackup.swift",
+      "previous_sha256": "1d47f75d4cf87a15cbbd8c08bc7c7b0fb05cae41673d5febdf4306d43ef5885f",
+      "current_sha256": "1d47f75d4cf87a15cbbd8c08bc7c7b0fb05cae41673d5febdf4306d43ef5885f",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/WalletCore/Keys/BIP39.swift",
+      "previous_sha256": "90436fbaa49baabf5e32d222b8ea488f888651aa74f7379de5f6460cc1c5f031",
+      "current_sha256": "90436fbaa49baabf5e32d222b8ea488f888651aa74f7379de5f6460cc1c5f031",
+      "unchanged": true
+    },
+    {
+      "path": "Sources/LightningCore/DNSSECSignature.swift",
+      "previous_sha256": null,
+      "current_sha256": "3f735d5dccf6e7db4cf029fb6f5a4785de0dd0db2de88145a59895e82e83c82a",
+      "unchanged": false
+    },
+    {
+      "path": "Sources/LightningCore/DNSSECValidator.swift",
+      "previous_sha256": null,
+      "current_sha256": "b7be42a8c370fd50255f47083477759017dd9de2425d35c4fb12d4af1b5c44d4",
+      "unchanged": false
+    },
+    {
+      "path": "Sources/LightningCore/DNSSECWildcard.swift",
+      "previous_sha256": null,
+      "current_sha256": "b087d2070ac779d5a5273fcf7a4b41416afa6c164bb280d450da476980f090d5",
+      "unchanged": false
+    },
+    {
+      "path": "Sources/LightningCore/BIP353Resolver.swift",
+      "previous_sha256": null,
+      "current_sha256": "3fbfdcb4cd2ba63a071885f1a239cf468666e7d4f8d04b37783278b61ae7a76b",
+      "unchanged": false
+    },
+    {
+      "path": "Sources/WinnowApp/PortableLightningBackup.swift",
+      "previous_sha256": null,
+      "current_sha256": "41e3d791044d0cff7dff7ff2cf1d27ac1209b345b677118a5bb2ee888c22315d",
+      "unchanged": false
+    },
+    {
+      "path": "Sources/LightningCore/LightningRecoveryBackup.swift",
+      "previous_sha256": null,
+      "current_sha256": "d290ab5fec5232f5b1ecb4638f0c4df9f87875594890e2a1a6ca58080aba9067",
+      "unchanged": false
+    },
+    {
+      "path": "Sources/LightningCore/Bolt12Invoice.swift",
+      "previous_sha256": null,
+      "current_sha256": "43d9c0b603071eb4fad328ecb9fdeebf4b5dd0d215467734fa2ed3417c8bac49",
+      "unchanged": false
+    },
+    {
+      "path": "Sources/LightningCore/InvoiceRequest.swift",
+      "previous_sha256": "73189ccf4a7cd60048e01bf6120904730dbcbfafcd569d7b2f1d076e35fdf341",
+      "current_sha256": "2f9089eeb5d544e248d040d481bd6d98584ebbd3abde0345371cda0aaa8e157c",
+      "unchanged": false
+    },
+    {
+      "path": "Sources/LightningCore/LightningOrdinaryReceiving.swift",
+      "previous_sha256": null,
+      "current_sha256": "606a67146098aa53f8775f08b6c67c05450be609305dac33efea11f4ee64dc28",
+      "unchanged": false
+    },
+    {
+      "path": "Sources/LightningCore/LightningOrdinarySending.swift",
+      "previous_sha256": null,
+      "current_sha256": "5545d6e968729c1f3d05da1244e5ddfdab8af96c12b77c4777bb6f3e954dfc13",
+      "unchanged": false
+    },
+    {
+      "path": "Sources/LightningCore/OrdinaryBlindedPayment.swift",
+      "previous_sha256": null,
+      "current_sha256": "c37731ddf676943255c38e3014e191e8c8e44d1baede459ecf3fdede53da6822",
+      "unchanged": false
+    }
+  ],
+  "changed_source_paths": [
+    "Sources/LightningCore/AnchorFeeBump.swift",
+    "Sources/LightningCore/BIP353Name.swift",
+    "Sources/LightningCore/BIP353Resolver.swift",
+    "Sources/LightningCore/Bolt12Invoice.swift",
+    "Sources/LightningCore/Bolt12PaymentRoute.swift",
+    "Sources/LightningCore/ChannelFormat.swift",
+    "Sources/LightningCore/ChannelHTLCs.swift",
+    "Sources/LightningCore/ChannelNegotiation.swift",
+    "Sources/LightningCore/ChannelOpening.swift",
+    "Sources/LightningCore/ChannelRecovery.swift",
+    "Sources/LightningCore/ChannelResolution.swift",
+    "Sources/LightningCore/ChannelScripts.swift",
+    "Sources/LightningCore/ChannelState.swift",
+    "Sources/LightningCore/ChannelTransactions.swift",
+    "Sources/LightningCore/ChannelUpdates.swift",
+    "Sources/LightningCore/DNSSECSignature.swift",
+    "Sources/LightningCore/DNSSECValidator.swift",
+    "Sources/LightningCore/DNSSECWildcard.swift",
+    "Sources/LightningCore/DNSSECWire.swift",
+    "Sources/LightningCore/InvoiceRequest.swift",
+    "Sources/LightningCore/LightningAnchorFeeBumping.swift",
+    "Sources/LightningCore/LightningAppState.swift",
+    "Sources/LightningCore/LightningAsyncReceiving.swift",
+    "Sources/LightningCore/LightningAsyncState.swift",
+    "Sources/LightningCore/LightningBackgroundStore.swift",
+    "Sources/LightningCore/LightningChainDriver.swift",
+    "Sources/LightningCore/LightningEngine.swift",
+    "Sources/LightningCore/LightningFeatures.swift",
+    "Sources/LightningCore/LightningInvoiceRouting.swift",
+    "Sources/LightningCore/LightningLiquidity.swift",
+    "Sources/LightningCore/LightningLiquidityHTTP.swift",
+    "Sources/LightningCore/LightningOrdinaryReceiving.swift",
+    "Sources/LightningCore/LightningOrdinaryRouting.swift",
+    "Sources/LightningCore/LightningOrdinarySending.swift",
+    "Sources/LightningCore/LightningPayments.swift",
+    "Sources/LightningCore/LightningPeerRouting.swift",
+    "Sources/LightningCore/LightningRecovery.swift",
+    "Sources/LightningCore/LightningRecoveryBackup.swift",
+    "Sources/LightningCore/LightningRecoveryReestablishment.swift",
+    "Sources/LightningCore/LightningRouteSearch.swift",
+    "Sources/LightningCore/OnionMessage.swift",
+    "Sources/LightningCore/OrdinaryBlindedPayment.swift",
+    "Sources/LightningCore/OrdinaryOfferState.swift",
+    "Sources/LightningCore/README.md",
+    "Sources/WalletCore/Descriptors/Descriptor.swift",
+    "Sources/WalletCore/Keys/KeychainStore.swift",
+    "Sources/WalletCore/Network/Broadcast/TxBroadcaster.swift",
+    "Sources/WalletCore/Network/Peers/PeerPool.swift",
+    "Sources/WalletCore/Network/Peers/SeedResolver.swift",
+    "Sources/WalletCore/Network/Protocol/Messages.swift",
+    "Sources/WalletCore/Network/Transport/PeerConnection.swift",
+    "Sources/WalletCore/PSBT/PSBT.swift",
+    "Sources/WalletCore/Script/Multisig.swift",
+    "Sources/WalletCore/Transactions/FundingSources.swift",
+    "Sources/WalletCore/Wallet/RecoverySpendReservation.swift",
+    "Sources/WalletCore/Wallet/Vault.swift",
+    "Sources/WalletCore/Wallet/Wallet.swift",
+    "Sources/WinnowApp/AppModel.swift",
+    "Sources/WinnowApp/BackupSection.swift",
+    "Sources/WinnowApp/CloudAppState.swift",
+    "Sources/WinnowApp/CloudBackupView.swift",
+    "Sources/WinnowApp/HomeView.swift",
+    "Sources/WinnowApp/ICloudBackupStore.swift",
+    "Sources/WinnowApp/LightningAppChain.swift",
+    "Sources/WinnowApp/LightningAppController.swift",
+    "Sources/WinnowApp/LightningAppFeeBumps.swift",
+    "Sources/WinnowApp/LightningAppFunding.swift",
+    "Sources/WinnowApp/LightningAppOffers.swift",
+    "Sources/WinnowApp/LightningAppReceiving.swift",
+    "Sources/WinnowApp/LightningBackupView.swift",
+    "Sources/WinnowApp/LightningFeeBumpView.swift",
+    "Sources/WinnowApp/LightningInvoiceSendView.swift",
+    "Sources/WinnowApp/LightningLiquidityView.swift",
+    "Sources/WinnowApp/LightningOfferSendView.swift",
+    "Sources/WinnowApp/LightningReceiveIntent.swift",
+    "Sources/WinnowApp/LightningReceiveView.swift",
+    "Sources/WinnowApp/LightningReviewView.swift",
+    "Sources/WinnowApp/LightningView.swift",
+    "Sources/WinnowApp/MuSig2SignView.swift",
+    "Sources/WinnowApp/OnboardingView.swift",
+    "Sources/WinnowApp/PortableLightningBackup.swift",
+    "Sources/WinnowApp/ReceiveView.swift",
+    "Sources/WinnowApp/RecipientsView.swift",
+    "Sources/WinnowApp/SendView.swift",
+    "Sources/WinnowApp/SettingsView.swift",
+    "Sources/WinnowApp/VaultSpendSession.swift",
+    "Sources/WinnowApp/VaultStore.swift",
+    "Sources/WinnowApp/WalletImportMetadata.swift",
+    "Sources/WinnowApp/WinnowApp.swift"
+  ],
+  "review_status": "Technical source facts SHA-bound to the clean app commit by root; production readiness adapter change explicitly reviewed; exact-head CI/display proof and Apple determination remain pending.",
+  "previous_review_source": "5420cbea1de9b5cff26e22c09d76d3392c9556aa",
+  "app_tests_dependencies_and_project_unchanged_from_previous_review": false,
+  "source_binding_history": [
+    {
+      "source": "3064377d4c9fa3b1670148832321cc4ed18aac53",
+      "previous_review_source": "7ceba20bc3d214cfaff6a53fd5f955be5740bc14",
+      "app_tests_dependencies_and_project_unchanged_from_previous_review": true
+    },
+    {
+      "source": "7e1177f8aeaf8c33f5977da8439b0ff7adc3d9e5",
+      "previous_review_source": "3064377d4c9fa3b1670148832321cc4ed18aac53",
+      "app_tests_dependencies_and_project_unchanged_from_previous_review": false,
+      "app_sources_dependencies_and_project_unchanged_from_previous_review": true,
+      "test_changes_from_previous_review": [
+        {
+          "path": "Tests/WalletCoreTests/Network/FilterSyncTests.swift",
+          "previous_sha256": "dcbb3fbe670ebe47e037ba77bcb59cad6f658bcdcd7c416d2c80d156d635ebe4",
+          "current_sha256": "e9e363f81fd27a3cc870d1a191d4a68b3b7c3a221564b376f12fc117688d67f5",
+          "scope": "Test failure diagnostics only; exact 30-second peer dial timeout and fatal failed-handshake requirement retained."
+        },
+        {
+          "path": "UITests/LightningAppUITests.swift",
+          "previous_sha256": "76fbca9208f53e5199eb90a384ddd1239144cef28e068bb7c9782e12bb0a04b8",
+          "current_sha256": "1d127de23c431c7f944e82d075b033cb64e71924dd999486d21c37482298bc33",
+          "scope": "Read-only public-mainnet quote review scrolls the lazy Form to verify the existing enabled approval button; no approval tap or financial action."
+        }
+      ]
+    },
+    {
+      "source": "5420cbea1de9b5cff26e22c09d76d3392c9556aa",
+      "previous_review_source": "7e1177f8aeaf8c33f5977da8439b0ff7adc3d9e5",
+      "sources_identical_to_observed": true,
+      "app_sources_dependencies_and_project_unchanged_from_previous_review": true,
+      "test_changes_from_previous_review": [
+        {
+          "path": "UITests/LightningAppUITests.swift",
+          "previous_sha256": "1d127de23c431c7f944e82d075b033cb64e71924dd999486d21c37482298bc33",
+          "current_sha256": "d1ff5ea4a54d2d8f298f332f80fa46a89a0833e9a9502991d307feab1d3936fa",
+          "scope": "UI test-only iPad keyboard dismissal uses the app Done button at most twice under the existing strict 10-second deadline; keyboard node absence remains required."
+        },
+        {
+          "path": "scripts/tests/test_lightning_peer.py",
+          "previous_sha256": "4120a4d15121b44dc21e061d6ffa93511a7779e0cbb938ac636f8d7d265ae2a9",
+          "current_sha256": "1bb2ac2a0f09042028dbbe8bccaf29c9c409083685efb50517eebbdf3c9fff66",
+          "scope": "Host tests cover exact routed-startup classification and retained failures, rejecting wrong peer/state/txid, signatures/broadcast, HSM/protocol errors, unrelated bounds/platforms and failed diagnostics; no third attempt or receipt is permitted."
+        }
+      ],
+      "host_harness_changes_from_previous_review": [
+        {
+          "path": "scripts/ci-lightning-async",
+          "previous_sha256": "5d6c0294d1c6e36170e90cc95d6537a45216eda2c9faac29821f7e0b7c4830bc",
+          "current_sha256": "651fde34219b5de08eddc4e1f466bb311f7a570f7ec5bedfe64b34a967ac40cf",
+          "scope": "Host test fixture diagnostics add bounded RPC timings/partial failure output and Core RPC logging; successful output and arguments are omitted, the exact 20-second CLI timeout and original failure behavior remain unchanged."
+        },
+        {
+          "path": "scripts/ci-lightning-peer",
+          "previous_sha256": "f577b775751c5486dd46a0981914aae27b5b37008afa444ff2b93c86c51c4829",
+          "current_sha256": "3cc86dd30dc038e20bcc6278470f4721e5ca1516eacf55d658f5dce5d56f7330",
+          "scope": "Host stock-peer fixture classifies only the observed macOS routed-recipient exit before funding_signed/broadcast, matched to both peer IDs/funding txid and pending channel state; original 20-second timeout is retained, existing two-fresh-attempt limit stays fixed, unknown/protocol/post-signature failures remain fatal. Underlying child-exit cause is unproven."
+        }
+      ]
+    }
+  ],
+  "app_sources_dependencies_and_project_unchanged_from_previous_review": false,
+  "test_changes_from_previous_review": [
+    {
+      "path": "AppTests/LightningFundingReadinessTests.swift",
+      "previous_sha256": null,
+      "current_sha256": "c3d576166e7e9233cb52645437ff67974ce437e73e6c15d7a411249321cc0922",
+      "scope": "Seven actual app/engine/wallet regressions use held loopback header responses to prove one exact signed funding after verification and no reservations for cancellation, failed/incomplete/stalled scans, changed generation or disconnected peer."
+    },
+    {
+      "path": "UITests/LightningAppUITests.swift",
+      "previous_sha256": "d1ff5ea4a54d2d8f298f332f80fa46a89a0833e9a9502991d307feab1d3936fa",
+      "current_sha256": "57733e5a31115186814dae85f28b8402ba4d59c22e5ecdd5c5ad4d50a8924779",
+      "scope": "BOLT11 UI requires actual funding review dismissal and captures the local rejection before the unchanged ninety-second mempool check. No retry, weakened assertion or changed financial action."
+    }
+  ],
+  "host_harness_changes_from_previous_review": [],
+  "production_changes_from_previous_review": [
+    {
+      "path": "Sources/WinnowApp/LightningAppFunding.swift",
+      "previous_sha256": "d6457f3014fd66c51015088c98f764bd674d57ca998dfda355a74f22a258fff9",
+      "current_sha256": "5916838b9afd2418b90c85d4e9d283c9c33024b0639526668cc8893b2d9e2342",
+      "scope": "After owner authentication, wait only an already active verified scan within one monotonic ten-second deadline, re-read the accepted funding request and verify current chain, network generation and initialized peer. Exact preview checks, signing, reservations, submitted funding and protocol guards remain intact. Adds public stage-only E2E diagnostics; no cryptographic primitive or format changes."
+    }
+  ],
+  "validation_configuration_changes_from_previous_review": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "previous_sha256": "ecbd260e2ebfc38c83b6823ac46d422ecb2d571dbf8bea5be4ad2c0869e9c786",
+      "current_sha256": "68f936006ae8c752475c3e8a42c7f140a8c8e7fb3008ba9d6a88088cb8154cc4",
+      "scope": "Add the new funding readiness regression class to the Research coverage allowlist; normal coverage already selects all app tests."
+    }
+  ]
+}

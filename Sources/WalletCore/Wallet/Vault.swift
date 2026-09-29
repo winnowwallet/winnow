@@ -993,15 +993,18 @@ public struct Vault: Sendable {
     /// Derives a participant/cosigner secret from the master key: along the
     /// origin path, then the key's own derivation suffix at the context's
     /// coordinates. Returns nil when the key isn't from this master.
-    private func privateKey(for single: Descriptor.SingleKey, master: HDKey,
-                            context: MuSig2Context) throws -> Data? {
+    private func privateKey(for single: Descriptor.SingleKey, master: HDKey, context: MuSig2Context) throws -> Data? {
         guard let origin = single.origin, origin.fingerprint == master.fingerprint,
-              case let .extended(base, _) = single.base
-        else { return nil }
+              case let .extended(base, _) = single.base else { return nil }
         var key = master
         for step in origin.path { key = try key.child(at: step) }
-        guard key.publicKey == base.publicKey else { return nil } // origin/base mismatch
-        for element in single.derivation.elements {
+        guard key.publicKey == base.publicKey else { return nil }
+        return try derivedParticipantKey(key, derivation: single.derivation, context: context)?.privateKey
+    }
+    private func derivedParticipantKey(_ ancestor: HDKey, derivation: Descriptor.Derivation,
+                                       context: MuSig2Context) throws -> HDKey? {
+        var key = ancestor
+        for element in derivation.elements {
             switch element {
             case let .step(step): key = try key.child(at: step)
             case let .multipath(values): key = try key.child(at: values[context.choice])
@@ -1010,6 +1013,6 @@ public struct Vault: Sendable {
                 key = try key.child(at: context.index)
             }
         }
-        return key.privateKey
+        return key
     }
 }

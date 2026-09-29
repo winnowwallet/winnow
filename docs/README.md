@@ -10,7 +10,7 @@ technical guides and site.css so those explanations are available offline.
 [app test source](../UITests/README.md) feed [build-site](../scripts/build-site),
 which generates home and recording pages. The homepage pairs three signing
 choices with real wallet screens: one key, both keys, or any two of three.
-An expandable gallery keeps all sixteen checkpoint screenshots in journey order,
+An expandable gallery keeps all seventeen checkpoint screenshots in journey order,
 each linking to the full-size image. Generation refuses any checkpoint the
 journey does not capture, so the page cannot show a screen no test produced.
 
@@ -35,7 +35,7 @@ The checks cover generation, local links and section targets, media objects, and
 hosting limit, not rendered-browser layout or the truth of every prose claim.
 
 For a successful CI journey, run `scripts/prepare-site-artifact OUTPUT --journey
-JOURNEY --media-output MEDIA`. It copies all 16 current checkpoints, normalizes
+JOURNEY --media-output MEDIA`. It copies all 17 current checkpoints, normalizes
 the full recording with `+igndts` and no cuts, and records source SHA, run URL,
 duration, and checksums in `journey-provenance.json`. The output includes a local
 `/recording` page explaining that evidence. Replaying an older artifact requires
@@ -44,7 +44,7 @@ its `--source-sha` and `--run-url`; CI defaults to the current checkout and run.
 Website-only builds use `--media MEDIA` to reuse the small normalized artifact
 without video tools or raw result bundles. Its original recording provenance
 stays intact while pages are regenerated from the current source. The optional
-`--media-output` contains only the video, 16 PNGs, and provenance JSON for caching.
+`--media-output` contains only the video, 17 PNGs, and provenance JSON for caching.
 With neither media option, packaging retains the reviewed repository reference
 assets and explicitly makes no new integration-result claim. Output directories
 must be new. Packaging never changes repository media.

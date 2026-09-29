@@ -12,13 +12,16 @@ struct OnboardingView: View {
     @State private var error: String?
     @State private var showImport = false
     @State private var showCloudRestore = false
+    @State private var showLightningRestore = false
     @State private var operation: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    Text("Your bitcoin, on your phone. Winnow connects directly to Bitcoin and automatically backs up your wallet with iCloud when available.")
+                    Text(model.lightning == nil
+                        ? "Your bitcoin, on your phone. Winnow connects directly to Bitcoin and automatically backs up your wallet with iCloud when available."
+                        : "Winnow connects directly to Bitcoin. Mainnet uses real bitcoin; signet and regtest use test coins. Save an encrypted Lightning recovery file and its separate phrase. iCloud backup is unavailable in this beta.")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
                 Section {
@@ -38,9 +41,15 @@ struct OnboardingView: View {
                             .accessibilityIdentifier("createWalletButton")
                         Button("Restore from a file", systemImage: "square.and.arrow.down") { showImport = true }
                             .accessibilityIdentifier("importWalletButton")
+                        if model.supportsLightning {
+                            Button("Restore encrypted Lightning recovery") { showLightningRestore = true }
+                                .accessibilityIdentifier("onboardingLightningRestore")
+                        }
                     }
                 } footer: {
-                    Text("No iCloud? Your wallet still works. You can save a manual backup instead. Recovery words and backup controls are in Advanced.")
+                    Text(model.lightning == nil
+                        ? "No iCloud? Your wallet still works. You can save a manual backup instead. Recovery words and backup controls are in Advanced."
+                        : "A Bitcoin phrase alone cannot restore Lightning channels. Restored channels stay in recovery mode and may need their counterparties to close.")
                 }
                 if model.cloudBackups.busy { ProgressView("Checking iCloud…") }
                 if let message = model.cloudBackups.message {
@@ -54,8 +63,11 @@ struct OnboardingView: View {
                         )) {
                             Text("Mainnet").tag(BitcoinNetwork.mainnet)
                             Text("Signet").tag(BitcoinNetwork.signet)
+                            if model.supportsLightning || model.network == .regtest {
+                                Text("Regtest").tag(BitcoinNetwork.regtest)
+                            }
                         }
-                        .disabled(model.e2e?.forcedNetwork != nil || busy)
+                        .disabled(model.e2e?.forcedNetwork != nil || busy || model.changingNetwork)
                         .accessibilityIdentifier("onboardingNetworkPicker")
                     } footer: {
                         Text("Each network has its own wallet. Signet uses test coins with no value.")
@@ -68,6 +80,7 @@ struct OnboardingView: View {
             .navigationTitle("Winnow")
             .sheet(isPresented: $showCloudRestore) { CloudRestoreView() }
             .sheet(isPresented: $showImport) { ImportBundleView() }
+            .sheet(isPresented: $showLightningRestore) { LightningBackupView() }
             .task(id: model.network) { await model.discoverCloudBackups() }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .background { cancel() }
@@ -85,9 +98,13 @@ struct OnboardingView: View {
         operation = Task { @MainActor in
             defer { busy = false }
             do { try await model.createWallet() }
-            catch is CancellationError { }
-            catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+            catch { recordCreationError(error) }
         }
+    }
+
+    private func recordCreationError(_ error: Error) {
+        guard !(error is CancellationError), !Task.isCancelled else { return }
+        self.error = error.localizedDescription
     }
 
     private func cancel() {
@@ -99,7 +116,7 @@ struct OnboardingView: View {
 
 /// Paste an ImportBundle JSON (WalletCore's format v1); verification scans
 /// forward from the bundle's height and its report is shown.
-private struct ImportBundleView: View {
+struct ImportBundleView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -144,7 +161,7 @@ private struct ImportBundleView: View {
                     Section { Text(error).foregroundStyle(.red).font(.footnote) }
                 }
                 if report != nil || imported
-                    || model.walletID != nil {
+                    || model.walletID != nil && !model.hasPendingWalletImport {
                     if let report {
                         Section("Verification report") {
                             LabeledContent("Scanned from block", value: "\(report.scannedFromHeight)")
@@ -199,37 +216,42 @@ private struct ImportBundleView: View {
         let payload = json
         busy = true
         error = nil
-        importTask = Task { @MainActor in
-            do {
-                let result = try await model.importWallet(bundleJSON: payload)
-                try Task.checkCancellation()
-                guard importEpoch.accepts(
-                    token, whilePresentationIsAllowed: scenePhase != .background
-                ) else { return }
-                report = result
-                // A seed-bearing bundle must not remain in view state after
-                // it has been handed to WalletCore/Keychain.
-                json = ""
-                imported = true
-                if result == nil {
-                    error = "Imported, but no peers were reachable for verification yet — the regular sync will verify from the bundle's height."
-                }
-            } catch is CancellationError {
-                // The text is cleared below; an import that already crossed
-                // its commit boundary remains discoverable through AppModel.
-            } catch {
-                if importEpoch.accepts(token, whilePresentationIsAllowed: scenePhase != .background) {
-                    self.error = error.localizedDescription
-                }
-            }
-            guard importEpoch.accepts(
-                token, whilePresentationIsAllowed: scenePhase != .background
-            ) else {
-                return
-            }
-            busy = false
-            importTask = nil
+        importTask = Task { @MainActor in await performImport(payload, token: token) }
+    }
+
+    private func performImport(_ payload: String, token: SensitivePresentationEpoch.Token) async {
+        do {
+            let result = try await model.importWallet(bundleJSON: payload)
+            try Task.checkCancellation()
+            installImport(result, token: token)
+        } catch { recordImportError(error, token: token) }
+        finishImport(token)
+    }
+
+    private func installImport(_ result: ImportReport?, token: SensitivePresentationEpoch.Token) {
+        guard acceptsImport(token) else { return }
+        report = result
+        // A seed-bearing bundle must leave view state after its key is imported.
+        json = ""
+        imported = true
+        if result == nil {
+            error = "Imported, but no peers were reachable for verification yet — the regular sync will verify from the bundle's height."
         }
+    }
+
+    private func recordImportError(_ error: Error, token: SensitivePresentationEpoch.Token) {
+        guard !(error is CancellationError), acceptsImport(token) else { return }
+        self.error = error.localizedDescription
+    }
+
+    private func finishImport(_ token: SensitivePresentationEpoch.Token) {
+        guard acceptsImport(token) else { return }
+        busy = false
+        importTask = nil
+    }
+
+    private func acceptsImport(_ token: SensitivePresentationEpoch.Token) -> Bool {
+        importEpoch.accepts(token, whilePresentationIsAllowed: scenePhase != .background)
     }
 
     private func clearSensitiveImport() {

@@ -1,0 +1,257 @@
+Command line invocation:
+    /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test-without-building -xctestrun /Users/posix4e/Documents/Codex/2026-09-24/i-x20/outputs/winnow-lightning/native-head7e1177f-20260928/live-mainnet/Mainnet.xctestrun -derivedDataPath /tmp/winnow-bolt11-final-derived -destination "platform=iOS Simulator,id=757850D5-A6B8-4272-943E-67BD1DD3860A" "-only-testing:WinnowAppUITests/LightningAppUITests/testLiveMainnetSyncAndUnpaidReceivingQuote" -enableCodeCoverage YES -collect-test-diagnostics never -test-timeouts-enabled YES -maximum-test-execution-time-allowance 1050 -resultBundlePath /Users/posix4e/Documents/Codex/2026-09-24/i-x20/outputs/winnow-lightning/native-head7e1177f-20260928/live-mainnet/LiveMainnet.xcresult
+
+Writing result bundle at path:
+	/Users/posix4e/Documents/Codex/2026-09-24/i-x20/outputs/winnow-lightning/native-head7e1177f-20260928/live-mainnet/LiveMainnet.xcresult
+
+2026-09-28 09:17:24.118238-0400 WinnowAppUITests-Runner[16352:1974356] [Default] Running tests...
+    t =      nans Interface orientation changed to Portrait
+Test Suite 'Selected tests' started at 2026-09-28 09:17:26.877.
+Test Suite 'WinnowAppUITests.xctest' started at 2026-09-28 09:17:26.878.
+Test Suite 'LightningAppUITests' started at 2026-09-28 09:17:26.878.
+Test Case '-[WinnowAppUITests.LightningAppUITests testLiveMainnetSyncAndUnpaidReceivingQuote]' started.
+    t =     0.00s Start Test at 2026-09-28 09:17:26.882
+    t =     0.01s Set Up
+    t =     0.01s Open com.btcswift.lightning
+    t =     0.01s     Launch com.btcswift.lightning
+2026-09-28 09:17:27.246 xcodebuild[16337:1973992] [MT] IDELaunchParametersSnapshot: debugger version lookup failed for path '<nil>': noURL
+2026-09-28 09:17:27.246 xcodebuild[16337:1973992] [MT] IDELaunchParametersSnapshot: no debugger version
+objc[16352]: Class UIAccessibilityLoaderWebShared is implemented in both /private/var/run/com.apple.security.cryptexd/mnt/com.apple.iPhoneOS.SimulatorRuntime-v24.1.434.0.JdS02P/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 27.0.simruntime/Contents/Resources/RuntimeRoot/System/Library/AccessibilityBundles/WebKit.axbundle/WebKit (0x102544398) and /private/var/run/com.apple.security.cryptexd/mnt/com.apple.iPhoneOS.SimulatorRuntime-v24.1.434.0.JdS02P/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 27.0.simruntime/Contents/Resources/RuntimeRoot/System/Library/AccessibilityBundles/WebCore.axbundle/WebCore (0x1062e8310). This may cause spurious casting failures and mysterious crashes. One of the duplicates must be removed or renamed.
+    t =     1.00s         Setting up automation session
+    t =     3.52s         Wait for com.btcswift.lightning to idle
+    t =     5.43s Checking existence of `"createWalletButton" Button`
+    t =     5.58s Find the "createWalletButton" Button
+    t =     5.60s Find the Target Application 'com.btcswift.lightning'
+    t =     5.62s Checking existence of `"createWalletButton" Button`
+    t =     5.64s Find the "createWalletButton" Button
+    t =     5.66s Find the Target Application 'com.btcswift.lightning'
+    t =     5.69s Find the Target Application 'com.btcswift.lightning'
+    t =     5.72s Checking existence of `TabBar (First Match)`
+    t =     5.76s Checking existence of `Keyboard (First Match)`
+    t =     5.79s Tap Target Application 'com.btcswift.lightning'[0.00, 0.00] -> (201.0, 357.0)
+    t =     5.79s     Wait for com.btcswift.lightning to idle
+    t =     5.79s     Find the Target Application 'com.btcswift.lightning'
+    t =     5.81s     Check for interrupting elements affecting "Winnow Lightning" Application
+    t =     5.87s     Synthesize event
+    t =     5.87s         Find the Target Application 'com.btcswift.lightning'
+    t =     5.88s         Find the Target Application 'com.btcswift.lightning'
+    t =     5.90s         Find the Target Application 'com.btcswift.lightning'
+    t =     6.23s     Wait for com.btcswift.lightning to idle
+    t =     6.79s Checking existence of `"Wallet" Button`
+    t =     6.82s Tap "Wallet" Button
+    t =     6.82s     Wait for com.btcswift.lightning to idle
+    t =     6.82s     Find the "Wallet" Button
+    t =     6.85s     Check for interrupting elements affecting "bitcoinsign.circle" Button
+    t =     6.90s     Synthesize event
+    t =     7.20s     Wait for com.btcswift.lightning to idle
+    t =     8.85s Tap "advancedModeButton" Button
+    t =     8.85s     Wait for com.btcswift.lightning to idle
+    t =     8.86s     Find the "advancedModeButton" Button
+    t =     8.94s     Check for interrupting elements affecting "advancedModeButton" Button
+    t =     8.99s     Synthesize event
+    t =     9.28s     Wait for com.btcswift.lightning to idle
+    t =     9.29s Tap "receiveButton" Button
+    t =     9.29s     Wait for com.btcswift.lightning to idle
+    t =     9.29s     Find the "receiveButton" Button
+    t =     9.33s     Check for interrupting elements affecting "receiveButton" Button
+    t =     9.36s     Synthesize event
+    t =     9.65s     Wait for com.btcswift.lightning to idle
+    t =    10.10s Checking existence of `"receiveLightning" Button`
+    t =    10.15s Find the "receiveLightning" Button
+    t =    10.19s Find the Target Application 'com.btcswift.lightning'
+    t =    10.21s Checking existence of `"receiveLightning" Button`
+    t =    10.25s Find the "receiveLightning" Button
+    t =    10.29s Find the Target Application 'com.btcswift.lightning'
+    t =    10.33s Find the Target Application 'com.btcswift.lightning'
+    t =    10.37s Checking existence of `TabBar (First Match)`
+    t =    10.43s Checking existence of `Keyboard (First Match)`
+    t =    10.49s Tap Target Application 'com.btcswift.lightning'[0.00, 0.00] -> (201.0, 217.3)
+    t =    10.49s     Wait for com.btcswift.lightning to idle
+    t =    10.49s     Find the Target Application 'com.btcswift.lightning'
+    t =    10.53s     Check for interrupting elements affecting "Winnow Lightning" Application
+    t =    10.56s     Synthesize event
+    t =    10.56s         Find the Target Application 'com.btcswift.lightning'
+    t =    10.59s         Find the Target Application 'com.btcswift.lightning'
+    t =    10.62s         Find the Target Application 'com.btcswift.lightning'
+    t =    10.92s     Wait for com.btcswift.lightning to idle
+    t =    10.93s Find the "lightningReceiveProvider" StaticText
+    t =    11.00s Find the "lightningReceivable" StaticText
+    t =    11.05s Checking existence of `"lightningReceiveInvoice" StaticText`
+    t =    11.09s Checking existence of `"lightningReceiveAmount" TextField`
+    t =    11.14s Checking existence of `"lightningReceiveAmount" TextField`
+    t =    11.18s Tap "lightningReceiveAmount" TextField
+    t =    11.18s     Wait for com.btcswift.lightning to idle
+    t =    11.18s     Find the "lightningReceiveAmount" TextField
+    t =    11.23s     Check for interrupting elements affecting "lightningReceiveAmount" TextField
+    t =    11.27s     Synthesize event
+    t =    11.56s     Wait for com.btcswift.lightning to idle
+<unknown>:0: warning: -[WinnowAppUITests.LightningAppUITests testLiveMainnetSyncAndUnpaidReceivingQuote] : Invalid frame dimension (negative or non-finite).
+    t =    12.15s Find the "lightningReceiveAmount" TextField
+    t =    12.26s Type '500' into "lightningReceiveAmount" TextField
+    t =    12.26s     Wait for com.btcswift.lightning to idle
+    t =    12.49s     Find the "lightningReceiveAmount" TextField
+    t =    12.56s     Check for interrupting elements affecting "lightningReceiveAmount" TextField
+    t =    12.63s     Synthesize event
+    t =    12.89s     Wait for com.btcswift.lightning to idle
+    t =    13.13s Checking existence of `Keyboard (First Match)`
+    t =    13.16s Checking existence of `"return" Button`
+    t =    13.22s Checking existence of `"sendKeyboardDone" Button`
+    t =    13.27s Find the "sendKeyboardDone" Button
+    t =    13.32s Tap "sendKeyboardDone" Button
+    t =    13.32s     Wait for com.btcswift.lightning to idle
+    t =    13.32s     Find the "sendKeyboardDone" Button
+    t =    13.38s     Check for interrupting elements affecting "sendKeyboardDone" Button
+    t =    13.45s     Synthesize event
+    t =    13.74s     Wait for com.btcswift.lightning to idle
+    t =    13.99s Checking existence of `Keyboard (First Match)`
+    t =    14.09s Checking existence of `Keyboard (First Match)`
+    t =    14.19s Checking existence of `"lightningGetCapacity" Button`
+    t =    14.25s Find the "lightningGetCapacity" Button
+    t =    14.31s Find the Target Application 'com.btcswift.lightning'
+    t =    14.35s Checking existence of `"lightningGetCapacity" Button`
+    t =    14.40s Find the "lightningGetCapacity" Button
+    t =    14.45s Find the Target Application 'com.btcswift.lightning'
+    t =    14.53s Find the Target Application 'com.btcswift.lightning'
+    t =    14.60s Checking existence of `TabBar (First Match)`
+    t =    14.70s Checking existence of `Keyboard (First Match)`
+    t =    14.80s Tap Target Application 'com.btcswift.lightning'[0.00, 0.00] -> (201.0, 702.0)
+    t =    14.80s     Wait for com.btcswift.lightning to idle
+    t =    14.81s     Find the Target Application 'com.btcswift.lightning'
+    t =    14.84s     Check for interrupting elements affecting "Winnow Lightning" Application
+    t =    14.88s     Synthesize event
+    t =    14.88s         Find the Target Application 'com.btcswift.lightning'
+    t =    14.92s         Find the Target Application 'com.btcswift.lightning'
+    t =    14.95s         Find the Target Application 'com.btcswift.lightning'
+    t =    15.27s     Wait for com.btcswift.lightning to idle
+    t =    15.70s Find the "lightningProviderOptions" Button
+    t =    18.77s Find the "lightningProviderOptions" Button
+    t =    21.81s Find the "lightningProviderOptions" Button
+    t =    24.86s Find the "lightningProviderOptions" Button
+    t =    27.90s Find the "lightningProviderOptions" Button
+    t =    30.94s Find the "lightningProviderOptions" Button
+    t =    33.98s Find the "lightningProviderOptions" Button
+    t =    37.03s Find the "lightningProviderOptions" Button
+    t =    40.08s Find the "lightningProviderOptions" Button
+    t =    43.12s Find the "lightningProviderOptions" Button
+    t =    46.17s Find the "lightningProviderOptions" Button
+    t =    49.21s Find the "lightningProviderOptions" Button
+LIVE_MAINNET_SYNC_SECONDS=49.236430048942566
+    t =    49.25s Checking existence of `"lightningProviderOptions" Button`
+    t =    49.28s Find the "lightningProviderOptions" Button
+    t =    49.31s Find the Target Application 'com.btcswift.lightning'
+    t =    49.34s Checking existence of `"lightningProviderOptions" Button`
+    t =    49.37s Find the "lightningProviderOptions" Button
+    t =    49.41s Find the Target Application 'com.btcswift.lightning'
+    t =    49.45s Find the Target Application 'com.btcswift.lightning'
+    t =    49.50s Checking existence of `TabBar (First Match)`
+    t =    49.56s Checking existence of `Keyboard (First Match)`
+    t =    49.63s Tap Target Application 'com.btcswift.lightning'[0.00, 0.00] -> (201.0, 453.7)
+    t =    49.63s     Wait for com.btcswift.lightning to idle
+    t =    49.63s     Find the Target Application 'com.btcswift.lightning'
+    t =    49.66s     Check for interrupting elements affecting "Winnow Lightning" Application
+    t =    49.69s     Synthesize event
+    t =    49.69s         Find the Target Application 'com.btcswift.lightning'
+    t =    49.72s         Find the Target Application 'com.btcswift.lightning'
+    t =    49.75s         Find the Target Application 'com.btcswift.lightning'
+    t =    50.07s     Wait for com.btcswift.lightning to idle
+    t =    50.33s Checking existence of `"lightningInboundCapacity" TextField`
+    t =    50.37s Checking existence of `"lightningLiquidityError" StaticText`
+    t =    50.41s Checking existence of `"lightningInboundCapacity" TextField`
+    t =    50.44s Find the Target Application 'com.btcswift.lightning'
+    t =    50.59s Added attachment named 'live-mainnet-provider-options.png'
+    t =    50.59s Checking existence of `"lightningQuoteCapacity" Button`
+    t =    50.64s Find the "lightningQuoteCapacity" Button
+    t =    50.68s Find the Target Application 'com.btcswift.lightning'
+    t =    50.71s Checking existence of `"lightningQuoteCapacity" Button`
+    t =    50.74s Find the "lightningQuoteCapacity" Button
+    t =    50.78s Find the Target Application 'com.btcswift.lightning'
+    t =    50.84s Find the Target Application 'com.btcswift.lightning'
+    t =    50.89s Checking existence of `TabBar (First Match)`
+    t =    50.96s Checking existence of `Keyboard (First Match)`
+    t =    51.04s Tap Target Application 'com.btcswift.lightning'[0.00, 0.00] -> (201.0, 639.3)
+    t =    51.04s     Wait for com.btcswift.lightning to idle
+    t =    51.04s     Find the Target Application 'com.btcswift.lightning'
+    t =    51.07s     Check for interrupting elements affecting "Winnow Lightning" Application
+    t =    51.11s     Synthesize event
+    t =    51.11s         Find the Target Application 'com.btcswift.lightning'
+    t =    51.14s         Find the Target Application 'com.btcswift.lightning'
+    t =    51.18s         Find the Target Application 'com.btcswift.lightning'
+    t =    51.50s     Wait for com.btcswift.lightning to idle
+    t =    51.75s Checking existence of `"lightningSetupFee" StaticText`
+    t =    51.80s Checking existence of `"lightningLiquidityError" StaticText`
+    t =    53.87s Checking existence of `"lightningSetupFee" StaticText`
+    t =    53.95s Checking existence of `"lightningLiquidityError" StaticText`
+    t =    53.99s Checking existence of `"lightningSetupFee" StaticText`
+    t =    54.04s Find the "lightningSetupFee" StaticText
+    t =    54.08s Checking existence of `"lightningApproveSetupFee" Button`
+    t =    54.32s Checking existence of `"lightningApproveSetupFee" Button`
+    t =    54.59s Checking existence of `"lightningApproveSetupFee" Button`
+    t =    54.87s Checking existence of `"lightningApproveSetupFee" Button`
+    t =    55.14s Checking existence of `"lightningApproveSetupFee" Button`
+    t =    55.42s Checking existence of `"lightningApproveSetupFee" Button`
+    t =    55.58s Checking existence of `"lightningApproveSetupFee" Button`
+    t =    55.64s Find the Target Application 'com.btcswift.lightning'
+    t =    55.67s Find the Target Application 'com.btcswift.lightning'
+    t =    55.73s Find the Target Application 'com.btcswift.lightning'
+    t =    55.78s Checking existence of `TabBar (First Match)`
+    t =    55.88s Checking existence of `Keyboard (First Match)`
+    t =    55.96s Press Target Application 'com.btcswift.lightning'[0.00, 0.00] -> (12.1, 676.0) for 0.1 seconds, then drag to Target Application 'com.btcswift.lightning'[0.00, 0.00] -> (12.1, 348.0) with velocity of 500.00 pixels per second, and then hold for 0.2 seconds 
+    t =    55.96s     Wait for com.btcswift.lightning to idle
+    t =    55.96s     Find the Target Application 'com.btcswift.lightning'
+    t =    56.00s     Check for interrupting elements affecting "Winnow Lightning" Application
+    t =    56.03s     Synthesize event
+    t =    56.04s         Find the Target Application 'com.btcswift.lightning'
+    t =    56.07s         Find the Target Application 'com.btcswift.lightning'
+    t =    56.10s         Find the Target Application 'com.btcswift.lightning'
+    t =    56.13s         Find the Target Application 'com.btcswift.lightning'
+    t =    56.16s         Find the Target Application 'com.btcswift.lightning'
+    t =    57.41s     Wait for com.btcswift.lightning to idle
+    t =    57.41s Checking existence of `"lightningApproveSetupFee" Button`
+    t =    57.46s Find the Target Application 'com.btcswift.lightning'
+    t =    57.49s Find the Target Application 'com.btcswift.lightning'
+    t =    57.56s Find the Target Application 'com.btcswift.lightning'
+    t =    57.63s Checking existence of `TabBar (First Match)`
+    t =    57.73s Checking existence of `Keyboard (First Match)`
+    t =    57.82s Checking existence of `"lightningApproveSetupFee" Button`
+    t =    57.87s Find the "lightningApproveSetupFee" Button
+    t =    57.92s Find the "lightningApproveSetupFee" Button
+    t =    57.96s Checking existence of `"lightningSetupInvoice" StaticText`
+    t =    58.01s Find the Target Application 'com.btcswift.lightning'
+    t =    58.13s Added attachment named 'live-mainnet-unpaid-quote.png'
+LIVE_MAINNET_QUOTE=Setup fee, 6750 sats
+LIVE_MAINNET_FINANCIAL_ACTIONS=none
+    t =    58.13s Tap Button (First Match)
+    t =    58.13s     Wait for com.btcswift.lightning to idle
+    t =    58.14s     Find the Button (First Match)
+    t =    58.16s     Check for interrupting elements affecting "BackButton" Button
+    t =    58.20s     Synthesize event
+    t =    58.52s     Wait for com.btcswift.lightning to idle
+    t =    58.85s Tap "Done" Button
+    t =    58.85s     Wait for com.btcswift.lightning to idle
+    t =    58.85s     Find the "Done" Button
+    t =    58.90s     Check for interrupting elements affecting "Done" Button
+    t =    58.94s     Synthesize event
+    t =    59.24s     Wait for com.btcswift.lightning to idle
+    t =    59.63s Find the "syncSummaryText" StaticText
+LIVE_MAINNET_SYNC_SECONDS_THIS_LAUNCH=59.646236062049866
+    t =    59.66s Find the Target Application 'com.btcswift.lightning'
+    t =    59.75s Added attachment named 'live-mainnet-synced.png'
+    t =    59.75s Terminate com.btcswift.lightning:16363
+    t =    60.85s Tear Down
+Test Case '-[WinnowAppUITests.LightningAppUITests testLiveMainnetSyncAndUnpaidReceivingQuote]' passed (60.885 seconds).
+Test Suite 'LightningAppUITests' passed at 2026-09-28 09:18:27.769.
+	 Executed 1 test, with 0 failures (0 unexpected) in 60.885 (60.891) seconds
+Test Suite 'WinnowAppUITests.xctest' passed at 2026-09-28 09:18:27.778.
+	 Executed 1 test, with 0 failures (0 unexpected) in 60.885 (60.901) seconds
+Test Suite 'Selected tests' passed at 2026-09-28 09:18:27.779.
+	 Executed 1 test, with 0 failures (0 unexpected) in 60.885 (60.903) seconds
+2026-09-28 09:18:28.171 xcodebuild[16337:1973992] [MT] IDETestOperationsObserverDebug: 72.499 elapsed -- Testing started completed.
+2026-09-28 09:18:28.171 xcodebuild[16337:1973992] [MT] IDETestOperationsObserverDebug: 0.000 sec, +0.000 sec -- start
+2026-09-28 09:18:28.171 xcodebuild[16337:1973992] [MT] IDETestOperationsObserverDebug: 72.499 sec, +72.499 sec -- end
+
+Test session results, code coverage, and logs:
+	/Users/posix4e/Documents/Codex/2026-09-24/i-x20/outputs/winnow-lightning/native-head7e1177f-20260928/live-mainnet/LiveMainnet.xcresult
+
+** TEST EXECUTE SUCCEEDED **
+
+Testing started

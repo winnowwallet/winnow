@@ -70,17 +70,17 @@ public struct SeedResolver: Sendable {
     /// Resolve every seed (shuffled, in parallel) and flatten, de-duplicating.
     public func resolveSeeds(_ seeds: [String], port: UInt16, allowPrivate: Bool) async -> [PeerEndpoint] {
         guard !seeds.isEmpty else { return [] }
-        var collected: [PeerEndpoint] = []
-        await withTaskGroup(of: [PeerEndpoint].self) { group in
-            for seed in seeds.shuffled() {
-                group.addTask { await self.resolve(host: seed, port: port, allowPrivate: allowPrivate) }
-            }
-            for await batch in group {
-                collected.append(contentsOf: batch)
-            }
-        }
+        let collected = await resolveInParallel(seeds, port: port, allowPrivate: allowPrivate)
         var seen = Set<PeerEndpoint>()
         return collected.filter { seen.insert($0).inserted }
+    }
+    private func resolveInParallel(_ seeds: [String], port: UInt16, allowPrivate: Bool) async -> [PeerEndpoint] {
+        await withTaskGroup(of: [PeerEndpoint].self) { group in
+            for seed in seeds.shuffled() { group.addTask { await self.resolve(host: seed, port: port, allowPrivate: allowPrivate) } }
+            var collected: [PeerEndpoint] = []
+            for await batch in group { collected.append(contentsOf: batch) }
+            return collected
+        }
     }
 
     // MARK: - Live lookup
@@ -123,23 +123,25 @@ public struct SeedResolver: Sendable {
     }
 
     static func dohGET(endpoint: URL, session: URLSession, name: String, type: String) async throws -> Data {
+        let request = try dohRequest(endpoint: endpoint, name: name, type: type)
+        let (bytes, response) = try await session.bytes(for: request)
+        try validateDoHResponse(response)
+        return try await readDoHBody(bytes)
+    }
+    private static func dohRequest(endpoint: URL, name: String, type: String) throws -> URLRequest {
         var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
-        components?.queryItems = [
-            URLQueryItem(name: "name", value: name),
-            URLQueryItem(name: "type", value: type),
-        ]
+        components?.queryItems = [.init(name: "name", value: name), .init(name: "type", value: type)]
         guard let url = components?.url else { throw URLError(.badURL) }
         var request = URLRequest(url: url)
-        request.setValue("application/dns-json", forHTTPHeaderField: "Accept")
-        request.timeoutInterval = 5
-        // Streamed and capped, like the routed client: a resolver that
-        // answers with megabytes is refused before they are held.
-        let (bytes, response) = try await session.bytes(for: request)
+        request.setValue("application/dns-json", forHTTPHeaderField: "Accept"); request.timeoutInterval = 5
+        return request
+    }
+    private static func validateDoHResponse(_ response: URLResponse) throws {
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-        guard (200 ..< 300).contains(status),
-              response.expectedContentLength <= Int64(maximumDoHBytes) else {
-            throw URLError(.badServerResponse)
-        }
+        guard (200 ..< 300).contains(status), response.expectedContentLength <= Int64(maximumDoHBytes)
+        else { throw URLError(.badServerResponse) }
+    }
+    private static func readDoHBody(_ bytes: URLSession.AsyncBytes) async throws -> Data {
         var data = Data()
         for try await byte in bytes {
             data.append(byte)
@@ -157,20 +159,26 @@ public struct SeedResolver: Sendable {
         var result: UnsafeMutablePointer<addrinfo>?
         guard Darwin.getaddrinfo(host, nil, &hints, &result) == 0, let first = result else { return [] }
         defer { freeaddrinfo(first) }
-        var endpoints: [PeerEndpoint] = []
-        var current: UnsafeMutablePointer<addrinfo>? = first
+        return systemEndpoints(first, port: port)
+    }
+    private static func systemEndpoints(_ first: UnsafeMutablePointer<addrinfo>, port: UInt16) -> [PeerEndpoint] {
+        var endpoints: [PeerEndpoint] = [], current: UnsafeMutablePointer<addrinfo>? = first
         while let info = current {
             defer { current = info.pointee.ai_next }
-            guard info.pointee.ai_family == AF_INET || info.pointee.ai_family == AF_INET6 else { continue }
-            var hostBuffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            let status = getnameinfo(info.pointee.ai_addr, info.pointee.ai_addrlen,
-                                     &hostBuffer, socklen_t(hostBuffer.count), nil, 0, NI_NUMERICHOST)
-            guard status == 0 else { continue }
-            let bytes = hostBuffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
-            endpoints.append(PeerEndpoint(host: String(decoding: bytes, as: UTF8.self), port: port))
+            if let endpoint = numericEndpoint(info.pointee, port: port) { endpoints.append(endpoint) }
         }
         return endpoints
     }
+    private static func numericEndpoint(_ info: addrinfo, port: UInt16) -> PeerEndpoint? {
+        guard info.ai_family == AF_INET || info.ai_family == AF_INET6 else { return nil }
+        var hostBuffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        let status = getnameinfo(info.ai_addr, info.ai_addrlen, &hostBuffer,
+                                socklen_t(hostBuffer.count), nil, 0, NI_NUMERICHOST)
+        guard status == 0 else { return nil }
+        let bytes = hostBuffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        return PeerEndpoint(host: String(decoding: bytes, as: UTF8.self), port: port)
+    }
+
 }
 
 /// Cloudflare / Google / RFC 8427 dns-json body.

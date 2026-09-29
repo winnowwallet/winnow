@@ -1,0 +1,20 @@
+{
+  "result": "passed",
+  "manifest": {
+    "source": "1f1bfdd956c84765c444ed6b0667806b20626c55",
+    "dirty": false,
+    "simulator": "3EAB72CC-DBE7-47A1-8054-EC507497A1E8",
+    "bundle": "com.btcswift.lightning",
+    "executable_sha256": "b86d33e911346c0fc79aab8bf2d3c646cf623768187f5b594faeb84461157e15",
+    "xcode": "Xcode 27.0\nBuild version 27A266a",
+    "device": {
+      "name": "iPad Pro 13-inch (M5)",
+      "device_type": "com.apple.CoreSimulator.SimDeviceType.iPad-Pro-13-inch-M5-12GB",
+      "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-26-3"
+    },
+    "content_size": "large",
+    "scope": "ResearchDebug regtest fixture; physical authentication is a separate release gate"
+  },
+  "video_sha256": "6422913a0259b2f448731518a2b378d8346fbe55467d6f3e5d2ce29cb73bda86",
+  "independent_receipt_sha256": "224251a9a174e186fd8eeeeec825f0556d2a04bc8863b498317a36a5def4e66c"
+}

@@ -126,7 +126,11 @@ public enum SegwitAddress {
         return (version, Data(program))
     }
 
-    static func convertBits(_ input: [UInt8], from: Int, to: Int, pad: Bool) throws -> [UInt8] {
+    public static func convertBits(_ input: [UInt8], from: Int, to: Int, pad: Bool) throws -> [UInt8] {
+        guard (1...8).contains(from), (1...8).contains(to) else { throw Bech32Error.invalidDataValue }
+        return try convertSymbols(input, from: from, to: to, pad: pad)
+    }
+    private static func convertSymbols(_ input: [UInt8], from: Int, to: Int, pad: Bool) throws -> [UInt8] {
         var accumulator = 0
         var bits = 0
         var output: [UInt8] = []

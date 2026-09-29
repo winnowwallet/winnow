@@ -1,0 +1,21 @@
+{
+  "result": "passed",
+  "source": "7e1177f8aeaf8c33f5977da8439b0ff7adc3d9e5",
+  "source_dirty": false,
+  "namespace": "BTCSwiftE2E-live-mainnet-E2FD8B9F-545B-496D-B6D8-21B6BB400B04",
+  "runtime": "iOS27.0 (24A434)",
+  "public_connected_peers": 3,
+  "provider_setup_enabled_seconds": 49.236430048942566,
+  "up_to_date_observed_seconds": 59.646236062049866,
+  "xctest_seconds": 60.885,
+  "setup_fee_sats": 6750,
+  "payable_invoice_exposed": false,
+  "approval_tapped": false,
+  "financial_actions": "none",
+  "runtime_warnings": [
+    {
+      "issueType": "Runtime Warning",
+      "message": "Invalid frame dimension (negative or non-finite)."
+    }
+  ]
+}

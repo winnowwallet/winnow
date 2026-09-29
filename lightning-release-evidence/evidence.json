@@ -1,0 +1,95 @@
+{
+  "source": "1f1bfdd956c84765c444ed6b0667806b20626c55",
+  "bundle": "com.btcswift.lightning",
+  "physical_device": false,
+  "device_checks_deferred_to_testflight": true,
+  "checks": {
+    "owner_authentication": "pending",
+    "cancelled_authentication": "pending",
+    "file_protection": "pending",
+    "exact_share": "pending",
+    "ipad": "passed",
+    "large_text": "passed"
+  },
+  "artifacts": [
+    {
+      "path": "app-state-before.json",
+      "sha256": "e85249a2571755ab3b0b96820d6fc7f953b476560dc22054ae3177f23bcde185"
+    },
+    {
+      "path": "core-tests.log",
+      "sha256": "cf70e250b95041c8b84ffc586280727f6ecbe16e000cc7ee92e986db49651955"
+    },
+    {
+      "path": "crypto-comparison.json",
+      "sha256": "7fadf0eae47e7952c7f2a078cf43cf0142ead0afe72313527f4174ffc09d821c"
+    },
+    {
+      "path": "encryption-inventory.md",
+      "sha256": "a4f8a90d9854f773b1d8559a5b90972e02c90ea34eca483cafd2640a088e0ca2"
+    },
+    {
+      "path": "encryption-questionnaire.json",
+      "sha256": "65b7ba3c35a9b7e41625995eb747a9f5036d8d972034a506fc7cb19843e29f6a"
+    },
+    {
+      "path": "what-to-test.txt",
+      "sha256": "b57681f7e1f751e457514e34d71cd1eddfd0c02a872441b56f0e90a4a789d512"
+    },
+    {
+      "path": "ipad-journey.json",
+      "sha256": "803a1be29ac06746b343ef0b200f8d7d98af66b1de219462be1f44455eb20dda"
+    },
+    {
+      "path": "ipad-independent-receipt.json",
+      "sha256": "224251a9a174e186fd8eeeeec825f0556d2a04bc8863b498317a36a5def4e66c"
+    },
+    {
+      "path": "ipad-bolt11-receipt.json",
+      "sha256": "4a9d143e90c8d5a8c0b453dd74fcb878eac310ff5e82f3ebcb0e2ff5c4dbafca"
+    },
+    {
+      "path": "ipad-test-summary.json",
+      "sha256": "14573cd0a8bc5af2b6244a1d752e8d463d36e224801623516962f11b7a6c27af"
+    },
+    {
+      "path": "large-text-journey.json",
+      "sha256": "be6cb01a81d6320c10768d49c674947c4694bd4d8b0a6f63c81b16cec1b9d769"
+    },
+    {
+      "path": "large-text-independent-receipt.json",
+      "sha256": "479719fe3f2e1b85ae8870183a56ad436069cdccbf957b071ee0b89d544d40c7"
+    },
+    {
+      "path": "large-text-bolt11-receipt.json",
+      "sha256": "773ac2fc69a0597907e52091af650505c3247e9a6dc57b0de84851f7e41962ad"
+    },
+    {
+      "path": "large-text-test-summary.json",
+      "sha256": "342efefbc6080435cfed8d6dfffee6b4fcb5b7739daf9380ad3ac20116289609"
+    },
+    {
+      "path": "app-tests.log",
+      "sha256": "d1d8bcfd0844838be4e1b27b6b65fc8279c0a7e6449cf216c1ea1aa80384a458"
+    },
+    {
+      "path": "app-test-summary.json",
+      "sha256": "971c6a268a2675f76925e49f876f8470c5436096e7af4a4328cb0752e5bbc8db"
+    },
+    {
+      "path": "validation-provenance.json",
+      "sha256": "311d9aed93106a292db7d281dbcd8968cbace832cc64ac5d45a46916329fb516"
+    }
+  ],
+  "encryption": {
+    "mode": "pending",
+    "artifact": "encryption-inventory.md"
+  },
+  "notes": [
+    "Full exact-source iPad and maximum-accessibility iPhone recorded journeys passed: async/offline/crash/recovery, native BOLT11 cancellation/settlement/restart, fresh Simple receiving and persistent node identity. Each has four passing UI tests and one explicit live-mainnet opt-in skip.",
+    "CI run 36353224497 must pass this exact source before archive and upload; the workflow verifies the head SHA and propagates failure.",
+    "Physical camera, device-owner authentication, cancellation, sharing and locked-storage checks remain pending through internal TestFlight.",
+    "Funded payment and channel/recovery checks use regtest. Funded mainnet validation remains unverified. No mainnet funds or setup fees were sent.",
+    "Ninety core tests passed in CI attempt 1 on this exact source; the workflow failed later at simulator preflight. Nineteen research app tests passed locally on the exact source, with one physical file-protection skip. validation-provenance.json records this distinction; the new full CI gate is still required."
+  ]
+}
