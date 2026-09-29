@@ -22,18 +22,22 @@ protocol, not the operator or overlay type. Discovery supports conventional
 IPv4 tailnet addresses; custom address ranges and IPv6-only discovery need an
 extension. Manual gateways support DNS names and bracketed IPv6 addresses.
 
-Automatic always keeps clearnet eligible and adds each available overlay.
-It is a resilience mode, not a promise of anonymous traffic. Selected networks
-are eligible; the pool does not guarantee a slot on every network. Existing
-peer provenance and address diversity checks remain in force, and while
-clearnet is selected automatic Tor and I2P peers together may not take every
-slot, since onion and I2P names have no address block to limit. Gateways see
+When either gateway answers, Automatic uses only Tor and I2P: no peer
+connection, catalog download or explorer lookup goes direct, and peers never
+see the phone's IP address. When neither answers, it falls back to clearnet
+so the wallet keeps syncing, and simple mode's banner says peers can see the
+IP address. Existing peer provenance and address diversity checks remain in
+force. Onion and I2P names have no address block to limit, so while clearnet
+is selected automatic Tor and I2P peers together may not take every slot, and
+with Tor and I2P both selected and clearnet off neither overlay may; a round
+that cannot fill the pool with a mix relaxes that rule for the next one. Gateways see
 the destinations clients ask them to reach; Bitcoin peers still undergo the
 normal version, compact-filter, header and chain checks.
 
 Advanced Settings → Peer networks offers:
 
-- **Automatic**: discover the conventional gateways and allow clearnet.
+- **Automatic**: discover the conventional gateways; use only them when
+  either answers, clearnet when neither does.
 - **Direct only**: skip discovery and use clearnet peers.
 - **Manual**: choose any nonempty combination of clearnet, Tor and I2P and
   supply each selected overlay's SOCKS address. Edits take effect on **Apply

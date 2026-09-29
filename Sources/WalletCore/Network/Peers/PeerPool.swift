@@ -70,6 +70,9 @@ public actor PeerPool {
     private var catalogChangedDuringRound = false
     private var attemptsThisRound = 0
     private var exhausted = false
+    /// Set for a round that follows one which could not fill the pool, so a
+    /// dry Tor or I2P side cannot keep the pool short under the mix rule.
+    private var relaxOverlayMix = false
     /// Endpoints rejected for a protocol/chain failure during this pool run.
     /// Without this set a manual or persisted bad peer is immediately dialed
     /// again after `misbehaving`, starving healthy fallback candidates.
@@ -625,6 +628,7 @@ public actor PeerPool {
         guard started, !replenishing, peers.count < peerCount else { return }
         replenishing = true
         attemptsThisRound = 0
+        relaxOverlayMix = exhausted
         exhausted = false
         defer { finishReplenish() }
 
@@ -709,7 +713,10 @@ public actor PeerPool {
 
     /// The diversity rules this pool enforces, sized to its slot count.
     private var policy: DiversityPolicy {
-        DiversityPolicy(peerCount: peerCount, clearnetSelected: gateways.networks.contains(.clearnet))
+        let networks = gateways.networks
+        return DiversityPolicy(peerCount: peerCount, clearnetSelected: networks.contains(.clearnet),
+                               overlayMix: !networks.contains(.clearnet) && networks.contains(.tor)
+                                   && networks.contains(.i2p) && !relaxOverlayMix)
     }
 
     /// The class a known-good peer counts as today.

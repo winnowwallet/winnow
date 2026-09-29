@@ -25,6 +25,19 @@ struct FilterSyncTests {
 
     /// Loopback integration: real NWConnection transport against a fake node.
     /// No external network — everything runs on 127.0.0.1 listeners.
+    /// A chunk of mainnet filters is megabytes; I2P carried the census at
+    /// about half a megabit a second, so overlay peers get longer deadlines.
+    @Test("Tor and I2P peers get longer filter and block deadlines")
+    func overlayDeadlines() {
+        #expect(FilterSync.chunkTimeout(filters: 100) == .seconds(30))
+        #expect(FilterSync.chunkTimeout(filters: 1_000) == .seconds(120))
+        #expect(FilterSync.chunkTimeout(filters: 100, overlay: true) == .seconds(120))
+        #expect(FilterSync.chunkTimeout(filters: 1_000, overlay: true) == .seconds(1_200))
+        #expect(FilterSync.blockTimeout(.seconds(120), overlay: false) == .seconds(120))
+        #expect(FilterSync.blockTimeout(.seconds(30), overlay: true) == .seconds(300))
+        #expect(FilterSync.blockTimeout(.seconds(600), overlay: true) == .seconds(600))
+    }
+
     @Test("handshake negotiates and tracks peer services")
     func handshake() async throws {
         let node = LoopbackNode(params: .signet, chain: makeSyntheticChain(length: 2, watchHeight: 6).blocks)

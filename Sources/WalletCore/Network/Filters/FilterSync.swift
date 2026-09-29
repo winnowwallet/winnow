@@ -850,9 +850,10 @@ public actor FilterSync {
             throw FilterSyncError.badPeerResponse("missing header at \(chunkStop)")
         }
         let count = Int(chunkStop - chunkStart + 1)
+        let overlay = peer.endpoint.isOverlay
         let responses = try await peer.requestMany(
             .getcfilters(GetCFiltersRequest(startHeight: chunkStart, stopHash: stopHash)),
-            expecting: "cfilter", count: count, timeout: Self.chunkTimeout(filters: count))
+            expecting: "cfilter", count: count, timeout: Self.chunkTimeout(filters: count, overlay: overlay))
 
         var heightByHash: [Data: UInt32] = [:]
         for height in chunkStart ... chunkStop {
@@ -885,8 +886,20 @@ public actor FilterSync {
     /// is now per request: at a flat 120 seconds a peer that answered every
     /// chunk just inside it could hold one batch ten times as long as it could
     /// before.
-    private static func chunkTimeout(filters: Int) -> Duration {
-        .seconds(max(30, 120 * filters / Int(maxRangePerRequest)))
+    ///
+    /// A Tor or I2P peer gets ten times that share and at least two minutes.
+    /// A chunk of mainnet filters is a few megabytes, and an I2P tunnel that
+    /// carried the census at about half a megabit a second would miss the
+    /// clearnet deadline on every chunk, stalling the scan for good.
+    static func chunkTimeout(filters: Int, overlay: Bool = false) -> Duration {
+        overlay ? .seconds(max(120, 1_200 * filters / Int(maxRangePerRequest)))
+                : .seconds(max(30, 120 * filters / Int(maxRangePerRequest)))
+    }
+
+    /// Whole blocks are up to a few megabytes too; an overlay peer gets at
+    /// least five minutes.
+    static func blockTimeout(_ timeout: Duration, overlay: Bool) -> Duration {
+        overlay ? max(timeout, .seconds(300)) : timeout
     }
 
     /// One cfilter response, verified: the right type, a block we asked
@@ -933,9 +946,10 @@ public actor FilterSync {
 
     private func verifiedBlock(from peer: PeerConnection, height: UInt32, blockHash: Data,
                                timeout: Duration = .seconds(120)) async throws -> Block {
+        let limit = Self.blockTimeout(timeout, overlay: peer.endpoint.isOverlay)
         let blockResponse = try await peer.request(
             .getdata(InventoryPayload([InventoryVector(type: .witnessBlock, hash: blockHash)])),
-            expecting: ["block", "notfound"], timeout: timeout)
+            expecting: ["block", "notfound"], timeout: limit)
         switch blockResponse {
         case let .block(block):
             guard block.hash == blockHash else {

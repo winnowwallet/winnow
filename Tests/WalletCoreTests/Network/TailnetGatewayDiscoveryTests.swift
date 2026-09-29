@@ -13,13 +13,19 @@ struct TailnetGatewayDiscoveryTests {
             return endpoint.port == 9050
         })
         let result = await discovery.discover()
-        #expect(result.networks == [.clearnet, .tor])
+        #expect(result.networks == [.tor], "a gateway that answers takes clearnet out")
         #expect(result.torProxy == .init(host: "100.75.175.127", port: 9050))
         #expect(result.i2pProxy == nil)
         let absent = await TailnetGatewayDiscovery(resolve: { _ in [] }, probe: { _ in
             Issue.record("Probed an unresolved host"); return true
         }).discover()
-        #expect(absent == .init())
+        #expect(absent == .init(), "no gateway: clearnet keeps the wallet syncing")
+        let both = await TailnetGatewayDiscovery(resolve: { host in
+            host == "winnow-tor-gateway" ? ["100.75.175.127"] : ["100.74.30.8"]
+        }, probe: { _ in true }).discover()
+        #expect(both.networks == [.tor, .i2p])
+        #expect(both.torProxy == .init(host: "100.75.175.127", port: 9050))
+        #expect(both.i2pProxy == .init(host: "100.74.30.8", port: 4447))
     }
 
     @Test func cancelledDiscoveryCannotInstallAnEndpoint() async {
