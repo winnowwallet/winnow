@@ -16,8 +16,16 @@ journey, recorded continuously on iPhone. It covers three payments in order:
 [WinnowAppUITests.swift](WinnowAppUITests.swift) owns the ordinary payment and
 fixture readiness checks; [MultisigJourney.swift](MultisigJourney.swift)
 continues in the same app session. [JourneyPayment.swift](JourneyPayment.swift) checks the
-shared-account transactions accepted by Core. There is one test result, not
+shared-account transactions accepted by Core. The journey is one test result, not
 three independently prepared stories.
+
+Two smaller classes share the bundle.
+[PeerGatewaySettingsUITests.swift](PeerGatewaySettingsUITests.swift) checks the
+Advanced peer-network controls and their persistence across relaunch with a
+disposable wallet; CI runs it with the journey.
+[LiveGatewayDeviceTests.swift](LiveGatewayDeviceTests.swift) skips unless
+`scripts/check-live-gateways-ui` selects it on a device or simulator whose
+network is on the tailnet running both [gateways](../docs/peer-gateways.md).
 
 Before XCTest starts, `scripts/ci-ui-journey` runs
 `swift run winnow-fixture prepare-bank` on the host. The command uses the shared

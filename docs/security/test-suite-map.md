@@ -39,8 +39,13 @@ Historical `WinnowSoak` runs used the standalone executable. The same driver
 now runs as `swift run winnow-debug soak`; the retained checkpoint command now uses
 `swift run winnow-debug generate checkpoint`. Bundled-peer generation and
 its crawler were removed, along with `FallbackPeerListTests`; Tor’s
-`SocksProxyTests` were removed with that transport. Neither command migration rewrites the
+`SocksProxyTests` were removed with that transport and returned with the optional external SOCKS5 transport (#179). Neither command migration rewrites the
 recorded dates, measurements, or scope of historical evidence.
+
+Gateway routing (#181) added `PeerGatewayTests`, `TailnetGatewayDiscoveryTests`
+and routing cases in `RoutingTests` under WalletCoreTests/Network,
+`PeerGatewayModelTests` in AppTests, and `PeerGatewaySettingsUITests` plus the
+opt-in `LiveGatewayDeviceTests` in UITests.
 
 ## Wallet/network consolidation
 

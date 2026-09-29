@@ -51,3 +51,5 @@ must be new. Packaging never changes repository media.
 [Testing policy](testing.md), [the recording](videos/README.md),
 [current and historical screenshots](screenshots/README.md), and
 [security evidence](security/README.md) explain the supporting records.
+Operator guides cover [Tor and I2P gateways](peer-gateways.md), the
+[signed census](census-signing.md) and the [tdx CI lane](engineering/tdx-ci.md).
