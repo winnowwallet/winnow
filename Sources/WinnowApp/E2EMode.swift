@@ -65,6 +65,10 @@ struct E2EMode {
     let peerCount: Int?
     /// `WINNOW_E2E_SYNC_INTERVAL`: seconds between automatic sync passes.
     let syncInterval: Duration?
+    /// `WINNOW_E2E_LIVE_GATEWAYS=1`: let Automatic routing probe the real
+    /// tailnet. Only the live gateway journey sets it; every other UI story
+    /// keeps discovery off so it never depends on the developer's network.
+    let liveGateways: Bool
 
     static let keychainServicePrefix = "org.btc-swift.wallet.e2e"
 
@@ -130,7 +134,8 @@ struct E2EMode {
                        controlFile: environment["WINNOW_E2E_CONTROL_FILE"].map { URL(fileURLWithPath: $0) },
                        peerCount: environment["WINNOW_E2E_PEER_COUNT"].flatMap(Int.init).flatMap { $0 > 0 ? $0 : nil },
                        syncInterval: environment["WINNOW_E2E_SYNC_INTERVAL"].flatMap(Double.init)
-                           .flatMap { $0 > 0 ? .seconds($0) : nil }))
+                           .flatMap { $0 > 0 ? .seconds($0) : nil },
+                       liveGateways: environment["WINNOW_E2E_LIVE_GATEWAYS"] == "1"))
     }
 
     static var current: E2EMode? {
@@ -327,6 +332,7 @@ struct E2EMode {
     var controlFile: URL? { unavailable() }
     var peerCount: Int? { unavailable() }
     var syncInterval: Duration? { unavailable() }
+    var liveGateways: Bool { unavailable() }
     var keychainService: String { unavailable() }
     var defaults: UserDefaults { unavailable() }
     var networkParams: NetworkParams? { unavailable() }

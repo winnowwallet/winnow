@@ -5,7 +5,7 @@ import Testing
 struct CensusCatalogTests {
     let now = Date(timeIntervalSince1970: 1_789_300_800) // 2026-09-13 UTC
     /// The published shape: the census also lists `tor` and `i2p` nodes,
-    /// which the wallet does not dial and validation drops.
+    /// which are retained for use with configured gateways.
     func catalog(_ date: String = "2026-09-13") -> CensusCatalog {
         .init(date: date, tip: 900_000, networks: [
             "clearnet": [.init(host: "8.8.8.8", port: 8333, userAgent: "/Satoshi:30/", startHeight: 900_100)],
@@ -27,13 +27,13 @@ struct CensusCatalogTests {
         #expect(CensusCatalog.day("0000-01-01") == nil)
         #expect(throws: CensusCatalog.Invalid.size) { try CensusCatalog.decode(Data(repeating: 0, count: CensusCatalog.maximumBytes + 1)) }
     }
-    @Test func aThinListIsRefusedAndOtherNetworksAreDropped() throws {
+    @Test func aThinListAndMalformedOverlayEntriesAreRefused() throws {
         let validated = try catalog().validated(now: now)
-        #expect(validated.networks.keys.sorted() == ["clearnet"], "only what the wallet dials survives validation")
+        #expect(validated.networks.keys.sorted() == ["clearnet", "i2p", "tor"])
         #expect(throws: CensusCatalog.Invalid.thin) { try catalog().validated(now: now, minimumEntries: 2) }
         var c = catalog()
         c.networks["tor"] = [.init(host: "not an onion", port: 0, userAgent: "", startHeight: -1)]
-        _ = try c.validated(now: now, minimumEntries: 1) // an undialled list is never inspected
+        #expect(throws: CensusCatalog.Invalid.endpoint) { try c.validated(now: now, minimumEntries: 1) }
     }
     @Test func extremeHeightsAndAliases() throws {
         #expect(!CensusCatalog.nearTip(.min, tip: .max))

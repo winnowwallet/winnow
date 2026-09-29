@@ -11,8 +11,9 @@ for d in Tools/*/Tests; do [ -d "$d" ] && TEST_DIRS+=("$d"); done
 SETTERS=(.github/workflows scripts)
 # Optional overrides a developer may set by hand; never a gate.
 ALLOW_UNSET="WINNOW_BITCOIN_CLI"
-# Conditional skips that are deliberate and documented.
-ALLOW_XCTSKIP="AppTests/E2EModeTests.swift"
+# Conditional skips that are deliberate and documented. The live gateway
+# journey needs a device or simulator on the tailnet; scripts/check-live-gateways-ui runs it.
+ALLOW_XCTSKIP="AppTests/E2EModeTests.swift UITests/LiveGatewayDeviceTests.swift"
 # Retired gates: node integration now runs through the one UI journey.
 DENY='WINNOW_DIFF|WINNOW_SIGNET|WINNOW_HEADERS_BIN|WINNOW_GENERATE_FALLBACK_PEERS'
 
@@ -32,7 +33,10 @@ done
 
 # 2. File-protection attributes are measured
 # where the OS records them; the same suite is included in iOS AppTests.
-if grep -rn 'enabled(if:' "${TEST_DIRS[@]}" | sed -E 's/^([^:]+):[0-9]+:/\1:/' | grep -vF 'Tests/WalletCoreTests/FileProtectionTests.swift:@Suite("Persisted file protection", .enabled(if: fileProtectionRecorded))'; then
+# The live gateway check needs the tailnet that runs them; scripts/check-live-gateways sets its gate.
+if grep -rn 'enabled(if:' "${TEST_DIRS[@]}" | sed -E 's/^([^:]+):[0-9]+:/\1:/' \
+  | grep -vF 'Tests/WalletCoreTests/FileProtectionTests.swift:@Suite("Persisted file protection", .enabled(if: fileProtectionRecorded))' \
+  | grep -vF 'Tests/WalletCoreTests/Network/TailnetGatewayDiscoveryTests.swift:    @Test(.enabled(if: ProcessInfo.processInfo.environment["WINNOW_LIVE_GATEWAYS"] == "1"))'; then
   echo "::error::an undocumented conditional test suite was found"
   status=1
 fi

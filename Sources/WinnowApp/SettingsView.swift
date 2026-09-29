@@ -54,6 +54,7 @@ struct SettingsView: View {
                 BackupSection()
 
                 if model.advancedMode {
+                    PeerGatewaysSection()
                     Section {
                         Button(model.refreshingCatalog ? "Refreshing… \(model.catalogBytes) bytes" : "Refresh peer list") {
                             Task { await model.refreshPeerCatalog() }
@@ -62,11 +63,11 @@ struct SettingsView: View {
                         .accessibilityIdentifier("refreshPeerCatalogButton")
                         if let notice = model.catalogNotice { Text(notice).accessibilityIdentifier("peerCatalogNotice") }
                         else if let downloaded = model.catalogStore?.load() {
-                            Text("Observed \(downloaded.catalog.date): \(AppModel.candidateCount(downloaded.catalog)).").accessibilityIdentifier("peerCatalogNotice")
+                            Text("Observed \(downloaded.catalog.date): \(AppModel.candidateCount(downloaded.catalog, networks: model.activePeerGateways.networks)).").accessibilityIdentifier("peerCatalogNotice")
                         } else { Text("Using bundled candidates. Downloaded catalogs expire after seven days.") }
                         if let error = model.catalogError { Text(error).foregroundStyle(.red).accessibilityIdentifier("peerCatalogError") }
                     } header: { Text("Mainnet peer list") } footer: {
-                        Text("Mainnet downloads a signed list automatically when needed. Refresh checks census.winnowwallet.com now and keeps active connections. Every selected peer still undergoes Winnow's normal checks.")
+                        Text("Mainnet downloads a signed list automatically when needed. Refresh checks census.winnowwallet.com now, or its I2P mirror when I2P is the only network, and keeps active connections. Every selected peer still undergoes Winnow's normal checks.")
                     }
                 }
 
@@ -93,7 +94,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Manual peers")
                 } footer: {
-                    Text("Manual peers are tried first. Seeds resolve over HTTPS (Cloudflare 1.1.1.1), with system DNS as the fallback. The default port is 8333 (mainnet) / 38333 (signet). Peers must advertise compact filters and pass Winnow's checks.")
+                    Text("Manual peers are tried first when their network is enabled. Clearnet seeds resolve over HTTPS (Cloudflare 1.1.1.1), with system DNS as the fallback. Overlay names are resolved by their SOCKS gateway. The default port is 8333 (mainnet) / 38333 (signet). Peers must advertise compact filters and pass Winnow's checks.")
                 }
                 }
 

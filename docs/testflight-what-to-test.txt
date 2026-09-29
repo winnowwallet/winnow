@@ -1,23 +1,23 @@
-Winnow 0.7.9: automatic complete iCloud recovery and mainnet startup
+Winnow 0.7.10: Tor and I2P peers through your own Tailscale gateways
 
-Peer-list updates now require a valid signature from the pinned census publisher. The bundled address list has been removed. Mainnet automatically refreshes a missing or expired signed census alongside DNS discovery and remembered peers. Older unsigned or expired census caches are ignored.
+Winnow does not include Tor or I2P. This build can route Bitcoin peer connections through Tor and I2P SOCKS gateways that you run on your own Tailscale network. Setup: https://github.com/winnowwallet/winnow/blob/main/docs/peer-gateways.md
 
-Mainnet now connects to responsive peers without waiting for unrelated discovery attempts. A disconnected peer no longer leaves a response request waiting for its 30-second timeout. Check fresh startup, returning to the app, and repeated syncs.
+Gateway routing
 
-iCloud recovery
+With Tailscale connected on the iPhone and gateways named winnow-tor-gateway (port 9050) and winnow-i2p-gateway (port 4447) on the same tailnet, open Advanced → Settings → Peer networks. Automatic, the default, should show Active Tor gateway and Active I2P gateway. Without Tailscale, Automatic should fall back to ordinary peers with no error.
 
-Using a disposable signet wallet, create the wallet without enabling backup or completing a recovery-word checklist. Check the saved date after the automatic upload. On a second device with the same Apple Account and iCloud Keychain enabled, choose Restore from iCloud. Verify addresses, history, shared accounts, saved people, labels and the ability to sign. Confirm automatic backup resumes on the replacement device. Check that Advanced opt-out persists across mode changes and restart. Check a missing Keychain key, offline recovery and cancellation. Keep the original wallet and manual backup until verified; never erase your only funded wallet for this test.
+Choose Manual, enable only Tor peers, enter the Tor gateway, and tap Apply routing. Connected peers should become .onion addresses. Repeat with only I2P peers: tap Refresh peer list and check that it succeeds (it downloads from the I2P mirror), then check for .b32.i2p peers. Turn Tailscale off while in a Tor-only or I2P-only mode: the wallet should stop connecting rather than use ordinary peers. Choose Automatic again to restore ordinary peers.
 
 Connections
 
-Check a fresh install and an existing wallet: both should connect and sync without a bundled peer list. In Advanced settings, use "Refresh peer list" and check the reported observation date and candidate count. Reconnect peers and check that the wallet resumes syncing. Report any connection failure with the network and app version.
+Check a fresh install and an existing wallet: both should connect and sync. In Advanced settings, use "Refresh peer list" and check the reported observation date and candidate count. Report any connection failure with the network, routing mode and app version.
 
 Payments and shared accounts
 
-On signet, receive and send an ordinary payment, then receive and send with a MuSig2 shared account and a script-path 2-of-3 account. Check the recipient, amount, fee, approvals, and confirmed balance. The automated iPhone journey covers these payments with Bitcoin Core cosigners; report any difference you see in normal use.
+On signet, receive and send an ordinary payment, then receive and send with a MuSig2 shared account and a script-path 2-of-3 account. Check the recipient, amount, fee, approvals, and confirmed balance.
 
 Upgrading from an older version
 
-Check that your accounts, transaction history, and backups remain available. Reveal the recovery phrase, send a payment, or export a backup with the phrase and check the passcode or Face ID prompt. Winnow now connects directly: users who previously enabled Tor should see the removal notice once.
+Check that your accounts, transaction history, backups and saved settings remain available after the update.
 
 Report bugs publicly at https://github.com/winnowwallet/winnow/issues. Include the app version, device, network, and steps to reproduce. Never include recovery words, private keys, or wallet backup files.
