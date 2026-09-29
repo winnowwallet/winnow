@@ -8,7 +8,7 @@ A Bitcoin wallet for iOS with on-device compact-filter matching, written in Swif
 - **Taproot today.** Ordinary receiving uses P2TR (BIP86); shared accounts use MuSig2 key-path or threshold script-path signing. There is no ECDSA signing path or P2WSH Safe.
 - **Pay people and share control.** Save a public payment card or Bitcoin address. From Wallet, create shared savings with a threshold such as 2-of-3: any two keys can spend while one is unavailable. A 1-of-n policy permits one key to spend. Cards carry public keys only.
 - **Require another signing device.** Advanced mode offers MuSig2 accounts where every key must participate. The single integration journey receives and sends with a phone-plus-Core account, followed by a script-path 2-of-3 account. Focused tests check wallet and account rules. Hardware-wallet compatibility needs its own test. Read about [shared signing and its limits](docs/vaults.html).
-- **Bitcoin cryptography:** [`swift-secp256k1`](https://github.com/21-DOT-DEV/swift-secp256k1) (Bitcoin Core's libsecp256k1), pinned; the only third-party dependency. The embedded Tor client shipped in 0.6 through 0.7.0 was removed in 0.7.1 (its source is kept on the `archive/tor-0.7.0` branch); Tor and I2P are historical proposals, not current features or scheduled work.
+- **Bitcoin cryptography:** [`swift-secp256k1`](https://github.com/21-DOT-DEV/swift-secp256k1) (Bitcoin Core's libsecp256k1), pinned; the only third-party dependency. The embedded Tor client shipped in 0.6 through 0.7.0 was removed in 0.7.1 (its source is kept on the `archive/tor-0.7.0` branch). Winnow bundles no Tor or I2P client; it can route peer connections through Tor and I2P SOCKS gateways you run on your own Tailscale network ([peer gateways](docs/peer-gateways.md)).
 - **Warned explorer links** — choose mempool.space or a custom Esplora website; Winnow opens it only after a tap and privacy warning, never as a wallet backend.
 
 ## Release roadmap
@@ -102,9 +102,11 @@ package and its committed third-party dependency revision.
 
 [CI and release operations](.github/internal/ci-release.md) describes the shared
 validation gates, node fixture, TestFlight recovery and website deployment.
-CI has one GitHub-hosted Apple silicon (`macos-26`) `build` job for package,
-app, fuzz, lint, and release checks, followed by a `website` job that deploys
-its ready artifact. Fresh runs use per-run build products and a new signet
+Same-repository CI runs on four disposable macOS guests on the self-hosted
+[tdx lane](docs/engineering/tdx-ci.md) when the repository enables it; fork PRs
+and the manual `hosted` input use one GitHub-hosted Apple silicon (`macos-26`)
+`build` job for package, app, fuzz, lint, and release checks. Either lane is
+followed by a `website` job that deploys its ready artifact. Fresh runs use per-run build products and a new signet
 fixture, with no dependence on a developer Mac. One Debug build serves app
 unit tests and the signet journey on the same simulator. Fresh runs retain both
 result bundles, the video, and screenshots in `app-tests-…`.

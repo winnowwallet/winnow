@@ -106,7 +106,7 @@ unit tests use in-memory cloud and key stores for failures, wallet/account
 changes, cancellation, automatic defaults and persistent opt-out. These run in existing CI.
 
 Before App Store submission, use disposable signet funds on two physical devices
-with the same test Apple Account and iCloud Keychain enabled. Create a wallet without enabling backup, wait
+with the same test Apple Account and iCloud Keychain enabled. Create a wallet (backup starts automatically), wait
 for a saved date, restore on the second device, and check addresses, balances,
 history and a signed payment. Also check an offline device, disabled iCloud
 Keychain, a different Apple Account and cancellation during authentication.

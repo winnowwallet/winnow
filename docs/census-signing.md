@@ -50,7 +50,8 @@ peer cache, and DNS supplies additional candidates.
 
 ## Key rotation
 
-1. Generate a replacement key with `WinnowCensus keygen` in a trusted local
+1. Generate a replacement key with `WinnowCensus keygen` (from the
+   [census repository](https://github.com/winnowwallet/census)) in a trusted local
    session. Its output includes the private key; keep it out of logs and git.
 2. Ship the new public key alongside the old key in the wallet. Wait until
    supported wallet versions trust it before switching the publisher.

@@ -29,3 +29,5 @@ or iCloud Keychain synchronization; see [cloud recovery validation](../CloudKit/
 `AutomaticCloudBackupTests` checks cancelled initialization authentication and mode
 changes; `CloudAppStateTests` checks complete context recovery and safe contact merges.
 `WalletStartupTests` covers automatic creation and migration from the old phrase checklist.
+[Peer gateway model tests](PeerGatewayModelTests.swift) check routing persistence,
+corrupt preferences and stale discovery after backgrounding or a settings change.
