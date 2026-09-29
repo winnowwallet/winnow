@@ -97,8 +97,8 @@ absence of test controls; its hash is checked again immediately before upload.
 ## Rollout and fallback
 
 Until three fresh trials of one revision pass, `TDX_CI_ENABLED` remains unset or
-false and normal CI stays hosted. `tdx-trial.yml` runs the pool for the rollout
-branch while preserving the hosted baseline. Rerun the complete trial workflow
+false and normal CI stays hosted. `tdx-trial.yml` runs the pool while preserving the hosted baseline; start it
+by hand (Actions → TDX rollout trial → Run workflow) on the candidate branch. Rerun the complete trial workflow
 three times on the final revision; never count a failed or partial attempt.
 Compare test inventories, all three confirmed payments, 16 captures, continuous
 video and all 20 website files before enabling the pool. Preserve the 600-second

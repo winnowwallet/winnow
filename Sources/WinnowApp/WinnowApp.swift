@@ -4,8 +4,15 @@ import UIKit
 
 @main
 struct WinnowApp: App {
-    @State private var model = AppModel()
+    @State private var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        let model = AppModel()
+        _model = State(initialValue: model)
+        // BGTask handlers must be registered before launch finishes.
+        BackgroundSyncScheduler.shared.register(model: model)
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -32,7 +39,7 @@ struct WinnowApp: App {
             )) {
                 Button("OK") {}
             } message: {
-                Text("Your old built-in Tor setting no longer applies. Automatic routing includes direct connections and can use external Tailscale gateways when available. To require Tor, open Advanced Settings, choose Manual gateway routing, and select only Tor peers with your gateway address.")
+                Text("Your old built-in Tor setting no longer applies. Automatic routing uses your Tor and I2P gateways on Tailscale when they answer, and connects directly when none do. To require Tor, open Advanced Settings, choose Manual gateway routing, and select only Tor peers with your gateway address.")
             }
             .redacted(reason: shouldObscureWallet(for: scenePhase) ? .privacy : [])
             .accessibilityHidden(shouldObscureWallet(for: scenePhase))

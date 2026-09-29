@@ -217,6 +217,35 @@ final class AppModel {
     /// One-line rendering of `syncPhase`; nil when there is nothing to show.
     var syncSummary: SyncPhase.Summary { SyncPhase.summary(phase: syncPhase, syncing: status.syncing) }
 
+    /// What Simple mode shows under the balance. Advanced shows every error.
+    var simpleSyncError: String? {
+        Self.simpleSyncError(lastError: status.lastSyncError, transientError: transientSyncError,
+                             failures: transientSyncFailures)
+    }
+
+    /// A peer dropping mid-scan is routine, and the next pass recovers on
+    /// another peer, so one or two in a row stay quiet and a third is said
+    /// in plain words. Any other error shows at once.
+    static func simpleSyncError(lastError: String?, transientError: String?, failures: Int) -> String? {
+        guard let lastError else { return nil }
+        guard lastError == transientError else { return lastError }
+        return failures >= 3 ? "Winnow keeps losing its connection to Bitcoin peers. It will keep trying." : nil
+    }
+
+    /// Failures of the link rather than of a peer's answers: the pool moves
+    /// to another peer and the next pass usually succeeds.
+    static func isTransientSyncError(_ error: any Error) -> Bool {
+        switch error {
+        case let peer as PeerError:
+            return peer.isTransport
+        case let sync as FilterSyncError:
+            if case .peersCoolingDown = sync { return true }
+            return sync == .noPeers
+        default:
+            return false
+        }
+    }
+
     var syncStatusText: String? {
         switch syncPhase {
         case .idle, .synced:
@@ -379,6 +408,18 @@ final class AppModel {
     private var phaseTask: Task<Void, Never>?
     private var broadcasterEventTask: Task<Void, Never>?
     private var isActive = false
+    private var bootTask: Task<Void, Never>?
+    /// A BGTask's scan. Foreground networking and a background check never
+    /// run together: returning to the app cancels this before `activate()`.
+    private var backgroundRun: Task<Bool, Never>?
+    private var networkShutdown: Task<Void, Never>?
+    private(set) var backgroundRunning = false
+    /// When a scan last reached the tip, in the foreground or the background.
+    private(set) var lastCompleteCheck: Date?
+    /// Sync passes in a row that a dropped or slow peer ended, and the
+    /// message the last one left. See `simpleSyncError`.
+    private var transientSyncFailures = 0
+    private var transientSyncError: String?
     private var buildingStack = false
     /// Prevents the E2E journal from repeating an identical wallet/vault
     /// snapshot every time SwiftUI asks for a refresh.
@@ -393,6 +434,10 @@ final class AppModel {
         /// explorer answers mainnet queries with confidently wrong data.
         /// See #81.
         static func manualPeers(_ network: BitcoinNetwork) -> String { "manualPeers.\(network.rawValue)" }
+        static func lastCompleteCheck(_ network: BitcoinNetwork) -> String { "sync.lastComplete.\(network.rawValue)" }
+        /// Whether Automatic routing last reached peers through Tor or I2P
+        /// in the foreground. See `backgroundRoutingAllowed`.
+        static let automaticUsedGateways = "peerGateways.automaticUsedGateways"
         static func esploraURL(_ network: BitcoinNetwork) -> String { "esploraURL.\(network.rawValue)" }
         static func explorerProvider(_ network: BitcoinNetwork) -> String { "explorerProvider.\(network.rawValue)" }
         /// The pre-#81 flat keys, migrated once into the active network.
@@ -466,6 +511,7 @@ final class AppModel {
         let scoped = Self.networkScopedSettings(defaults: defaults, network: selectedNetwork)
         manualPeers = scoped.manualPeers
         esploraURLString = scoped.esploraURL
+        lastCompleteCheck = defaults.object(forKey: DefaultsKey.lastCompleteCheck(selectedNetwork)) as? Date
         // Provider default is blockstream.info; an installation that had
         // already typed a custom explorer URL keeps it by migrating to
         // `.custom` rather than silently switching sites.
@@ -497,7 +543,17 @@ final class AppModel {
     // MARK: - Lifecycle
 
     /// Opens the persisted wallet for the current network, if any.
+    /// The window's `.task` and a cold background launch can both ask; both
+    /// wait for the one open rather than reading the wallet twice.
     func boot() async {
+        if let bootTask { await bootTask.value; return }
+        let opening = Task { await openWalletForBoot() }
+        bootTask = opening
+        await opening.value
+        bootTask = nil
+    }
+
+    private func openWalletForBoot() async {
         // A crash with the export sheet open skips its cleanup; the staging
         // file may carry the recovery phrase, so it does not wait for tmp.
         ExportStagingFile.sweep()
@@ -574,13 +630,17 @@ final class AppModel {
         await boot()
     }
 
-    /// Sync-while-active: the stack runs only while the scene is foreground.
+    /// The stack runs while the scene is foreground, and for bounded
+    /// background checks iOS schedules. The two never overlap.
     func scenePhaseChanged(_ phase: ScenePhase) async {
         e2e?.journal("app.scenePhase", fields: ["phase": String(describing: phase)])
         switch phase {
         case .active:
             if !isActive { attemptedCloudPreparation.removeAll() }
             isActive = true
+            await cancelBackgroundSync()
+            await networkShutdown?.value
+            lastCompleteCheck = defaults.object(forKey: DefaultsKey.lastCompleteCheck(network)) as? Date
             await activate()
         case .background:
             isActive = false
@@ -588,8 +648,14 @@ final class AppModel {
             cloudPreparationTask = nil
             cloudBackups.suspend()
             keychainAuthentication.revoke()
+            BackgroundSyncScheduler.shared.schedule()
+            // A cold BGTask launch can deliver the initial scene phase after
+            // its handler started. That phase must not tear down its own scan.
+            if backgroundRun != nil { return }
             suspendNetworking()
-            await stopNetworking()
+            let shutdown = Task { await stopNetworking() }
+            networkShutdown = shutdown
+            await shutdown.value
         default:
             break // .inactive: still foreground — keep syncing
         }
@@ -597,13 +663,12 @@ final class AppModel {
 
     private func activate() async {
         // Boot must attach the saved wallet before a stack chooses its filters.
-        guard stage != .loading, isActive, !changingNetwork, storageDirectory() != nil else { return }
+        guard stage != .loading, isActive, !backgroundRunning, !changingNetwork,
+              storageDirectory() != nil else { return }
         if case .storageDamaged = stage { return }
         scheduleAutomaticCloudPreparation()
         let epoch = networkGeneration
-        if httpClient.isCancelled {
-            httpClient = RoutedHTTPClient(gateways: activePeerGateways)
-        }
+        resumeHTTPClient()
         await buildStackIfNeeded()
         guard epoch == networkGeneration, isActive else { return }
         schedulePeerCatalogRefresh()
@@ -624,6 +689,69 @@ final class AppModel {
         automaticCatalogTask = nil
         networkGeneration &+= 1
         httpClient.cancel()
+    }
+
+    private func resumeHTTPClient() {
+        if httpClient.isCancelled { httpClient = RoutedHTTPClient(gateways: activePeerGateways) }
+    }
+
+    /// Called only by the registered BGTask handler: one bounded scan with
+    /// the same routing, peers and checks as the foreground, then teardown.
+    func runBackgroundSync() async -> Bool {
+        guard !isActive, !changingNetwork, backgroundRun == nil else { return false }
+        let run = Task { @MainActor in await runBackgroundCheck() }
+        backgroundRun = run
+        let complete = await run.value
+        backgroundRun = nil
+        return complete
+    }
+
+    private func runBackgroundCheck() async -> Bool {
+        await networkShutdown?.value
+        guard !isActive, !Task.isCancelled else { return false }
+        backgroundRunning = true
+        if stage == .loading { await boot() }
+        let complete = await scanInBackground()
+        // The next foreground resolves routing afresh, as after backgrounding;
+        // Tailscale may have come or gone since this check.
+        suspendNetworking()
+        await stopNetworking()
+        backgroundRunning = false
+        e2e?.journal("background.completed", fields: ["complete": String(complete)])
+        return complete
+    }
+
+    private func scanInBackground() async -> Bool {
+        guard stage == .ready, storageDirectory() != nil, !Task.isCancelled else { return false }
+        resumeHTTPClient()
+        await preparePeerGateways()
+        guard backgroundRoutingAllowed(), !Task.isCancelled else { return false }
+        await buildStackIfNeeded()
+        guard !Task.isCancelled else { return false }
+        await stack?.pool.start()
+        return await syncOnce()
+    }
+
+    /// Automatic routing falls back to direct connections when no gateway
+    /// answers, and the foreground says so with a banner. A background check
+    /// has no banner, so after the foreground last used Tor or I2P it waits
+    /// for the app to open rather than connecting directly.
+    private func backgroundRoutingAllowed() -> Bool {
+        Self.backgroundRoutingAllowed(mode: gatewaySettings.mode, resolved: activePeerGateways,
+                                      foregroundUsedGateways: defaults.bool(forKey: DefaultsKey.automaticUsedGateways))
+    }
+
+    static func backgroundRoutingAllowed(mode: PeerGatewaySettings.Mode, resolved: PeerGatewayConfiguration,
+                                         foregroundUsedGateways: Bool) -> Bool {
+        mode != .automatic || !resolved.networks.contains(.clearnet) || !foregroundUsedGateways
+    }
+
+    func cancelBackgroundSync() async {
+        guard let run = backgroundRun else { return }
+        run.cancel()
+        // Closing sockets interrupts pending peer reads before the OS deadline.
+        await stack?.pool.stop()
+        _ = await run.value
     }
 
     /// Retries peer discovery after the pool reported exhaustion (the UI's
@@ -783,7 +911,7 @@ final class AppModel {
         // Wallet creation/import can request the stack before activation has
         // finished. Every entry point must wait for the same routing decision.
         await preparePeerGateways()
-        guard epoch == networkGeneration, isActive, !Task.isCancelled else { return }
+        guard epoch == networkGeneration, isActive || backgroundRunning, !Task.isCancelled else { return }
         do {
             let params = e2e?.networkParams ?? NetworkParams.params(for: network)
             // relayPreference: peers inv us relayed transactions so bounded
@@ -800,7 +928,7 @@ final class AppModel {
             let chain = try await Task.detached(priority: .userInitiated) {
                 try Self.openOrRebuildChain(params: params, storageURL: headersURL, start: start)
             }.value
-            guard epoch == networkGeneration, isActive else { await pool.stop(); return }
+            guard epoch == networkGeneration, isActive || backgroundRunning else { await pool.stop(); return }
             let broadcaster = try makeBroadcaster(
                 pool: pool, storageURL: dir.appending(path: "broadcast.json"))
             var newStack = SyncStack(pool: pool, chain: chain, filters: nil, broadcaster: broadcaster)
@@ -808,7 +936,7 @@ final class AppModel {
                 newStack.filters = try await makeFilterSync(pool: pool, chain: chain,
                                                             startHeight: wallet.nextScanHeight)
             }
-            guard epoch == networkGeneration, isActive else {
+            guard epoch == networkGeneration, isActive || backgroundRunning else {
                 await pool.stop(); await broadcaster.shutdown(); return
             }
             stack = newStack
@@ -1003,8 +1131,12 @@ final class AppModel {
         await syncOnce()
     }
 
-    private func syncOnce() async {
-        guard !status.syncing, let wallet, let stack, let filters = stack.filters else { return }
+    /// True when the scan reached the tip. A background run stops after a
+    /// bounded number of blocks and resumes from the saved frontier next time.
+    @discardableResult
+    private func syncOnce() async -> Bool {
+        guard !status.syncing, let wallet, let stack, let filters = stack.filters else { return false }
+        var complete = false
         status.syncing = true
         defer { status.syncing = false }
         do {
@@ -1013,7 +1145,7 @@ final class AppModel {
             let broadcaster = stack.broadcaster
             let network = network
             let vaultStore = vaultStore
-            try await filters.sync(watchScripts: scripts,
+            try await filters.sync(watchScripts: scripts, maxBlocks: backgroundRunning ? 2_000 : nil,
                                    onReorg: { [weak self] forkHeight in
                 guard let self else { return }
                 try await self.rollBackStores(to: forkHeight)
@@ -1045,6 +1177,14 @@ final class AppModel {
             // it redone at the next launch.
             finishRollback()
             status.lastSyncError = nil
+            transientSyncFailures = 0
+            transientSyncError = nil
+            complete = await filters.nextScanHeight > stack.chain.height
+            if complete {
+                let now = Date()
+                lastCompleteCheck = now
+                defaults.set(now, forKey: DefaultsKey.lastCompleteCheck(network))
+            }
         } catch {
             // A later batch may have thrown after earlier ones persisted
             // in FilterSync. Those earlier batches each passed their own
@@ -1052,9 +1192,17 @@ final class AppModel {
             // their progress is verified and worth keeping — the batch that
             // threw applied nothing. Keep WalletState from lagging it.
             try? await wallet.recordScanHeight(await filters.nextScanHeight)
-            status.lastSyncError = error.localizedDescription
+            // Backgrounding, a network switch or an expired background check
+            // cancels the scan and closes its peers. Nothing failed.
+            if !Task.isCancelled, !(error is CancellationError) {
+                status.lastSyncError = error.localizedDescription
+                let transient = Self.isTransientSyncError(error)
+                transientSyncFailures = transient ? transientSyncFailures + 1 : 0
+                transientSyncError = transient ? error.localizedDescription : nil
+            }
         }
         await refresh()
+        return complete
     }
 
     /// Keep replaced originals beside the payment that superseded them.
@@ -2542,9 +2690,11 @@ final class AppModel {
         let settings = Self.networkScopedSettings(defaults: defaults, network: network)
         manualPeers = settings.manualPeers
         esploraURLString = settings.esploraURL
+        lastCompleteCheck = defaults.object(forKey: DefaultsKey.lastCompleteCheck(network)) as? Date
     }
 
     func switchNetwork(to newNetwork: BitcoinNetwork) async {
+        await cancelBackgroundSync()
         cloudBackups.suspend()
         guard e2e?.forcedNetwork == nil || e2e?.forcedNetwork == newNetwork else { return }
         guard newNetwork != network else { return }
@@ -2646,6 +2796,9 @@ final class AppModel {
         preparedGatewayGeneration = epoch
         gatewayDiscoveryTask = nil
         discoveringGateways = false
+        if gatewaySettings.mode == .automatic, isActive {
+            defaults.set(!config.networks.contains(.clearnet), forKey: DefaultsKey.automaticUsedGateways)
+        }
         if activePeerGateways == config, !httpClient.isCancelled { return }
         activePeerGateways = config
         httpClient.cancel()
