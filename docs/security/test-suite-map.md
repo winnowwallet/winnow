@@ -47,6 +47,10 @@ and routing cases in `RoutingTests` under WalletCoreTests/Network,
 `PeerGatewayModelTests` in AppTests, and `PeerGatewaySettingsUITests` plus the
 opt-in `LiveGatewayDeviceTests` in UITests.
 
+Background chain checks (0.7.12) added `BackgroundSyncTests` in AppTests. They
+run the task lifecycle without iOS scheduling it; whether and when iOS starts a
+check is observed only on a device.
+
 ## Wallet/network consolidation
 
 The current WalletCore target contains the former BitcoinP2P target.
