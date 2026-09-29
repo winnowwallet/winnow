@@ -64,7 +64,7 @@ struct SettingsView: View {
                         if let notice = model.catalogNotice { Text(notice).accessibilityIdentifier("peerCatalogNotice") }
                         else if let downloaded = model.catalogStore?.load() {
                             Text("Observed \(downloaded.catalog.date): \(AppModel.candidateCount(downloaded.catalog, networks: model.activePeerGateways.networks)).").accessibilityIdentifier("peerCatalogNotice")
-                        } else { Text("Using bundled candidates. Downloaded catalogs expire after seven days.") }
+                        } else { Text("No peer list downloaded yet. Until one arrives, Winnow uses saved peers and, when clearnet is allowed, DNS seeds. Downloaded lists expire after seven days.") }
                         if let error = model.catalogError { Text(error).foregroundStyle(.red).accessibilityIdentifier("peerCatalogError") }
                     } header: { Text("Mainnet peer list") } footer: {
                         Text("Mainnet downloads a signed list automatically when needed. Refresh checks census.winnowwallet.com now, or its I2P mirror when I2P is the only network, and keeps active connections. Every selected peer still undergoes Winnow's normal checks.")
@@ -186,7 +186,7 @@ struct SettingsView: View {
                         .accessibilityIdentifier("confirmResetPeersButton")
                         Button("Cancel", role: .cancel) {}
                     } message: {
-                        Text("Disconnects all peers, forgets saved peers, and finds new ones from DNS seeds and the built-in list. Your manual peers and downloaded catalog are kept.")
+                        Text("Disconnects all peers, forgets saved peers, and finds new ones from the downloaded peer list and, when clearnet is allowed, DNS seeds. Your manual peers and downloaded catalog are kept.")
                     }
                 }
                 }

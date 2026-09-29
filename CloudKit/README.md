@@ -20,6 +20,8 @@ payment cards, sender names, receive-address labels, display name and interface
 mode. Other owners' signing keys are not on this phone and are not included.
 Watch-only and xprv-only imports cannot enable this mnemonic-based backup.
 Manual file export is unchanged and does not include this extra app context.
+The [recovery guide](../docs/import.html#cannot-restore) lists everything a backup
+cannot restore.
 Peer/explorer endpoints remain device-local, so a replacement phone does not
 inherit an inaccessible private-network address.
 
