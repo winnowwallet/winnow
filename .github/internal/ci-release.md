@@ -132,3 +132,5 @@ validate without deployment credentials. There is no second GitHub Pages site.
 Before releasing iCloud recovery, complete the [Apple container, schema and
 physical-device checks](../../CloudKit/README.md#apple-setup-required-before-release).
 Hosted CI does not establish Apple account setup or real Keychain synchronization.
+Status on 2026-09-29: TestFlight build 79 (0.7.11) saved to production iCloud
+("Backed up, last saved 3:32 PM"); restoring on a second device is still unverified.

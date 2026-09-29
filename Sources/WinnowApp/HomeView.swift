@@ -102,6 +102,7 @@ struct HomeView: View {
                         LabeledContent("Filter scan", value: filterScan)
                     }
                     LabeledContent("Peers", value: "\(model.status.peerCount)")
+                    ChainCheckStatus()
                     if model.status.syncing, model.syncStatusText == nil {
                         BusyIndicator(text: "Scanning filters…")
                     }

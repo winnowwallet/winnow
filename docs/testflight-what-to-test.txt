@@ -1,25 +1,21 @@
-Winnow 0.7.11: private by default through your own Tor and I2P gateways
+Winnow 0.7.12: background chain checks
 
-Winnow does not include Tor or I2P. With Tailscale connected and gateways named winnow-tor-gateway (port 9050) and winnow-i2p-gateway (port 4447) on your tailnet, Automatic routing now connects only through them, so no Bitcoin peer sees your IP address. Setup: https://github.com/winnowwallet/winnow/blob/main/docs/peer-gateways.md
+Winnow now asks iOS to let it check the chain while closed. iOS decides when these run, usually no more than every 15 minutes and often less, and never after you force-quit Winnow or with Background App Refresh off (Settings → General → Background App Refresh).
 
-Home screen banner
+Background checks
 
-On mainnet, simple mode shows how peers are reached. With Tailscale connected it should turn green: "Private: peers reached through Tor and I2P" (or just Tor or I2P). With Tailscale off, reopen Winnow: it should turn orange and say peers can see your IP address. Turn Tailscale back on and return to Winnow: it should go green again.
+In Advanced → Sync, note "Chain last checked … ago". Leave Winnow in the background (do not force-quit it) for an hour or more, ideally on Wi-Fi and charging. Reopen Advanced → Sync before the foreground sync finishes: the time should be recent, from while Winnow was closed. A payment sent to you while it was closed should appear quickly on open.
 
-Automatic without clearnet
+Private routing in the background
 
-In Advanced → Settings → Connected peers, tap Refresh. With both gateways active, every peer should be labelled Tor or I2P, never Clearnet, and the three peers should not all be on one network. Sync, Receive and Send should still work; the first connection can take 10 to 30 seconds.
+With Tailscale connected and your Tor and I2P gateways running, open Winnow once so the green Private banner shows, then background it. Turn Tailscale off and wait: background checks should skip rather than connect directly, so "Chain last checked" should not advance until you reopen Winnow. Turn Tailscale back on and it should advance again.
 
-Manual routing
+Simple mode errors
 
-Choose Manual, enable only Tor peers, enter the Tor gateway, and tap Apply routing: every peer should be labelled Tor. Repeat with only I2P peers: tap Refresh peer list (it downloads from the I2P mirror), then check that every peer is labelled I2P. Turn Tailscale off in a Tor-only or I2P-only mode: the wallet should stop connecting rather than use clearnet. Choose Automatic again when done.
-
-Backup
-
-Check whether the home screen says Backed up for iCloud, and that the delete-wallet wording reads clearly.
+In simple mode, a peer dropping mid-sync (previously a red "The peer disconnected (closed).") should no longer show. If the connection keeps failing for several passes, a plain message should say Winnow keeps losing its connection. Advanced → Sync still shows every error.
 
 Upgrading from an older version
 
-Check that your accounts, transaction history, backups and saved settings remain available after the update.
+Check that your accounts, transaction history, backups, routing and saved settings remain available after the update.
 
 Report bugs publicly at https://github.com/winnowwallet/winnow/issues. Include the app version, device, network, routing mode and steps to reproduce. Never include recovery words, private keys, or wallet backup files.

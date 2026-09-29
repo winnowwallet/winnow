@@ -59,6 +59,9 @@ signed files from the public census every 30 minutes, and serves them at
 `CensusCatalog.i2pMirror`.
 Corrupt saved routing settings keep networking offline until replaced.
 
+The project's gateway VMs, including the I2P census mirror, are reproducible
+from [winnowwallet/census `gateways/`](https://github.com/winnowwallet/census/tree/main/gateways).
+
 ## Validation
 
 `swift test --filter 'PeerGatewayTests|TailnetGatewayDiscoveryTests'` checks
