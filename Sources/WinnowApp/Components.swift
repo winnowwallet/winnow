@@ -87,7 +87,14 @@ struct WarnedExplorerLink: View {
     let accessibilityID: String
 
     @Environment(\.openURL) private var openURL
+    @Environment(AppModel.self) private var model: AppModel?
     @State private var showingWarning = false
+
+    /// Peer routing without clearnet reads as "everything goes through my
+    /// gateways"; the system browser never does.
+    private var browserBypassesRouting: Bool {
+        model.map { !$0.activePeerGateways.networks.contains(.clearnet) } ?? false
+    }
 
     var body: some View {
         Button {
@@ -101,6 +108,7 @@ struct WarnedExplorerLink: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Opening \(url.host ?? "this explorer") opens an external browser, which shares its IP address and this exact \(exposedItem) with that service. Winnow does not use its response for wallet balance, history, fees, synchronization, or broadcasting.")
+                + Text(browserBypassesRouting ? " Your Tor and I2P peer routing does not apply to the browser." : "")
         }
     }
 }
