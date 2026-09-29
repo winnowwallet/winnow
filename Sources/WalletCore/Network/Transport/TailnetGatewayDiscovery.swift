@@ -19,9 +19,12 @@ public struct TailnetGatewayDiscovery: Sendable {
         async let i2p = find("winnow-i2p-gateway", port: 4447)
         let endpoints = await (tor, i2p)
         guard !Task.isCancelled else { return .init() }
-        var networks: Set<PeerNetwork> = [.clearnet]
+        // A gateway that answers takes clearnet out: every peer then goes
+        // through Tor or I2P. With none, clearnet keeps the wallet syncing.
+        var networks: Set<PeerNetwork> = []
         if endpoints.0 != nil { networks.insert(.tor) }
         if endpoints.1 != nil { networks.insert(.i2p) }
+        if networks.isEmpty { return .init() }
         return .init(networks: networks, torProxy: endpoints.0, i2pProxy: endpoints.1)
     }
 

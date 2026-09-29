@@ -42,6 +42,9 @@ struct BeginnerHomeView: View {
                         .font(.footnote)
                     }
                     .padding(.vertical, 4)
+                    if model.network == .mainnet {
+                        PeerRoutingBanner()
+                    }
                     if case .peersUnavailable = model.syncSummary {
                         Button("Retry") {
                             Task { await model.retryPeerDiscovery() }

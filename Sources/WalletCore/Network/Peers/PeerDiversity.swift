@@ -98,6 +98,10 @@ struct DiversityPolicy {
     /// for a netblock-limited peer; Tor-only and I2P-only routing are the
     /// user's choice and rely on the source rule alone.
     var clearnetSelected = true
+    /// Whether Tor and I2P are both selected without clearnet. Then neither
+    /// overlay may hold every slot, unless the pool relaxed the rule after a
+    /// round could not fill with a mix.
+    var overlayMix = false
 
     /// Whether a candidate may take a slot given what is already connected.
     ///
@@ -112,6 +116,9 @@ struct DiversityPolicy {
     ///   limits them, and they can arrive under different source classes: two
     ///   remembered onions and one from the census would otherwise take the
     ///   whole pool at no cost to someone running many hidden services.
+    /// - With Tor and I2P both selected and clearnet off, neither overlay may
+    ///   hold every slot, so one network's hidden services cannot take the
+    ///   pool either.
     ///
     /// **Manual peers are exempt from the source and overlay rules.** The risk this guards
     /// against is *automatic* selection converging on one operator; a peer the
@@ -129,6 +136,12 @@ struct DiversityPolicy {
         if clearnetSelected, candidate.endpoint.isOverlay,
            seated.filter(\.endpoint.isOverlay).count >= peerCount - 1 {
             return false
+        }
+        if overlayMix, candidate.endpoint.isOverlay {
+            let network = PeerNetwork(host: candidate.endpoint.host)
+            if seated.filter({ PeerNetwork(host: $0.endpoint.host) == network }).count >= peerCount - 1 {
+                return false
+            }
         }
         let sameSource = seated.filter { $0.source == candidate.source }.count
         return sameSource < peerCount - 1

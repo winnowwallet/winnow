@@ -11,7 +11,7 @@ private actor GatewayReply {
 
 @MainActor
 final class PeerGatewayModelTests: XCTestCase {
-    private let discovered = PeerGatewayConfiguration(networks: [.clearnet, .tor], torProxy: .init(host: "100.75.175.127", port: 9050))
+    private let discovered = PeerGatewayConfiguration(networks: [.tor], torProxy: .init(host: "100.75.175.127", port: 9050))
 
     func testAutomaticDefaultAndManualOverridePersistAcrossModes() async throws {
         let defaults = makeDefaults()
@@ -33,6 +33,23 @@ final class PeerGatewayModelTests: XCTestCase {
         XCTAssertEqual(makeModel(defaults: defaults).gatewaySettings.manual, config)
         try await model.setPeerGatewaySettings(.init(mode: .direct))
         XCTAssertEqual(makeModel(defaults: defaults).gatewaySettings.mode, .direct)
+    }
+
+    func testRoutingBannerSaysWhetherPeersSeeTheIPAddress() {
+        let tor = PeerEndpoint(host: "100.75.175.127", port: 9050), i2p = PeerEndpoint(host: "100.74.30.8", port: 4447)
+        func state(_ mode: PeerGatewaySettings.Mode, _ config: PeerGatewayConfiguration, discovering: Bool = false) -> PeerRoutingState {
+            PeerRoutingState.current(mode: mode, active: config, discovering: discovering)
+        }
+        XCTAssertEqual(state(.automatic, .init(networks: [.tor, .i2p], torProxy: tor, i2pProxy: i2p)), .overlay(tor: true, i2p: true))
+        XCTAssertEqual(state(.automatic, .init(networks: [.tor], torProxy: tor)), .overlay(tor: true, i2p: false))
+        XCTAssertEqual(state(.automatic, .init()), .direct(fallback: true))
+        XCTAssertEqual(state(.direct, .init()), .direct(fallback: false))
+        XCTAssertEqual(state(.manual, .init(networks: [.clearnet, .i2p], i2pProxy: i2p)), .mixed)
+        XCTAssertEqual(state(.automatic, .init(), discovering: true), .checking)
+        XCTAssertEqual(state(.manual, .init(networks: [])), .offline)
+        XCTAssertEqual(PeerRoutingState.overlay(tor: true, i2p: true).message, "Private: peers reached through Tor and I2P")
+        XCTAssertTrue(PeerRoutingState.direct(fallback: true).message.contains("can see your IP address"))
+        XCTAssertTrue(PeerRoutingState.mixed.message.contains("can see your IP address"))
     }
 
     func testCandidateCountFollowsRoutedNetworks() {
