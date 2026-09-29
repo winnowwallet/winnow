@@ -19,6 +19,8 @@ the automatic download. Invalid or expired census caches do not prevent DNS
 bootstrap. DNS uses DoH first, with system DNS when DoH yields no usable
 addresses. The source ceiling remains: DNS alone can occupy two of the
 three default slots; a manual peer or census provides another source.
+Tor and I2P names have no netblock, so while clearnet is selected automatic
+overlay peers together may not hold every slot either.
 
 [Peer policy tests](../../../../Tests/WalletCoreTests/Network/PeerPolicyTests.swift) cover
 source classes, address ranges, persistence, and DNS replies.

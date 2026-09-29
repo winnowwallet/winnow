@@ -60,6 +60,9 @@ public extension PeerEndpoint {
         Self.netblock(forHost: host)
     }
 
+    /// A Tor or I2P destination, reached through its gateway by name.
+    var isOverlay: Bool { PeerNetwork(host: host) != .clearnet }
+
     /// Split out so it can be tested without constructing endpoints, and so the
     /// v4/v6 branch is visible in one place.
     ///
@@ -84,13 +87,17 @@ public extension PeerEndpoint {
 
 /// The connected pool, viewed as the thing diversity rules are enforced against.
 ///
-/// Both rules are ceilings rather than quotas: they say what a pool may not
+/// Every rule is a ceiling rather than a quota: it says what a pool may not
 /// become, not what it must contain. A quota would mean refusing to connect at
 /// all when a class is unreachable, which trades a real outage for a
 /// hypothetical attacker.
 struct DiversityPolicy {
     /// How many slots the pool is trying to fill.
     let peerCount: Int
+    /// Whether clearnet peers are selected. Only then can the overlay rule ask
+    /// for a netblock-limited peer; Tor-only and I2P-only routing are the
+    /// user's choice and rely on the source rule alone.
+    var clearnetSelected = true
 
     /// Whether a candidate may take a slot given what is already connected.
     ///
@@ -100,8 +107,13 @@ struct DiversityPolicy {
     ///   3 that permits 2 from one class and requires the third from another,
     ///   which is enough to stop a single compromised origin owning the pool
     ///   while still filling it when a class is dry.
+    /// - While clearnet is selected, Tor and I2P peers together may not hold
+    ///   every slot. Their names have no netblock, so the first rule never
+    ///   limits them, and they can arrive under different source classes: two
+    ///   remembered onions and one from the census would otherwise take the
+    ///   whole pool at no cost to someone running many hidden services.
     ///
-    /// **Manual peers are exempt from the source rule.** The risk this guards
+    /// **Manual peers are exempt from the source and overlay rules.** The risk this guards
     /// against is *automatic* selection converging on one operator; a peer the
     /// user typed in is not selection, it is instruction. Someone who
     /// configures three of their own nodes must get three, and an attacker who
@@ -114,6 +126,10 @@ struct DiversityPolicy {
             return false
         }
         guard candidate.source != .manual, peerCount > 1 else { return true }
+        if clearnetSelected, candidate.endpoint.isOverlay,
+           seated.filter(\.endpoint.isOverlay).count >= peerCount - 1 {
+            return false
+        }
         let sameSource = seated.filter { $0.source == candidate.source }.count
         return sameSource < peerCount - 1
     }

@@ -5,8 +5,8 @@
 A manual run from a Mac on the tailnet that runs the project's two
 [peer gateways](../../peer-gateways.md). CI has no tailnet, so this is the
 only live evidence for #181's routing. No wallet addresses or transactions were
-sent. Nothing here covers a physical iPhone; `scripts/check-live-gateways-ui`
-remains the device check.
+sent. The simulator journey below shares the Mac's network; the physical-iPhone
+run is recorded in #181.
 
 - **Revision:** WalletCore identical to main `8661469` (#181).
 - **Census input:** `census/peers.json` dated 2026-09-28 from
@@ -29,6 +29,20 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 | Bitcoin handshake through the I2P gateway | `/Satoshi:31.1.0/` |
 
 `TailnetGatewayDiscoveryTests.deployedMagicDNSGateways` passed in 24.6 seconds.
+
+## Simulator UI journey (18:18–18:21Z)
+
+```sh
+scripts/check-live-gateways-ui "platform=iOS Simulator,id=<iPhone 18 Pro>" <new evidence directory>
+```
+
+Built from main `a63e763` with Xcode 27.0 and run on an iPhone 18 Pro
+simulator (iOS 27.0) whose Mac was on the tailnet.
+`LiveGatewayDeviceTests.testRealGatewaysDiscoverRouteAndRefresh` passed in
+163 seconds: Automatic discovered both gateways, I2P alone refreshed the
+census from the mirror and seated a `.b32.i2p` peer, and Tor alone seated an
+onion peer. A simulator shares the Mac's network, so this does not replace the
+physical-iPhone run recorded in #181.
 
 ## Independent cross-checks (15:15–15:25Z)
 
