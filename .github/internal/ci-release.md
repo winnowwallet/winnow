@@ -14,6 +14,7 @@ is swift-secp256k1. Xcode resolution must match that root lockfile.
 | Release | New stable version tag or manual validation | Calls CI, then signs/uploads and publishes only for tag pushes |
 | TestFlight recovery | Manual, exact version and build number | Finish notes/group assignment for an existing upload |
 | App Store submission | Manual | Attach a processed build and optionally submit for review |
+| TestFlight feedback | Manual, with an age recipient | Pull tester comments, screenshots and crash logs encrypted to that recipient; the log shows counts only |
 | Website | Reusable job after CI build, for trusted PRs, main and manual previews | Download and deploy the ready website artifact from the same run; no checkout, build or test steps |
 
 CI runs one validation lane and a `website` job; there are no separate selector,
@@ -89,6 +90,11 @@ and bundled resources.
 If App Store Connect processing outlasts a release, use **TestFlight recovery**
 with its exact marketing version and build number; do not upload that number
 again. App Store submission remains a separate deliberate operation.
+
+To read tester feedback, run **TestFlight feedback** with an `age` public key
+whose private key stays on your machine, download the `testflight-feedback-<run>`
+artifact (kept three days) and decrypt it with `age -d -i <key>`. The repository is
+public, so feedback never appears unencrypted in logs or artifacts.
 
 There is no separate public library product or release process. The local app
 and tools change together and need no internal version bumps.

@@ -675,6 +675,9 @@ final class AppModel {
         }
         let connection = await stack.pool.connectionStatus
         await journalPeerStatusIfChanged(connection)
+        // The snapshot is rebuilt only around a sync pass; over Tor and I2P a
+        // pass is long enough that its starting count of zero read as no peers.
+        if status.peerCount != connection.connected { status.peerCount = connection.connected }
         if connection.connected == 0 {
             // No peers at all: still dialing, or the round ran dry.
             syncPhase = connection.exhausted

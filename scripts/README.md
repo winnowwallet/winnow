@@ -113,6 +113,7 @@ publishing. The helper names below are not additional release pipelines.
 | [ci-sign.sh](ci-sign.sh) | `ASC_PRIVATE_KEY`; write the API key file under runner/temp storage. | Writes sensitive signing material; release/recovery workflows provide and clean it up. Certificate import is a separate release step. |
 | [asc-jwt.swift](asc-jwt.swift) | `KEY_PATH KEY_ID ISSUER_ID`; create a short-lived App Store Connect token. | Reads a private key and prints a bearer token. Internal helper of `testflight.sh`; do not log its output. |
 | [testflight.sh](testflight.sh) | Explicit operation plus ASC credentials and build/version selectors; see below. | Reads or changes App Store Connect according to the operation. |
+| [testflight-feedback](testflight-feedback) | `OUT [--limit N]` plus ASC credentials; pull TestFlight screenshot and crash feedback. | Reads tester comments, emails and device details; prints counts only. The TestFlight feedback workflow encrypts its output before upload. |
 
 `testflight.sh` requires `ASC_KEY_ID`, `ASC_ISSUER_ID`, and the key at
 `ASC_KEY_PATH` (default `~/.appstoreconnect/private_keys/AuthKey_<id>.p8`).
