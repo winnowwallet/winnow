@@ -708,7 +708,9 @@ public actor PeerPool {
     }
 
     /// The diversity rules this pool enforces, sized to its slot count.
-    private var policy: DiversityPolicy { DiversityPolicy(peerCount: peerCount) }
+    private var policy: DiversityPolicy {
+        DiversityPolicy(peerCount: peerCount, clearnetSelected: gateways.networks.contains(.clearnet))
+    }
 
     /// The class a known-good peer counts as today.
     ///

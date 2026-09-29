@@ -1,3 +1,4 @@
 • Tor and I2P peers through your own gateways. If you run Tor or I2P on your Tailscale network, Winnow finds the gateways automatically and can reach Tor and I2P Bitcoin peers through them. Winnow itself still includes no Tor or I2P.
 • Advanced → Peer networks lets you require Tor, I2P or both. An unavailable gateway never falls back to a direct connection.
 • With I2P alone, the signed peer list downloads from its I2P mirror, so no public website is contacted.
+• While ordinary peers are allowed, at least one connection stays an ordinary peer, so Tor and I2P peers cannot take every slot.

@@ -27,8 +27,8 @@ struct PeerPolicyTests {
     // The owner decision this backs (2026-08-23) was to accept single-peer
     // operation rather than fail closed, with peer diversity as the mitigation.
 
-    private func policy(_ peerCount: Int = 3) -> DiversityPolicy {
-        DiversityPolicy(peerCount: peerCount)
+    private func policy(_ peerCount: Int = 3, clearnetSelected: Bool = true) -> DiversityPolicy {
+        DiversityPolicy(peerCount: peerCount, clearnetSelected: clearnetSelected)
     }
 
     private func candidate(_ host: String, _ source: PeerSource) -> PeerCandidate {
@@ -114,6 +114,43 @@ struct PeerPolicyTests {
     func manualPeersStillBlocked() {
         let seated = [candidate("47.206.253.100", .manual)]
         #expect(policy().admits(candidate("47.206.9.9", .manual), given: seated) == false)
+    }
+
+    // MARK: Overlays
+
+    private let onions = (0 ..< 3).map { String(repeating: Character(String($0)), count: 56) + ".onion" }
+    private let i2p = String(repeating: "a", count: 52) + ".b32.i2p"
+
+    /// Onion and I2P names have no netblock, so without this rule a pool that
+    /// also selects clearnet could be all hidden services from one operator.
+    @Test("Tor and I2P peers may not hold every slot while clearnet is selected")
+    func overlaysLeaveAClearnetSeat() {
+        let seated = [candidate(onions[0], .census), candidate(i2p, .persisted)]
+        #expect(policy().admits(candidate(onions[1], .dnsSeed), given: seated) == false)
+        #expect(policy().admits(candidate("74.209.75.75", .dnsSeed), given: seated))
+    }
+
+    /// Different source classes used to let remembered onions and a census
+    /// onion together take the whole pool.
+    @Test("remembered and census onions cannot fill the pool")
+    func rememberedPlusCensusOnions() {
+        let seated = [candidate(onions[0], .persisted), candidate(onions[1], .persisted)]
+        #expect(policy().admits(candidate(onions[2], .census), given: seated) == false)
+    }
+
+    /// With clearnet off the user chose overlays only; the source ceiling
+    /// still applies.
+    @Test("overlay-only routing relies on the source ceiling")
+    func overlayOnlyRouting() {
+        let seated = [candidate(onions[0], .persisted), candidate(onions[1], .persisted)]
+        #expect(policy(clearnetSelected: false).admits(candidate(onions[2], .census), given: seated))
+        #expect(policy(clearnetSelected: false).admits(candidate(onions[2], .persisted), given: seated) == false)
+    }
+
+    @Test("manual overlay peers are exempt from the overlay rule")
+    func manualOverlayPeersExempt() {
+        let seated = [candidate(onions[0], .census), candidate(onions[1], .persisted)]
+        #expect(policy().admits(candidate(onions[2], .manual), given: seated))
     }
 
     /// A single-slot pool has nothing to diversify.
