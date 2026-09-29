@@ -6,6 +6,11 @@ list must carry an Ed25519 signature from a publisher key compiled into the
 wallet. Peers remain untrusted: the wallet still validates their headers and
 filters independently.
 
+The same signed files are mirrored as an I2P site for wallets routed through
+I2P alone (`CensusCatalog.i2pMirror`, see [peer gateways](peer-gateways.md)).
+The mirror holds no key and is not trusted: a list it serves must verify
+against the same compiled-in publisher key.
+
 ## Publisher and wallet trust
 
 The publisher key established on September 18, 2026 is:

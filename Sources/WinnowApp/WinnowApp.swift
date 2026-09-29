@@ -27,12 +27,12 @@ struct WinnowApp: App {
                     StorageDamagedView(message: message)
                 }
             }
-            .alert("Tor is no longer part of Winnow", isPresented: Binding(
+            .alert("Built-in Tor was removed", isPresented: Binding(
                 get: { model.torRemovedNotice }, set: { model.torRemovedNotice = $0 }
             )) {
                 Button("OK") {}
             } message: {
-                Text("This version connects to Bitcoin peers directly. Your Tor setting was on, and it no longer applies: peers and the explorer see your connection's IP address. Tor and I2P are on the roadmap at winnowwallet.com/roadmap.")
+                Text("Your old built-in Tor setting no longer applies. Automatic routing includes direct connections and can use external Tailscale gateways when available. To require Tor, open Advanced Settings, choose Manual gateway routing, and select only Tor peers with your gateway address.")
             }
             .redacted(reason: shouldObscureWallet(for: scenePhase) ? .privacy : [])
             .accessibilityHidden(shouldObscureWallet(for: scenePhase))
