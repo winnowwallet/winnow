@@ -9,15 +9,18 @@ is swift-secp256k1. Xcode resolution must match that root lockfile.
 
 | Workflow | When | Responsibility |
 | --- | --- | --- |
-| CI | PR, main push, nightly, manual, release caller | One build job owns lint/test gates, package and debugging tests, app/Keychain tests and signet UI journey, release warning and E2E exclusion gates, inspection smoke, provenance, fixed fuzz corpus, and website preparation |
+| CI | PR, main push, nightly, manual, release caller | One validation lane (tdx guests or one hosted build job) owns lint/test gates, package and debugging tests, app/Keychain tests and signet UI journey, release warning and E2E exclusion gates, inspection smoke, provenance, fixed fuzz corpus, and website preparation |
 | Fuzz sanitizers | Weekly or manual seed replay | Sustained address/thread sanitizer coverage; does not repeat normal suites |
 | Release | New stable version tag or manual validation | Calls CI, then signs/uploads and publishes only for tag pushes |
 | TestFlight recovery | Manual, exact version and build number | Finish notes/group assignment for an existing upload |
 | App Store submission | Manual | Attach a processed build and optionally submit for review |
 | Website | Reusable job after CI build, for trusted PRs, main and manual previews | Download and deploy the ready website artifact from the same run; no checkout, build or test steps |
 
-CI has only `build` and `website` jobs; there are no separate selector,
-complexity, architecture or size-report jobs. The build job checks out the PR
+CI runs one validation lane and a `website` job; there are no separate selector,
+complexity, architecture or size-report jobs. With `TDX_CI_ENABLED`, same-repository
+runs use four self-hosted tdx guests ([tdx runbook](../../docs/engineering/tdx-ci.md));
+the rest of this section describes the hosted `build` job, which fork PRs and
+the manual `hosted` input use. The build job checks out the PR
 head explicitly. `scripts/ci-journey-cache` hashes the test/build inputs,
 including HTML/CSS bundled in the app, and looks for normalized media from a
 successful same-repository run with the same inputs. Website-only edits can
@@ -27,9 +30,9 @@ it does not establish a new test result for the website revision. Missing
 artifacts, API errors or changed inputs run fresh checks. Manual, nightly and
 release calls always run fresh checks.
 
-The single build job runs on GitHub-hosted Apple silicon with `macos-26`.
+The hosted build job runs on GitHub-hosted Apple silicon with `macos-26`.
 Each job gets its own Mac environment; it does not depend on a developer's
-Mac mini or a registered self-hosted runner. Same-repository pull requests and
+Mac mini. Same-repository pull requests and
 trusted push, manual, nightly and release runs include the signet journey.
 Fork pull requests use the same hosted runner image for package and app checks,
 without the node fixture, UI journey or deployment credentials.

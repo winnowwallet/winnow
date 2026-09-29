@@ -10,18 +10,23 @@ the code makes the checks and release inputs reviewable at the same revision.
 The [testing policy](../../docs/testing.md) explains each suite's scope and
 evidence requirements. Release workflows reuse the ordinary checks.
 
-The combined CI build uses GitHub-hosted Apple silicon (`macos-26`). Each job
-gets its own runner, per-run build directory, and disposable signet fixture.
-No developer Mac or private runner registration is required.
+The [CI workflow](ci.yml) picks one validation lane. With the repository
+variable `TDX_CI_ENABLED`, same-repository runs use [ci-tdx.yml](ci-tdx.yml):
+four disposable self-hosted macOS guests on the tdx host
+([runbook](../../docs/engineering/tdx-ci.md)). Fork PRs, the manual `hosted`
+input and repositories without the variable use [ci-hosted.yml](ci-hosted.yml):
+one GitHub-hosted Apple silicon (`macos-26`) `build` job. A reusable `website`
+job follows either lane. Each job gets its own runner, per-run build directory,
+and disposable signet fixture.
 
-The [CI workflow](ci.yml) has one `build` job and a reusable `website` job.
-The build job owns lint and test gates, package and debugging tests, fixed fuzz
+The hosted build job owns lint and test gates, package and debugging tests, fixed fuzz
 smoke, dependency and provenance checks, and the app's Debug and Release checks.
 It builds the Debug app and both test runners once,
 then runs app unit tests and the recorded UI journey with `test-without-building`.
 It also checks the Release build, resolved dependencies, warnings and exclusion
 of test controls from the shipping app. The UI suite runs one iPhone journey through ordinary-wallet, MuSig2, and
-2-of-3 receive, send, and confirmation against one signet fixture. Core wallets
+2-of-3 receive, send, and confirmation against one signet fixture, plus the
+peer-gateway settings test. Core wallets
 supply the other signing keys. There is no separate
 architecture lane, differential target, selector job, complexity job, or LOC job.
 Runner, Xcode and Bitcoin versions are recorded in fresh test logs.

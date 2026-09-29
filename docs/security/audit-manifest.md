@@ -27,6 +27,20 @@ describe the reviewed tree, kept on the `archive/tor-0.7.0` branch. The
 current egress inventory has no Tor rows: every connection is direct, and
 `RoutedHTTPClient` now lives in `Network/Transport/RoutedHTTPClient.swift`.
 
+Scope note (2026-09-29): "every connection is direct" no longer holds. #179
+restored the SOCKS5 path in `PeerConnection.swift` for external gateways, and
+#181 added gateway routing ([peer gateways](../peer-gateways.md)). The census
+also downloads automatically on mainnet when the saved catalog is missing or
+expired, not only on request. Egress added since the frozen table below:
+
+| Egress | Transport | Carries | When |
+|---|---|---|---|
+| Gateway lookup | UDP DNS to Tailscale's resolver `100.100.100.100:53` (`Network/Transport/TailnetGatewayDiscovery.swift`) | A-record queries for `winnow-tor-gateway` and `winnow-i2p-gateway`; nothing about the wallet | Automatic routing, when networking starts in the foreground and on reconnect or retry |
+| Gateway probe | TCP to each answering tailnet address (`TailnetGatewayDiscovery.probeSOCKS`) | A SOCKS5 greeting | Right after the lookup |
+| Routed peers | `PeerConnection.swift` through the gateway's SOCKS5 port (`Network/Transport/PeerGateways.swift`) | The same peer traffic as a direct connection; the destination name goes to the gateway | Tor and I2P peers, and every peer when clearnet is off |
+| Routed HTTP | `RoutedHTTPClient` through the Tor gateway | Census and explorer requests | When clearnet is off and Tor is on |
+| Census I2P mirror | `RoutedHTTPClient` through the I2P gateway to `CensusCatalog.i2pMirror` | The same census GETs | I2P-only routing; public hosts and explorer lookups are refused |
+
 ## Frozen target, 2026-09-14
 
 | Item | Value |

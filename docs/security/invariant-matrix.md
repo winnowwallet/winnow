@@ -17,6 +17,12 @@ client were removed (see the [audit manifest](audit-manifest.md)). S11's
 egress inventory loses its Arti row and its "through Tor" alternatives;
 `SEC-029`'s "Tor flag" default is cleared once at launch and no longer stored.
 
+Scope note (2026-09-29): #179 restored an unauthenticated SOCKS5 path in
+`PeerConnection.swift` for external gateways, and #181 routes peers, census
+downloads and explorer lookups through the user's own Tailscale Tor and I2P
+gateways. S11's egress inventory regains gateway rows; the current list is in
+the [audit manifest](audit-manifest.md)'s 2026-09-29 note.
+
 Baseline: `98d90563a2c20b7137c708cb121e72b9b34552a3`
 
 

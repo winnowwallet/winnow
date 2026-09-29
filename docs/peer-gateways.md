@@ -1,4 +1,4 @@
-# Tailscale gateway discovery POC
+# Tor and I2P through Tailscale gateways
 
 Fresh installations use **Automatic** routing in both simple and advanced mode.
 Winnow checks `winnow-tor-gateway:9050` and `winnow-i2p-gateway:4447` when
@@ -18,7 +18,7 @@ This is discovery by **name convention**, not by tag. The deployed servers have
 `tag:winnow-tor` and `tag:winnow-i2p` for administration, but iOS does not consult
 those tags. A tailnet administrator must reserve these names for trusted
 gateways and allow access to their SOCKS ports. A SOCKS greeting identifies the
-protocol, not the operator or overlay type. This POC supports conventional
+protocol, not the operator or overlay type. Discovery supports conventional
 IPv4 tailnet addresses; custom address ranges and IPv6-only discovery need an
 extension. Manual gateways support DNS names and bracketed IPv6 addresses.
 
