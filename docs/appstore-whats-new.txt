@@ -1,6 +1,3 @@
-• Automatic encrypted iCloud backup now starts without an Enable step. Beginner mode opens straight into the wallet and shows its backup status; Advanced holds manual backup controls and a persistent cloud-backup switch.
-• Recovery includes this phone’s signing key, history, shared accounts, saved people, payment cards and labels. A restored device continues automatic backups without replacing the original cloud copy.
-• Winnow automatically discovers iCloud backups on a replacement device. Use the same Apple Account with iCloud Keychain enabled.
-• Your wallet remains usable without iCloud. If it is not backed up, Winnow shows a warning and offers a manual backup.
-• Mainnet startup automatically refreshes missing or expired signed census data alongside saved peers and DNS discovery. No peer list is bundled with the app.
-• Mainnet connects to responsive peers sooner and avoids a 30-second sync delay when a peer disconnects.
+• Tor and I2P peers through your own gateways. If you run Tor or I2P on your Tailscale network, Winnow finds the gateways automatically and can reach Tor and I2P Bitcoin peers through them. Winnow itself still includes no Tor or I2P.
+• Advanced → Peer networks lets you require Tor, I2P or both. An unavailable gateway never falls back to a direct connection.
+• With I2P alone, the signed peer list downloads from its I2P mirror, so no public website is contacted.

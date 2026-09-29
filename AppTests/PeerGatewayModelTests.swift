@@ -35,6 +35,16 @@ final class PeerGatewayModelTests: XCTestCase {
         XCTAssertEqual(makeModel(defaults: defaults).gatewaySettings.mode, .direct)
     }
 
+    func testCandidateCountFollowsRoutedNetworks() {
+        let entry = CensusCatalog.Entry(host: "8.8.8.8", port: 8333, userAgent: "/Satoshi:30/", startHeight: 900_000)
+        let catalog = CensusCatalog(date: "2026-09-28", tip: 900_000,
+                                    networks: ["clearnet": [entry, entry], "tor": [entry], "i2p": [entry, entry, entry]])
+        XCTAssertEqual(AppModel.candidateCount(catalog), "2 candidates")
+        XCTAssertEqual(AppModel.candidateCount(catalog, networks: [.i2p]), "3 candidates")
+        XCTAssertEqual(AppModel.candidateCount(catalog, networks: [.tor]), "1 candidate")
+        XCTAssertEqual(AppModel.candidateCount(catalog, networks: [.clearnet, .tor, .i2p]), "6 candidates")
+    }
+
     func testCorruptSavedSettingsStayOffline() async {
         let defaults = makeDefaults()
         defaults.set(Data("broken".utf8), forKey: "peerGatewaySettings")

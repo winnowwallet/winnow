@@ -77,6 +77,7 @@ and [native fixture](../Tools/Fixture/README.md) are the three Swift executables
 | --- | --- | --- |
 | [check-dependencies](check-dependencies) | Optional `--xcode DERIVED_DATA`; compare package and Xcode resolutions with the root lockfile. | Reads manifests/build state; CI and release. |
 | [check-live-gateways](check-live-gateways) | `[peers.json]`; live discovery, I2P census mirror and optional Bitcoin handshakes through the tailnet gateways. | Manual, from a Mac on that tailnet; CI has no tailnet. Sends no wallet data. See [peer gateways](../docs/peer-gateways.md). |
+| [check-live-gateways-ui](check-live-gateways-ui) | `<Xcode destination> <new evidence directory>`; live gateway journey on a device or simulator on the tailnet. | Manual; records `LiveGateways.xcresult` screenshots. Disposable mainnet wallet, nothing sent. |
 | [check-test-gates](check-test-gates) | No arguments; check environment gates, deliberate skips, and retired flags. | Source check in CI’s build job; does not execute tests. |
 | [check-swift-warnings](check-swift-warnings) | `BUILD_LOG`; reject compiler warnings under `Sources/` and `SoakCommand.swift`. | Reads a log; it does not compile or prove a build succeeded. |
 | [ci-production-warnings](ci-production-warnings) | Optional `SCRATCH_PATH [LOG_PATH]`; Release-build `winnow-debug`, check warnings and lockfile drift. | Compiles package code. Use a fresh scratch path for meaningful warning evidence. |

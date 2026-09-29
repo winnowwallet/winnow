@@ -2629,8 +2629,9 @@ final class AppModel {
         case .direct: config = .init()
         case .manual: config = gatewaySettings.manual
         case .automatic:
-            // UI journeys never probe the developer's real tailnet.
-            if e2e != nil { config = .init(); break }
+            // UI journeys never probe the developer's real tailnet, except
+            // the live gateway journey that asks to.
+            if let e2e, !e2e.liveGateways { config = .init(); break }
             if gatewayDiscoveryTask == nil {
                 discoveringGateways = true
                 gatewayDiscoveryTask = Task { [discoverGateways] in await discoverGateways() }
@@ -2725,16 +2726,18 @@ final class AppModel {
             guard epoch == networkGeneration, isActive, let store = catalogStore else { throw CancellationError() }
             let download = try store.replace(with: data, signature: signature, trusting: censusTrustedKeys)
             if network == .mainnet { try await stack?.pool.updateCensusCatalog(download.catalog) }
-            catalogNotice = "Observed \(download.catalog.date): \(Self.candidateCount(download.catalog)). Active peers unchanged."
+            catalogNotice = "Observed \(download.catalog.date): \(Self.candidateCount(download.catalog, networks: activePeerGateways.networks)). Active peers unchanged."
             e2e?.journal("peers.catalogRefreshed", fields: ["date": download.catalog.date, "sha256": download.sha256])
         } catch {
             catalogError = error is CancellationError ? "Refresh cancelled; previous peer list retained." : error.localizedDescription
         }
     }
 
-    /// "977 candidates", for the peer-list notices.
-    static func candidateCount(_ catalog: CensusCatalog) -> String {
-        let count = catalog.networks["clearnet"]?.count ?? 0
+    /// "977 candidates", for the peer-list notices: the entries on the
+    /// networks the current routing may dial.
+    static func candidateCount(_ catalog: CensusCatalog,
+                               networks: Set<PeerNetwork> = [.clearnet]) -> String {
+        let count = networks.reduce(0) { $0 + (catalog.networks[$1.rawValue]?.count ?? 0) }
         return "\(count) \(count == 1 ? "candidate" : "candidates")"
     }
 

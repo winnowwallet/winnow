@@ -33,6 +33,13 @@ targets:
         NSLocalNetworkUsageDescription: "Winnow checks your Tailscale gateways and connects to Bitcoin nodes you configure."
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+          # The census I2P mirror (CensusCatalog.i2pMirror) speaks plain HTTP:
+          # I2P encrypts and authenticates the tunnel to the destination, and
+          # the census carries its own publisher signature. User-approved
+          # 2026-09-28 for this one host only.
+          NSExceptionDomains:
+            yts2d2oyrsz2eytnofuutgnsixymdkj2nmcmmpfv3aofzsnjt4eq.b32.i2p:
+              NSExceptionAllowsInsecureHTTPLoads: true
     sources:
       - path: Sources/WinnowApp
         excludes: ["README.md"]

@@ -63,11 +63,11 @@ struct SettingsView: View {
                         .accessibilityIdentifier("refreshPeerCatalogButton")
                         if let notice = model.catalogNotice { Text(notice).accessibilityIdentifier("peerCatalogNotice") }
                         else if let downloaded = model.catalogStore?.load() {
-                            Text("Observed \(downloaded.catalog.date): \(AppModel.candidateCount(downloaded.catalog)).").accessibilityIdentifier("peerCatalogNotice")
+                            Text("Observed \(downloaded.catalog.date): \(AppModel.candidateCount(downloaded.catalog, networks: model.activePeerGateways.networks)).").accessibilityIdentifier("peerCatalogNotice")
                         } else { Text("Using bundled candidates. Downloaded catalogs expire after seven days.") }
                         if let error = model.catalogError { Text(error).foregroundStyle(.red).accessibilityIdentifier("peerCatalogError") }
                     } header: { Text("Mainnet peer list") } footer: {
-                        Text("Mainnet downloads a signed list automatically when needed. Refresh checks census.winnowwallet.com now and keeps active connections. Every selected peer still undergoes Winnow's normal checks.")
+                        Text("Mainnet downloads a signed list automatically when needed. Refresh checks census.winnowwallet.com now, or its I2P mirror when I2P is the only network, and keeps active connections. Every selected peer still undergoes Winnow's normal checks.")
                     }
                 }
 
