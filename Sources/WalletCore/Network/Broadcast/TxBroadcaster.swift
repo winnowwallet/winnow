@@ -38,7 +38,7 @@ public enum TxBroadcasterStorageError: LocalizedError, Equatable, Sendable {
 }
 
 /// P2P transaction relay (docs/write-side.md §7): announce via
-/// `inv(MSG_WITNESS_TX)` to connected peers (pool default: 3), answer
+/// `inv(MSG_TX)` to connected peers (pool default: 3), answer witness-aware
 /// `getdata` with the raw transaction, and re-announce on an exponential
 /// backoff until the caller reports confirmation (observed via FilterSync
 /// block matches) or cancels. Pending transactions persist as JSON — raw tx,
@@ -92,6 +92,7 @@ public actor TxBroadcaster {
         var state: PeerAnnouncementState
         var announcements: Int
         var lastAnnouncedAt: Date
+        var servings = 0
     }
 
     private struct Pending {
@@ -623,7 +624,8 @@ public actor TxBroadcaster {
     private func announce(txid: Data) async {
         guard pending[txid] != nil else { return }
         let peers = await pool.connectedPeers()
-        let announcement = PeerMessage.inv(InventoryPayload([InventoryVector(type: .witnessTx, hash: txid)]))
+        // BIP144's witness flag belongs in getdata, not in inv announcements.
+        let announcement = PeerMessage.inv(InventoryPayload([InventoryVector(type: .tx, hash: txid)]))
         var announced = 0
         for peer in peers {
             // BIP133: a peer whose fee filter is above this transaction's
@@ -841,14 +843,17 @@ public actor TxBroadcaster {
         let key = peer.endpoint.description
         // One transaction per request, and one serving per peer: a getdata
         // that names a txid 50,000 times, or asks again for what it already
-        // holds, must not multiply the bytes and events it costs us.
+        // holds, must not multiply the bytes and events it costs us. The one
+        // exception is a parent, once more per child already served to that
+        // peer: Core's one-parent-one-child relay asks for it again after
+        // rejecting it alone for its fee (an anchor channel's CPFP).
         var seen = Set<Data>()
         for vector in payload.vectors where vector.type.baseType == .tx {
             guard pending[vector.hash] != nil, seen.insert(vector.hash).inserted else { continue }
             var relay = pending[vector.hash]?.peers[key] ?? PeerRelay(state: .announced,
                                                                       announcements: 0,
                                                                       lastAnnouncedAt: now())
-            guard relay.state != .served else { continue }
+            guard canServe(vector.hash, relay: relay, peer: key) else { continue }
             relay.state = .requested
             pending[vector.hash]?.peers[key] = relay
             emit(.requested(txid: vector.hash, peer: peer.endpoint))
@@ -856,6 +861,7 @@ public actor TxBroadcaster {
             do {
                 try await peer.send(.tx(transaction))
                 relay.state = .served
+                relay.servings += 1
                 if pending[vector.hash]?.served != true {
                     pending[vector.hash]?.served = true
                     // Best effort for this historical hint. If saving fails,
@@ -870,6 +876,15 @@ public actor TxBroadcaster {
                 emit(.failed(txid: vector.hash, peer: peer.endpoint, reason: "serve failed"))
             }
         }
+    }
+
+    private func canServe(_ txid: Data, relay: PeerRelay, peer: String) -> Bool {
+        guard relay.state == .served else { return true }
+        let servedChildren = pending.values.filter { child in
+            child.peers[peer]?.state == .served
+                && child.transaction.inputs.contains { $0.previousOutput.txid == txid }
+        }.count
+        return relay.servings <= servedChildren
     }
 
     private func persist(_ state: [Data: Pending]) throws {
