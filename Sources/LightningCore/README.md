@@ -1,16 +1,13 @@
 # Swift Lightning core
 
-An additive implementation on Winnow at `a1cc6fbaf6f0d3d68c675e1a78e8d5b8311767f7`,
-using its existing `WalletCore.Transaction`, `Script`, serialization and hashes.
-Curve operations use the unchanged P256K 0.23.2 dependency (C libsecp256k1);
-ChaCha20-Poly1305 and HKDF use Apple's CryptoKit. There is no Rust, LDK, PQLN,
-Kyoto, second wallet, scanner, or transaction representation in this target.
+Winnow's Lightning engine, built on WalletCore's `Transaction`, `Script`,
+serialization and hashes. Curve operations use the P256K 0.23.2 dependency
+(C libsecp256k1); ChaCha20-Poly1305 and HKDF use Apple's CryptoKit. There is no
+Rust, LDK, second wallet, scanner, or transaction representation in this target.
 
-This draft includes a durable Swift channel engine, independent-peer tests and
-a native SwiftUI research app. Simulator validation and the TestFlight release
-gates are tracked separately; no TestFlight upload is implied by engine tests.
-The complete accepted scope and remaining release gates are in
-[the implementation plan](../../docs/engineering/swift-lightning.md).
+How the Winnow app uses it, how it is tested and how it is released are in
+[Swift Lightning](../../docs/engineering/swift-lightning.md). Engine tests do
+not by themselves establish a release.
 
 ## Implemented
 
@@ -163,22 +160,21 @@ reference build directory. The app has no dependency on that repository.
 
 `ci-lightning-timeout` verifies automatic commitment, HTLC timeout and delayed
 recovery after the recipient and both providers disappear. Core validates the
-transactions and returned balance. `ci-lightning-ui` builds the research app,
+transactions and returned balance. `ci-lightning-ui` builds the Winnow app,
 records actual process crashes and Apple Share/Copy, and checks the independent
 provider receipts plus the app's restored payment history and wallet balance.
 Its Debug authentication fixture is not physical-device authentication evidence.
 
-## Research scope and release gates
+## Scope and release checks
 
-This beta supports the wallet's mainnet, signet and regtest selections. Keep the
+Lightning supports the wallet's mainnet, signet and regtest selections. Keep the
 channel journal and a recent channel backup; seed recovery alone does not restore
 current channel state. Background protection can scan and relay pre-signed
 transactions, including an already authorized anchor child. New fee-funded HTLC
 transactions and claims for a peer's augmented HTLC child require an unlocked
 wallet; background execution and available fee coins are not guaranteed.
-Device authentication, file protection, iPad/large text, final CI and an
-exact-source signed TestFlight release have separate required gates in the
-[release procedure](../../docs/engineering/lightning-release.md).
+Device authentication, file protection and iPad/large text have separate
+physical-device checks in the [release procedure](../../docs/engineering/lightning-release.md).
 
 The newer `zero_fee_commitments` format, splicing and post-quantum protocol
 extensions are not implemented or advertised. Single-part BOLT11 invoice payments use private hints and

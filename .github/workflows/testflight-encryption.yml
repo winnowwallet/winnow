@@ -1,0 +1,74 @@
+name: TestFlight encryption
+
+# Export compliance for one uploaded Winnow build; never archives, uploads or
+# adds testers. `inspect` reads App Store Connect state (tester counts only).
+# `declare` submits docs/release/encryption-questionnaire.json, which must be
+# reviewed and approved in the repository first, then links Apple's
+# determination to the build. Afterwards, run "TestFlight recovery" to add the
+# build to the internal and external groups.
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "inspect or declare"
+        type: choice
+        default: inspect
+        options: [inspect, declare]
+      marketing_version:
+        description: "Version as it appears in TestFlight, e.g. 0.8.0"
+        required: false
+      build_number:
+        description: "Build number, i.e. the run number of the release that uploaded it"
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testflight-encryption
+  cancel-in-progress: false
+
+env:
+  ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+  ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+  ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+
+jobs:
+  encryption:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Python with standard TOML support
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Prepare App Store Connect credentials
+        run: scripts/ci-sign.sh
+
+      - name: Read App Store Connect state
+        if: inputs.operation == 'inspect'
+        env:
+          ASC_KEY_PATH: ${{ runner.temp }}/winnow-signing/AuthKey.p8
+          VERSION: ${{ inputs.marketing_version }}
+          BUILD: ${{ inputs.build_number }}
+        run: |
+          args=(--output "$RUNNER_TEMP/app-state.json")
+          if [[ -n "$VERSION" ]]; then args+=(--version "$VERSION" --build "$BUILD"); fi
+          python3 scripts/asc-preflight "${args[@]}"
+
+      - name: Submit the reviewed encryption answers for this build
+        if: inputs.operation == 'declare'
+        env:
+          ASC_KEY_PATH: ${{ runner.temp }}/winnow-signing/AuthKey.p8
+          VERSION: ${{ inputs.marketing_version }}
+          BUILD: ${{ inputs.build_number }}
+        run: python3 scripts/encryption-declaration --version "$VERSION" --build "$BUILD"
+
+      - name: Remove App Store Connect key
+        if: always()
+        run: rm -f "${RUNNER_TEMP}/winnow-signing/AuthKey.p8"

@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+"""Read Winnow's App Store Connect state without changing it.
+
+Reports the app, recent builds, encryption declarations, beta groups (tester
+counts only, never who) and App Store versions. With --version and --build it
+also reads back that processed build: exactly one must exist, be VALID, and
+carry the reviewed encryption answer (--expect-encryption).
+Needs ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH.
+"""
+import argparse
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+import subprocess
+import urllib.error
+import urllib.request
+
+ROOT = Path(__file__).resolve().parent.parent
+API = 'https://api.appstoreconnect.apple.com/v1'
+BUNDLE = 'com.btcswift.app'
+
+
+def token():
+    return subprocess.check_output(['swift', str(ROOT / 'scripts/asc-jwt.swift'), os.environ['ASC_KEY_PATH'],
+                                    os.environ['ASC_KEY_ID'], os.environ['ASC_ISSUER_ID']], text=True).strip()
+
+
+def http_get(path, optional=False, bearer=None):
+    request = urllib.request.Request(API + path, headers={'Authorization': 'Bearer ' + (bearer or token()),
+                                                          'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as error:
+        if optional:
+            return {'http_status': error.code, 'data': []}
+        raise RuntimeError(f'App Store Connect returned HTTP {error.code} for {path.split("?")[0]}') from None
+
+
+def collection(get, path, limit=10):
+    """Every page of one collection; refuses a repeated or foreign next link."""
+    rows, visited = [], set()
+    while path:
+        if path in visited or len(visited) >= limit:
+            raise RuntimeError('App Store Connect pagination did not end')
+        visited.add(path)
+        page = get(path)
+        rows.extend(page['data'])
+        link = page.get('links', {}).get('next')
+        if link is not None and not link.startswith(API + '/'):
+            raise RuntimeError('Unexpected App Store Connect pagination URL')
+        path = link[len(API):] if link else None
+    return rows
+
+
+def app_id(get):
+    rows = get('/apps?filter[bundleId]=' + BUNDLE)['data']
+    if len(rows) != 1 or rows[0]['attributes']['bundleId'] != BUNDLE:
+        raise RuntimeError('Expected exactly one Winnow app')
+    return rows[0]['id'], rows[0]['attributes']['name']
+
+
+def read_build(get, app, version, build, expect):
+    rows = get(f'/builds?filter[app]={app}&filter[version]={build}&filter[preReleaseVersion.version]={version}&limit=2')['data']
+    if len(rows) != 1:
+        raise RuntimeError(f'Expected one build {version} ({build}); found {len(rows)}')
+    attributes = rows[0]['attributes']
+    if attributes.get('processingState') != 'VALID':
+        raise RuntimeError(f'Build {version} ({build}) is {attributes.get("processingState")}, not VALID')
+    answered = attributes.get('usesNonExemptEncryption')
+    if expect in {'YES', 'NO'} and answered is not (expect == 'YES'):
+        raise RuntimeError(f'Build {version} ({build}) declares usesNonExemptEncryption={answered}, not {expect}')
+    return {'id': rows[0]['id'], 'version': version, 'build': build, 'processing': 'VALID',
+            'uses_non_exempt_encryption': answered}
+
+
+def report(get):
+    app, name = app_id(get)
+    builds = get(f'/builds?filter[app]={app}&sort=-uploadedDate&limit=20&include=preReleaseVersion')
+    versions = {row['id']: row['attributes'].get('version') for row in builds.get('included', [])
+                if row['type'] == 'preReleaseVersions'}
+    allowed = {'appEncryptionDeclarationState', 'usesEncryption', 'exempt', 'containsProprietaryCryptography',
+               'containsThirdPartyCryptography', 'availableOnFrenchStore', 'createdDate', 'platform'}
+    result = {'app': {'id': app, 'bundle': BUNDLE, 'name': name},
+              'observed_at_utc': datetime.now(timezone.utc).isoformat(), 'builds': [], 'declarations': [],
+              'groups': [], 'app_store_versions': []}
+    for row in builds['data']:
+        attributes = row['attributes']
+        version = (row.get('relationships', {}).get('preReleaseVersion', {}).get('data') or {}).get('id')
+        beta = (get(f'/builds/{row["id"]}/buildBetaDetail', optional=True).get('data') or {}).get('attributes', {})
+        result['builds'].append({'build': attributes.get('version'), 'version': versions.get(version),
+                                 'processing': attributes.get('processingState'),
+                                 'uses_non_exempt_encryption': attributes.get('usesNonExemptEncryption'),
+                                 'uploaded_at': attributes.get('uploadedDate'),
+                                 'internal': beta.get('internalBuildState'), 'external': beta.get('externalBuildState')})
+    for row in collection(get, f'/appEncryptionDeclarations?filter[app]={app}&limit=200'):
+        result['declarations'].append({'id': row['id'], **{k: v for k, v in row['attributes'].items() if k in allowed}})
+    for row in collection(get, f'/apps/{app}/betaGroups?limit=200'):
+        testers = get(f'/betaGroups/{row["id"]}/relationships/betaTesters?limit=1')
+        result['groups'].append({'name': row['attributes']['name'], 'internal': row['attributes'].get('isInternalGroup'),
+                                 'tester_count': testers.get('meta', {}).get('paging', {}).get('total', len(testers['data']))})
+    for row in collection(get, f'/apps/{app}/appStoreVersions?limit=200'):
+        result['app_store_versions'].append({'version': row['attributes'].get('versionString'),
+                                             'state': row['attributes'].get('appStoreState')})
+    return app, result
+
+
+def main(argv=None, get=None):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument('--version')
+    parser.add_argument('--build')
+    parser.add_argument('--expect-encryption', choices=('PENDING', 'YES', 'NO'), default='PENDING')
+    parser.add_argument('--output', type=Path)
+    args = parser.parse_args(argv)
+    if bool(args.version) != bool(args.build):
+        parser.error('--version and --build go together')
+    if get is None:
+        bearer = token()
+        get = lambda path, optional=False: http_get(path, optional, bearer)
+    app, result = report(get)
+    if args.version:
+        result['release_build'] = read_build(get, app, args.version, args.build, args.expect_encryption)
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(result, indent=2) + '\n')
+    print(json.dumps({'app': result['app'], 'release_build': result.get('release_build'),
+                      'declarations': len(result['declarations']), 'groups': result['groups']}))
+    return result
+
+
+if __name__ == '__main__':
+    main()

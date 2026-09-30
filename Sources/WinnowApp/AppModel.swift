@@ -1384,11 +1384,7 @@ final class AppModel {
     func importWallet(bundle: ImportBundle, authenticate: Bool, resumingImport: Bool = false,
                       afterCommit: (@MainActor (String) async throws -> Void)? = nil) async throws -> ImportReport? {
         try requireWalletImportAllowed(bundle, resuming: resumingImport)
-        try VaultStore.validate(bundle.vaults ?? [], network: network)
-        guard bundle.lastKnownHeight < UInt32.max else {
-            throw WalletError.invalidBundle("Wallet scan height exceeds the supported range.")
-        }
-        guard bundle.network == network.rawValue else { throw AppError.wrongNetwork(bundle.network) }
+        try validateImport(bundle)
         if authenticate, bundle.mnemonic != nil {
             try await authenticateSensitiveAction(
                 reason: "Import this wallet's recovery phrase")
@@ -1557,6 +1553,15 @@ final class AppModel {
         walletID = await wallet.id
         walletDescriptor = await wallet.descriptor
         self.stack = stack
+    }
+
+    /// Checks a bundle can belong to this network before any key or file.
+    private func validateImport(_ bundle: ImportBundle) throws {
+        try VaultStore.validate(bundle.vaults ?? [], network: network)
+        guard bundle.lastKnownHeight < UInt32.max else {
+            throw WalletError.invalidBundle("Wallet scan height exceeds the supported range.")
+        }
+        guard bundle.network == network.rawValue else { throw AppError.wrongNetwork(bundle.network) }
     }
 
     var hasPendingWalletImport: Bool {

@@ -204,11 +204,23 @@ jobs:
             # Testers can install only after the build's export compliance
             # questions are answered in App Store Connect.
             if scripts/testflight.sh internal && scripts/testflight.sh external; then exit 0; fi
-            echo "::notice::Uploaded $TESTFLIGHT_MARKETING_VERSION ($TESTFLIGHT_BUILD_NUMBER). Answer its export compliance questions in App Store Connect, then run the TestFlight groups again (testflight-encryption.yml, operation groups)."
+            echo "::notice::Uploaded $TESTFLIGHT_MARKETING_VERSION ($TESTFLIGHT_BUILD_NUMBER). Answer its export compliance questions in App Store Connect (or run TestFlight encryption, declare), then run TestFlight recovery for this build."
           else
             scripts/testflight.sh internal
             scripts/testflight.sh external
           fi
+
+      # Read back what Apple processed: one VALID build of this version and
+      # number, carrying the reviewed encryption answer.
+      - name: Read back the processed build
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_PATH: ${{ runner.temp }}/winnow-signing/AuthKey.p8
+        run: >-
+          python3 scripts/asc-preflight --version "$TESTFLIGHT_MARKETING_VERSION"
+          --build "$TESTFLIGHT_BUILD_NUMBER" --expect-encryption "$WINNOW_NONEXEMPT_ENCRYPTION"
+          --output build/app-state.json
 
       - name: Remove App Store Connect key
         if: always()

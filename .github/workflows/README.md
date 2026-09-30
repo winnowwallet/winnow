@@ -20,11 +20,12 @@ job follows either lane. Each job gets its own runner, per-run build directory,
 and disposable signet fixture.
 
 A [Swift Lightning](ci-lightning.yml) job runs beside the lane on hosted
-`macos-26`: Winnow Lightning against Core Lightning and LDK, the recorded
-Lightning app journey and CRAP for the Lightning app's own code; `validation`
-requires it. [lightning-release.yml](lightning-release.yml) ships Winnow
-Lightning to its own TestFlight app from a `lightning-vX.Y.Z` tag
-([Swift Lightning](../../docs/engineering/swift-lightning.md)).
+`macos-26`: Winnow's Lightning against Core Lightning and LDK, and the recorded
+Lightning journey in the app; `validation` requires it
+([Swift Lightning](../../docs/engineering/swift-lightning.md)). Lightning ships
+in the ordinary release. [TestFlight encryption](testflight-encryption.yml)
+reads App Store Connect state or submits the reviewed export compliance answers
+for one uploaded build ([Lightning release](../../docs/engineering/lightning-release.md)).
 
 The hosted build job owns lint and test gates, package and debugging tests, fixed fuzz
 smoke, dependency and provenance checks, and the app's Debug and Release checks.
