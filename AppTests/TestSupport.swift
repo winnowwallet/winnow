@@ -1,4 +1,8 @@
+#if LIGHTNING
+@testable import WinnowLightning
+#else
 @testable import WinnowApp
+#endif
 import CryptoKit
 import WalletCore
 import Foundation

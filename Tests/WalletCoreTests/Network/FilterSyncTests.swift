@@ -38,6 +38,47 @@ struct FilterSyncTests {
         #expect(FilterSync.blockTimeout(.seconds(600), overlay: true) == .seconds(600))
     }
 
+    @Test("a stalled filter download cools its peer and resumes saved progress with an honest peer")
+    func stalledFiltersRecoverWithAnotherPeer() async throws {
+        let synthetic = makeSyntheticChain(length: 1_001, watchHeight: 1_001)
+        let slow = LoopbackNode(params: synthetic.params, chain: synthetic.blocks,
+                                withholdFiltersFromHeight: 1_001)
+        let honest = LoopbackNode(params: synthetic.params, chain: synthetic.blocks,
+                                  versionDelay: .milliseconds(200))
+        try await slow.start()
+        try await honest.start()
+        let slowEndpoint = await slow.endpoint
+        let pool = PeerPool(params: synthetic.params, peerCount: 2,
+                            manualPeers: [slowEndpoint, await honest.endpoint])
+        defer {
+            Task {
+                await pool.stop()
+                await slow.stop()
+                await honest.stop()
+            }
+        }
+        await pool.start()
+        #expect(await pool.connectedPeers().first?.endpoint == slowEndpoint)
+        let file = tempFileURL("filter-timeout-progress.json")
+        let headers = try HeaderChain(params: synthetic.params)
+        let filters = try FilterSync(pool: pool, chain: headers, startHeight: 1, storageURL: file)
+        let matches = MatchCollector()
+        await #expect(throws: PeerError.timeout) {
+            try await filters.sync(watchScripts: [synthetic.watchScript]) { matches.add($0) }
+        }
+        #expect(matches.matches.isEmpty)
+        #expect(await filters.nextScanHeight == 1_001)
+        let saved = try JSONDecoder().decode(FilterSync.Progress.self, from: Data(contentsOf: file))
+        #expect(saved.nextScanHeight == 1_001)
+        #expect(await pool.coolingEndpoints.contains(slowEndpoint))
+        var connected: [PeerEndpoint] = []
+        for peer in await pool.connectedPeers() { connected.append(await peer.endpoint) }
+        #expect(!connected.contains(slowEndpoint))
+        try await filters.sync(watchScripts: [synthetic.watchScript]) { matches.add($0) }
+        #expect(matches.matches.map(\.height) == [1_001])
+        #expect(await filters.nextScanHeight == 1_002)
+    }
+
     @Test("handshake negotiates and tracks peer services")
     func handshake() async throws {
         let node = LoopbackNode(params: .signet, chain: makeSyntheticChain(length: 2, watchHeight: 6).blocks)

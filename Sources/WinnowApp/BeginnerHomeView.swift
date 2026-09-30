@@ -31,12 +31,16 @@ struct BeginnerHomeView: View {
                         HStack(spacing: 8) {
                             status
                             if model.network != .mainnet {
+                                #if LIGHTNING
+                                LightningNetworkTag()
+                                #else
                                 Text("Signet · test coins")
                                     .font(.caption)
                                     .padding(.horizontal, 8)
                                     .padding(.vertical, 2)
                                     .background(Capsule().fill(.quaternary))
                                     .accessibilityIdentifier("networkTag")
+                                #endif
                             }
                         }
                         .font(.footnote)
@@ -144,9 +148,17 @@ struct BeginnerHomeView: View {
                 Button("Turn on") { model.setAdvancedMode(true) }
                 Button("Cancel", role: .cancel) {}
             } message: {
+                #if LIGHTNING
+                Text("The app changes to four tabs — Lightning, Wallet, Send and Settings — with Lightning payments, fee controls, network settings, signing tools and technical details. Simple, on the Wallet tab, brings this screen back and keeps every setting you changed.")
+                #else
                 Text("The app changes to three tabs — Wallet, Send and Settings — with fee controls, network settings, signing tools and technical details. Simple, on the Wallet tab, brings this screen back and keeps every setting you changed.")
+                #endif
             }
+            #if LIGHTNING
+            .sheet(isPresented: $showReceive) { ReceiveEntryView() }
+            #else
             .sheet(isPresented: $showReceive) { ReceiveView() }
+            #endif
             .sheet(isPresented: $showSend, onDismiss: {
                 sendAccountID = nil
                 sendPersonID = nil

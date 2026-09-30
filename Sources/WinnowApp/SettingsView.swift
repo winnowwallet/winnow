@@ -49,14 +49,25 @@ struct SettingsView: View {
                         )) {
                             Text("Mainnet").tag(BitcoinNetwork.mainnet)
                             Text("Signet").tag(BitcoinNetwork.signet)
+                            #if LIGHTNING
+                            Text("Regtest").tag(BitcoinNetwork.regtest)
+                            #endif
                         }
                         .disabled(model.e2e?.forcedNetwork != nil)
                     } footer: {
+                        #if LIGHTNING
+                        if model.e2e?.forcedNetwork != nil {
+                            Text("This debug session is locked to \(model.network.rawValue).")
+                        } else {
+                            Text("Each network has a separate wallet. Mainnet uses real bitcoin; signet uses public test coins. Regtest requires a private test node.")
+                        }
+                        #else
                         if model.e2e?.forcedNetwork != nil {
                             Text("This debug session is locked to \(model.network == .mainnet ? "mainnet" : "public signet").")
                         } else {
                             Text("Each network has a separate wallet. Signet uses test coins with no value.")
                         }
+                        #endif
                     }
                 }
 

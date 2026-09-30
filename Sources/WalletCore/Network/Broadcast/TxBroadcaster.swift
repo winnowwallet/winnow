@@ -273,6 +273,41 @@ public actor TxBroadcaster {
         return txid
     }
 
+    /// Register both signed transactions before announcing the child. Core's
+    /// opportunistic 1p1c relay can then request its missing low-fee parent.
+    /// This does not imply acceptance; callers verify confirmation separately.
+    public func broadcastPackage(parent rawParent: Data, child rawChild: Data) async throws -> [Data] {
+        guard !stopped else { throw TxBroadcasterError.stopped }
+        let parent = try Self.validatedTransaction(rawParent)
+        let child = try Self.validatedTransaction(rawChild)
+        guard parent.txid != child.txid,
+              child.inputs.contains(where: { $0.previousOutput.txid == parent.txid })
+        else {
+            throw WireError.malformed("package child does not spend parent")
+        }
+        var candidate = pending
+        for (raw, transaction) in [(rawParent, parent), (rawChild, child)] {
+            if let existing = candidate[transaction.txid] {
+                guard existing.rawTx == raw else {
+                    throw WireError.malformed("package changed an existing transaction")
+                }
+            } else {
+                candidate[transaction.txid] = Pending(rawTx: raw, transaction: transaction,
+                                                      feeRateSatPerVByte: nil,
+                                                      attempt: 0,
+                                                      nextAttemptAt: now() + Self.timeInterval(backoffInterval(attempt: 0)))
+            }
+        }
+        try persist(candidate)
+        pending = candidate
+        persistenceBlocked = false
+        await ensurePeerListeners()
+        await announce(txid: child.txid)
+        await announce(txid: parent.txid)
+        scheduleRebroadcast()
+        return [parent.txid, child.txid]
+    }
+
     /// Called when the tx is seen in a matched block (or otherwise confirmed).
     public func markConfirmed(_ txid: Data, atHeight height: UInt32) throws {
         guard !stopped else { throw TxBroadcasterError.stopped }
