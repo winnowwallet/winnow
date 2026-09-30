@@ -134,11 +134,13 @@ jobs:
         run: |
           scripts/generate-supply-chain-metadata \
             --output-dir "$CI_RESULTS/supply-chain" \
+            --source-repository "https://github.com/$GITHUB_REPOSITORY" \
             --subject "$CI_RESULTS/production-build/release/winnow-debug" \
             --subject-name winnow-debug \
             --builder-id "https://github.com/${{ github.repository }}/.github/workflows/ci.yml@${{ github.workflow_sha }}"
           scripts/generate-supply-chain-metadata \
             --output-dir "$CI_RESULTS/supply-chain-replay" \
+            --source-repository "https://github.com/$GITHUB_REPOSITORY" \
             --subject "$CI_RESULTS/production-build/release/winnow-debug" \
             --subject-name winnow-debug \
             --builder-id "https://github.com/${{ github.repository }}/.github/workflows/ci.yml@${{ github.workflow_sha }}"
@@ -267,7 +269,7 @@ jobs:
         if: steps.validate_media.outcome != 'success' && env.RUN_UI_JOURNEY == 'true'
         run: |
           scripts/ci-crap report --package "$CI_RESULTS/crap/package" --app "$CI_RESULTS/crap/units" \
-            --app "$CI_RESULTS/crap/journey" --without Sources/WinnowLightningApp \
+            --app "$CI_RESULTS/crap/journey" \
             --manifest "$CI_RESULTS/crap/source-manifest.json" \
             --output "$CI_RESULTS/crap/report"
 

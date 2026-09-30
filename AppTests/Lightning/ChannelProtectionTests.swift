@@ -2,7 +2,7 @@ import Foundation
 import UserNotifications
 import WalletCore
 import XCTest
-@testable import WinnowLightning
+@testable import WinnowApp
 
 @MainActor final class ChannelProtectionTests: XCTestCase {
     private func preferences() -> UserDefaults { UserDefaults(suiteName: "protection-test.\(UUID())")! }
@@ -24,6 +24,18 @@ import XCTest
         XCTAssertNil(reopened.warning(now: now.addingTimeInterval(20)))
         XCTAssertEqual(reopened.warning(now: now.addingTimeInterval(21621))?.severity, .urgent)
         await protection.flushReminders(); await reopened.flushReminders()
+    }
+    /// A scan the Bitcoin wallet ran alone, while Lightning could not open,
+    /// never counts as a check of funded channels.
+    func testAScanLightningDidNotWatchLeavesFundedChannelsUnchecked() async {
+        let protection = ChannelProtection(defaults: preferences(), notifications: TestChannelNotifications())
+        let now = Date()
+        protection.channelState(network: .mainnet, funded: true, now: now)
+        protection.scanFinished(network: .mainnet, watched: false, now: now)
+        XCTAssertEqual(protection.warning(now: now)?.severity, .overdue)
+        protection.scanFinished(network: .mainnet, watched: true, now: now)
+        XCTAssertNil(protection.warning(now: now))
+        await protection.flushReminders()
     }
     func testNormalSuspensionDoesNotTriggerFailureAlerts() {
         let error = POSIXError(.ECONNRESET)

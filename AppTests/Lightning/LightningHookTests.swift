@@ -1,11 +1,11 @@
-@testable import WinnowLightning
+@testable import WinnowApp
 import Foundation
 import TestSupport
 import WalletCore
 import XCTest
 
-/// The Lightning-only behavior the shared model and stores take on under
-/// `LIGHTNING` (AppModel+Lightning.swift and the hooks that call into it).
+/// The Lightning behavior the shared model and stores take on
+/// (AppModel+Lightning.swift and the hooks that call into it).
 @MainActor
 final class LightningHookTests: XCTestCase {
     func testLightningHonorsSavedSimpleAndAdvancedChoices() throws {
@@ -20,12 +20,28 @@ final class LightningHookTests: XCTestCase {
                      storeKeys: InMemoryStoreKeyVault(), keyStore: InMemoryKeyStore())
         }
         let model = reopen()
-        XCTAssertNotNil(model.lightning)
-        XCTAssertTrue(model.advancedMode, "a fresh Lightning install shows its tab")
-        model.setAdvancedMode(false)
-        XCTAssertFalse(reopen().advancedMode, "Lightning must respect a persisted false")
+        XCTAssertNotNil(model.lightning, "Lightning is there in Simple mode too")
+        XCTAssertFalse(model.advancedMode, "a fresh install starts in Simple mode")
         model.setAdvancedMode(true)
         XCTAssertTrue(reopen().advancedMode)
+        model.setAdvancedMode(false)
+        XCTAssertFalse(reopen().advancedMode, "a saved Simple choice survives relaunch")
+    }
+
+    /// A channel journal whose key is gone (a device restored from a backup
+    /// keeps files but not this-device-only keys) must not stop the Bitcoin
+    /// wallet: preparing reports the failure on Lightning and nothing else.
+    func testANodeThatCannotOpenLeavesTheWalletScanningAlone() async throws {
+        let model = makeModel(network: .regtest)
+        let root = FileManager.default.temporaryDirectory.appending(path: "lightning-unopenable-\(UUID())")
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root.appending(path: "lightning"), withIntermediateDirectories: true)
+        try Data([1]).write(to: root.appending(path: "lightning/journal.v1"))
+        try await model.prepareLightning(directory: root, headers: HeaderChain(params: .regtest))
+        XCTAssertNil(model.lightning?.engine)
+        XCTAssertNotNil(model.lightning?.error)
+        XCTAssertFalse(model.lightningWatchedChain)
+        XCTAssertEqual(try Data(contentsOf: root.appending(path: "lightning/journal.v1")), Data([1]), "the journal is kept")
     }
 
     func testEveryNetworkHasItsOwnController() {
@@ -36,10 +52,18 @@ final class LightningHookTests: XCTestCase {
                        BitcoinNetwork.allCases.count)
     }
 
-    func testLightningWalletCannotBeDeleted() async throws {
-        let model = makeModel(network: .regtest)
-        do { try await model.destroyWallet(); XCTFail("deleted a wallet whose channels may need it") }
-        catch AppModel.AppError.storageDamaged {}
+    /// With no channel journal, deleting goes on to the ordinary checks.
+    /// (LightningFundingReadinessTests covers a wallet with a channel.)
+    func testWalletWithoutChannelsReachesTheOrdinaryDeleteChecks() async throws {
+        guard case let .active(e2e) = E2EMode.resolve(environment: [
+            "WINNOW_E2E": "1", "WINNOW_E2E_RUN": "lightning-delete-\(UUID())", "WINNOW_E2E_NETWORK": "regtest",
+            "WINNOW_E2E_ENTROPY": String(repeating: "00", count: 16),
+        ]) else { return XCTFail("E2E mode should resolve") }
+        defer { e2e.defaults.removePersistentDomain(forName: e2e.defaultsSuiteName) }
+        let model = AppModel(deviceAuthenticator: SilentAuthenticator(), e2e: e2e,
+                             storeKeys: InMemoryStoreKeyVault(), keyStore: InMemoryKeyStore())
+        do { try await model.destroyWallet(); XCTFail("deleted a wallet that does not exist") }
+        catch AppModel.AppError.noWallet {}
     }
 
     func testInterruptedRecoveryAddsMissingVaultAndPreservesCurrentPendingSpend() async throws {

@@ -3,8 +3,8 @@ import Foundation
 import LightningCore
 import WalletCore
 
-/// Winnow Lightning's part of the app model. AppModel.swift reaches it only
-/// through `#if LIGHTNING` hooks; the ordinary WinnowApp never compiles it.
+/// Lightning's part of the app model: one node per network, the wallet
+/// guards its channels need, and its portable recovery file.
 extension AppModel {
     /// The selected network's Lightning node.
     var lightning: LightningAppController? { lightningControllers[network] }
@@ -43,12 +43,30 @@ extension AppModel {
 
     /// The foreground opens the signing engine. A background check opens only
     /// the watch-only monitor that can relay pre-signed recovery transactions.
+    /// A node that cannot open does not stop the Bitcoin wallet: the wallet
+    /// scans alone, Lightning shows why, and once the node opens its chain
+    /// driver rolls the shared scan back to its own cursor and catches up.
     func prepareLightning(directory: URL, headers: HeaderChain) async throws {
-        if backgroundRunning {
-            backgroundMonitor = try lightning?.prepareBackground(directory: directory)
-        } else {
-            try await lightning?.prepare(directory: directory, headers: headers)
+        do {
+            if backgroundRunning {
+                backgroundMonitor = try lightning?.prepareBackground(directory: directory)
+            } else {
+                try await lightning?.prepare(directory: directory, headers: headers)
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            backgroundMonitor = nil
+            if !backgroundRunning { lightning?.error = error.localizedDescription }
+            e2e?.journal("lightning.prepareFailed", fields: ["background": String(backgroundRunning),
+                                                             "error": String(describing: error)])
         }
+    }
+
+    /// Whether the last scan also watched the channels: a background check's
+    /// monitor, or the foreground node's chain driver.
+    var lightningWatchedChain: Bool {
+        backgroundRunning ? backgroundMonitor != nil : lightning?.driver != nil
     }
 
     /// After a background check's networking stopped: an unfinished check
@@ -81,10 +99,10 @@ extension AppModel {
     func syncWalletAndLightning(filters: FilterSync, scripts: [Data],
                                 onReorg: @escaping @Sendable (UInt32) async throws -> Void,
                                 onMatch: @escaping @Sendable (BlockMatch) async throws -> Void) async throws -> Bool {
-        if backgroundRunning, lightning != nil {
+        if backgroundRunning, backgroundMonitor != nil {
             return try await syncLightningInBackground(filters: filters, scripts: scripts, onReorg: onReorg, onMatch: onMatch)
         }
-        guard let lightning else {
+        guard !backgroundRunning, let lightning, lightning.driver != nil else {
             return try await syncBitcoinWallet(filters: filters, scripts: scripts, onReorg: onReorg, onMatch: onMatch)
         }
         return try await syncLightningInForeground(lightning, filters: filters, scripts: scripts, onReorg: onReorg, onMatch: onMatch)
@@ -129,25 +147,45 @@ extension AppModel {
         if complete { await controller.resume(model: self) }
     }
 
-    // MARK: - Keeping the research wallet
+    // MARK: - Keeping the wallet channels need
 
-    /// Channel recovery destinations belong to this wallet's keys. Replacing
-    /// the wallet while retaining its channel journal can strand those funds.
-    /// Check the file as well as memory so this also holds before boot and
-    /// after another creation/import completes across an authentication await.
+    /// Channel recovery destinations belong to this wallet's keys. Creating or
+    /// importing is offered only without a wallet; this also holds before boot
+    /// and after another creation/import completes across an authentication
+    /// await, and a restored recovery file admits only its own wallet.
     func requireLightningWalletPreserved(importing descriptor: String? = nil) throws {
         guard let lightning else { return }
         let savedWallet = walletURL().map { FileManager.default.fileExists(atPath: $0.path) } ?? false
         guard walletID == nil, !savedWallet else {
-            throw AppError.storageDamaged("Keep this research wallet on the device: replacing it could lose the keys needed to recover Lightning channel funds.")
+            throw AppError.storageDamaged("This network already has a wallet on this device, and it was not replaced: Lightning channel funds return to its keys.")
         }
         if let root = storageDirectory() { try lightning.requireRecoveryWalletMatch(root: root, importing: descriptor) }
     }
 
+    /// Deleting is the ordinary choice unless channels still need this
+    /// wallet's keys: one not yet closed, a restored recovery, or a channel
+    /// journal this session could not open.
     func requireLightningWalletRemovable() throws {
-        guard lightning == nil else {
-            throw AppError.storageDamaged("Keep this research wallet on the device: its Lightning journal may still be needed to recover channel funds.")
+        guard let lightning else { return }
+        let needed: Bool
+        if lightning.engine == nil {
+            needed = storageDirectory().map(lightning.hasStoredChannels(root:)) ?? false
+        } else {
+            needed = lightning.recoveryStatus != nil || lightning.channels.contains { $0.phase != .closed }
         }
+        guard !needed else {
+            throw AppError.storageDamaged("Close this network's Lightning channels before deleting its wallet: their funds return to this wallet's keys.")
+        }
+    }
+
+    /// Regtest needs a private test node: offered in Debug builds, and kept
+    /// for a wallet already on it.
+    var offersRegtest: Bool {
+        #if DEBUG
+        true
+        #else
+        network == .regtest
+        #endif
     }
 
     // MARK: - Portable recovery file

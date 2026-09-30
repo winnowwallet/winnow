@@ -1,4 +1,4 @@
-@testable import WinnowLightning
+@testable import WinnowApp
 import Foundation
 import LightningCore
 import WalletCore
@@ -17,16 +17,10 @@ final class LightningNetworkTests: XCTestCase {
                      route: nil, receive: nil)
     }
 
-    func testFreshInstallUsesMainnetAndOldWalletOrJournalKeepsRegtest() throws {
-        for name in ["wallet.json", "lightning/journal.v1"] {
-            let root = directory()
-            XCTAssertEqual(LightningResearch.initialNetwork(root: root), .mainnet)
-            let file = root.appending(path: "regtest/\(name)")
-            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data([1]).write(to: file)
-            XCTAssertEqual(LightningResearch.initialNetwork(root: root), .regtest)
-            XCTAssertEqual(try Data(contentsOf: file), Data([1]))
-        }
+    func testFreshInstallUsesMainnetWithItsOwnLightningNode() {
+        let model = makeModel()
+        XCTAssertEqual(model.network, .mainnet)
+        XCTAssertEqual(model.lightning?.network, .mainnet)
     }
 
     func testEveryNetworkKeepsIndependentDurableIdentityAndProfile() async throws {

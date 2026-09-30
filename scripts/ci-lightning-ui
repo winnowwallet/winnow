@@ -91,17 +91,17 @@ def main():
     run(['swift', 'build', '--product', 'winnow-lightning-peer-fixture'], results / 'host-build.log')
     if not args.skip_build:
         run(['xcodegen', 'generate'], results / 'project.log')
-        run(['xcodebuild', 'build-for-testing', '-project', 'WinnowApp.xcodeproj', '-scheme', 'WinnowLightning', '-configuration', 'Debug',
+        run(['xcodebuild', 'build-for-testing', '-project', 'WinnowApp.xcodeproj', '-scheme', 'WinnowApp', '-configuration', 'Debug',
              '-destination', f'platform=iOS Simulator,id={simulator}', '-derivedDataPath', str(derived),
              '-enableCodeCoverage', 'YES', '-skipPackagePluginValidation', '-skipMacroValidation'], results / 'app-build.log')
-    specifications = list((derived / 'Build/Products').glob('WinnowLightning_*.xctestrun'))
+    specifications = list((derived / 'Build/Products').glob('WinnowApp_*.xctestrun'))
     assert len(specifications) == 1, specifications
     with specifications[0].open('rb') as file:
         specification = plistlib.load(file)
     products = derived / 'Build/Products'
-    app = products / 'Debug-iphonesimulator/WinnowLightning.app'
+    app = products / 'Debug-iphonesimulator/WinnowApp.app'
     info = plistlib.loads((app / 'Info.plist').read_bytes())
-    assert info['CFBundleIdentifier'] == 'com.btcswift.lightning'
+    assert info['CFBundleIdentifier'] == 'com.btcswift.app'
     binary = app / info['CFBundleExecutable']
     run(['xcrun', 'simctl', 'bootstatus', simulator, '-b'], results / 'simulator.log')
     devices = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devices', '--json'], text=True))['devices']
@@ -114,7 +114,7 @@ def main():
                     xcode=subprocess.check_output(['xcodebuild', '-version'], text=True).strip(),
                     device=identity,
                     content_size=subprocess.check_output(['xcrun', 'simctl', 'ui', simulator, 'content_size'], text=True).strip(),
-                    scope='WinnowLightning Debug regtest fixture; physical authentication is a separate release gate')
+                    scope='WinnowApp Debug regtest fixture; physical authentication is a separate release gate')
     (results / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     def absolute(value):
         if isinstance(value, str):
@@ -155,7 +155,7 @@ def main():
         # the result bundle, screenshots, video and peer logs without sysdiagnose.
         run(['xcodebuild', 'test-without-building', '-xctestrun', str(spec),
              '-derivedDataPath', str(derived),
-             '-destination', f'platform=iOS Simulator,id={simulator}', '-only-testing:WinnowLightningUITests/LightningAppUITests',
+             '-destination', f'platform=iOS Simulator,id={simulator}', '-only-testing:WinnowAppLightningUITests/LightningAppUITests',
              '-enableCodeCoverage', 'YES',
              '-collect-test-diagnostics', 'never',
              '-test-timeouts-enabled', 'YES', '-maximum-test-execution-time-allowance', '900',

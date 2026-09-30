@@ -116,7 +116,7 @@ class Journey:
         assert initialization['fields']['network'] == 'regtest'
         pid = int(initialization['fields']['processID'])
         command = subprocess.check_output(['/bin/ps', '-p', str(pid), '-o', 'comm='], text=True).strip()
-        assert command.endswith('/WinnowLightning.app/WinnowLightning'), command
+        assert command.endswith('/WinnowApp.app/WinnowApp'), command
         self.clients[role] = dict(pid=pid, node=node, journal=str(journal))
         other = 'sender' if role == 'recipient' else 'recipient'
         assert other not in self.clients or not self.alive(other), 'both client processes running'

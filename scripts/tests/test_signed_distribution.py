@@ -86,47 +86,45 @@ class SignedAppTests(unittest.TestCase):
             with self.subTest(architecture=architecture), self.assertRaises(AssertionError):
                 self.verify(architectures=architecture)
 
-    def test_research_distribution_requires_reviewed_encryption_and_no_cloud(self):
-        self.info['CFBundleIdentifier'] = 'com.btcswift.lightning'
-        self.entitlements = {'application-identifier': '2858MX5336.com.btcswift.lightning',
-                             'com.apple.developer.team-identifier': '2858MX5336', 'get-task-allow': False}
-        with patch.dict(os.environ, TESTFLIGHT_BUNDLE_ID='com.btcswift.lightning', LIGHTNING_NONEXEMPT_ENCRYPTION='', LIGHTNING_ENCRYPTION_COMPLIANCE_CODE='approved-code'):
-            with self.assertRaises(AssertionError):
-                self.verify(True)
-            for value in (True, False):
-                self.info['ITSAppUsesNonExemptEncryption'] = value
-                self.info['ITSEncryptionExportComplianceCode'] = 'approved-code'
-                os.environ['LIGHTNING_NONEXEMPT_ENCRYPTION'] = 'YES' if value else 'NO'
-                self.verify(True)
-                self.info['ITSAppUsesNonExemptEncryption'] = not value
-                with self.assertRaises(AssertionError):
-                    self.verify(True)
-            os.environ['LIGHTNING_NONEXEMPT_ENCRYPTION'] = 'YES'
+    def test_each_reviewed_encryption_answer_is_required_exactly(self):
+        with patch.dict(os.environ, WINNOW_NONEXEMPT_ENCRYPTION='YES', WINNOW_ENCRYPTION_COMPLIANCE_CODE='approved-code'):
             self.info['ITSAppUsesNonExemptEncryption'] = True
-            for code in ('', 'different-code'):
-                self.info['ITSEncryptionExportComplianceCode'] = code
+            self.info['ITSEncryptionExportComplianceCode'] = 'approved-code'
+            self.verify()
+            for code in (None, 'other-code'):
                 with self.subTest(code=code), self.assertRaises(AssertionError):
-                    self.verify(True)
-            os.environ['LIGHTNING_NONEXEMPT_ENCRYPTION'] = 'NO'
+                    self.info['ITSEncryptionExportComplianceCode'] = code
+                    if code is None:
+                        self.info.pop('ITSEncryptionExportComplianceCode')
+                    self.verify()
+            self.info['ITSEncryptionExportComplianceCode'] = 'approved-code'
             self.info['ITSAppUsesNonExemptEncryption'] = False
-            self.entitlements['com.apple.developer.icloud-services'] = ['CloudKit']
             with self.assertRaises(AssertionError):
-                self.verify(True)
+                self.verify()
+        with patch.dict(os.environ, WINNOW_NONEXEMPT_ENCRYPTION='YES', WINNOW_ENCRYPTION_COMPLIANCE_CODE=''):
+            self.info.pop('ITSEncryptionExportComplianceCode')
+            self.info['ITSAppUsesNonExemptEncryption'] = True
+            self.verify()
+        with patch.dict(os.environ, WINNOW_NONEXEMPT_ENCRYPTION='NO'):
+            self.info['ITSAppUsesNonExemptEncryption'] = False
+            self.verify()
+            self.info['ITSEncryptionExportComplianceCode'] = 'approved-code'
+            with self.assertRaises(AssertionError):
+                self.verify()
+        with patch.dict(os.environ, WINNOW_NONEXEMPT_ENCRYPTION='MAYBE'), self.assertRaises(AssertionError):
+            self.verify()
 
-    def test_pending_questionnaire_cannot_claim_exemption_or_approved_code(self):
-        self.info['CFBundleIdentifier'] = 'com.btcswift.lightning'
-        self.entitlements = {'application-identifier': '2858MX5336.com.btcswift.lightning',
-                             'com.apple.developer.team-identifier': '2858MX5336', 'get-task-allow': False}
-        with patch.dict(os.environ, TESTFLIGHT_BUNDLE_ID='com.btcswift.lightning', LIGHTNING_NONEXEMPT_ENCRYPTION='PENDING'):
-            self.verify(True)
+    def test_pending_questionnaire_cannot_claim_an_answer_or_approved_code(self):
+        with patch.dict(os.environ, WINNOW_NONEXEMPT_ENCRYPTION='PENDING'):
+            self.verify()
             for value in (True, False, ''):
                 self.info['ITSAppUsesNonExemptEncryption'] = value
                 with self.subTest(value=value), self.assertRaises(AssertionError):
-                    self.verify(True)
+                    self.verify()
             self.info.pop('ITSAppUsesNonExemptEncryption')
             self.info['ITSEncryptionExportComplianceCode'] = 'unreviewed-code'
             with self.assertRaises(AssertionError):
-                self.verify(True)
+                self.verify()
 
 
 class UploadIntegrityTests(unittest.TestCase):

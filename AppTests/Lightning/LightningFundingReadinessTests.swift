@@ -1,4 +1,4 @@
-@testable import WinnowLightning
+@testable import WinnowApp
 import Foundation
 import LightningCore
 import TestSupport
@@ -414,6 +414,18 @@ final class LightningFundingReadinessTests: XCTestCase {
         XCTAssertEqual(created.count, 1, "one funding_created for the one submitted transaction", file: file, line: line)
         let reservations = await fixture.wallet.fundingReservations
         XCTAssertEqual(reservations.map(\.phase), [.submitted], file: file, line: line)
+    }
+
+    /// A channel not yet closed still needs this wallet's keys: deleting is
+    /// refused before any authentication.
+    func testWalletWithAnUnclosedChannelCannotBeDeleted() async throws {
+        let fixture = try await makeFixture()
+        try await fixture.controller.refresh()
+        XCTAssertEqual(fixture.controller.channels.first?.phase, .accepted)
+        do { try await fixture.model.destroyWallet(); XCTFail("deleted a wallet a channel needs") }
+        catch AppModel.AppError.storageDamaged {}
+        XCTAssertEqual(fixture.authenticator.calls, 0)
+        XCTAssertNotNil(fixture.model.walletID)
     }
 
     /// Resuming supplies the submitted funding once; a later resume finds the

@@ -61,6 +61,11 @@ final class ChannelProtection {
         record.checked = now; record.failed = false; record.generation = UUID().uuidString
         records[network.rawValue] = record; persistAndSchedule()
     }
+    /// A complete scan checks funded channels only if Lightning watched it;
+    /// one the wallet ran alone leaves them unchecked.
+    func scanFinished(network: BitcoinNetwork, watched: Bool, now: Date = .now) {
+        if watched { scanCompleted(network: network, now: now) } else { scanFailed(network: network) }
+    }
     func scanFailed(network: BitcoinNetwork) {
         guard var record = records[network.rawValue], !record.failed else { return }
         record.failed = true; records[network.rawValue] = record; persistAndSchedule()

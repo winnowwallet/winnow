@@ -98,7 +98,6 @@ actor VaultStore {
         }
     }
 
-    #if LIGHTNING
     /// Completes a Lightning recovery file restored onto the same wallet
     /// without replacing a live account's coins, pending reservations,
     /// birthday or address cursors: only accounts this device lacks are added.
@@ -109,7 +108,6 @@ actor VaultStore {
         guard !missing.isEmpty else { return }
         try restore(records + missing)
     }
-    #endif
 
     func record(id: String) -> VaultRecord? {
         records.first { $0.id == id }

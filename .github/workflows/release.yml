@@ -36,6 +36,12 @@ jobs:
     needs: ci
     runs-on: macos-26
     timeout-minutes: 120
+    env:
+      # Export compliance is the account holder's reviewed answer
+      # (docs/release/encryption-inventory.md). Unset, it is PENDING: builds
+      # carry no encryption key and App Store Connect asks for each build.
+      WINNOW_NONEXEMPT_ENCRYPTION: ${{ vars.WINNOW_NONEXEMPT_ENCRYPTION || 'PENDING' }}
+      WINNOW_ENCRYPTION_COMPLIANCE_CODE: ${{ vars.WINNOW_ENCRYPTION_COMPLIANCE_CODE }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -54,6 +60,9 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
+
+      - name: Apply the reviewed encryption declaration
+        run: python3 scripts/encryption-declaration-key project.yml
 
       - name: Install pinned XcodeGen
         run: scripts/install-xcodegen
@@ -158,6 +167,7 @@ jobs:
         run: >-
           scripts/generate-supply-chain-metadata
           --output-dir build/supply-chain
+          --source-repository "https://github.com/$GITHUB_REPOSITORY"
           --subject build/export/WinnowApp.ipa
           --subject-name WinnowApp.ipa
           --builder-id https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.workflow_sha }}
@@ -190,8 +200,15 @@ jobs:
           chmod +x scripts/testflight.sh
           scripts/testflight.sh wait-processing
           scripts/testflight.sh notes
-          scripts/testflight.sh internal
-          scripts/testflight.sh external
+          if [[ "$WINNOW_NONEXEMPT_ENCRYPTION" == PENDING ]]; then
+            # Testers can install only after the build's export compliance
+            # questions are answered in App Store Connect.
+            if scripts/testflight.sh internal && scripts/testflight.sh external; then exit 0; fi
+            echo "::notice::Uploaded $TESTFLIGHT_MARKETING_VERSION ($TESTFLIGHT_BUILD_NUMBER). Answer its export compliance questions in App Store Connect, then run the TestFlight groups again (testflight-encryption.yml, operation groups)."
+          else
+            scripts/testflight.sh internal
+            scripts/testflight.sh external
+          fi
 
       - name: Remove App Store Connect key
         if: always()

@@ -354,6 +354,13 @@ final class LightningAppController {
         guard selection.network == network.rawValue else { throw LightningError.invalidHash }
         return selection
     }
+    /// A channel journal or recovery namespace on disk, whether or not this
+    /// session opened it.
+    func hasStoredChannels(root: URL) -> Bool {
+        ["lightning/journal.v1", "lightning-recovery"].contains {
+            FileManager.default.fileExists(atPath: root.appending(path: $0).path)
+        }
+    }
     func requireRecoveryWalletMatch(root: URL, importing descriptor: String?) throws {
         guard let selection = try loadRecoverySelection(root: root) else { return }
         guard let descriptor, descriptor == selection.walletDescriptor else {

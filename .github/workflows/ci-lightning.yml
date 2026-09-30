@@ -1,10 +1,10 @@
 name: Swift Lightning
 
-# Winnow Lightning against independent peers: Core Lightning and LDK built from
-# pinned sources (posix4e/lightning-reference), Bitcoin Core regtest, and the
-# recorded Winnow Lightning app journey. Also measures and gates CRAP for the
-# code only the Lightning app compiles (Sources/WinnowLightningApp); the tdx
-# lanes gate everything else. A tree that already passed here is not re-run.
+# Winnow's Lightning against independent peers: Core Lightning and LDK built
+# from pinned sources (posix4e/lightning-reference), Bitcoin Core regtest, and
+# the recorded Lightning journey in the Winnow app. The tdx lanes run every
+# unit test (Lightning's included) and the CRAP gate. A tree that already
+# passed here is not re-run.
 on:
   workflow_call:
 
@@ -54,14 +54,13 @@ jobs:
         run: |
           brew install autoconf automake libtool gnu-sed gettext libsodium lowdown pkgconf openssl@3 make sqlite uv bitcoin
           rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
-          mkdir -p "$RUNNER_TEMP/lightning-results" "$RUNNER_TEMP/lightning-crap"
+          mkdir -p "$RUNNER_TEMP/lightning-results"
           {
             echo "REFERENCE_DIR=$RUNNER_TEMP/lightning-references"
             echo "WINNOW_LIGHTNING_RESULTS=$RUNNER_TEMP/lightning-results"
             echo "WINNOW_BITCOIN_DIR=$(dirname "$(command -v bitcoind)")"
             echo "WINNOW_CLN_DIR=$RUNNER_TEMP/lightning-references/cln"
             echo "WINNOW_LDK_HARNESS=$RUNNER_TEMP/lightning-references/harness/target/debug/winnow-lightning-reference"
-            echo "CRAP_RESULTS=$RUNNER_TEMP/lightning-crap"
             echo "DERIVED_DATA=$RUNNER_TEMP/lightning-app-build"
           } >> "$GITHUB_ENV"
 
@@ -87,10 +86,6 @@ jobs:
         with:
           path: ${{ runner.temp }}/lightning-references
           key: ${{ steps.references.outputs.cache-primary-key }}
-
-      - name: Capture the source identity for CRAP
-        if: steps.evidence.outputs.cache-hit != 'true'
-        run: scripts/check-crap snapshot --output "$CRAP_RESULTS/source-manifest.json"
 
       - name: Upstream LDK offer, request and static-invoice checks
         if: steps.evidence.outputs.cache-hit != 'true'
@@ -127,60 +122,13 @@ jobs:
         if: ${{ !cancelled() && steps.evidence.outputs.cache-hit != 'true' }}
         run: scripts/install-xcodegen
 
-      # Builds WinnowLightning with coverage once; the app tests below reuse it.
-      - name: Record Winnow Lightning sharing, offline payment, crashes and returned funds
+      - name: Record Lightning sharing, offline payment, crashes and returned funds in Winnow
         if: ${{ !cancelled() && steps.evidence.outputs.cache-hit != 'true' }}
         env:
           WINNOW_CLN_UI_MANIFEST: ${{ runner.temp }}/lightning-references/cln-ui-manifest.json
-        run: |
-          scripts/ci-lightning-ui "$RUNNER_TEMP/lightning-ui"
-          scripts/ci-crap export-app --result "$RUNNER_TEMP/lightning-ui/LightningUI.xcresult" \
-            --derived-data "$DERIVED_DATA" --app-name WinnowLightning --manifest "$CRAP_RESULTS/source-manifest.json" \
-            --output "$CRAP_RESULTS/journey"
+        run: scripts/ci-lightning-ui "$RUNNER_TEMP/lightning-ui"
 
-      - name: Winnow Lightning app tests with coverage
-        if: ${{ !cancelled() && steps.evidence.outputs.cache-hit != 'true' }}
-        run: |
-          simulator=$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/lightning-ui/manifest.json"))["simulator"])')
-          specs=("$DERIVED_DATA"/Build/Products/WinnowLightning_*.xctestrun)
-          test "${#specs[@]}" = 1
-          xcodebuild test-without-building -xctestrun "${specs[0]}" -derivedDataPath "$DERIVED_DATA" \
-            -destination "platform=iOS Simulator,id=$simulator" -only-testing:WinnowLightningTests \
-            -enableCodeCoverage YES -collect-test-diagnostics never \
-            -resultBundlePath "$CRAP_RESULTS/LightningAppTests.xcresult" 2>&1 | tee "$CRAP_RESULTS/app-tests.log"
-          scripts/ci-crap export-app --result "$CRAP_RESULTS/LightningAppTests.xcresult" \
-            --derived-data "$DERIVED_DATA" --app-name WinnowLightning --manifest "$CRAP_RESULTS/source-manifest.json" \
-            --output "$CRAP_RESULTS/units"
-
-      # Its own step: the installer adds SwiftLint to GITHUB_PATH, which only
-      # later steps see.
-      - name: Install the audited SwiftLint for CRAP
-        if: ${{ !cancelled() && steps.evidence.outputs.cache-hit != 'true' }}
-        run: scripts/install-crap-swiftlint
-
-      # docs/crap.md: the tdx report gates everything except this directory.
-      - name: CRAP at most 12 across the Lightning app's own methods
-        if: ${{ !cancelled() && steps.evidence.outputs.cache-hit != 'true' }}
-        run: |
-          scripts/ci-crap report --app "$CRAP_RESULTS/units" --app "$CRAP_RESULTS/journey" \
-            --scope Sources/WinnowLightningApp --manifest "$CRAP_RESULTS/source-manifest.json" \
-            --output "$CRAP_RESULTS/report"
-
-      - name: Compile the Winnow Lightning device release and exclude test activation
-        if: ${{ !cancelled() && steps.evidence.outputs.cache-hit != 'true' }}
-        run: |
-          xcodebuild build -project WinnowApp.xcodeproj -scheme WinnowLightning -configuration Release \
-            -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/lightning-release-build" \
-            -skipPackagePluginValidation -skipMacroValidation CODE_SIGNING_ALLOWED=NO \
-            > "$RUNNER_TEMP/lightning-ui/release-build.log" 2>&1
-          scripts/check-swift-warnings "$RUNNER_TEMP/lightning-ui/release-build.log"
-          app="$RUNNER_TEMP/lightning-release-build/Build/Products/Release-iphoneos/WinnowLightning.app"
-          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")" = com.btcswift.lightning
-          test "$(lipo -archs "$app/WinnowLightning")" = arm64
-          scripts/verify-release-e2e-exclusion "$app"
-          scripts/check-dependencies --xcode "$RUNNER_TEMP/lightning-release-build"
-
-      - name: Preserve interoperability, recording and CRAP evidence
+      - name: Preserve interoperability and recording evidence
         if: always() && steps.evidence.outputs.cache-hit != 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -195,8 +143,6 @@ jobs:
             ${{ runner.temp }}/lightning-ui/manifest.json
             ${{ runner.temp }}/lightning-ui/journey.json
             ${{ runner.temp }}/lightning-ui/fixture/evidence
-            ${{ env.CRAP_RESULTS }}/report
-            ${{ env.CRAP_RESULTS }}/*.log
           retention-days: 14
 
       - name: Record this tree as passing

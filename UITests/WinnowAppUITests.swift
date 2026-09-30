@@ -53,6 +53,9 @@ final class WinnowAppUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["balanceText"].appears(within: 60))
 
         app.buttons["receiveButton"].tap()
+        // Receive offers Lightning or Bitcoin; this journey is paid on-chain.
+        XCTAssertTrue(app.buttons["receiveBitcoin"].appears(within: 20))
+        app.buttons["receiveBitcoin"].tap()
         XCTAssertTrue(app.buttons["skipReceiveAddressLabelButton"].appears(within: 20))
         app.buttons["skipReceiveAddressLabelButton"].tap()
         let addressElement = app.staticTexts["receiveAddress"]

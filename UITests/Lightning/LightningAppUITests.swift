@@ -152,6 +152,9 @@ final class LightningAppUITests: XCTestCase {
             "WINNOW_E2E_RESET": "1", "WINNOW_E2E_NETWORK": "signet",
             "WINNOW_E2E_ENTROPY": String(repeating: "03", count: 16),
             "WINNOW_E2E_PEER": "127.0.0.1:1", "WINNOW_E2E_PEER_COUNT": "1",
+            // Start on the tabs; the relaunch below drops this so the saved
+            // Simple choice alone decides the layout.
+            "WINNOW_E2E_ADVANCED": "1",
         ]
         app.launch()
         tap(app, "createWalletButton")
@@ -177,6 +180,7 @@ final class LightningAppUITests: XCTestCase {
 
         app.terminate()
         app.launchEnvironment.removeValue(forKey: "WINNOW_E2E_RESET")
+        app.launchEnvironment.removeValue(forKey: "WINNOW_E2E_ADVANCED")
         app.launch()
         XCTAssertTrue(mode.appears(within: 30))
         XCTAssertEqual(mode.label, "Advanced", "relaunch must keep Simple mode")
@@ -414,7 +418,9 @@ final class LightningAppUITests: XCTestCase {
         app.launchEnvironment = ["WINNOW_E2E": "1", "WINNOW_E2E_RUN": run + "-" + role,
             "WINNOW_E2E_NETWORK": "regtest", "WINNOW_E2E_ENTROPY": String(repeating: role == "recipient" ? "02" : (setup["sender_entropy"] as? String ?? "01"), count: 16),
             "WINNOW_E2E_PEER": try XCTUnwrap(setup["bitcoin_peer"] as? String), "WINNOW_E2E_PEER_COUNT": "1",
-            "WINNOW_E2E_SYNC_INTERVAL": "3", "WINNOW_E2E_TAB": "lightning", "WINNOW_E2E_CONTROL_FILE": control.path]
+            "WINNOW_E2E_SYNC_INTERVAL": "3", "WINNOW_E2E_TAB": "lightning", "WINNOW_E2E_CONTROL_FILE": control.path,
+            // The journey drives the Lightning tab, which Advanced mode shows.
+            "WINNOW_E2E_ADVANCED": "1"]
         if fresh { app.launchEnvironment["WINNOW_E2E_RESET"] = "1" }
         app.launch()
         if fresh {

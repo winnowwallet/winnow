@@ -12,9 +12,7 @@ struct BackupSection: View {
 
     @State private var showExport = false
     @State private var showCloudBackup = false
-    #if LIGHTNING
     @State private var showLightningBackup = false
-    #endif
     @State private var revealedMnemonic: String?
     @State private var revealing = SensitiveAction()
 
@@ -23,19 +21,16 @@ struct BackupSection: View {
         // section: a Form flattens its sections, and a sheet attached to
         // one never presented.
         Section {
-            #if LIGHTNING
-            // No iCloud here: the encrypted recovery file carries the wallet
-            // and the channels' recovery keys.
-            Button("Lightning recovery file") { showLightningBackup = true }
-                .accessibilityIdentifier("lightningBackup")
-                .sheet(isPresented: $showLightningBackup) { LightningBackupView() }
-            #else
             if model.advancedMode {
             Button("iCloud backup", systemImage: "icloud") { showCloudBackup = true }
                 .disabled(model.walletID == nil)
                 .sheet(isPresented: $showCloudBackup) { CloudBackupView() }
             }
-            #endif
+            // iCloud never holds channel state: the encrypted recovery file
+            // carries the wallet and the channels' recovery keys.
+            Button("Lightning recovery file") { showLightningBackup = true }
+                .accessibilityIdentifier("lightningBackup")
+                .sheet(isPresented: $showLightningBackup) { LightningBackupView() }
             Button("Back up wallet") { showExport = true }
                 .disabled(model.walletID == nil)
                 .accessibilityIdentifier("exportBundleButton")

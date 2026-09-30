@@ -1,7 +1,5 @@
 import WalletCore
-#if LIGHTNING
 import LightningCore
-#endif
 import CryptoKit
 import Foundation
 import LocalAuthentication
@@ -343,14 +341,12 @@ final class AppModel {
     let vaultStore: VaultStore
     let peopleStore: PeopleStore
     let cloudBackups: CloudBackupController
-    #if LIGHTNING
     /// One Lightning node per network, each with its own journal and keys
     /// (AppModel+Lightning.swift).
     let lightningControllers: [BitcoinNetwork: LightningAppController]
     /// A background check's watch-only channel monitor; never the signing engine.
     var backgroundMonitor: LightningBackgroundMonitor?
     let channelProtection: ChannelProtection
-    #endif
     private let allowsCloudBackup: Bool
     private var cloudPreparationTask: Task<Void, Never>?
     private var cloudPreparationEpoch = UUID()
@@ -480,23 +476,14 @@ final class AppModel {
         self.discoverGateways = discoverGateways
         networkParamsOverride = networkParams
         self.cloudBackups = cloudBackups ?? CloudBackupController()
-        #if LIGHTNING
-        // Winnow Lightning has no iCloud entitlement; only tests inject one.
-        allowsCloudBackup = cloudBackups != nil
-        #else
         allowsCloudBackup = e2e == nil || cloudBackups != nil
-        #endif
         self.deviceAuthenticator = deviceAuthenticator
             ?? LocalDeviceAuthenticator(keychain: keychainAuthentication)
         self.e2e = e2e
         e2e?.wipeIfRequested()
-        #if LIGHTNING
-        let keychainService = e2e?.keychainService ?? LightningResearch.keychainService
+        let keychainService = e2e?.keychainService ?? KeychainStore.defaultService
         lightningControllers = Self.makeLightningControllers(e2e: e2e, storeKeys: storeKeys,
                                                              keychainService: keychainService)
-        #else
-        let keychainService = e2e?.keychainService ?? KeychainStore.defaultService
-        #endif
         self.keyStore = keyStore ?? KeychainStore(
             service: keychainService,
             protection: e2e == nil ? .userPresence : .deviceOnly,
@@ -508,9 +495,7 @@ final class AppModel {
         peopleStore = PeopleStore(keys: storeKeys)
         let defaults = e2e?.defaults ?? defaults
         self.defaults = defaults
-        #if LIGHTNING
         channelProtection = ChannelProtection(defaults: defaults)
-        #endif
         let initialGatewaySettings: PeerGatewaySettings
         if defaults.object(forKey: "peerGatewaySettings") != nil {
             initialGatewaySettings = defaults.data(forKey: "peerGatewaySettings").flatMap {
@@ -530,11 +515,7 @@ final class AppModel {
         }
         // Mainnet is the default (#9). The E2E harness is a custom-signet
         // fixture, so a test launch that names no network still gets signet.
-        #if LIGHTNING
-        let freshInstallNetwork = LightningResearch.initialNetwork(root: LightningResearch.storageRoot)
-        #else
         let freshInstallNetwork = Self.defaultNetwork
-        #endif
         let selectedNetwork = e2e?.forcedNetwork
             ?? BitcoinNetwork(rawValue: defaults.string(forKey: DefaultsKey.network) ?? "")
             ?? (e2e != nil ? .signet : freshInstallNetwork)
@@ -542,10 +523,6 @@ final class AppModel {
         if e2e?.forcedNetwork != nil {
             defaults.set(selectedNetwork.rawValue, forKey: DefaultsKey.network)
         }
-        #if LIGHTNING
-        // Earlier research releases did not save their network; save it now.
-        defaults.set(selectedNetwork.rawValue, forKey: DefaultsKey.network)
-        #endif
         Self.migrateLegacyNetworkSettings(defaults: defaults, into: selectedNetwork)
         let scoped = Self.networkScopedSettings(defaults: defaults, network: selectedNetwork)
         manualPeers = scoped.manualPeers
@@ -561,28 +538,17 @@ final class AppModel {
             explorerProvider = scoped.esploraURL.isEmpty ? .blockstream : .custom
         }
         verifyFromGenesis = defaults.bool(forKey: DefaultsKey.verifyFromGenesis)
-        #if LIGHTNING
-        // Lightning starts with its tab visible, but a saved Simple choice
-        // must survive relaunch just like a saved Advanced choice.
-        advancedMode = e2e?.advancedMode == true
-            || (defaults.object(forKey: DefaultsKey.advancedMode) as? Bool ?? true)
-        #else
         advancedMode = defaults.bool(forKey: DefaultsKey.advancedMode) || e2e?.advancedMode == true
-        #endif
         // Test mode preconfigures the local node as the (only) manual peer;
         // custom signets have no DNS seeds.
         if let peer = e2e?.peer, !manualPeers.contains(peer) {
             manualPeers = [peer]
             defaults.set(manualPeers, forKey: DefaultsKey.manualPeers(selectedNetwork))
         }
-        #if LIGHTNING
         // The Lightning UI fixture kills this exact process between steps.
         e2e?.journal("app.initialized", fields: ["network": network.rawValue,
                                                  "processID": String(ProcessInfo.processInfo.processIdentifier)])
         observeLightningChannels()
-        #else
-        e2e?.journal("app.initialized", fields: ["network": network.rawValue])
-        #endif
     }
 
     /// What a Paste button reads: the runner's control file under the UI
@@ -669,9 +635,7 @@ final class AppModel {
             await cancelBackgroundSync()
             await networkShutdown?.value
             lastCompleteCheck = defaults.object(forKey: DefaultsKey.lastCompleteCheck(network)) as? Date
-            #if LIGHTNING
             await channelProtection.refreshPermission()
-            #endif
             await activate()
         case .background:
             isActive = false
@@ -747,9 +711,7 @@ final class AppModel {
         // Tailscale may have come or gone since this check.
         suspendNetworking()
         await stopNetworking()
-        #if LIGHTNING
         await finishLightningBackgroundCheck(complete: complete, foreground: isActive)
-        #endif
         backgroundRunning = false
         e2e?.journal("background.completed", fields: ["complete": String(complete)])
         return complete
@@ -983,9 +945,7 @@ final class AppModel {
             // then scan on state already known to be stale, which is the one
             // thing every other damaged-state path in this app refuses to do.
             try await resumeInterruptedRollback()
-            #if LIGHTNING
             try await prepareLightning(directory: dir, headers: chain)
-            #endif
         } catch {
             status.lastSyncError = error.localizedDescription
             e2e?.journal("network.stackFailed", fields: ["error": error.localizedDescription])
@@ -1221,9 +1181,7 @@ final class AppModel {
                 let now = Date()
                 lastCompleteCheck = now
                 defaults.set(now, forKey: DefaultsKey.lastCompleteCheck(network))
-                #if LIGHTNING
-                channelProtection.scanCompleted(network: network)
-                #endif
+                channelProtection.scanFinished(network: network, watched: lightningWatchedChain)
             }
         } catch {
             // A later batch may have thrown after earlier ones persisted
@@ -1239,9 +1197,7 @@ final class AppModel {
                 let transient = Self.isTransientSyncError(error)
                 transientSyncFailures = transient ? transientSyncFailures + 1 : 0
                 transientSyncError = transient ? error.localizedDescription : nil
-                #if LIGHTNING
                 channelProtection.scanFailed(network: network)
-                #endif
             }
         }
         await refresh()
@@ -1254,13 +1210,7 @@ final class AppModel {
     private func scan(_ filters: FilterSync, watchScripts scripts: [Data],
                       onReorg: @escaping @Sendable (UInt32) async throws -> Void,
                       onMatch: @escaping @Sendable (BlockMatch) async throws -> Void) async throws -> Bool {
-        #if LIGHTNING
         return try await syncWalletAndLightning(filters: filters, scripts: scripts, onReorg: onReorg, onMatch: onMatch)
-        #else
-        try await filters.sync(watchScripts: scripts, maxBlocks: backgroundRunning ? 2_000 : nil,
-                               onReorg: onReorg, onMatch: onMatch)
-        return await filters.nextScanHeight > filters.chain.height
-        #endif
     }
 
     /// Keep replaced originals beside the payment that superseded them.
@@ -1374,18 +1324,14 @@ final class AppModel {
     /// Peer/header catch-up continues through the regular sync loop while the
     /// user backs up the phrase.
     func createWallet() async throws {
-        #if LIGHTNING
         try requireLightningWalletPreserved()
-        #endif
         try await authenticateSensitiveAction(reason: "Create and protect your wallet")
         defer { keychainAuthentication.revoke() }
         try Task.checkCancellation()
         await buildStackIfNeeded()
         guard stack != nil else { throw AppError.noStack }
         let knownHeight = await creationHeightForNewWallet()
-        #if LIGHTNING
         try requireLightningWalletPreserved()
-        #endif
         guard let walletURL = walletURL() else { throw AppError.noWallet }
         let wallet = try Wallet.create(network: network, keyStore: keyStore,
                                        storageURL: walletURL, entropy: e2e?.entropy,
@@ -1415,9 +1361,7 @@ final class AppModel {
 
     func importWallet(bundle: ImportBundle, authenticate: Bool,
                       afterCommit: (@MainActor (String) async throws -> Void)? = nil) async throws -> ImportReport? {
-        #if LIGHTNING
         try requireLightningWalletPreserved(importing: bundle.descriptor)
-        #endif
         try VaultStore.validate(bundle.vaults ?? [], network: network)
         guard bundle.network == network.rawValue else { throw AppError.wrongNetwork(bundle.network) }
         if authenticate, bundle.mnemonic != nil {
@@ -1428,9 +1372,7 @@ final class AppModel {
         // Do not cross the Keychain/storage commit boundary after the view
         // that requested a seed-bearing import has been invalidated.
         try Task.checkCancellation()
-        #if LIGHTNING
         try requireLightningWalletPreserved(importing: bundle.descriptor)
-        #endif
         e2e?.journal("import.started", fields: [
             "bundleVersion": String(bundle.version),
             "seedBearing": String(bundle.mnemonic != nil),
@@ -1647,9 +1589,7 @@ final class AppModel {
     /// Kept: headers and known peers. Those describe the chain, not the
     /// wallet, so a re-import does not pay for a fresh header sync.
     func destroyWallet() async throws {
-        #if LIGHTNING
         try requireLightningWalletRemovable()
-        #endif
         cloudBackups.suspend()
         guard let walletID else { throw AppError.noWallet }
         try await authenticateSensitiveAction(reason: "Delete this wallet from this device")
@@ -2847,12 +2787,10 @@ final class AppModel {
     }
 
     func switchNetwork(to newNetwork: BitcoinNetwork) async {
-        #if LIGHTNING
         // Channel work of the old network must not outlive the switch.
         guard lightningAllowsNetworkSwitch(to: newNetwork) else { return }
         changingNetwork = true
         defer { changingNetwork = false }
-        #endif
         await cancelBackgroundSync()
         cloudBackups.suspend()
         guard e2e?.forcedNetwork == nil || e2e?.forcedNetwork == newNetwork else { return }
@@ -2867,9 +2805,7 @@ final class AppModel {
         loadNetworkScopedSettings()
         guard await openSavedWalletForCurrentNetwork() else { return }
         await refresh()
-        #if LIGHTNING
         changingNetwork = false
-        #endif
         if isActive { await activate() }
     }
 
@@ -2927,11 +2863,9 @@ final class AppModel {
     }
 
     private func stopNetworking() async {
-        #if LIGHTNING
         let previousSync = syncTask
         previousSync?.cancel()
         await lightning?.stop()
-        #endif
         syncTask?.cancel(); syncTask = nil
         phaseTask?.cancel(); phaseTask = nil
         broadcasterEventTask?.cancel(); broadcasterEventTask = nil
@@ -2939,10 +2873,8 @@ final class AppModel {
         stack = nil
         await previous?.pool.stop()
         await previous?.broadcaster.shutdown()
-        #if LIGHTNING
         await previousSync?.value
         await finishStoppingLightning()
-        #endif
     }
 
     /// Resolve once per foreground generation. No address discovered on one
@@ -3219,13 +3151,8 @@ final class AppModel {
                                                       in: .userDomainMask,
                                                       appropriateFor: nil, create: true)
         else { return nil }
-        #if LIGHTNING
-        var root = base.appending(path: e2e?.storageDirectoryName ?? LightningResearch.storageName,
-                                  directoryHint: .isDirectory)
-        #else
         var root = base.appending(path: e2e?.storageDirectoryName ?? "BTCSwift",
                                   directoryHint: .isDirectory)
-        #endif
         let dir = root.appending(path: network.rawValue, directoryHint: .isDirectory)
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

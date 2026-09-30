@@ -103,9 +103,7 @@ struct HomeView: View {
                     }
                     LabeledContent("Peers", value: "\(model.status.peerCount)")
                     ChainCheckStatus()
-                    #if LIGHTNING
                     ChannelProtectionLink()
-                    #endif
                     if model.status.syncing, model.syncStatusText == nil {
                         BusyIndicator(text: "Scanning filters…")
                     }
@@ -155,11 +153,7 @@ struct HomeView: View {
                 }
             }
             .sheet(isPresented: $showReceive) {
-                #if LIGHTNING
                 ReceiveEntryView()
-                #else
-                ReceiveView()
-                #endif
             }
             .sheet(isPresented: $showSharedSavings) { SharedSavingsCreateView() }
             .sheet(isPresented: $showAddSavings) { AddSharedSavingsView() }

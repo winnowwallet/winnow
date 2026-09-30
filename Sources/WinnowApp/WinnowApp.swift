@@ -8,11 +8,14 @@ struct WinnowApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
-        #if LIGHTNING
-        let model = LightningResearch.makeModel()
-        #else
-        let model = AppModel()
+        #if DEBUG
+        // The regtest Lightning UI fixture uses still UIKit transitions on
+        // phones; the signet journey keeps the normal ones.
+        if E2EMode.current?.forcedNetwork == .regtest, UIDevice.current.userInterfaceIdiom == .phone {
+            UIView.setAnimationsEnabled(false)
+        }
         #endif
+        let model = AppModel()
         _model = State(initialValue: model)
         // BGTask handlers must be registered before launch finishes.
         BackgroundSyncScheduler.shared.register(model: model)
@@ -27,18 +30,8 @@ struct WinnowApp: App {
                 case .onboarding:
                     OnboardingView()
                 case .ready:
-                    #if LIGHTNING
                     // Either mode, under the channel protection banner.
                     LightningReadyView()
-                    #else
-                    // Beginner mode is one screen; Advanced mode is the
-                    // three tabs. The switch lives in each one's toolbar.
-                    if model.advancedMode {
-                        MainTabView()
-                    } else {
-                        BeginnerHomeView()
-                    }
-                    #endif
                 case let .storageDamaged(message):
                     StorageDamagedView(message: message)
                 }
@@ -185,14 +178,10 @@ final class PrivacyShield {
 
 /// Advanced mode: Wallet, Send, and Settings (and Lightning, in Winnow Lightning).
 struct MainTabView: View {
-    #if LIGHTNING
     @Environment(AppModel.self) private var model
-    #endif
     private enum Tab: String, Hashable {
         case wallet, send, settings
-        #if LIGHTNING
         case lightning
-        #endif
     }
 
     @State private var selection: Tab
@@ -206,14 +195,12 @@ struct MainTabView: View {
 
     var body: some View {
         TabView(selection: $selection) {
-            #if LIGHTNING
             if let lightning = model.lightning {
                 LightningView(controller: lightning)
                     .id(model.network)
                     .tabItem { Label("Lightning", systemImage: "bolt.circle") }
                     .tag(Tab.lightning)
             }
-            #endif
             HomeView(
                 sendFrom: { accountID in
                     sendAccountID = accountID

@@ -12,22 +12,15 @@ struct OnboardingView: View {
     @State private var error: String?
     @State private var showImport = false
     @State private var showCloudRestore = false
-    #if LIGHTNING
     @State private var showLightningRestore = false
-    #endif
     @State private var operation: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    #if LIGHTNING
-                    Text("Winnow connects directly to Bitcoin. Mainnet uses real bitcoin; signet and regtest use test coins. Save an encrypted Lightning recovery file and its separate phrase. iCloud backup is unavailable in this beta.")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                    #else
                     Text("Your bitcoin, on your phone. Winnow connects directly to Bitcoin and automatically backs up your wallet with iCloud when available.")
                         .font(.subheadline).foregroundStyle(.secondary)
-                    #endif
                 }
                 Section {
                     if model.walletID != nil {
@@ -46,17 +39,11 @@ struct OnboardingView: View {
                             .accessibilityIdentifier("createWalletButton")
                         Button("Restore from a file", systemImage: "square.and.arrow.down") { showImport = true }
                             .accessibilityIdentifier("importWalletButton")
-                        #if LIGHTNING
                         Button("Restore encrypted Lightning recovery") { showLightningRestore = true }
                             .accessibilityIdentifier("onboardingLightningRestore")
-                        #endif
                     }
                 } footer: {
-                    #if LIGHTNING
-                    Text("A Bitcoin phrase alone cannot restore Lightning channels. Restored channels stay in recovery mode and may need their counterparties to close.")
-                    #else
-                    Text("No iCloud? Your wallet still works. You can save a manual backup instead. Recovery words and backup controls are in Advanced.")
-                    #endif
+                    Text("No iCloud? Your wallet still works. You can save a manual backup instead. Recovery words and backup controls are in Advanced. Lightning channels come back only from their encrypted recovery file, and restored channels stay in recovery mode until they close.")
                 }
                 if model.cloudBackups.busy { ProgressView("Checking iCloud…") }
                 if let message = model.cloudBackups.message {
@@ -70,9 +57,9 @@ struct OnboardingView: View {
                         )) {
                             Text("Mainnet").tag(BitcoinNetwork.mainnet)
                             Text("Signet").tag(BitcoinNetwork.signet)
-                            #if LIGHTNING
-                            Text("Regtest").tag(BitcoinNetwork.regtest)
-                            #endif
+                            if model.offersRegtest {
+                                Text("Regtest").tag(BitcoinNetwork.regtest)
+                            }
                         }
                         .disabled(model.e2e?.forcedNetwork != nil || busy)
                         .accessibilityIdentifier("onboardingNetworkPicker")
@@ -87,11 +74,9 @@ struct OnboardingView: View {
             .navigationTitle("Winnow")
             .sheet(isPresented: $showCloudRestore) { CloudRestoreView() }
             .sheet(isPresented: $showImport) { ImportBundleView() }
-            #if LIGHTNING
             // On the list, not the button: a restore installs the wallet,
             // which removes the button while the restore is still finishing.
             .sheet(isPresented: $showLightningRestore) { LightningBackupView() }
-            #endif
             .task(id: model.network) { await model.discoverCloudBackups() }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .background { cancel() }

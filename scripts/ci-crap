@@ -33,13 +33,13 @@ def package_inputs(build):
     return profiles[0], binaries
 
 
-def app_binaries(derived, variant, app_name='WinnowApp'):
+def app_binaries(derived, variant):
     products = derived / 'Build/Products' / f'{variant}-iphonesimulator'
-    app = products / f'{app_name}.app'
-    if not (app / app_name).is_file():
+    app = products / 'WinnowApp.app'
+    if not (app / 'WinnowApp').is_file():
         raise ValueError(f'Missing instrumented {variant} app executable')
-    binaries = [app / app_name, app / f'{app_name}.debug.dylib']
-    bundles = list(products.rglob(f'{app_name}Tests.xctest'))
+    binaries = [app / 'WinnowApp', app / 'WinnowApp.debug.dylib']
+    bundles = list(products.rglob('WinnowAppTests.xctest'))
     binaries += [binary for bundle in bundles if (binary := test_binary(bundle))]
     binaries = sorted({path.resolve() for path in binaries if path.is_file()})
     return binaries
@@ -265,8 +265,8 @@ def export_app(args):
     receipt['frameworks'] = {'profile': str(profile), 'binaries': list(map(str, frameworks)),
                              'sources': validate_package_sources(args.output / 'frameworks.lcov',
                                                                  args.manifest.resolve(), args.manifest.resolve())}
-    binaries = app_binaries(derived, args.variant, args.app_name)
-    receipt['application'] = {'variant': args.variant, 'app': args.app_name, 'derived_data': str(derived),
+    binaries = app_binaries(derived, args.variant)
+    receipt['application'] = {'variant': args.variant, 'derived_data': str(derived),
                               'binary_hashes_at_collection': {str(path): hashlib.sha256(path.read_bytes()).hexdigest()
                                                               for path in binaries}}
     (args.output / 'app-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
@@ -275,31 +275,23 @@ def export_app(args):
 def report_exports(args):
     """Union exported directories; the package export must match the final sources."""
     output = args.output.resolve(); output.mkdir(parents=True, exist_ok=True)
-    coverage, sources, package = [], [], None
-    if args.package:
-        package = args.package.resolve()
-        sources = validate_package_sources(package / 'package.lcov', package / 'package-source-manifest.json',
-                                           args.manifest.resolve())
-        coverage.append(package / 'package.lcov')
-    elif not args.scope:
-        raise ValueError('A report over all Sources needs the package export')
+    package = args.package.resolve()
+    sources = validate_package_sources(package / 'package.lcov', package / 'package-source-manifest.json',
+                                       args.manifest.resolve())
+    coverage = [package / 'package.lcov']
     for directory in args.app:
         lines = directory.resolve() / 'coverage.lcov'
         frameworks = directory.resolve() / 'frameworks.lcov'
         if not (lines.is_file() and frameworks.is_file() and (directory / 'app-receipt.json').is_file()):
             raise ValueError('Missing exported app coverage: ' + str(directory))
         coverage += [lines, frameworks]
-    receipt = {'schema': 1, 'package_export': str(package) if package else None, 'package_source_files': sources,
+    receipt = {'schema': 1, 'package_export': str(package), 'package_source_files': sources,
                'app_exports': [str(path.resolve()) for path in args.app], 'source_manifest': str(args.manifest.resolve())}
     (output / 'coverage-inputs.json').write_text(json.dumps(receipt, indent=2) + '\n')
     command = [str(ROOT / 'scripts/check-crap'), 'report', '--manifest', str(args.manifest.resolve()),
                '--output', str(output / 'report.json')]
     for lines in coverage:
         command += ['--coverage', str(lines)]
-    for prefix in args.scope:
-        command += ['--scope', prefix]
-    for prefix in args.without:
-        command += ['--without', prefix]
     subprocess.run(command, check=True)
 
 
@@ -326,13 +318,10 @@ def main():
     app.add_argument('--result', type=Path, required=True)
     app.add_argument('--derived-data', type=Path, required=True)
     app.add_argument('--variant', default='Debug')
-    app.add_argument('--app-name', default='WinnowApp', help='The app product, e.g. WinnowLightning')
     app.add_argument('--manifest', type=Path, required=True)
     app.add_argument('--output', type=Path, required=True)
     report = commands.add_parser('report', help='Union exported runs and enforce the cap')
-    report.add_argument('--package', type=Path, help='An export-package output directory (required unless --scope)')
-    report.add_argument('--scope', action='append', default=[], help='Passed to check-crap report')
-    report.add_argument('--without', action='append', default=[], help='Passed to check-crap report')
+    report.add_argument('--package', type=Path, required=True, help='An export-package output directory')
     report.add_argument('--app', type=Path, action='append', default=[], help='An export-app output directory')
     report.add_argument('--manifest', type=Path, required=True)
     report.add_argument('--output', type=Path, required=True)

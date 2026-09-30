@@ -21,8 +21,8 @@ POLICY = {'schema': 1, 'image': 'tdx-macos15.7.9-xcode26.6-17F113-v1',
           # docs/crap.md: every first-party method at or below the cap, measured
           # over a report that saw at least this many methods.
           'crap': {'threshold': 12, 'minimum_functions': 1000,
-                   # Only the Lightning app compiles these; its own job gates them.
-                   'without': ['Sources/WinnowLightningApp']}}
+                   # No source directory is left out of the report.
+                   'without': []}}
 
 
 def sha(path):

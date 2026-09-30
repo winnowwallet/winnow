@@ -1,4 +1,4 @@
-@testable import WinnowLightning
+@testable import WinnowApp
 import CryptoKit
 import LightningCore
 import Security
@@ -193,14 +193,14 @@ final class LightningAppTests: XCTestCase {
         XCTAssertEqual(attributes[kSecAttrSynchronizable] as? Bool, false)
     }
 
-    func testResearchWalletCannotBeReplacedBeforeOrAfterBoot() async throws {
+    func testExistingWalletCannotBeReplacedBeforeOrAfterBoot() async throws {
         let environment = ["WINNOW_E2E": "1", "WINNOW_E2E_RUN": "preserve-\(UUID().uuidString)",
             "WINNOW_E2E_ENTROPY": "000102030405060708090a0b0c0d0e0f",
             "WINNOW_E2E_PEER": "127.0.0.1:1", "WINNOW_E2E_NETWORK": "regtest"]
         guard case let .active(mode) = E2EMode.resolve(environment: environment),
               case let .active(cleanup) = E2EMode.resolve(
                 environment: environment.merging(["WINNOW_E2E_RESET": "1"]) { _, reset in reset })
-        else { return XCTFail("could not create isolated research wallet") }
+        else { return XCTFail("could not create an isolated wallet") }
         defer { cleanup.wipeIfRequested() }
         let keys = InMemoryKeyStore(), auth = Denied()
         let model = AppModel(deviceAuthenticator: auth, e2e: mode,
@@ -223,9 +223,9 @@ final class LightningAppTests: XCTestCase {
         XCTAssertNotEqual(walletID, replacementID)
         for booted in [false, true] {
             if booted { await model.boot(); XCTAssertEqual(model.walletID, walletID) }
-            do { try await model.createWallet(); XCTFail("replaced research wallet") }
+            do { try await model.createWallet(); XCTFail("replaced the existing wallet") }
             catch AppModel.AppError.storageDamaged {}
-            do { try await model.importWallet(bundleJSON: json); XCTFail("import replaced research wallet") }
+            do { try await model.importWallet(bundleJSON: json); XCTFail("import replaced the existing wallet") }
             catch AppModel.AppError.storageDamaged {}
             XCTAssertEqual(try Data(contentsOf: file), original)
             XCTAssertEqual(try keys.load(walletID: walletID).serialized, secret)

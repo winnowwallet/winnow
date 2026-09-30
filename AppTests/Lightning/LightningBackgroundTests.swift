@@ -1,4 +1,4 @@
-@testable import WinnowLightning
+@testable import WinnowApp
 import CryptoKit
 import Foundation
 import LightningCore
