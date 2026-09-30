@@ -304,45 +304,59 @@ public actor PeerConnection {
         }
         defer { timer.cancel() }
         do {
-            // Greeting: version 5, one method, no authentication.
-            try await rawSend(connection, Data([0x05, 0x01, 0x00]))
-            let chosen = try await rawReceive(connection, exactly: 2)
-            guard chosen == Data([0x05, 0x00]) else {
-                throw PeerError.handshakeFailed("SOCKS5 proxy refused an unauthenticated connection")
-            }
-            // CONNECT, address type 3: the name goes through unresolved.
-            let name = Data(destination.host.utf8)
-            guard !name.isEmpty, name.count <= 255 else {
-                throw PeerError.handshakeFailed("SOCKS5 destination name too long")
-            }
-            var request = Data([0x05, 0x01, 0x00, 0x03, UInt8(name.count)])
-            request.append(name)
-            request.append(UInt8(destination.port >> 8))
-            request.append(UInt8(destination.port & 0xFF))
-            try await rawSend(connection, request)
-            // Reply: VER REP RSV ATYP BND.ADDR BND.PORT.
-            let head = try await rawReceive(connection, exactly: 4)
-            guard head[head.startIndex] == 0x05, head[head.startIndex + 2] == 0 else {
-                throw PeerError.handshakeFailed("SOCKS5 proxy returned an invalid reply header")
-            }
-            let reply = head[head.startIndex + 1]
-            guard reply == 0x00 else {
-                // The proxy could not reach the peer. That is the peer being
-                // unreachable, not a protocol fault, so it is a transport error.
-                throw PeerError.disconnected("SOCKS5 proxy: \(socksReplyDescription(reply))")
-            }
-            switch head[head.startIndex + 3] {
-            case 0x01: _ = try await rawReceive(connection, exactly: 4 + 2)
-            case 0x04: _ = try await rawReceive(connection, exactly: 16 + 2)
-            case 0x03:
-                let length = try await rawReceive(connection, exactly: 1)
-                _ = try await rawReceive(connection, exactly: Int(length[length.startIndex]) + 2)
-            default:
-                throw PeerError.handshakeFailed("SOCKS5 proxy answered with an unknown address type")
-            }
+            try await socksGreeting(connection)
+            let addressType = try await socksConnect(connection, destination: destination)
+            try await consumeSocksBoundAddress(connection, type: addressType)
         } catch {
             if timedOut.isSet { throw PeerError.timeout }
             throw error
+        }
+    }
+
+    /// Greeting: version 5, one method, no authentication.
+    private static func socksGreeting(_ connection: NWConnection) async throws {
+        try await rawSend(connection, Data([0x05, 0x01, 0x00]))
+        let chosen = try await rawReceive(connection, exactly: 2)
+        guard chosen == Data([0x05, 0x00]) else {
+            throw PeerError.handshakeFailed("SOCKS5 proxy refused an unauthenticated connection")
+        }
+    }
+
+    /// CONNECT, address type 3: the name goes through unresolved. Returns the
+    /// reply's bound-address type.
+    private static func socksConnect(_ connection: NWConnection, destination: PeerEndpoint) async throws -> UInt8 {
+        let name = Data(destination.host.utf8)
+        guard !name.isEmpty, name.count <= 255 else {
+            throw PeerError.handshakeFailed("SOCKS5 destination name too long")
+        }
+        var request = Data([0x05, 0x01, 0x00, 0x03, UInt8(name.count)])
+        request.append(name)
+        request.append(UInt8(destination.port >> 8))
+        request.append(UInt8(destination.port & 0xFF))
+        try await rawSend(connection, request)
+        // Reply: VER REP RSV ATYP BND.ADDR BND.PORT.
+        let head = try await rawReceive(connection, exactly: 4)
+        guard head[head.startIndex] == 0x05, head[head.startIndex + 2] == 0 else {
+            throw PeerError.handshakeFailed("SOCKS5 proxy returned an invalid reply header")
+        }
+        let reply = head[head.startIndex + 1]
+        guard reply == 0x00 else {
+            // The proxy could not reach the peer. That is the peer being
+            // unreachable, not a protocol fault, so it is a transport error.
+            throw PeerError.disconnected("SOCKS5 proxy: \(socksReplyDescription(reply))")
+        }
+        return head[head.startIndex + 3]
+    }
+
+    private static func consumeSocksBoundAddress(_ connection: NWConnection, type: UInt8) async throws {
+        switch type {
+        case 0x01: _ = try await rawReceive(connection, exactly: 4 + 2)
+        case 0x04: _ = try await rawReceive(connection, exactly: 16 + 2)
+        case 0x03:
+            let length = try await rawReceive(connection, exactly: 1)
+            _ = try await rawReceive(connection, exactly: Int(length[length.startIndex]) + 2)
+        default:
+            throw PeerError.handshakeFailed("SOCKS5 proxy answered with an unknown address type")
         }
     }
 

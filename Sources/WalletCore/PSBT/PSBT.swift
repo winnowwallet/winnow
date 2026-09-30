@@ -814,16 +814,26 @@ public struct PSBT: Equatable, Sendable {
 
     private static func validateKnownFields(globals: [KeyValue], inputs: [Input],
                                             outputs: [Output]) throws {
-        func requireSingleton(_ pair: KeyValue, length: Int? = nil, name: String) throws {
-            guard pair.key.count == 1 else {
-                throw PSBTError.malformed("\(name) must not carry key data")
-            }
-            if let length, pair.value.count != length {
-                throw PSBTError.malformed("\(name) must be \(length) bytes")
-            }
+        try validateGlobalFields(globals)
+        for input in inputs {
+            try validateInputFields(input.pairs)
         }
+        for output in outputs {
+            try validateOutputFields(output.pairs)
+        }
+    }
 
-        for pair in globals {
+    private static func requireSingleton(_ pair: KeyValue, length: Int? = nil, name: String) throws {
+        guard pair.key.count == 1 else {
+            throw PSBTError.malformed("\(name) must not carry key data")
+        }
+        if let length, pair.value.count != length {
+            throw PSBTError.malformed("\(name) must be \(length) bytes")
+        }
+    }
+
+    private static func validateGlobalFields(_ pairs: [KeyValue]) throws {
+        for pair in pairs {
             switch pair.type {
             case GlobalType.unsignedTx:
                 try requireSingleton(pair, name: "unsigned transaction")
@@ -835,41 +845,41 @@ public struct PSBT: Equatable, Sendable {
                 break
             }
         }
+    }
 
-        for input in inputs {
-            for pair in input.pairs {
-                switch pair.type {
-                case InType.previousTxid:
-                    try requireSingleton(pair, length: 32, name: "previous transaction ID")
-                case InType.outputIndex, InType.sequence, InType.sighashType:
-                    try requireSingleton(pair, length: 4, name: "input field \(pair.type)")
-                case InType.tapInternalKey:
-                    try requireSingleton(pair, length: 32, name: "Taproot internal key")
-                case InType.tapKeySignature:
-                    try requireSingleton(pair, name: "Taproot key signature")
-                    guard pair.value.count == 64 || pair.value.count == 65 else {
-                        throw PSBTError.malformed("Taproot key signature must be 64 or 65 bytes")
-                    }
-                case InType.witnessUTXO, InType.finalScriptWitness:
-                    try requireSingleton(pair, name: "input field \(pair.type)")
-                default:
-                    break
+    private static func validateInputFields(_ pairs: [KeyValue]) throws {
+        for pair in pairs {
+            switch pair.type {
+            case InType.previousTxid:
+                try requireSingleton(pair, length: 32, name: "previous transaction ID")
+            case InType.outputIndex, InType.sequence, InType.sighashType:
+                try requireSingleton(pair, length: 4, name: "input field \(pair.type)")
+            case InType.tapInternalKey:
+                try requireSingleton(pair, length: 32, name: "Taproot internal key")
+            case InType.tapKeySignature:
+                try requireSingleton(pair, name: "Taproot key signature")
+                guard pair.value.count == 64 || pair.value.count == 65 else {
+                    throw PSBTError.malformed("Taproot key signature must be 64 or 65 bytes")
                 }
+            case InType.witnessUTXO, InType.finalScriptWitness:
+                try requireSingleton(pair, name: "input field \(pair.type)")
+            default:
+                break
             }
         }
+    }
 
-        for output in outputs {
-            for pair in output.pairs {
-                switch pair.type {
-                case OutType.amount:
-                    try requireSingleton(pair, length: 8, name: "output amount")
-                case OutType.tapInternalKey:
-                    try requireSingleton(pair, length: 32, name: "output Taproot internal key")
-                case OutType.script, OutType.tapTree:
-                    try requireSingleton(pair, name: "output field \(pair.type)")
-                default:
-                    break
-                }
+    private static func validateOutputFields(_ pairs: [KeyValue]) throws {
+        for pair in pairs {
+            switch pair.type {
+            case OutType.amount:
+                try requireSingleton(pair, length: 8, name: "output amount")
+            case OutType.tapInternalKey:
+                try requireSingleton(pair, length: 32, name: "output Taproot internal key")
+            case OutType.script, OutType.tapTree:
+                try requireSingleton(pair, name: "output field \(pair.type)")
+            default:
+                break
             }
         }
     }

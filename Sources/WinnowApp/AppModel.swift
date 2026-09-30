@@ -561,32 +561,7 @@ final class AppModel {
         if let clipboard = e2e?.clipboard {
             UIPasteboard.general.string = clipboard
         }
-        if case let .damaged(message) = await vaultStore.configure(
-            storageURL: vaultsURL(), network: network)
-        {
-            stage = .storageDamaged(message)
-            return
-        }
-        await configurePeople()
-        guard let walletURL = walletURL() else {
-            stage = .storageDamaged(
-                "Winnow could not access its protected local storage. No wallet files or keys were changed.")
-            return
-        }
-        switch Self.openPersistedWallet(at: walletURL, keyStore: keyStore) {
-        case let .opened(wallet):
-            self.wallet = wallet
-            walletID = await wallet.id
-            walletDescriptor = await wallet.descriptor
-            upgradeKeyProtection()
-            defaults.removeObject(forKey: DefaultsKey.backupPending(walletID ?? ""))
-            stage = .ready
-        case .missing:
-            stage = .onboarding
-        case let .damaged(details):
-            stage = .storageDamaged(details)
-            return
-        }
+        guard await openSavedWalletForCurrentNetwork() else { return }
         e2e?.journal("app.booted", fields: [
             "stage": stage == .ready ? "ready" : "onboarding",
             "walletID": walletID ?? "",
@@ -2699,30 +2674,33 @@ final class AppModel {
         guard e2e?.forcedNetwork == nil || e2e?.forcedNetwork == newNetwork else { return }
         guard newNetwork != network else { return }
         suspendNetworking()
-        syncTask?.cancel()
-        syncTask = nil
-        await stack?.pool.stop()
-        await stack?.broadcaster.shutdown()
-        broadcasterEventTask?.cancel()
-        broadcasterEventTask = nil
-        stack = nil
+        await stopNetworking()
         wallet = nil
         walletID = nil
         walletDescriptor = nil
         network = newNetwork
         defaults.set(newNetwork.rawValue, forKey: DefaultsKey.network)
         loadNetworkScopedSettings()
+        guard await openSavedWalletForCurrentNetwork() else { return }
+        await refresh()
+        if isActive { await activate() }
+    }
+
+    /// Opens the current network's vaults, people and wallet, the same way at
+    /// launch and after a network switch. False when storage is damaged; the
+    /// stage then says so and nothing else runs.
+    private func openSavedWalletForCurrentNetwork() async -> Bool {
         if case let .damaged(message) = await vaultStore.configure(
             storageURL: vaultsURL(), network: network)
         {
             stage = .storageDamaged(message)
-            return
+            return false
         }
         await configurePeople()
         guard let walletURL = walletURL() else {
             stage = .storageDamaged(
                 "Winnow could not access its protected local storage. No wallet files or keys were changed.")
-            return
+            return false
         }
         switch Self.openPersistedWallet(at: walletURL, keyStore: keyStore) {
         case let .opened(wallet):
@@ -2736,10 +2714,9 @@ final class AppModel {
             stage = .onboarding
         case let .damaged(details):
             stage = .storageDamaged(details)
-            return
+            return false
         }
-        await refresh()
-        if isActive { await activate() }
+        return true
     }
 
     static func parsePeer(_ text: String) throws -> PeerEndpoint {

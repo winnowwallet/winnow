@@ -124,6 +124,25 @@ struct HostileInputBoundsTests {
         await pool.stop()
     }
 
+    @Test("a multi_a threshold is a minimal positive script number of at most four bytes")
+    func multisigThresholdPushIsBounded() throws {
+        let key = Data(repeating: 0x02, count: 32)
+        func leaf(threshold: [UInt8]) -> Script {
+            var bytes = Data([0x20]) + key + Data([Script.Op.checkSig])
+            bytes += Data(threshold) + Data([Script.Op.numEqual])
+            return Script(bytes)
+        }
+        #expect(Multisig.parse(leaf(threshold: [0x51]))?.threshold == 1, "OP_1")
+        #expect(Multisig.parse(leaf(threshold: [0x01, 0x11]))?.threshold == 17, "a one-byte push")
+        #expect(Multisig.parse(leaf(threshold: [0x02, 0xE7, 0x03]))?.threshold == 999, "BIP387's maximum")
+        #expect(Multisig.parse(leaf(threshold: [0x02, 0x11, 0x00])) == nil, "a redundant zero byte")
+        #expect(Multisig.parse(leaf(threshold: [0x01, 0x81])) == nil, "negative")
+        #expect(Multisig.parse(leaf(threshold: [0x05, 0x11, 0, 0, 0, 0])) == nil,
+                "five bytes is not a script number, whatever it would shift to")
+        let built = try Multisig.script(threshold: 17, xonlyKeys: Array(repeating: key, count: 17), sorted: false)
+        #expect(Multisig.parse(built)?.threshold == 17, "the builder's own k > 16 push parses back")
+    }
+
     @Test("sweep removes staging directories a previous process left behind, and nothing else")
     func sweepRemovesLeftovers() throws {
         let root = FileManager.default.temporaryDirectory

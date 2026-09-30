@@ -43,6 +43,48 @@ final class WalletStartupTests: XCTestCase {
         await late.scenePhaseChanged(.background)
     }
 
+    /// Each network keeps its own wallet: switching opens the other network's
+    /// (here none, so onboarding), a damaged file there says so, and switching
+    /// back reopens the first wallet unchanged.
+    func testSwitchingNetworksOpensEachNetworksOwnWallet() async throws {
+        let environment = ["WINNOW_E2E": "1", "WINNOW_E2E_RUN": "switch-\(UUID().uuidString)",
+                           "WINNOW_E2E_ENTROPY": "000102030405060708090a0b0c0d0e0f",
+                           "WINNOW_E2E_PEER": "127.0.0.1:1", "WINNOW_E2E_CHALLENGE": "51"]
+        guard case let .active(mode) = E2EMode.resolve(environment: environment),
+              case let .active(cleanup) = E2EMode.resolve(
+                environment: environment.merging(["WINNOW_E2E_RESET": "1"]) { _, reset in reset })
+        else { return XCTFail("could not create isolated network fixture") }
+        defer { cleanup.wipeIfRequested() }
+        let model = AppModel(e2e: mode, storeKeys: InMemoryStoreKeyVault(), keyStore: InMemoryKeyStore())
+        let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                               appropriateFor: nil, create: true)
+            .appending(path: mode.storageDirectoryName)
+        try FileManager.default.createDirectory(at: root.appending(path: "signet"), withIntermediateDirectories: true)
+        _ = try Wallet.create(network: .signet, keyStore: model.keyStore,
+                              storageURL: root.appending(path: "signet/wallet.json"), entropy: mode.entropy)
+        await model.boot()
+        XCTAssertEqual(model.network, .signet)
+        XCTAssertEqual(model.stage, .ready)
+        let signetWallet = try XCTUnwrap(model.walletID)
+
+        await model.switchNetwork(to: .signet)
+        XCTAssertEqual(model.walletID, signetWallet, "switching to the current network changes nothing")
+
+        await model.switchNetwork(to: .mainnet)
+        XCTAssertEqual(model.network, .mainnet)
+        XCTAssertEqual(model.stage, .onboarding, "mainnet has no wallet of its own yet")
+        XCTAssertNil(model.walletID)
+
+        await model.switchNetwork(to: .signet)
+        XCTAssertEqual(model.stage, .ready)
+        XCTAssertEqual(model.walletID, signetWallet)
+
+        try FileManager.default.createDirectory(at: root.appending(path: "mainnet"), withIntermediateDirectories: true)
+        try Data("not a wallet".utf8).write(to: root.appending(path: "mainnet/wallet.json"))
+        await model.switchNetwork(to: .mainnet)
+        guard case .storageDamaged = model.stage else { return XCTFail("a damaged file must stop, not onboard over it") }
+    }
+
     func testNewAndLegacyUnfinishedWalletsOpenWithoutPhraseChecklist() async throws {
         let environment = ["WINNOW_E2E": "1", "WINNOW_E2E_RUN": "backup-\(UUID().uuidString)",
                            "WINNOW_E2E_ENTROPY": "000102030405060708090a0b0c0d0e0f",
