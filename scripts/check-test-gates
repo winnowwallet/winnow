@@ -9,11 +9,15 @@ cd "$(dirname "$0")/.."
 TEST_DIRS=(Tests UITests AppTests)
 for d in Tools/*/Tests; do [ -d "$d" ] && TEST_DIRS+=("$d"); done
 SETTERS=(.github/workflows scripts)
-# Optional overrides a developer may set by hand; never a gate.
-ALLOW_UNSET="WINNOW_BITCOIN_CLI"
+# Optional overrides a developer may set by hand; never a gate. The Lightning
+# mainnet smoke test only creates an unpaid, expiring order with a public
+# provider, whose availability is not a release gate.
+ALLOW_UNSET="WINNOW_BITCOIN_CLI WINNOW_LIVE_MAINNET"
 # Conditional skips that are deliberate and documented. The live gateway
 # journey needs a device or simulator on the tailnet; scripts/check-live-gateways-ui runs it.
-ALLOW_XCTSKIP="AppTests/E2EModeTests.swift UITests/LiveGatewayDeviceTests.swift"
+# LightningAppUITests skips only that opted-in mainnet smoke test; its
+# regtest journey against independent peers is required (scripts/ci-lightning-ui).
+ALLOW_XCTSKIP="AppTests/E2EModeTests.swift UITests/LiveGatewayDeviceTests.swift UITests/LightningAppUITests.swift"
 # Retired gates: node integration now runs through the one UI journey.
 DENY='WINNOW_DIFF|WINNOW_SIGNET|WINNOW_HEADERS_BIN|WINNOW_GENERATE_FALLBACK_PEERS'
 

@@ -110,6 +110,11 @@ jobs:
           scripts/ci-crap export-package --package-build .build --manifest "$CI_RESULTS/crap/source-manifest.json" --output "$CI_RESULTS/crap/package"
           scripts/ci-debug
 
+      # Needs bitcoind, which only trusted runs install (with the journey).
+      - name: Lightning transactions against Bitcoin Core regtest
+        if: steps.validate_media.outcome != 'success' && env.RUN_UI_JOURNEY == 'true'
+        run: scripts/ci-lightning 2>&1 | tee "$CI_RESULTS/lightning-regtest.log"
+
       - name: Release-build production package and reject first-party warnings
         if: steps.validate_media.outcome != 'success'
         run: >-
@@ -257,7 +262,8 @@ jobs:
         run: |
           scripts/install-crap-swiftlint
           scripts/ci-crap report --package "$CI_RESULTS/crap/package" --app "$CI_RESULTS/crap/units" \
-            --app "$CI_RESULTS/crap/journey" --manifest "$CI_RESULTS/crap/source-manifest.json" \
+            --app "$CI_RESULTS/crap/journey" --without Sources/WinnowLightningApp \
+            --manifest "$CI_RESULTS/crap/source-manifest.json" \
             --output "$CI_RESULTS/crap/report"
 
       - name: Stop the trusted run's simulator and fixture

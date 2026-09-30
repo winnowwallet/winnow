@@ -17,6 +17,15 @@ class CrapEvidenceTests(unittest.TestCase):
         coverage = {'Sources/Core/example.swift': counts} if counts is not None else {}
         return TOOL['records'](root, [violation], parsed, coverage)[0]
 
+    def test_reports_partition_sources_by_prefix(self):
+        in_scope = TOOL['in_scope']
+        self.assertTrue(in_scope('Sources/WalletCore/a.swift', [], []))
+        self.assertFalse(in_scope('Sources/WinnowLightningApp/a.swift', [], ['Sources/WinnowLightningApp']))
+        self.assertTrue(in_scope('Sources/WinnowLightningAppendix/a.swift', [], ['Sources/WinnowLightningApp']),
+                        'a prefix names a directory, not a string prefix')
+        self.assertTrue(in_scope('Sources/WinnowLightningApp/a.swift', ['Sources/WinnowLightningApp/'], []))
+        self.assertFalse(in_scope('Sources/WinnowApp/a.swift', ['Sources/WinnowLightningApp'], []))
+
     def test_entry_path_and_exact_twelve_boundary(self):
         uncovered = self.row(2, {3: 0, 4: 0, 7: 0})
         self.assertEqual(uncovered['complexity'], 3)

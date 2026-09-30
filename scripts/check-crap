@@ -126,6 +126,13 @@ def records(root, inventory, parsed, coverage):
     return sorted(output, key=lambda item: (-item['conservative_crap'], item['file'], item['line']))
 
 
+def in_scope(file, scope, without):
+    """Reports partition Sources: the ordinary app's report leaves out what
+    only the Lightning app compiles, and the Lightning job's report covers it."""
+    inside = lambda prefix: file == prefix or file.startswith(prefix.rstrip('/') + '/')
+    return (not scope or any(map(inside, scope))) and not any(map(inside, without))
+
+
 def report(args):
     root = args.source_root.resolve()
     expected = json.loads(args.manifest.read_text())['files']
@@ -140,10 +147,12 @@ def report(args):
         item['file'] = str(root.joinpath(*parts[parts.index('Sources'):]))
     with ThreadPoolExecutor(max_workers=4) as pool:
         parsed = dict(pool.map(declarations, source_files(root)))
-    rows = records(root, inventory, parsed, line_coverage(args.coverage, root))
+    rows = [row for row in records(root, inventory, parsed, line_coverage(args.coverage, root))
+            if in_scope(row['file'], args.scope, args.without)]
     high = [row for row in rows if row['conservative_crap'] > args.threshold]
     result = {'schema': 1, 'formula': FORMULA, 'threshold': args.threshold,
               'scope': 'All Sources Swift function and initializer bodies, including switch cases; CC entry path is 1',
+              'partition': {'scope': args.scope, 'without': args.without},
               'limitations': 'Accessors and standalone closures are not declarations covered by the SwiftLint function/initializer rule',
               'decision_tool': f'SwiftLint {SWIFTLINT_VERSION}',
               'coverage': 'Compiler executable-line records (LLVM LCOV and/or xccov archive lines), union across supplied test runs',
@@ -178,6 +187,10 @@ def main():
     check.add_argument('--output', type=Path, required=True)
     check.add_argument('--threshold', type=float, default=12)
     check.add_argument('--report-only', action='store_true')
+    check.add_argument('--scope', action='append', default=[], metavar='SOURCES_PREFIX',
+                       help='Report only methods under these Sources prefixes')
+    check.add_argument('--without', action='append', default=[], metavar='SOURCES_PREFIX',
+                       help='Leave out methods under these prefixes; another report must cover them')
     args = parser.parse_args()
     try:
         if args.command == 'snapshot':

@@ -1,0 +1,381 @@
+#!/usr/bin/env python3
+"""Disposable, loopback-only Core/LDK coordinator for the real simulator app."""
+import argparse
+import hashlib
+import importlib.machinery
+import json
+import os
+from pathlib import Path
+import secrets
+import signal
+import subprocess
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+ROOT = Path(__file__).resolve().parent.parent
+reference = importlib.machinery.SourceFileLoader('lightning_async', str(ROOT / 'scripts/ci-lightning-async')).load_module()
+
+
+def validated_ui_cln_reference(cln, manifest_path, host=None):
+    """Validate a pinned UI-only HSM override without changing the stock peer."""
+    cln = Path(cln).resolve(strict=True)
+    manifest_path = Path(manifest_path).resolve(strict=True)
+    directory = cln.parent
+    assert manifest_path == directory / 'cln-ui-manifest.json', 'UI manifest must belong to the reference directory'
+    host = Path(host or os.environ.get('WINNOW_CLN_UI_SOURCE', directory / 'reference-source')).resolve(strict=True)
+    pinned = __import__('runpy').run_path(str(ROOT / 'scripts/ci-lightning-references'))
+    commit = subprocess.check_output(['git', '-C', str(host), 'rev-parse', 'HEAD'], text=True).strip()
+    dirty = subprocess.check_output(['git', '-C', str(host), 'status', '--porcelain', '--untracked-files=all'], text=True).strip()
+    assert commit == pinned['COMMIT'] and not dirty, 'UI reference policy requires the exact clean app-pinned host'
+    policy = __import__('runpy').run_path(str(host / 'scripts/build-ui-hsmd'))
+    raw = manifest_path.read_bytes()
+    manifest = json.loads(raw)
+    assert type(manifest['schema_version']) is int and manifest['schema_version'] == 1
+    assert manifest['role'] == 'macos_ui_only' and manifest['observed_platform'] == 'darwin'
+    assert manifest['stock_baseline_unchanged'] is True and manifest['stock_release_ui_claim'] is False
+    assert manifest['upstream_patch']['merged'] is False and manifest['reference_harness']['source_dirty'] is False
+    assert manifest['reference_harness'] == dict(repository='https://github.com/posix4e/lightning-reference',
+                                                commit=commit, source_dirty=False)
+    version = subprocess.check_output([str(cln / 'lightningd/lightningd'), '--version'], text=True, timeout=5).strip()
+    assert version == 'v26.06.8'
+    stock = policy['stock_state'](cln)
+    assert manifest['stock_cln'] == dict(commit=policy['CLN'], version=version, **stock)
+    assert manifest['upstream_patch'] == dict(pr=9564, url='https://github.com/ElementsProject/lightning/pull/9564',
+        base=policy['PR_BASE'], head=policy['PR_HEAD'], sha256=policy['PATCH_SHA'],
+        released_base=policy['CLN'], merged=False, paths=['hsmd/hsmd.c'])
+    patch = host / 'patches/cln-hsmd-pr9564-d03657d.diff'
+    assert hashlib.sha256(patch.read_bytes()).hexdigest() == policy['PATCH_SHA']
+    ui = directory / 'cln-ui'
+    hsm, source = ui / 'lightningd/lightning_hsmd', ui / 'hsmd/hsmd.c'
+    override = manifest['hsmd_override']
+    assert override['path'] == str(hsm) and override['source_path'] == str(source)
+    assert hsm.resolve(strict=True).is_relative_to(ui) and source.resolve(strict=True).is_relative_to(ui)
+    assert override['source_sha256'] == policy['UI_SOURCE_SHA'] == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert override['sha256'] == hashlib.sha256(hsm.read_bytes()).hexdigest()
+    assert override['version'] == version == subprocess.check_output([str(hsm), '--version'], text=True, timeout=5).strip()
+    assert subprocess.check_output(['git', '-C', str(ui), 'rev-parse', 'HEAD'], text=True).strip() == policy['CLN']
+    assert subprocess.check_output(['git', '-C', str(ui), 'diff', '--name-only', 'HEAD', '--'], text=True).strip() == 'hsmd/hsmd.c'
+    others = {name: policy['digest'](ui / name) for name in policy['BINARY_PATHS'] if name != 'lightningd/lightning_hsmd'}
+    assert others == override['other_binary_sha256']
+    assert all(value == stock['binary_sha256'][name] for name, value in others.items())
+    return manifest, raw
+
+
+class Journey:
+    def __init__(self, directory, simulator, bundle):
+        self.directory, self.simulator, self.bundle = directory, simulator, bundle
+        self.token = secrets.token_hex(24)
+        self.clients, self.timeline = {}, []
+        self.payment_hash = None
+        self.cln_process = None
+        self.run = 'ln-' + secrets.token_hex(5)
+        self.evidence = directory / 'evidence'
+        self.evidence.mkdir(parents=True)
+        root = directory / 'state'
+        root.mkdir()
+        harness = Path(os.environ['WINNOW_LDK_HARNESS'])
+        upstream = harness.resolve().parents[3] / 'ldk'
+        assert subprocess.check_output(['git', '-C', str(upstream), 'rev-parse', 'HEAD'], text=True).strip() == reference.LDK_COMMIT
+        subprocess.run(['git', '-C', str(upstream), 'diff', '--exit-code', 'HEAD', '--'], check=True)
+        binary_dir = subprocess.check_output(['swift', 'build', '--show-bin-path'], cwd=ROOT, text=True).strip()
+        self.swift = Path(binary_dir) / 'winnow-lightning-peer-fixture'
+        self.fixture = reference.Fixture(root, self.evidence, harness, self.swift, Path(os.environ['WINNOW_BITCOIN_DIR']), p2p=True)
+        self.a = self.fixture.ldk('provider-a', 21)
+        self.b = self.fixture.ldk('provider-b', 22)
+        self.ab = self.fixture.open_ldk(self.a, self.b, public=True)
+        self.recipient_profile = None
+
+    def record(self, name, **fields):
+        event = dict(event=name, monotonic_ns=time.monotonic_ns(), **fields)
+        self.timeline.append(event)
+        with (self.evidence / 'process-events.jsonl').open('a') as file:
+            file.write(json.dumps(event, sort_keys=True) + '\n')
+        return event
+
+    def profile(self, role):
+        peer = self.a if role == 'sender' else self.b
+        profile = dict(network='regtest', name='LDK regtest ' + role, peer=peer.node, host='127.0.0.1', port=peer.initial['port'])
+        if role == 'sender':
+            profile['route'] = dict(introduction=self.b.node, shortChannelID=self.ab['scid'], baseMsat=1000,
+                                    proportionalMillionths=0, expiryDelta=48)
+        elif self.recipient_profile:
+            profile['receive'] = self.recipient_profile
+        return profile
+
+    def mine(self, blocks):
+        hashes = self.fixture.rpc('generatetoaddress', blocks, self.fixture.address)
+        self.fixture.sync()
+        return hashes
+
+    def register(self, role, node):
+        assert role in ('sender', 'recipient')
+        container = subprocess.check_output(['/usr/bin/xcrun', 'simctl', 'get_app_container', self.simulator, self.bundle, 'data'], text=True).strip()
+        journal = Path(container) / 'Library/Application Support' / ('BTCSwiftE2E-' + self.run + '-' + role) / 'story-events.jsonl'
+        events = [json.loads(line) for line in journal.read_text().splitlines()]
+        initialization = next(e for e in reversed(events) if e['name'] == 'app.initialized')
+        assert initialization['fields']['network'] == 'regtest'
+        pid = int(initialization['fields']['processID'])
+        command = subprocess.check_output(['/bin/ps', '-p', str(pid), '-o', 'comm='], text=True).strip()
+        assert command.endswith('/WinnowLightning.app/WinnowLightning'), command
+        self.clients[role] = dict(pid=pid, node=node, journal=str(journal))
+        other = 'sender' if role == 'recipient' else 'recipient'
+        assert other not in self.clients or not self.alive(other), 'both client processes running'
+        return self.record(role + '_started', pid=pid, node=node)
+
+    def alive(self, role):
+        try:
+            os.kill(self.clients[role]['pid'], 0)
+            return True
+        except ProcessLookupError:
+            return False
+
+    def kill(self, role):
+        client = self.clients[role]
+        assert self.alive(role)
+        os.kill(client['pid'], signal.SIGKILL)
+        reference.wait(lambda: not self.alive(role))
+        target = self.evidence / (role + '-story-events.jsonl')
+        target.write_bytes(Path(client['journal']).read_bytes())
+        return self.record(role + '_killed', pid=client['pid'], signal='SIGKILL', running=self.alive(role))
+
+    def export_journals(self, *, preserve_run=False):
+        for role, client in self.clients.items():
+            journal = Path(client['journal'])
+            if not journal.is_file():
+                continue
+            data = journal.read_bytes()
+            (self.evidence / (role + '-story-events.jsonl')).write_bytes(data)
+            if preserve_run:
+                snapshot = self.run + '-' + role + '-story-events.jsonl'
+                (self.evidence / snapshot).write_bytes(data)
+                self.record('client_journal_preserved', run=self.run, role=role,
+                            pid=client['pid'], snapshot=snapshot, sha256=hashlib.sha256(data).hexdigest())
+
+    def recipient_channel(self):
+        node = self.clients['recipient']['node']
+        reference.wait(lambda: node in self.b.call('status')['peers'])
+        self.b.call('open', peer=node, public=False, amount=1_000_000)
+        ready = reference.wait(lambda: self.b.event('funding'))
+        self.b.events.remove(ready)
+        tx, _ = self.fixture.funding(ready['script'], ready['amount'])
+        self.b.call('fund', id=ready['temporary_id'], peer=node, transaction=tx)
+        reference.wait(lambda: (self.b.drain(), tx in self.b.broadcasts)[1])
+        txid = self.fixture.rpc('sendrawtransaction', tx)
+        self.mine(6)
+        channel = reference.wait(lambda: next((c for c in self.b.call('status')['channels'] if c['peer'] == node and c['usable']), None), timeout=90)
+        paths = self.b.call('server_paths', recipient='74' * 32)['paths']
+        self.recipient_profile = dict(serverPath=paths[0], inboundShortChannelID=channel['scid'], baseMsat=1000,
+                                      proportionalMillionths=0, expiryDelta=48, maximumMsat=50_000_000)
+        self.record('recipient_channel_confirmed', txid=txid, channel=channel['id'])
+        return self.profile('recipient')
+
+    def hold(self):
+        assert not self.alive('recipient')
+        sender = self.clients['sender']['node']
+        def committed():
+            return next((h for c in self.a.call('status')['channels'] if c['peer'] == sender
+                         for h in c['pending_inbound'] if h['state'] == 'Some(Committed)'), None)
+        held = reference.wait(committed)
+        assert held['amount'] == 5_002_000
+        # Same read-only classifier as the independent host interop tests.
+        # The Debug app uses this explicitly pinned, disposable fixture key.
+        secret = hashlib.sha256(b'winnow-lightning-ui' + bytes.fromhex('02' * 16)).hexdigest()
+        checked = {}
+        def persisted():
+            for raw in self.b.call('offline_queue', peer=self.clients['recipient']['node'])['messages']:
+                if raw not in checked:
+                    output = subprocess.check_output([str(self.swift), 'inspect-held', secret, raw], text=True)
+                    checked[raw] = json.loads(output)['held'] == 'true'
+                if checked[raw]:
+                    return hashlib.sha256(bytes.fromhex(raw)).hexdigest()
+            return None
+        notification = reference.wait(persisted)
+        self.payment_hash = held['hash']
+        self.record('held_and_durably_notified', hash=held['hash'], amount_msat=held['amount'], notification_sha256=notification)
+        return self.kill('sender')
+
+    def settled(self):
+        assert not self.alive('sender')
+        forwarding = reference.wait(lambda: self.b.event('forwarded'), timeout=90)
+        assert forwarding['outbound_msat'] == 5_000_000 and forwarding['fee'] == 1000 and not forwarding['onchain']
+        self.record('recipient_settled_while_sender_stopped', hash=self.payment_hash)
+        return dict(hash=self.payment_hash, amount_msat=5_000_000)
+
+    def finish(self):
+        af = reference.wait(lambda: self.a.event('forwarded'))
+        assert af['fee'] == 1000 and af['outbound_msat'] == 5_001_000 and not af['onchain']
+        assert not self.alive('recipient')
+        receipt = dict(result='passed', hash=self.payment_hash, amount_msat=5_000_000, provider_fees_msat=[1000, 1000],
+            timeline=self.timeline, ldk_commit=reference.LDK_COMMIT, bitcoin_core_version=self.fixture.rpc('getnetworkinfo')['version'],
+            swift_source=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+            source_dirty=bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip()),
+            reference_binary_sha256=hashlib.sha256(self.fixture.harness.read_bytes()).hexdigest())
+        (self.evidence / 'async-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+        return receipt
+
+    def invoice_fixture(self):
+        # The previous UI case can fail before kill() snapshots its journal.
+        # Retain that run before the invoice case replaces the registered roles.
+        self.export_journals(preserve_run=True)
+        cln = Path(os.environ['WINNOW_CLN_DIR']).resolve()
+        peer = __import__('runpy').run_path(str(ROOT / 'scripts/ci-lightning-peer'))
+        commit = subprocess.check_output(['git', '-C', str(cln), 'rev-parse', 'HEAD'], text=True).strip()
+        assert commit == peer['CLN_COMMIT']
+        subprocess.run(['git', '-C', str(cln), 'diff', '--exit-code', 'HEAD', '--'], check=True)
+        self.cln_ui_reference = None
+        extra = []
+        manifest_path = os.environ.get('WINNOW_CLN_UI_MANIFEST')
+        if manifest_path:
+            manifest, raw = validated_ui_cln_reference(cln, manifest_path)
+            (self.evidence / 'ui-cln-reference.json').write_bytes(raw)
+            self.cln_ui_reference = dict(kind='released_cln_with_ui_hsmd_override', manifest='ui-cln-reference.json',
+                manifest_sha256=hashlib.sha256(raw).hexdigest(), stock_release_commit=commit,
+                hsm_sha256=manifest['hsmd_override']['sha256'], upstream_patch_sha256=manifest['upstream_patch']['sha256'])
+            extra = ['--subdaemon=hsmd:' + manifest['hsmd_override']['path']]
+        self.cln_dir = self.fixture.root / 'invoice-cln'; self.cln_dir.mkdir()
+        peer_port = reference.port()
+        rpc_port = next(value.split('=', 1)[1] for value in self.fixture.base if value.startswith('-rpcport='))
+        log = self.fixture.log('invoice-cln')
+        self.cln_process = subprocess.Popen([str(cln / 'lightningd/lightningd'), f'--lightning-dir={self.cln_dir}', '--network=regtest',
+            f'--addr=127.0.0.1:{peer_port}', '--autolisten=false', '--announce-addr-discovered=false',
+            f'--bitcoin-cli={self.fixture.bitcoin / "bitcoin-cli"}', f'--bitcoin-datadir={self.fixture.root / "bitcoin"}',
+            f'--bitcoin-rpcport={rpc_port}', '--log-level=debug', *extra], stdout=log, stderr=log)
+        self.cln_cli = cln / 'cli/lightning-cli'
+        info = peer['wait_for'](lambda: self.ln('getinfo'))
+        self.run = 'bolt11-' + secrets.token_hex(5); self.clients = {}
+        name = 'Core Lightning with unreleased macOS HSM fix' if self.cln_ui_reference else 'Stock Core Lightning'
+        profile = dict(network='regtest', name=name, peer=info['id'], host='127.0.0.1', port=peer_port)
+        return dict(bitcoin_peer=f'127.0.0.1:{self.fixture.p2p_port}', run=self.run, sender=profile, sender_entropy='05')
+
+    def ln(self, method, *args):
+        value = subprocess.check_output([str(self.cln_cli), '-J', '--notifications=none', f'--lightning-dir={self.cln_dir}',
+            '--network=regtest', method, *map(str, args)], text=True, stderr=subprocess.PIPE, timeout=30)
+        return json.loads(value)
+
+    def command(self, data):
+        command = data['command']
+        if command == 'invoice_fixture':
+            return self.invoice_fixture()
+        if command == 'bolt11_invoice':
+            return self.ln('invoice', '2000000msat', 'swift-ui-invoice', 'Ordinary invoice payment')
+        if command == 'assert_invoice_unpaid':
+            invoice = self.ln('listinvoices', 'swift-ui-invoice')['invoices'][0]
+            assert invoice['status'] == 'unpaid'
+            return self.record('canceled_invoice_review_did_not_pay')
+        if command == 'invoice_settled':
+            invoice = self.ln('listinvoices', 'swift-ui-invoice')['invoices'][0]
+            assert invoice['status'] == 'paid' and invoice['amount_received_msat'] == 2_000_000
+            receipt = dict(result='passed', scope='App BOLT11 review cancellation, approval, settlement and restart',
+                invoice=invoice, source=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                source_dirty=bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip()))
+            if self.cln_ui_reference:
+                receipt['reference'] = self.cln_ui_reference
+            (self.evidence / 'bolt11-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+            return invoice
+        if command == 'status':
+            return dict(bitcoin_peer=f'127.0.0.1:{self.fixture.p2p_port}', run=self.run,
+                        sender=self.profile('sender'), recipient=self.profile('recipient'))
+        if command == 'register':
+            return self.register(data['role'], data['node'])
+        if command == 'clipboard':
+            return dict(text=subprocess.check_output(['/usr/bin/xcrun', 'simctl', 'pbpaste', self.simulator], text=True))
+        if command == 'recipient_channel':
+            return self.recipient_channel()
+        if command == 'kill':
+            return self.kill(data['role'])
+        if command == 'fund_wallet':
+            txid = self.fixture.rpc('sendtoaddress', data['address'], '0.02000000')
+            self.mine(1)
+            return dict(txid=txid, amount_sat=2_000_000)
+        if command == 'confirm_funding':
+            transactions = reference.wait(lambda: self.fixture.rpc('getrawmempool'), timeout=90)
+            assert len(transactions) == 1
+            self.mine(6)
+            transaction = self.fixture.rpc('getrawtransaction', transactions[0], True)
+            assert any(round(out['value'] * 100_000_000) == 100_000 and out['scriptPubKey']['type'] == 'witness_v0_scripthash' for out in transaction['vout'])
+            inputs = sum(round(self.fixture.rpc('getrawtransaction', item['txid'], True)['vout'][item['vout']]['value'] * 100_000_000) for item in transaction['vin'])
+            self.funding_fee = inputs - sum(round(out['value'] * 100_000_000) for out in transaction['vout'])
+            self.funding_txid = transactions[0]
+            self.record('sender_funding_confirmed', txid=transactions[0])
+            return transaction
+        if command == 'assert_no_funding':
+            assert self.fixture.rpc('getrawmempool') == [], 'canceled review published funding'
+            return self.record('canceled_funding_review_did_not_publish')
+        if command == 'hold_and_kill':
+            return self.hold()
+        if command == 'recipient_settled':
+            return self.settled()
+        if command == 'finish':
+            return self.finish()
+        if command == 'mine_close':
+            transactions = reference.wait(lambda: self.fixture.rpc('getrawmempool'), timeout=90)
+            assert len(transactions) == 1
+            close = self.fixture.rpc('getrawtransaction', transactions[0], True)
+            assert len(close['vin']) == 1 and close['vin'][0]['txid'] == self.funding_txid
+            values = [round(out['value'] * 100_000_000) for out in close['vout']]
+            close_fee = 100_000 - sum(values)
+            assert close_fee == 905 and 5002 in values, (close_fee, values)
+            self.mine(12)
+            expected = 2_000_000 - self.funding_fee - 5002 - close_fee
+            receipt = json.loads((self.evidence / 'async-receipt.json').read_text())
+            receipt.update(funding_fee_sat=self.funding_fee, close_fee_sat=close_fee,
+                           returned_wallet_balance_sat=expected, close_transaction=transactions[0])
+            (self.evidence / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+            return dict(expected_balance=expected, transactions=transactions, height=self.fixture.rpc('getblockcount'))
+        raise ValueError('Unknown fixture command')
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('directory', type=Path)
+    parser.add_argument('--simulator', required=True)
+    parser.add_argument('--bundle', default='com.btcswift.app')
+    args = parser.parse_args()
+    args.directory.mkdir(parents=True, exist_ok=False)
+    journey = Journey(args.directory, args.simulator, args.bundle)
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+        def do_POST(self):
+            if self.headers.get('Authorization') != 'Bearer ' + journey.token:
+                self.send_error(403)
+                return
+            try:
+                length = int(self.headers['Content-Length'])
+                assert 0 < length < 100_000
+                result = journey.command(json.loads(self.rfile.read(length)))
+                response = dict(ok=True, result=result)
+            except Exception as error:
+                journey.record('failure', reason=str(error))
+                response = dict(ok=False, error=str(error))
+            raw = json.dumps(response).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+    server = HTTPServer(('127.0.0.1', 0), Handler)
+    config = dict(url=f'http://127.0.0.1:{server.server_port}', token=journey.token, simulator=args.simulator)
+    (args.directory / 'connection.json').write_text(json.dumps(config))
+    os.chmod(args.directory / 'connection.json', 0o600)
+    print('Simulator fixture ready', flush=True)
+    def stop(*_):
+        raise KeyboardInterrupt()
+    signal.signal(signal.SIGTERM, stop)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+        try:
+            # Include the restarted clients and final close review, not only
+            # the journal snapshots taken before each intentional crash.
+            journey.export_journals()
+        finally:
+            __import__('runpy').run_path(str(ROOT / 'scripts/ci-lightning-peer'))['stop'](journey.cln_process)
+            journey.fixture.close()
+
+
+if __name__ == '__main__':
+    main()

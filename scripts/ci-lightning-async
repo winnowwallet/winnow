@@ -1,0 +1,615 @@
+#!/usr/bin/env python3
+"""Live Swift/stock-LDK regtest async lifecycle, using separately killed processes."""
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import selectors
+import shutil
+import socket
+import subprocess
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parent.parent
+LDK_COMMIT = '0a2b003e7e1602df8933b15b7563ba8b6e198391'
+
+
+def port():
+    with socket.socket() as sock:
+        sock.bind(('127.0.0.1', 0))
+        return sock.getsockname()[1]
+
+
+def wait(check, timeout=45):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        value = check()
+        if value:
+            return value
+        time.sleep(0.05)
+    raise TimeoutError('Async peer condition did not become true')
+
+
+def record_peer_event(evidence, event, *, role=None, pid=None, command=None, stage=None,
+                      success=None, error_type=None, elapsed_seconds=None):
+    # Observe only: never retain arguments, successful replies or error text.
+    # A failed/nonblocking diagnostic write must not replace the real result.
+    try:
+        fields = dict(role=role, pid=pid, command=command, stage=stage, success=success,
+                      error_type=error_type, elapsed_seconds=elapsed_seconds)
+        record = dict(event=event, epoch_ns=time.time_ns(), monotonic_ns=time.monotonic_ns(),
+                      **{key: value for key, value in fields.items() if value is not None})
+        with (evidence / 'peer-events.jsonl').open('a', encoding='utf-8') as file:
+            fcntl.flock(file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            file.write(json.dumps(record, sort_keys=True) + '\n')
+            file.flush()
+    except Exception:
+        pass
+
+
+def observed_wait(evidence, stage, check, timeout=45):
+    record_peer_event(evidence, 'stage_started', stage=stage)
+    start = time.monotonic_ns()
+    try:
+        result = wait(check, timeout=timeout)
+    except BaseException as error:
+        record_peer_event(evidence, 'stage_failed', stage=stage, success=False,
+                          error_type=type(error).__name__,
+                          elapsed_seconds=(time.monotonic_ns() - start) / 1_000_000_000)
+        raise
+    record_peer_event(evidence, 'stage_completed', stage=stage, success=True,
+                      elapsed_seconds=(time.monotonic_ns() - start) / 1_000_000_000)
+    return result
+
+
+def reconnect_async_recipient(recipient, return_provider, notification_provider):
+    recipient.start()
+    recipient.call('connect', peer=return_provider.node, address=f'127.0.0.1:{return_provider.initial["port"]}')
+    # A TCP connect acknowledgement does not complete Init. Establish the
+    # release response route before reconnecting the provider that replays the
+    # saved HeldHtlcAvailable notification. status.peers uses LDK list_peers,
+    # which reports only peers whose initial handshake has completed.
+    wait(lambda: return_provider.node in recipient.call('status')['peers'])
+    recipient.call('connect', peer=notification_provider.node, address=f'127.0.0.1:{notification_provider.initial["port"]}')
+
+
+class Peer:
+    def __init__(self, command, log, swift=False):
+        self.command, self.log, self.swift = command, log, swift
+        self.events, self.broadcasts = [], []
+        self.process, self.selector = None, None
+        try:
+            self.start()
+        except BaseException:
+            # Fixture cannot register a peer until this constructor returns.
+            # Reap partial ownership here and preserve the startup failure.
+            try:
+                self.close()
+            except BaseException:
+                pass
+            raise
+
+    def observe(self, action, operation, command=None):
+        start = time.monotonic_ns()
+        def record(event, **fields):
+            try:
+                log = Path(self.log.name)
+                process = getattr(self, 'process', None)
+                record_peer_event(log.parent, event, role=log.stem,
+                                  pid=process.pid if process is not None else None,
+                                  command=command, **fields)
+            except Exception:
+                pass
+        record(action + '_started')
+        try:
+            result = operation()
+        except BaseException as error:
+            record(action + '_failed', success=False, error_type=type(error).__name__,
+                   elapsed_seconds=(time.monotonic_ns() - start) / 1_000_000_000)
+            raise
+        record(action + '_completed', success=True,
+               elapsed_seconds=(time.monotonic_ns() - start) / 1_000_000_000)
+        return result
+
+    def start(self):
+        return self.observe('start', self._start)
+
+    def _start(self):
+        self.process = subprocess.Popen(self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log)
+        self.selector = selectors.DefaultSelector()
+        self.selector.register(self.process.stdout, selectors.EVENT_READ)
+        self.initial = self.read()
+        assert self.initial.get('ok', True), self.initial
+        self.node = self.initial.get('node') or self.initial['node_id']
+        self.started = time.monotonic_ns()
+        self.stopped = None
+
+    def read(self):
+        if not self.selector.select(30):
+            raise TimeoutError(f'Peer stalled: {self.command}')
+        line = self.process.stdout.readline()
+        if not line:
+            raise RuntimeError(f'Peer exited: {self.command}')
+        return json.loads(line)
+
+    def call(self, command, **values):
+        return self.observe('command', lambda: self._call(command, **values), command)
+
+    def _call(self, command, **values):
+        if self.swift and command == 'height':
+            self.command[-1] = values['height']
+        self.process.stdin.write(json.dumps(dict(command=command, **values)).encode() + b'\n')
+        self.process.stdin.flush()
+        reply = self.read()
+        if self.swift:
+            return reply
+        assert reply['ok'], reply
+        return reply['result']
+
+    def drain(self):
+        response = self.call('events')
+        events = json.loads(response['events']) if self.swift else response['events']
+        for event in events:
+            assert 'error' not in event, event
+            if event.get('type') in ('1', '17'):
+                raise AssertionError(event)
+        self.events.extend(events)
+        self.broadcasts.extend(response.get('broadcasts', []))
+        return events
+
+    def event(self, kind):
+        self.drain()
+        return next((item for item in self.events if item.get('event') == kind), None)
+
+    def close(self):
+        return self.observe('close', self._close)
+
+    def _close(self):
+        if self.process is not None and self.process.poll() is None:
+            self.process.kill()  # actual abrupt process death, not a logical offline flag
+            self.process.wait(timeout=10)
+        self.stopped = time.monotonic_ns()
+        if self.selector is not None:
+            self.selector.close()
+
+    def reconnect_to(self, provider):
+        if self.swift:
+            self.command[2] = str(provider.initial['port'])
+        self.start()
+        if not self.swift:
+            self.call('connect', peer=provider.node, address=f'127.0.0.1:{provider.initial["port"]}')
+
+
+class Fixture:
+    def __init__(self, root, evidence, harness, swift, bitcoin, p2p=False):
+        self.root, self.evidence, self.harness, self.swift, self.bitcoin = root, evidence, harness, swift, bitcoin
+        self.peers, self.logs = [], []
+        self.core = None
+        try:
+            self.base = ['-regtest', f'-datadir={root / "bitcoin"}', f'-rpcport={port()}']
+            (root / 'bitcoin').mkdir()
+            log = self.log('bitcoin')
+            self.p2p_port = port() if p2p else None
+            listen = [f'-port={self.p2p_port}', '-bind=127.0.0.1', '-listen=1', '-blockfilterindex=1', '-peerblockfilters=1', '-txindex=1'] if p2p else ['-listen=0']
+            command = [str(bitcoin / 'bitcoind'), *self.base, '-server=1', *listen, '-connect=0', '-dnsseed=0', '-discover=0',
+                       '-fallbackfee=0.00002', '-rpcbind=127.0.0.1', '-rpcallowip=127.0.0.1', '-debug=rpc']
+            self.record_core('launch_requested', argv=command, cwd=os.getcwd())
+            self.core = subprocess.Popen(command, stdout=log, stderr=log)
+            self.record_core('launched')
+            def ready():
+                self.record_core('startup_poll', poll_change_only=True)
+                try:
+                    return self.rpc('getblockchaininfo')
+                except subprocess.CalledProcessError:
+                    return False
+            wait(ready)
+            self.record_core('startup_ready', snapshot=True)
+            self.rpc('createwallet', 'fixture')
+            self.address = self.rpc('getnewaddress')
+            self.rpc('generatetoaddress', 101, self.address)
+            self.chain = bytes.fromhex(self.rpc('getblockhash', 0))[::-1].hex()
+        except BaseException as error:
+            self.record_core('startup_failure', snapshot=True, error_type=type(error).__name__,
+                             error_exit_code=getattr(error, 'returncode', None))
+            # The caller cannot own this fixture until construction returns.
+            # Clean partial ownership here, including a failed Core launch,
+            # and keep the original startup failure even if cleanup fails.
+            try:
+                self.close()
+            except BaseException:
+                pass
+            raise
+
+    def log(self, name):
+        handle = open(self.evidence / f'{name}.log', 'w')
+        self.logs.append(handle)
+        return handle
+
+    def record_core(self, event, *, poll_change_only=False, snapshot=False, **fields):
+        # Observe only: an exited child does not shorten the existing warm-up
+        # wait, and diagnostics never replace a startup or cleanup failure.
+        try:
+            result = self.core.poll() if self.core is not None else None
+            if poll_change_only and getattr(self, '_last_core_poll', object()) == result:
+                return
+            self._last_core_poll = result
+            record = dict(event=event, epoch_ns=time.time_ns(), monotonic_ns=time.monotonic_ns(),
+                          pid=self.core.pid if self.core is not None else None, poll=result, **fields)
+            if snapshot:
+                files = []
+                truncated = False
+                for directory, folders, names in os.walk(self.root / 'bitcoin'):
+                    folders.sort()
+                    for name in sorted(names):
+                        if len(files) == 128:
+                            truncated = True
+                            break
+                        path = Path(directory) / name
+                        files.append(dict(path=str(path.relative_to(self.root / 'bitcoin')), size=path.stat().st_size))
+                    if truncated:
+                        break
+                record.update(data_files=files, data_files_truncated=truncated)
+            with (self.evidence / 'core-events.jsonl').open('a', encoding='utf-8') as file:
+                fcntl.flock(file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                file.write(json.dumps(record, sort_keys=True) + '\n')
+                file.flush()
+        except Exception:
+            pass
+
+    def record_rpc(self, method, start_epoch_ns, start_monotonic_ns, error):
+        end_epoch_ns, end_monotonic_ns = time.time_ns(), time.monotonic_ns()
+        try:
+            record = dict(method=method, start_epoch_ns=start_epoch_ns, end_epoch_ns=end_epoch_ns,
+                          start_monotonic_ns=start_monotonic_ns, end_monotonic_ns=end_monotonic_ns,
+                          elapsed_seconds=(end_monotonic_ns - start_monotonic_ns) / 1_000_000_000,
+                          timeout_seconds=20, exit_code=0 if error is None else getattr(error, 'returncode', None),
+                          timed_out=isinstance(error, subprocess.TimeoutExpired))
+            if error is not None:
+                record['error_type'] = type(error).__name__
+                for name in ('stdout', 'stderr'):
+                    value = getattr(error, name, None) or ''
+                    text = value.decode('utf-8', errors='replace') if isinstance(value, bytes) else str(value)
+                    record['partial_' + name] = text[:4096]
+                    record[name + '_truncated'] = len(text) > 4096
+            # A nonblocking append lock prevents interleaved records without
+            # extending CLI waits. Omit arguments, auth, and successful output.
+            with (self.evidence / 'rpc-events.jsonl').open('a', encoding='utf-8') as file:
+                fcntl.flock(file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                file.write(json.dumps(record, sort_keys=True) + '\n')
+                file.flush()
+        except Exception:
+            # Diagnostics must never replace a CLI failure or change its result.
+            pass
+
+    def rpc(self, command, *args):
+        arguments = [json.dumps(value) if isinstance(value, bool) else str(value) for value in args]
+        start_epoch_ns, start_monotonic_ns = time.time_ns(), time.monotonic_ns()
+        error = None
+        try:
+            raw = subprocess.check_output([str(self.bitcoin / 'bitcoin-cli'), *self.base, command, *arguments], stderr=subprocess.PIPE, text=True, timeout=20)
+        except BaseException as failure:
+            error = failure
+            raise
+        finally:
+            self.record_rpc(command, start_epoch_ns, start_monotonic_ns, error)
+        raw = raw.strip()
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return raw
+
+    def ldk(self, name, seed, client=False):
+        peer = Peer([str(self.harness), 'node', str(self.root / name), str(seed), 'client' if client else 'provider'], self.log(name))
+        self.peers.append(peer)
+        self.sync([peer])
+        return peer
+
+    def swift_peer(self, name, seed, provider):
+        peer = Peer([str(self.swift), '127.0.0.1', str(provider.initial['port']), provider.node, self.chain, str(self.root / name),
+                     str(seed), str(self.rpc('getblockcount'))], self.log(name), swift=True)
+        self.peers.append(peer)
+        return peer
+
+    def sync(self, nodes=None):
+        active = [p for p in (nodes or self.peers) if p.process.poll() is None]
+        height = self.rpc('getblockcount')
+        heights = {p: p.call('status')['height'] for p in active if not p.swift}
+        heights.update({p: int(p.call('scan_begin', genesis=self.chain)['next']) - 1 for p in active if p.swift})
+        for block_height in range(min(heights.values(), default=height) + 1, height + 1):
+            block = self.rpc('getblock', self.rpc('getblockhash', block_height), 0)
+            for peer, current in heights.items():
+                if current < block_height:
+                    peer.call('scan_block' if peer.swift else 'block', height=str(block_height) if peer.swift else block_height, hex=block)
+        for peer in active:
+            if peer.swift:
+                result = peer.call('height', height=str(height))
+                peer.events.extend(json.loads(result['chain_events']))
+
+    def funding(self, script, sats):
+        address = self.rpc('decodescript', script)['address']
+        raw = self.rpc('createrawtransaction', '[]', json.dumps({address: sats / 100_000_000}))
+        funded = self.rpc('fundrawtransaction', raw, json.dumps({'fee_rate': 2}))['hex']
+        signed = self.rpc('signrawtransactionwithwallet', funded)
+        assert signed['complete']
+        tx = signed['hex']
+        vout = next(out['n'] for out in self.rpc('decoderawtransaction', tx)['vout'] if out['scriptPubKey']['hex'] == script)
+        return tx, vout
+
+    def open_ldk(self, source, target, public):
+        source.call('connect', peer=target.node, address=f'127.0.0.1:{target.initial["port"]}')
+        time.sleep(0.3)
+        source.call('open', peer=target.node, public=public, amount=1_000_000)
+        ready = wait(lambda: source.event('funding'))
+        source.events.remove(ready)
+        tx, _ = self.funding(ready['script'], ready['amount'])
+        source.call('fund', id=ready['temporary_id'], peer=target.node, transaction=tx)
+        wait(lambda: (source.drain(), tx in source.broadcasts)[1])
+        self.rpc('sendrawtransaction', tx)
+        self.rpc('generatetoaddress', 6, self.address)
+        self.sync()
+        channel = wait(lambda: next((c for c in source.call('status')['channels'] if c['peer'] == target.node and c['usable']), None))
+        if public:
+            source.call('announce'); target.call('announce')
+            time.sleep(0.3)
+        return channel
+
+    def open_swift(self, swift, provider):
+        swift.call('open', capacity='1000000')
+        ready = wait(lambda: swift.event('funding_required'))
+        tx, vout = self.funding(ready['script'], 1_000_000)
+        swift.call('fund', id=ready['id'], transaction=tx, output=str(vout))
+        signed = wait(lambda: swift.event('broadcast_funding'))
+        assert signed['transaction'] == tx
+        self.rpc('sendrawtransaction', tx)
+        self.rpc('generatetoaddress', 6, self.address)
+        self.sync()
+        # The verified scan publishes channel_ready. A second synthetic
+        # confirmation races the peer's readiness and can reject a ready channel.
+        def ready():
+            swift.drain()
+            snapshot = swift.call('snapshot')
+            assert snapshot['id'] == signed['id'], snapshot
+            return snapshot['phase'] == 'ready'
+        wait(ready)
+        swift.call('recovery', id=signed['id'], destination=self.rpc('getaddressinfo', self.address)['scriptPubKey'])
+        return signed['id']
+
+    def fund_swift_recipient(self, provider, swift):
+        wait(lambda: swift.node in provider.call('status')['peers'])
+        provider.call('open', peer=swift.node, public=False, amount=1_000_000)
+        ready = wait(lambda: provider.event('funding'))
+        provider.events.remove(ready)
+        tx, _ = self.funding(ready['script'], ready['amount'])
+        provider.call('fund', id=ready['temporary_id'], peer=swift.node, transaction=tx)
+        wait(lambda: (provider.drain(), tx in provider.broadcasts)[1])
+        channel = swift.call('snapshot')['id']
+        self.rpc('sendrawtransaction', tx)
+        self.rpc('generatetoaddress', 6, self.address)
+        self.sync()
+        def ready():
+            swift.drain()
+            snapshot = swift.call('snapshot')
+            assert snapshot['id'] == channel, snapshot
+            return snapshot['phase'] == 'ready'
+        wait(ready)
+        swift.call('recovery', id=channel, destination=self.rpc('getaddressinfo', self.address)['scriptPubKey'])
+        return wait(lambda: next((c for c in provider.call('status')['channels'] if c['peer'] == swift.node and c['usable']), None))
+
+    def restart_providers(self, a, b):
+        # Status replies follow a ChannelManager persistence barrier. Both
+        # processes then die while clients are absent and HTLCs remain held.
+        a.call('status'); b.call('status')
+        a.close(); b.close()
+        a.start(); b.start()
+        a.call('connect', peer=b.node, address=f'127.0.0.1:{b.initial["port"]}')
+        observed_wait(self.evidence, 'provider_a_reestablished', lambda: any(c['peer'] == b.node and c['usable'] for c in a.call('status')['channels']))
+        observed_wait(self.evidence, 'provider_b_reestablished', lambda: any(c['peer'] == a.node and c['usable'] for c in b.call('status')['channels']))
+        print('Both LDK providers restored held channels and offline messages', flush=True)
+
+    def held_notification(self, provider, recipient):
+        # Count is not evidence: duplicate invoice requests may precede the
+        # held notification. Authenticate and classify the saved ciphertext
+        # without starting a recipient engine or generating a release.
+        assert recipient.process.poll() is not None
+        cache = {}
+        def persisted():
+            for raw in provider.call('offline_queue', peer=recipient.node)['messages']:
+                if raw not in cache:
+                    if recipient.swift:
+                        result = subprocess.check_output([str(self.swift), 'inspect-held', '2', raw], text=True)
+                        cache[raw] = json.loads(result)['held'] == 'true'
+                    else:
+                        command = dict(command='held_message', seed=23, hex=raw)
+                        result = subprocess.check_output([str(self.harness)], input=json.dumps(command) + '\n', text=True)
+                        decoded = json.loads(result)
+                        assert decoded['ok'], decoded
+                        cache[raw] = decoded['result']['held']
+                if cache[raw]:
+                    return hashlib.sha256(bytes.fromhex(raw)).hexdigest()
+            return None
+        return observed_wait(self.evidence, 'held_notification_persisted', persisted)
+
+    def close(self):
+        try:
+            for peer in self.peers:
+                peer.close()
+        finally:
+            try:
+                self.record_core('cleanup_started')
+                if self.core is not None and self.core.poll() is None:
+                    self.core.terminate()
+                    self.record_core('terminate_sent')
+                    try:
+                        self.core.wait(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        self.record_core('terminate_timeout', timeout_seconds=15)
+                        self.core.kill()
+                        self.record_core('kill_sent')
+                        self.core.wait(timeout=10)
+                    self.record_core('reaped')
+            except BaseException as error:
+                self.record_core('cleanup_failure', error_type=type(error).__name__)
+                raise
+            finally:
+                for log in self.logs:
+                    log.close()
+                self.record_core('cleanup_finished')
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--direction', choices=['swift-to-ldk', 'ldk-to-swift'], default='swift-to-ldk')
+    parser.add_argument('--restart-providers', action='store_true')
+    args = parser.parse_args()
+    harness = Path(os.environ['WINNOW_LDK_HARNESS'])
+    bitcoin = Path(os.environ['WINNOW_BITCOIN_DIR'])
+    reference = harness.resolve().parents[3] / 'ldk'
+    assert subprocess.check_output(['git', '-C', str(reference), 'rev-parse', 'HEAD'], text=True).strip() == LDK_COMMIT
+    subprocess.run(['git', '-C', str(reference), 'diff', '--exit-code', 'HEAD', '--'], check=True)
+    subprocess.run(['swift', 'build', '--product', 'winnow-lightning-peer-fixture'], cwd=ROOT, check=True)
+    binary_dir = subprocess.check_output(['swift', 'build', '--show-bin-path'], cwd=ROOT, text=True).strip()
+    swift = Path(binary_dir) / 'winnow-lightning-peer-fixture'
+    scenario = args.direction + ('-provider-restart' if args.restart_providers else '')
+    evidence = Path(os.environ.get('WINNOW_LIGHTNING_RESULTS', ROOT / '.build/lightning-peer-results')) / scenario
+    evidence.mkdir(parents=True, exist_ok=True)
+    (evidence / 'receipt.json').unlink(missing_ok=True)
+    root = Path(tempfile.mkdtemp(prefix='winnow-async-'))
+    fixture = None
+    try:
+        fixture = Fixture(root, evidence, harness, swift, bitcoin)
+        a, b = fixture.ldk('provider-a', 21), fixture.ldk('provider-b', 22)
+        ab = fixture.open_ldk(a, b, public=True)
+        print('Public provider channel ready', flush=True)
+        if args.direction == 'swift-to-ldk':
+            recipient = fixture.ldk('recipient', 23, client=True)
+            fixture.open_ldk(b, recipient, public=False)
+            sender = fixture.swift_peer('sender', 1, a)
+            channel = fixture.open_swift(sender, a)
+            paths = b.call('server_paths', recipient='72' * 32)['paths']
+            recipient.call('receive_offer', paths=paths)
+            def offer_ready():
+                response = recipient.call('offer')
+                return response['offer']
+            offer = observed_wait(evidence, 'offer_ready', offer_ready)
+            print('Reusable receive offer persisted', flush=True)
+            recipient.close()
+            recipient_stopped = recipient.stopped
+            payment_id = '51' * 32
+            initial = sender.call('async_pay', id=payment_id, channel=channel, introduction=b.node, scid=str(ab['scid']),
+                                  offer=offer, amount='5000000', fee='50000')
+            def held():
+                sender.drain()
+                payment = sender.call('payment', id=payment_id)
+                assert payment['phase'] != 'failed', payment
+                return payment if payment['phase'] == 'awaitingRecipient' else None
+            hold = wait(held)
+            notification_hash = fixture.held_notification(b, recipient)
+            sender.close()
+            sender_stopped = sender.stopped
+            print('Sender terminated after committed hold and persisted offline notification', flush=True)
+            if args.restart_providers:
+                fixture.restart_providers(a, b)
+            reconnect_async_recipient(recipient, a, b)
+            received = observed_wait(evidence, 'recipient_received', lambda: recipient.event('received'))
+            recipient_settled = time.monotonic_ns()
+            assert sender.process.poll() is not None
+            assert received['hash'] == initial['hash']
+            claimable = next(e for e in recipient.events if e.get('event') == 'claimable' and e['hash'] == received['hash'])
+            assert claimable['intended_msat'] == 5_000_000
+            # Aggregate blinded fees round upward at each hop; the randomized
+            # dummy policies do not guarantee a fixed 10-msat surplus. Check
+            # the actual wire amount and exact total debit below instead.
+            assert received['amount'] >= 5_000_000
+            recipient_started = recipient.started
+            sender.reconnect_to(a)
+            def settled_once():
+                sender.drain()
+                result = sender.call('payment', id=payment_id)
+                return result if result['phase'] == 'settled' else None
+            settled = wait(settled_once)
+            assert hashlib.sha256(bytes.fromhex(settled['preimage'])).hexdigest() == received['hash']
+            af, bf = wait(lambda: a.event('forwarded')), wait(lambda: b.event('forwarded'))
+            assert af['fee'] == 1000 and not af['onchain'] and not bf['onchain']
+            assert af['outbound_msat'] == bf['outbound_msat'] + bf['fee']
+            assert bf['outbound_msat'] == claimable['wire_amount_msat']
+            assert 5_000_000 + int(hold['fee']) == claimable['wire_amount_msat'] + af['fee'] + bf['fee']
+            assert received['amount'] <= claimable['wire_amount_msat'] <= 5_000_000 + int(hold['fee'])
+            assert int(hold['fee']) <= 50000
+            receipt = dict(direction=args.direction, hash=received['hash'], amount_msat=5_000_000, received_msat=received['amount'],
+                           channel_received_msat=claimable['wire_amount_msat'], provider_fees_msat=[af['fee'], bf['fee']],
+                           fee_budget_msat=50000, sender_fee_msat=int(hold['fee']), hold=hold['phase'], settlement=settled['phase'],
+                           recipient_stopped_ns=recipient_stopped, sender_stopped_ns=sender_stopped, recipient_restarted_ns=recipient_started,
+                           sender_restarted_ns=sender.started, ldk_commit=LDK_COMMIT)
+            assert recipient_stopped < sender_stopped < recipient_started < sender.started
+            print('PASS: Swift-to-LDK async payment settled while sender process was stopped', flush=True)
+        else:
+            recipient = fixture.swift_peer('recipient', 2, b)
+            br = fixture.fund_swift_recipient(b, recipient)
+            sender = fixture.ldk('sender', 24, client=True)
+            fixture.open_ldk(sender, a, public=False)
+            paths = b.call('server_paths', recipient='73' * 32)['paths']
+            recipient.call('async_register', id='62' * 32, path=paths[0], scid=str(br['scid']))
+            def offer_ready():
+                recipient.drain()
+                state = recipient.call('async_offer')
+                return state.get('offer')
+            offer = observed_wait(evidence, 'offer_ready', offer_ready)
+            print('Swift reusable receive offer persisted by LDK', flush=True)
+            recipient.close()
+            recipient_stopped = recipient.stopped
+            sender.call('connect', peer=b.node, address=f'127.0.0.1:{b.initial["port"]}')
+            sender.call('pay_offer', offer=offer, amount=5_000_000, id='52' * 32)
+            def committed(peer, counterparty, direction):
+                return next((h for c in peer.call('status')['channels'] if c['peer'] == counterparty.node
+                             for h in c[direction] if h['state'] == 'Some(Committed)'), None)
+            sent_hold = wait(lambda: committed(sender, a, 'pending_outbound'))
+            received_hold = wait(lambda: committed(a, sender, 'pending_inbound'))
+            assert sent_hold['hash'] == received_hold['hash'] and sent_hold['amount'] == received_hold['amount'] == 5_002_000
+            notification_hash = fixture.held_notification(b, recipient)
+            sender.close()
+            sender_stopped = sender.stopped
+            print('LDK sender terminated after durable hold', flush=True)
+            if args.restart_providers:
+                fixture.restart_providers(a, b)
+            recipient.reconnect_to(b)
+            def received_payment():
+                recipient.drain()
+                event = next((e for e in recipient.events if e.get('event') == 'payment_changed' and e.get('phase') == 'settled'), None)
+                return recipient.call('payment', id=event['id']) if event else None
+            received = observed_wait(evidence, 'recipient_received', received_payment)
+            recipient_settled = time.monotonic_ns()
+            assert sender.process.poll() is not None
+            recipient_started = recipient.started
+            sender.reconnect_to(a)
+            settled = wait(lambda: sender.event('sent'))
+            assert settled['hash'] == received['hash']
+            assert hashlib.sha256(bytes.fromhex(settled['preimage'])).hexdigest() == received['hash']
+            assert settled['fee'] == 2000
+            receipt = dict(direction=args.direction, hash=received['hash'], amount_msat=5_000_000, fee_msat=settled['fee'],
+                           recipient_stopped_ns=recipient_stopped, sender_stopped_ns=sender_stopped,
+                           recipient_restarted_ns=recipient_started, sender_restarted_ns=sender.started, ldk_commit=LDK_COMMIT)
+            assert recipient_stopped < sender_stopped < recipient_started < sender.started
+            print('PASS: LDK-to-Swift async payment settled while sender process was stopped', flush=True)
+        receipt.update(result='passed', provider_restart=args.restart_providers, recipient_settled_ns=recipient_settled,
+                       persisted_held_notification_sha256=notification_hash,
+                       swift_source=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                       source_dirty=bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip()),
+                       bitcoin_core_version=fixture.rpc('getnetworkinfo')['version'],
+                       swift_binary_sha256=hashlib.sha256(swift.read_bytes()).hexdigest(),
+                       reference_binary_sha256=hashlib.sha256(harness.read_bytes()).hexdigest())
+        assert recipient_stopped < sender_stopped < recipient_started < recipient_settled < sender.started
+        (evidence / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+    finally:
+        if fixture:
+            fixture.close()
+        if os.environ.get('WINNOW_KEEP_FIXTURE'):
+            print(f'Fixture retained: {root}', flush=True)
+        else:
+            shutil.rmtree(root)
+
+
+if __name__ == '__main__':
+    main()

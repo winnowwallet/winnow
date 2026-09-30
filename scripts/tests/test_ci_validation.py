@@ -15,7 +15,7 @@ class ValidationTests(unittest.TestCase):
         self.record={'identity':copy.deepcopy(self.identity),'repository':'winnowwallet/winnow',
                      'result':'success','fresh':True,'source_sha':'c'*40,
                      'created_at':self.now.isoformat(),
-                     'lanes':{x:{'result':'success','tests':M['POLICY']['minimum_tests'].get(x,0),'architecture':'x86_64','image':M['POLICY']['image'],'runtime':M['POLICY']['runtime'],'release_inspected':True,'source_sha':'c'*40,'debug_sha256':'f'*64,'crap':{'threshold':12,'above_threshold':0,'functions':1200,'unmeasured':3}} for x in M['LANES']},
+                     'lanes':{x:{'result':'success','tests':M['POLICY']['minimum_tests'].get(x,0),'architecture':'x86_64','image':M['POLICY']['image'],'runtime':M['POLICY']['runtime'],'release_inspected':True,'source_sha':'c'*40,'debug_sha256':'f'*64,'crap':{'threshold':12,'above_threshold':0,'functions':1200,'unmeasured':3,'without':['Sources/WinnowLightningApp']}} for x in M['LANES']},
                      'files':{**{'lanes/'+x+'.json':'d'*64 for x in M['LANES']},'media/journey-provenance.json':'d'*64}}
     def valid(self):
         return M['validate'](self.record,self.identity,'winnowwallet/winnow',self.now)
@@ -79,7 +79,8 @@ class ValidationTests(unittest.TestCase):
         self.assertFalse(self.valid())
 
     def test_rejects_crap_above_the_cap_or_a_thin_report(self):
-        for change in ({'above_threshold':1},{'functions':12},{'threshold':30}):
+        for change in ({'above_threshold':1},{'functions':12},{'threshold':30},
+                       {'without':['Sources/WinnowLightningApp','Sources/WalletCore']},{'without':[]}):
             self.setUp(); self.record['lanes']['journey']['crap'].update(change)
             self.assertFalse(self.valid(),change)
         self.setUp(); del self.record['lanes']['journey']['crap']

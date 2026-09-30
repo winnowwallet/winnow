@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""A real held payment whose recipient never returns: Swift recovers on chain."""
+import hashlib
+import importlib.machinery
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+
+ROOT = Path(__file__).resolve().parent.parent
+reference = importlib.machinery.SourceFileLoader('lightning_async', str(ROOT / 'scripts/ci-lightning-async')).load_module()
+
+
+def main():
+    harness = Path(os.environ['WINNOW_LDK_HARNESS'])
+    upstream = harness.resolve().parents[3] / 'ldk'
+    assert subprocess.check_output(['git', '-C', str(upstream), 'rev-parse', 'HEAD'], text=True).strip() == reference.LDK_COMMIT
+    subprocess.run(['git', '-C', str(upstream), 'diff', '--exit-code', 'HEAD', '--'], check=True)
+    subprocess.run(['swift', 'build', '--product', 'winnow-lightning-peer-fixture'], cwd=ROOT, check=True)
+    swift = Path(subprocess.check_output(['swift', 'build', '--show-bin-path'], cwd=ROOT, text=True).strip()) / 'winnow-lightning-peer-fixture'
+    evidence = Path(os.environ.get('WINNOW_LIGHTNING_RESULTS', ROOT / '.build/lightning-peer-results')) / 'recipient-never-returns'
+    evidence.mkdir(parents=True, exist_ok=True)
+    (evidence / 'receipt.json').unlink(missing_ok=True)
+    root = Path(tempfile.mkdtemp(prefix='winnow-timeout-'))
+    fixture = None
+    try:
+        fixture = reference.Fixture(root, evidence, harness, swift, Path(os.environ['WINNOW_BITCOIN_DIR']), p2p=True)
+        a, b = fixture.ldk('provider-a', 21), fixture.ldk('provider-b', 22)
+        ab = fixture.open_ldk(a, b, public=True)
+        recipient = fixture.ldk('recipient', 23, client=True)
+        fixture.open_ldk(b, recipient, public=False)
+        sender = fixture.swift_peer('sender', 1, a)
+        channel = fixture.open_swift(sender, a)
+        destination = fixture.rpc('getnewaddress')
+        script = fixture.rpc('getaddressinfo', destination)['scriptPubKey']
+        sender.call('recovery', id=channel, destination=script)
+        paths = b.call('server_paths', recipient='72' * 32)['paths']
+        recipient.call('receive_offer', paths=paths)
+        offer = reference.wait(lambda: recipient.call('offer')['offer'])
+        recipient.close()
+        payment_id = '53' * 32
+        initial = sender.call('async_pay', id=payment_id, channel=channel, introduction=b.node, scid=str(ab['scid']),
+                              offer=offer, amount='5000000', fee='50000')
+        reference.wait(lambda: sender.call('payment', id=payment_id)['phase'] == 'awaitingRecipient')
+        notification = fixture.held_notification(b, recipient)
+        held = next(h for c in a.call('status')['channels'] if c['peer'] == sender.node
+                    for h in c['pending_inbound'] if h['hash'] == initial['hash'])
+        expiry = held['expiry']
+        sender.close()
+        sender.reconnect_to(a)
+        reference.wait(lambda: any(c['peer'] == sender.node and c['usable'] for c in a.call('status')['channels']))
+        # Both providers also disappear. The Swift monitor must use the real
+        # Core-validated chain and its persisted recovery policy, not a peer.
+        a.close(); b.close()
+        remaining = expiry - fixture.rpc('getblockcount')
+        while remaining > 0:
+            blocks = min(100, remaining)
+            fixture.rpc('generatetoaddress', blocks, fixture.address)
+            remaining -= blocks
+        fixture.sync([sender])
+        payment = sender.call('payment', id=payment_id)
+        assert payment['phase'] == 'recovering', payment
+        assert not payment['preimage']
+        transactions = {}
+        for blocks in [1, 1, 144, 6]:
+            sender.drain()
+            for event in sender.events:
+                if event.get('event') not in ('broadcast_close', 'broadcast_recovery'):
+                    continue
+                raw = event['transaction']
+                tx = fixture.rpc('decoderawtransaction', raw)
+                if tx['txid'] not in transactions:
+                    fixture.rpc('sendrawtransaction', raw)  # consensus validation
+                    transactions[tx['txid']] = tx
+            fixture.rpc('generatetoaddress', blocks, fixture.address)
+            fixture.sync([sender])
+        final = sender.call('payment', id=payment_id)
+        assert final['phase'] == 'failed' and not final['preimage'], final
+        assert not recipient.process.poll() is None
+        assert len(transactions) >= 3, transactions
+        fees = 0
+        for tx in transactions.values():
+            inputs = sum(round(fixture.rpc('getrawtransaction', item['txid'], True)['vout'][item['vout']]['value'] * 100_000_000) for item in tx['vin'])
+            outputs = sum(round(item['value'] * 100_000_000) for item in tx['vout'])
+            fees += inputs - outputs
+        returned = sum(round(item['amount'] * 100_000_000) for item in fixture.rpc('listunspent', 1, 9999999, json.dumps([destination])))
+        assert returned == 1_000_000 - fees, (returned, fees)
+        receipt = dict(result='passed', scenario='recipient never returns; providers unavailable; automatic on-chain timeout',
+                       hash=initial['hash'], notification_sha256=notification, settlement=final['phase'],
+                       recovery_transactions=list(transactions), funding_sat=1_000_000, returned_sat=returned, total_fees_sat=fees,
+                       ldk_commit=reference.LDK_COMMIT, bitcoin_core_version=fixture.rpc('getnetworkinfo')['version'],
+                       swift_source=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                       source_dirty=bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip()),
+                       swift_binary_sha256=hashlib.sha256(swift.read_bytes()).hexdigest())
+        (evidence / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+        print('PASS: never-returning recipient timed out; Core confirmed all Swift recovery spends and exact returned balance', flush=True)
+    finally:
+        if fixture:
+            fixture.close()
+        if os.environ.get('WINNOW_KEEP_FIXTURE'):
+            print(f'Fixture retained: {root}', flush=True)
+        else:
+            shutil.rmtree(root)
+
+
+if __name__ == '__main__':
+    main()
