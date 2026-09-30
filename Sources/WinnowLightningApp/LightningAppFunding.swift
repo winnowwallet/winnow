@@ -18,8 +18,26 @@ extension LightningAppController {
             guard let engine, let profile, await engine.channels().allSatisfy({ $0.phase == .closed }) else { throw LightningError.invalidState }
             let rate = try Self.commitmentFeeRate(satPerVByte: await model.resolvedFeeRate(priority: .medium, override: nil))
             try requireNetwork(model, generation: epoch)
-            _ = try await engine.openChannel(peer: profile.peerKey, capacitySat: capacitySat, feePerKW: rate)
+            try await openWhenReady(engine, peer: profile.peerKey, capacitySat: capacitySat, feePerKW: rate,
+                                    model: model, generation: epoch)
             try await refresh()
+        }
+    }
+    /// Every periodic scan marks the chain unverified while it runs. Wait for
+    /// one already in progress, as funding does, rather than refusing a
+    /// request that happened to arrive during it; never start one.
+    private func openWhenReady(_ engine: LightningEngine, peer: Data, capacitySat: UInt64, feePerKW: UInt32,
+                               model: AppModel, generation epoch: UInt64) async throws {
+        let deadline = ContinuousClock.now + .seconds(10)
+        while true {
+            try await awaitChannelScan(model: model, generation: epoch, deadline: deadline, operation: "open")
+            guard try await channelReady(engine, peer: peer, model: model, generation: epoch, operation: "open") else { continue }
+            do {
+                _ = try await engine.openChannel(peer: peer, capacitySat: capacitySat, feePerKW: feePerKW)
+                return
+            } catch LightningError.invalidState where model.status.syncing {
+                // A new scan began during the engine's await; nothing was opened.
+            }
         }
     }
     func reviewFunding(_ request: LightningEngine.FundingRequest, model: AppModel) async throws -> FundingReview {

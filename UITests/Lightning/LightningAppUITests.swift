@@ -259,7 +259,7 @@ final class LightningAppUITests: XCTestCase {
         XCTAssertEqual(app.keyboards.count, 0)
         tap(app, "lightningOpen")
         let funding = app.buttons["lightningFundingReview"]
-        XCTAssertTrue(scroll(app, funding))
+        XCTAssertTrue(scroll(app, funding), channelRequestFailure(app))
         XCTAssertTrue(funding.appears(within: 60))
         tap(app, "lightningFundingReview")
         XCTAssertTrue(app.navigationBars["Review Lightning"].appears(within: 20))
@@ -447,6 +447,12 @@ final class LightningAppUITests: XCTestCase {
         XCTAssertTrue(poll(timeout: 15, interval: 0.2, "input sheet is visible after approval") { button.isHittable })
         XCTAssertTrue(tapVisibleCenter(app, button, excludingBars: false))
         XCTAssertTrue(button.disappears(within: 15))
+    }
+    /// A channel request that produced no funding review: the app's own error.
+    private func channelRequestFailure(_ app: XCUIApplication) -> String {
+        let error = app.staticTexts["lightningError"]
+        guard scroll(app, error, up: true) else { return "no funding request and no app error shown: \(app.debugDescription)" }
+        return "no funding request: \(error.label)"
     }
     private func waitConnected(_ app: XCUIApplication) throws {
         let connection = app.descendants(matching: .any)["lightningConnection"].firstMatch

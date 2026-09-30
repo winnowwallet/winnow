@@ -21,6 +21,7 @@ final class LightningFundingReadinessTests: XCTestCase {
             if declines { throw CancellationError() }
         }
     }
+    private final class Flag { var raised = false }
     private struct Fixture {
         let model: AppModel
         let controller: LightningAppController
@@ -31,11 +32,12 @@ final class LightningFundingReadinessTests: XCTestCase {
         let peer: Data
         let counterparty: LightningEngine
         let local: Data
-        let review: LightningAppController.FundingReview
+        /// Nil for a fixture made without an accepted channel.
+        let review: LightningAppController.FundingReview!
         let authenticator: Approved
     }
 
-    private func makeFixture(lockNetwork: Bool = true) async throws -> Fixture {
+    private func makeFixture(lockNetwork: Bool = true, acceptedChannel: Bool = true) async throws -> Fixture {
         var environment = ["WINNOW_E2E": "1", "WINNOW_E2E_RUN": "funding-readiness-\(UUID())",
             "WINNOW_E2E_NETWORK": "regtest", "WINNOW_E2E_ENTROPY": "000102030405060708090a0b0c0d0e0f",
             "WINNOW_E2E_DEVICE_AUTH": "1"]
@@ -84,16 +86,19 @@ final class LightningFundingReadinessTests: XCTestCase {
         try await engine.chainCaughtUp(); try await counterparty.chainCaughtUp()
         try await engine.peerInitialized(peer, features: .channelOpening)
         try await counterparty.peerInitialized(local, features: .channelOpening)
-        _ = try await engine.openChannel(peer: peer, capacitySat: 100_000, feePerKW: 5_000)
-        let openingMessages = try await engine.pendingMessages(peer: peer)
-        let open = try XCTUnwrap(openingMessages.first(where: { $0.message.type == 32 })).message
-        _ = try await counterparty.receive(peer: local, message: open)
-        let acceptingMessages = try await counterparty.pendingMessages(peer: local)
-        let accept = try XCTUnwrap(acceptingMessages.first(where: { $0.message.type == 33 })).message
-        _ = try await engine.receive(peer: peer, message: accept)
-        let fundingRequests = try await engine.fundingRequests()
-        let request = try XCTUnwrap(fundingRequests.first)
-        let review = try await controller.reviewFunding(request, model: model)
+        var review: LightningAppController.FundingReview?
+        if acceptedChannel {
+            _ = try await engine.openChannel(peer: peer, capacitySat: 100_000, feePerKW: 5_000)
+            let openingMessages = try await engine.pendingMessages(peer: peer)
+            let open = try XCTUnwrap(openingMessages.first(where: { $0.message.type == 32 })).message
+            _ = try await counterparty.receive(peer: local, message: open)
+            let acceptingMessages = try await counterparty.pendingMessages(peer: local)
+            let accept = try XCTUnwrap(acceptingMessages.first(where: { $0.message.type == 33 })).message
+            _ = try await engine.receive(peer: peer, message: accept)
+            let fundingRequests = try await engine.fundingRequests()
+            let request = try XCTUnwrap(fundingRequests.first)
+            review = try await controller.reviewFunding(request, model: model)
+        }
         return Fixture(model: model, controller: controller, engine: engine, wallet: wallet,
             pool: pool, node: node, peer: peer, counterparty: counterparty, local: local,
             review: review, authenticator: authenticator)
@@ -110,11 +115,15 @@ final class LightningFundingReadinessTests: XCTestCase {
         XCTAssertFalse(current)
         return scan
     }
-    private func releaseScan(_ fixture: Fixture, scan: Task<Void, Never>) async throws {
+    /// With a channel the driver verifies headers before the filter scan asks
+    /// again; without one the ordinary scan asks once.
+    private func releaseScan(_ fixture: Fixture, scan: Task<Void, Never>, headerRequests: Int = 2) async throws {
         try await fixture.node.send(.headers([]))
-        let second = await fixture.node.nextMessage(command: "getheaders")
-        _ = try XCTUnwrap(second, "both the driver and filter scan must verify headers")
-        try await fixture.node.send(.headers([]))
+        for _ in 1..<headerRequests {
+            let next = await fixture.node.nextMessage(command: "getheaders")
+            _ = try XCTUnwrap(next, "both the driver and filter scan must verify headers")
+            try await fixture.node.send(.headers([]))
+        }
         await scan.value
         XCTAssertFalse(fixture.model.status.syncing)
         XCTAssertNil(fixture.model.status.lastSyncError)
@@ -439,28 +448,63 @@ final class LightningFundingReadinessTests: XCTestCase {
         XCTAssertEqual(fixture.authenticator.calls, 0, "resuming never asks for another approval")
     }
 
-    /// Approving a provider runs a verified scan, then connects to it over
-    /// BOLT 8 and resumes submitted funding. Resuming while connected reuses
-    /// that session rather than opening another.
-    func testApprovedProviderConnectsAfterTheVerifiedScanAndResumingReusesTheSession() async throws {
-        let fixture = try await makeFixture()
-        try await submitWithoutSupplying(fixture)
+    /// Approves the counterparty as the provider, answering its BOLT 8 handshake
+    /// on localhost and releasing the verified scan the approval runs.
+    private func approveLocalProvider(_ fixture: Fixture) async throws -> (LightningLocalPeer, LightningProfile) {
         let remote = try LightningLocalPeer(secret: Data(repeating: 21, count: 32)), port = try await remote.listen()
         addTeardownBlock { await remote.close() }
         let profile = try LightningProfile(network: "regtest", name: "Fixture", peer: fixture.peer.hex, host: "127.0.0.1", port: port,
             route: .init(introduction: ChannelKeys.publicKey(secret: Data(repeating: 22, count: 32)).hex, shortChannelID: 1,
                 baseMsat: 1000, proportionalMillionths: 0, expiryDelta: 48), receive: nil)
         let answered = Task { try await remote.handshake() }
+        let approved = Flag()
         let approval = Task {
+            defer { approved.raised = true }
             try await LightningReview.profile(profile).confirm(controller: fixture.controller, model: fixture.model)
         }
-        for _ in 0..<2 {
-            let request = await fixture.node.nextMessage(command: "getheaders")
-            _ = try XCTUnwrap(request, "approving a provider runs a verified scan first")
-            try await fixture.node.send(.headers([]))
+        // One header request without channels; with one, the driver also
+        // verifies headers before its scan.
+        var scans = 0
+        while !approved.raised {
+            guard await fixture.node.nextMessage(command: "getheaders", timeout: .milliseconds(200)) != nil else { continue }
+            try await fixture.node.send(.headers([])); scans += 1
         }
+        XCTAssertGreaterThan(scans, 0, "approving a provider runs a verified scan first")
         try await answered.value
         try await approval.value
+        return (remote, profile)
+    }
+
+    /// A periodic scan marks the chain unverified while it runs. A channel
+    /// requested during one waits for it, then opens exactly one channel.
+    func testChannelRequestWaitsForAnInFlightScanThenOpensOnce() async throws {
+        let fixture = try await makeFixture(acceptedChannel: false)
+        _ = try await approveLocalProvider(fixture)
+        let scan = try await holdScan(fixture), finished = Flag()
+        let request = Task {
+            try await fixture.controller.openChannel(capacitySat: 100_000, model: fixture.model)
+            finished.raised = true
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertFalse(finished.raised, "the request waits for the scan instead of failing or opening")
+        let during = await fixture.engine.channels()
+        XCTAssertTrue(during.isEmpty, "nothing opens while the chain is unverified")
+        try await releaseScan(fixture, scan: scan, headerRequests: 1)
+        try await request.value
+        let channels = await fixture.engine.channels()
+        XCTAssertEqual(channels.map(\.capacitySat), [100_000])
+        XCTAssertEqual(channels.first?.phase, .opening)
+        XCTAssertNil(fixture.controller.error)
+        await fixture.controller.stop()
+    }
+
+    /// Approving a provider runs a verified scan, then connects to it over
+    /// BOLT 8 and resumes submitted funding. Resuming while connected reuses
+    /// that session rather than opening another.
+    func testApprovedProviderConnectsAfterTheVerifiedScanAndResumingReusesTheSession() async throws {
+        let fixture = try await makeFixture()
+        try await submitWithoutSupplying(fixture)
+        let (remote, profile) = try await approveLocalProvider(fixture)
         XCTAssertEqual(fixture.controller.profile, profile)
         XCTAssertEqual(fixture.controller.connection, "Connected")
         XCTAssertNil(fixture.controller.error)
