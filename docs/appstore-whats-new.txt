@@ -1,3 +1,4 @@
+• Every Tor and I2P peer the daily census verifies is now kept, instead of a sample of 2,000 per network.
 • Background checks. When iOS allows, Winnow checks the chain for new payments while it is closed, through the same peers and routing it uses when open. Advanced → Sync shows when the chain was last checked.
 • If Automatic routing last used your Tor or I2P gateways and none answer in the background, Winnow skips that check instead of connecting directly.
 • Simple mode no longer shows an error each time a peer drops mid-sync. It speaks up only if the connection keeps failing.
