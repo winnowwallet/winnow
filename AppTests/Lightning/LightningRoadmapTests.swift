@@ -190,6 +190,8 @@ final class LightningRoadmapTests: XCTestCase {
         await model.boot()
         XCTAssertNil(model.walletID)
         XCTAssertNil(model.stack)
+        do { _ = try await model.portableLightningBackupContents(); XCTFail("exported without a wallet") }
+        catch AppModel.AppError.noWallet {}
         _ = try await model.restorePortableLightningBackup(original)
         let restoredDescriptor = await model.wallet?.descriptor
         XCTAssertEqual(restoredDescriptor?.serialized(), original.bundle.descriptor)
@@ -198,6 +200,15 @@ final class LightningRoadmapTests: XCTestCase {
         XCTAssertEqual(model.stage, .ready)
         XCTAssertNil(model.stack, "recovery-only state must not depend on connecting to a peer")
         XCTAssertFalse(model.keychainAuthentication.isGranted)
+
+        // The restored wallet exports a recovery file that restores the same
+        // wallet and Lightning identity.
+        let exported = try await model.portableLightningBackupContents()
+        XCTAssertEqual(exported.bundle.descriptor, original.bundle.descriptor)
+        XCTAssertEqual(exported.bundle.mnemonic, original.bundle.mnemonic)
+        let exportedState = try PortableLightningState.decode(exported.appState, for: exported.bundle)
+        XCTAssertEqual(exportedState.lightning.nodeID, backup.nodeID)
+        XCTAssertFalse(model.keychainAuthentication.isGranted, "the export's authorization ends with it")
         _ = try await model.restorePortableLightningBackup(original)
         XCTAssertEqual(model.lightning?.recoveryStatus?.backupID, backup.id)
         do { try await model.createWallet(); XCTFail("fresh keys replaced a restored wallet") }

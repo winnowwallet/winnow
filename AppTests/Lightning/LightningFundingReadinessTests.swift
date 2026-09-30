@@ -15,7 +15,11 @@ final class LightningFundingReadinessTests: XCTestCase {
     private final class Approved: DeviceAuthenticating {
         var entered: (() -> Void)?
         var calls = 0
-        func authenticate(reason: String) async throws { calls += 1; entered?() }
+        var declines = false
+        func authenticate(reason: String) async throws {
+            calls += 1; entered?()
+            if declines { throw CancellationError() }
+        }
     }
     private struct Fixture {
         let model: AppModel
@@ -120,7 +124,8 @@ final class LightningFundingReadinessTests: XCTestCase {
     private func startFunding(_ fixture: Fixture) async -> Task<Void, Error> {
         let entered = expectation(description: "actual funding authentication entered")
         fixture.authenticator.entered = { entered.fulfill() }
-        let operation = Task { try await fixture.controller.fund(fixture.review, model: fixture.model) }
+        // The review sheet's Confirm action, as the app runs it.
+        let operation = Task { try await LightningReview.funding(fixture.review).confirm(controller: fixture.controller, model: fixture.model) }
         await fulfillment(of: [entered], timeout: 5)
         return operation
     }
@@ -214,6 +219,18 @@ final class LightningFundingReadinessTests: XCTestCase {
         await assertCloseUnchanged(fixture, channel: channel)
         let outbox = try await fixture.engine.pendingMessages(peer: fixture.peer)
         XCTAssertFalse(outbox.contains { [38, 39].contains($0.message.type) }, "readiness may not initiate a close")
+
+        fixture.authenticator.declines = true
+        do {
+            try await LightningReview.close(review).confirm(controller: fixture.controller, model: fixture.model)
+            XCTFail("a declined close closed")
+        } catch is CancellationError {}
+        XCTAssertEqual(fixture.authenticator.calls, 1, "confirming the reviewed close asks for its approval")
+        XCTAssertFalse(fixture.model.keychainAuthentication.isGranted)
+        let declined = try await fixture.engine.pendingMessages(peer: fixture.peer)
+        XCTAssertFalse(declined.contains { [38, 39].contains($0.message.type) }, "a declined close sends no shutdown")
+        let phase = await fixture.engine.channels().first?.phase
+        XCTAssertEqual(phase, .ready)
     }
 
     func testCancelledCloseReviewDuringActualScanCannotProduceApproval() async throws {
@@ -377,6 +394,73 @@ final class LightningFundingReadinessTests: XCTestCase {
         // A cancelled publication is neither a failed sync nor a verified check.
         XCTAssertNil(fixture.model.lastCompleteCheck)
         await assertUnreserved(fixture)
+    }
+
+    /// The state an app stopped in after durably marking the signed funding
+    /// submitted and before handing it to the engine.
+    private func submitWithoutSupplying(_ fixture: Fixture) async throws {
+        let request = fixture.review.request
+        let reserved = try await fixture.wallet.reserveChannelFunding(requestID: request.temporaryID.hex,
+            amount: Int64(request.amountSat), scriptPubKey: request.scriptPubKey,
+            feeRateSatPerVByte: fixture.review.preview.feeRateSatPerVByte, chainTip: fixture.model.chainTipHeight)
+        _ = try await fixture.wallet.markFundingSubmitted(requestID: reserved.requestID)
+        let phase = await fixture.engine.channels().first?.phase
+        XCTAssertEqual(phase, .accepted)
+    }
+    private func assertSuppliedOnce(_ fixture: Fixture, file: StaticString = #filePath, line: UInt = #line) async throws {
+        let phase = await fixture.engine.channels().first?.phase
+        XCTAssertEqual(phase, .awaitingFundingSignature, file: file, line: line)
+        let created = try await fixture.engine.pendingMessages(peer: fixture.peer).filter { $0.message.type == 34 }
+        XCTAssertEqual(created.count, 1, "one funding_created for the one submitted transaction", file: file, line: line)
+        let reservations = await fixture.wallet.fundingReservations
+        XCTAssertEqual(reservations.map(\.phase), [.submitted], file: file, line: line)
+    }
+
+    /// Resuming supplies the submitted funding once; a later resume finds the
+    /// request already answered and supplies nothing again.
+    func testResumeSuppliesFundingSubmittedBeforeARestartOnce() async throws {
+        let fixture = try await makeFixture()
+        try await submitWithoutSupplying(fixture)
+        try await fixture.controller.resumeSubmittedFunding(model: fixture.model)
+        try await fixture.controller.resumeSubmittedFunding(model: fixture.model)
+        try await assertSuppliedOnce(fixture)
+        XCTAssertEqual(fixture.authenticator.calls, 0, "resuming never asks for another approval")
+    }
+
+    /// Approving a provider runs a verified scan, then connects to it over
+    /// BOLT 8 and resumes submitted funding. Resuming while connected reuses
+    /// that session rather than opening another.
+    func testApprovedProviderConnectsAfterTheVerifiedScanAndResumingReusesTheSession() async throws {
+        let fixture = try await makeFixture()
+        try await submitWithoutSupplying(fixture)
+        let remote = try LightningLocalPeer(secret: Data(repeating: 21, count: 32)), port = try await remote.listen()
+        addTeardownBlock { await remote.close() }
+        let profile = try LightningProfile(network: "regtest", name: "Fixture", peer: fixture.peer.hex, host: "127.0.0.1", port: port,
+            route: .init(introduction: ChannelKeys.publicKey(secret: Data(repeating: 22, count: 32)).hex, shortChannelID: 1,
+                baseMsat: 1000, proportionalMillionths: 0, expiryDelta: 48), receive: nil)
+        let answered = Task { try await remote.handshake() }
+        let approval = Task {
+            try await LightningReview.profile(profile).confirm(controller: fixture.controller, model: fixture.model)
+        }
+        for _ in 0..<2 {
+            let request = await fixture.node.nextMessage(command: "getheaders")
+            _ = try XCTUnwrap(request, "approving a provider runs a verified scan first")
+            try await fixture.node.send(.headers([]))
+        }
+        try await answered.value
+        try await approval.value
+        XCTAssertEqual(fixture.controller.profile, profile)
+        XCTAssertEqual(fixture.controller.connection, "Connected")
+        XCTAssertNil(fixture.controller.error)
+        try await assertSuppliedOnce(fixture)
+
+        await fixture.controller.resume(model: fixture.model)
+        let connections = await remote.connections
+        XCTAssertEqual(connections, 1, "resuming while connected reuses the session")
+        XCTAssertEqual(fixture.controller.connection, "Connected")
+        try await assertSuppliedOnce(fixture)
+        XCTAssertEqual(fixture.authenticator.calls, 1, "only the provider approval authenticates")
+        await fixture.controller.stop()
     }
 
     func testStalledActiveScanExpiresWithoutReservationOrFinancialRetry() async throws {

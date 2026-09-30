@@ -8,6 +8,13 @@ extension LightningAppController {
         let quote: Bolt11PaymentRoute.Quote
         let description: String?, payee: Data, expiresAt: UInt64
     }
+    /// The invoice form's text: a fixed-amount invoice ignores the typed amount.
+    func reviewInvoice(_ invoice: String, amountText: String, maximumFeeText: String, model: AppModel) async throws -> InvoiceReview {
+        let decoded = try Bolt11Invoice.decode(invoice, network: network)
+        let amountMsat = try decoded.amountMsat ?? Bolt11Invoice.millisatoshis(amountText)
+        guard let maximumFee = UInt64(maximumFeeText) else { throw LightningError.invalidAmount }
+        return try await reviewInvoice(invoice, amountMsat: amountMsat, maximumFeeSat: maximumFee, model: model)
+    }
     func reviewInvoice(_ invoice: String, amountMsat: UInt64, maximumFeeSat: UInt64, model: AppModel) async throws -> InvoiceReview {
         try requireNetwork(model)
         let epoch = generation, decoded = try Bolt11Invoice.decode(invoice, network: network)

@@ -44,7 +44,7 @@ final class LightningAppTests: XCTestCase {
     func testCancelledProviderReviewLeavesNoProfileOrJournalMutation() async throws {
         let dir = directory(), controller = try await prepared(dir), auth = Denied()
         let before = try Data(contentsOf: dir.appending(path: "lightning/journal.v1"))
-        do { try await controller.saveProfile(profile(), model: makeModel(network: .regtest, deviceAuthenticator: auth)); XCTFail("canceled review saved a provider") }
+        do { try await LightningReview.profile(profile()).confirm(controller: controller, model: makeModel(network: .regtest, deviceAuthenticator: auth)); XCTFail("canceled review saved a provider") }
         catch is CancellationError {}
         XCTAssertEqual(auth.attempts, 1)
         XCTAssertNil(controller.profile)
@@ -56,7 +56,7 @@ final class LightningAppTests: XCTestCase {
         try await controller.saveProfile(profile, model: makeModel(network: .regtest))
         let model = makeModel(network: .regtest, deviceAuthenticator: auth)
         let before = try Data(contentsOf: dir.appending(path: "lightning/journal.v1"))
-        do { try await controller.pay(review(profile), model: model); XCTFail("canceled authentication created payment") }
+        do { try await LightningReview.payment(review(profile)).confirm(controller: controller, model: model); XCTFail("canceled authentication created payment") }
         catch is CancellationError {}
         XCTAssertEqual(auth.attempts, 1)
         XCTAssertFalse(model.keychainAuthentication.isGranted)
@@ -78,7 +78,7 @@ final class LightningAppTests: XCTestCase {
         try await controller.saveProfile(profile, model: makeModel(network: .regtest))
         let model = makeModel(network: .regtest, deviceAuthenticator: auth)
         let before = try Data(contentsOf: dir.appending(path: "lightning/journal.v1"))
-        do { try await controller.payInvoice(invoiceReview(profile), model: model); XCTFail() } catch is CancellationError {}
+        do { try await LightningReview.invoice(invoiceReview(profile)).confirm(controller: controller, model: model); XCTFail() } catch is CancellationError {}
         XCTAssertEqual(auth.attempts, 1); XCTAssertTrue(controller.payments.isEmpty)
         XCTAssertFalse(model.keychainAuthentication.isGranted)
         XCTAssertEqual(try Data(contentsOf: dir.appending(path: "lightning/journal.v1")), before)
