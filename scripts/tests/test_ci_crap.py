@@ -49,6 +49,21 @@ class CoverageCollectorTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 TOOL['app_inputs'](root, 'Debug')
 
+    def test_package_frameworks_need_their_run_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            derived = Path(directory)
+            products = 'Build/Products/Debug-iphonesimulator/PackageFrameworks'
+            with self.assertRaises(ValueError):
+                TOOL['framework_inputs'](derived, 'Debug')
+            core = self.file(derived, f'{products}/WalletCore.framework/WalletCore')
+            with self.assertRaises(ValueError):
+                TOOL['framework_inputs'](derived, 'Debug')
+            profile = self.file(derived, 'Build/ProfileData/device/Coverage.profdata')
+            self.assertEqual(TOOL['framework_inputs'](derived, 'Debug'), (profile, [core]))
+            self.file(derived, 'Build/ProfileData/other/Coverage.profdata')
+            with self.assertRaises(ValueError):
+                TOOL['framework_inputs'](derived, 'Debug')
+
     def test_app_missing_profile_cannot_supply_coverage(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

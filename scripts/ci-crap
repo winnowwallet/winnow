@@ -45,6 +45,21 @@ def app_binaries(derived, variant):
     return binaries
 
 
+def framework_inputs(derived, variant):
+    """Xcode's coverage archive holds the app's own targets only. Package
+    libraries the app links as frameworks (WalletCore) are instrumented in the
+    same build, so they are read from that run's profile instead."""
+    products = derived / 'Build/Products' / f'{variant}-iphonesimulator' / 'PackageFrameworks'
+    binaries = sorted({(framework / framework.stem).resolve() for framework in products.glob('*.framework')
+                       if (framework / framework.stem).is_file()})
+    profiles = sorted({path.resolve() for path in (derived / 'Build/ProfileData').rglob('Coverage.profdata')})
+    if not binaries:
+        raise ValueError('No package frameworks in the instrumented app build')
+    if len(profiles) != 1:
+        raise ValueError(f'Expected the one test run\'s coverage profile; found {len(profiles)}')
+    return profiles[0], binaries
+
+
 def app_inputs(derived, variant):
     binaries = app_binaries(derived, variant)
     profiles = sorted({path.resolve() for path in (derived / 'Build/ProfileData').rglob('Coverage.profdata')})
@@ -196,9 +211,15 @@ def collect(args):
             retained = output / f'app-result-{index}'
             receipt = export_app_result(result.resolve(), retained, args.manifest.resolve(), allowed_products)
             coverage.append(retained / 'coverage.lcov'); app_receipts.append(receipt)
-        for derived, variant in applications:
+        for index, (derived, variant) in enumerate(applications):
             binaries = app_binaries(derived.resolve(), variant)
+            # One profile per DerivedData: collect locally after its last run.
+            profile, frameworks = framework_inputs(derived.resolve(), variant)
+            lines = output / f'frameworks-{index}.lcov'
+            export(profile, frameworks, lines)
+            coverage.append(lines)
             app_receipts.append({'variant': variant, 'derived_data': str(derived.resolve()),
+                                 'framework_profile': str(profile),
                                  'binary_hashes_at_collection': {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in binaries}})
     for index, (derived, variant) in enumerate([] if args.app_result else applications):
         app_profiles, binaries = app_inputs(derived.resolve(), variant)
@@ -239,6 +260,11 @@ def export_app(args):
     derived = args.derived_data.resolve()
     receipt = export_app_result(args.result.resolve(), args.output.resolve(), args.manifest.resolve(),
                                 [derived / 'Build/Products'])
+    profile, frameworks = framework_inputs(derived, args.variant)
+    export(profile, frameworks, args.output / 'frameworks.lcov')
+    receipt['frameworks'] = {'profile': str(profile), 'binaries': list(map(str, frameworks)),
+                             'sources': validate_package_sources(args.output / 'frameworks.lcov',
+                                                                 args.manifest.resolve(), args.manifest.resolve())}
     binaries = app_binaries(derived, args.variant)
     receipt['application'] = {'variant': args.variant, 'derived_data': str(derived),
                               'binary_hashes_at_collection': {str(path): hashlib.sha256(path.read_bytes()).hexdigest()
@@ -255,9 +281,10 @@ def report_exports(args):
     coverage = [package / 'package.lcov']
     for directory in args.app:
         lines = directory.resolve() / 'coverage.lcov'
-        if not lines.is_file() or not (directory / 'app-receipt.json').is_file():
+        frameworks = directory.resolve() / 'frameworks.lcov'
+        if not (lines.is_file() and frameworks.is_file() and (directory / 'app-receipt.json').is_file()):
             raise ValueError('Missing exported app coverage: ' + str(directory))
-        coverage.append(lines)
+        coverage += [lines, frameworks]
     receipt = {'schema': 1, 'package_export': str(package), 'package_source_files': sources,
                'app_exports': [str(path.resolve()) for path in args.app], 'source_manifest': str(args.manifest.resolve())}
     (output / 'coverage-inputs.json').write_text(json.dumps(receipt, indent=2) + '\n')
