@@ -103,36 +103,53 @@ actor ICloudBackupStore: ICloudBackupStoring {
     }
 
     func save(_ backup: CloudWalletBackup, account expectedAccount: String) async throws {
-        guard try await account() == expectedAccount else { throw ICloudBackupError.accountChanged }
+        try await requireAccount(expectedAccount)
         try Task.checkCancellation()
         let directory = FileManager.default.temporaryDirectory.appending(path: "cloud-backup-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appending(path: "backup.encrypted")
         try backup.encoded().write(to: file, options: [.atomic, .completeFileProtection])
-        let record = CKRecord(recordType: "WalletBackup", recordID: CKRecord.ID(recordName: backup.id.uuidString))
-        record["network"] = backup.network
-        record["savedAt"] = backup.savedAt
-        record["payload"] = CKAsset(fileURL: file)
+        let record = Self.record(for: backup, payload: file)
         let result = try await container.privateCloudDatabase.modifyRecords(saving: [record], deleting: [],
             savePolicy: .changedKeys, atomically: true)
         guard let saved = result.saveResults[record.recordID] else { throw ICloudBackupError.invalidBackup }
         _ = try saved.get()
-        guard try await account() == expectedAccount else { throw ICloudBackupError.accountChanged }
+        try await requireAccount(expectedAccount)
     }
 
     func load(_ id: UUID, account expectedAccount: String) async throws -> CloudWalletBackup {
-        guard try await account() == expectedAccount else { throw ICloudBackupError.accountChanged }
+        try await requireAccount(expectedAccount)
         let record = try await container.privateCloudDatabase.record(for: CKRecord.ID(recordName: id.uuidString))
+        let backup = try Self.backup(from: record, id: id)
+        try await requireAccount(expectedAccount)
+        return backup
+    }
+
+    /// Before and after every transfer: a backup is never saved to, or read
+    /// from, an Apple Account other than the one it was made for.
+    private func requireAccount(_ expected: String) async throws {
+        guard try await account() == expected else { throw ICloudBackupError.accountChanged }
+    }
+
+    static func record(for backup: CloudWalletBackup, payload: URL) -> CKRecord {
+        let record = CKRecord(recordType: "WalletBackup", recordID: CKRecord.ID(recordName: backup.id.uuidString))
+        record["network"] = backup.network
+        record["savedAt"] = backup.savedAt
+        record["payload"] = CKAsset(fileURL: payload)
+        return record
+    }
+
+    /// A fetched record's payload, read only within the size bound and only
+    /// when it is the backup that was asked for.
+    static func backup(from record: CKRecord, id: UUID) throws -> CloudWalletBackup {
         guard let asset = record["payload"] as? CKAsset, let url = asset.fileURL else {
             throw ICloudBackupError.invalidBackup
         }
         let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max
         guard size <= CloudWalletBackup.maximumBytes else { throw ICloudBackupError.invalidBackup }
         let backup = try CloudWalletBackup.decode(Data(contentsOf: url))
-        guard backup.id == id, try await account() == expectedAccount else {
-            throw ICloudBackupError.accountChanged
-        }
+        guard backup.id == id else { throw ICloudBackupError.accountChanged }
         return backup
     }
 }

@@ -1751,6 +1751,44 @@ final class AppModel {
         }
     }
 
+    enum ReviewWarning: Equatable {
+        case unverifiedFundingDestination(name: String)
+        case addressReuse(name: String)
+        case disproportionateFee(FeeProportion)
+        case locktimeLagsTip
+
+        func message(sats: (Int64) -> String) -> String {
+            switch self {
+            case let .unverifiedFundingDestination(name):
+                "This destination was inferred from transaction funding. Winnow has not verified that it belongs to \(name). Confirm it with them before sending."
+            case let .addressReuse(name):
+                "This address has been saved for reuse. Repeated payments can be linked. Ask \(name) for a fresh address or Winnow contact card."
+            case let .disproportionateFee(proportion):
+                proportion.message(sats: sats)
+            case .locktimeLagsTip:
+                "Your wallet is still syncing. Sending now can reveal that on the Bitcoin network. Wait for sync to finish for better privacy."
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .addressReuse: "eye"
+            case .locktimeLagsTip: "clock.arrow.circlepath"
+            case .unverifiedFundingDestination, .disproportionateFee: "exclamationmark.triangle"
+            }
+        }
+
+        /// UI tests find each warning by these.
+        var accessibilityIdentifier: String {
+            switch self {
+            case .unverifiedFundingDestination: "unverifiedFundingWarning"
+            case .addressReuse: "addressReuseWarning"
+            case .disproportionateFee: "feeProportionWarning"
+            case .locktimeLagsTip: "locktimeLagWarning"
+            }
+        }
+    }
+
     struct SendPreview: Equatable {
         enum Source: Equatable {
             case wallet
@@ -1810,6 +1848,20 @@ final class AppModel {
             guard amount > 0 else { return nil }
             let proportion = FeeProportion(fee: fee, amount: amount)
             return proportion.isDisproportionate ? proportion : nil
+        }
+
+        /// What the review screen warns about, in the order it shows them.
+        var reviewWarnings: [ReviewWarning] {
+            var warnings: [ReviewWarning] = []
+            if let recipient, recipient.hasUnverifiedFundingDestination {
+                warnings.append(.unverifiedFundingDestination(name: recipient.name))
+            }
+            if let recipient, !recipient.derivesFreshAddresses {
+                warnings.append(.addressReuse(name: recipient.name))
+            }
+            if let feeProportion { warnings.append(.disproportionateFee(feeProportion)) }
+            if locktimeLagsTip { warnings.append(.locktimeLagsTip) }
+            return warnings
         }
 
         /// Whether `built` is the transaction that was reviewed.
