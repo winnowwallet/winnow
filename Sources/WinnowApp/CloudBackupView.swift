@@ -39,9 +39,9 @@ struct CloudRestoreView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var operation: Task<Void, Never>?
-    @State private var restoring = false
+    @State private var restoring = SensitiveAction()
     @State private var restored = false
-    @State private var error: String?
+    @State private var notice: String?
 
     var body: some View {
         NavigationStack {
@@ -60,22 +60,24 @@ struct CloudRestoreView: View {
                             } label: {
                                 Label(backup.savedAt.formatted(), systemImage: "icloud.and.arrow.down")
                             }
-                            .disabled(restoring)
+                            .disabled(restoring.busy)
                         }
                         if model.cloudBackups.available.isEmpty, !model.cloudBackups.busy {
                             Text("No backup found for this network yet.")
                         }
                         Button("Check again") {
                             operation = Task { await model.discoverCloudBackups() }
-                        }.disabled(restoring || model.cloudBackups.busy)
+                        }.disabled(restoring.busy || model.cloudBackups.busy)
                     } header: {
                         Text("Choose a saved backup")
                     } footer: {
                         Text("Use the same Apple Account and enable Passwords & Keychain. Backups may take time to appear on a new device. Restoring never replaces a wallet already on this phone.")
                     }
                 }
-                if restoring || model.cloudBackups.busy { ProgressView(restoring ? "Restoring wallet…" : "Checking iCloud…") }
-                if let error { Text(error).foregroundStyle(.secondary) }
+                if restoring.busy || model.cloudBackups.busy {
+                    ProgressView(restoring.busy ? "Restoring wallet…" : "Checking iCloud…")
+                }
+                if let message = restoring.error ?? notice { Text(message).foregroundStyle(.secondary) }
                 if let message = model.cloudBackups.message { Text(message).foregroundStyle(.secondary) }
             }
             .navigationTitle("Restore from iCloud")
@@ -87,21 +89,12 @@ struct CloudRestoreView: View {
     }
 
     private func restore(_ id: UUID) {
-        restoring = true
-        error = nil
-        operation = Task { @MainActor in
-            defer { restoring = false }
-            do {
-                let report = try await model.restoreCloudBackup(id)
-                try Task.checkCancellation()
-                restored = true
-                if let report, !report.matchesBundle {
-                    error = "Some payments changed since this backup. Winnow updated the wallet from the network; review the restored balances."
-                } else if report == nil {
-                    error = "Restored. Network verification will resume when peers are reachable."
-                }
-            } catch is CancellationError { }
-            catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+        notice = nil
+        restoring.start(presentable: { scenePhase != .background }) {
+            try await model.restoreCloudBackup(id)
+        } apply: { report in
+            restored = true
+            notice = AppModel.cloudRestoreMessage(for: report)
         }
     }
 
@@ -109,6 +102,6 @@ struct CloudRestoreView: View {
         operation?.cancel()
         operation = nil
         model.cloudBackups.suspend()
-        restoring = false
+        restoring.reset()
     }
 }
