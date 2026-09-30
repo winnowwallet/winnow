@@ -8,28 +8,43 @@ import subprocess
 
 
 def verify(app, distribution=False):
+    bundle = os.environ.get('TESTFLIGHT_BUNDLE_ID', 'com.btcswift.app')
+    assert bundle in {'com.btcswift.app', 'com.btcswift.lightning'}, 'unsupported release identity'
     info = plistlib.loads((app / 'Info.plist').read_bytes())
     assert info['CFBundleShortVersionString'] == os.environ['TESTFLIGHT_MARKETING_VERSION'], 'app version mismatch'
     assert str(info['CFBundleVersion']) == os.environ['TESTFLIGHT_BUILD_NUMBER'], 'app build number mismatch'
-    assert info['CFBundleIdentifier'] == 'com.btcswift.app', 'app bundle mismatch'
+    assert info['CFBundleIdentifier'] == bundle, 'app bundle mismatch'
     subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)
     entitlements = plistlib.loads(subprocess.check_output(
         ['codesign', '-d', '--entitlements', ':-', str(app)], stderr=subprocess.DEVNULL))
-    assert entitlements['application-identifier'] == '2858MX5336.com.btcswift.app', 'app signing identity mismatch'
+    assert entitlements['application-identifier'] == '2858MX5336.' + bundle, 'app signing identity mismatch'
     assert entitlements['com.apple.developer.team-identifier'] == '2858MX5336', 'signing team mismatch'
-    assert entitlements['com.apple.developer.icloud-container-identifiers'] == ['iCloud.com.btcswift.app']
-    assert 'CloudKit' in entitlements['com.apple.developer.icloud-services']
+    research = bundle == 'com.btcswift.lightning'
+    if research:
+        assert not any('icloud' in key.lower() or 'ubiquity' in key.lower() for key in entitlements), 'research journal must not use iCloud'
+        reviewed = os.environ.get('LIGHTNING_NONEXEMPT_ENCRYPTION')
+        assert reviewed in {'YES', 'NO', 'PENDING'}, 'research encryption determination is missing'
+        if reviewed == 'PENDING':
+            assert 'ITSAppUsesNonExemptEncryption' not in info, 'pending encryption must use the Apple questionnaire'
+            assert 'ITSEncryptionExportComplianceCode' not in info, 'pending encryption must not claim an approved code'
+        else:
+            assert info.get('ITSAppUsesNonExemptEncryption') is (reviewed == 'YES'), 'research encryption differs from its reviewed determination'
+            if reviewed == 'YES':
+                code = os.environ.get('LIGHTNING_ENCRYPTION_COMPLIANCE_CODE')
+                assert code and info.get('ITSEncryptionExportComplianceCode') == code, 'research export code must match the approved declaration'
+    else:
+        assert entitlements['com.apple.developer.icloud-container-identifiers'] == ['iCloud.com.btcswift.app']
+        assert 'CloudKit' in entitlements['com.apple.developer.icloud-services']
     environment = entitlements.get('com.apple.developer.icloud-container-environment')
     if distribution or entitlements.get('get-task-allow') is not True:
-        assert environment == 'Production', 'distribution requires production iCloud'
+        assert research or environment == 'Production', 'distribution requires production iCloud'
         assert entitlements.get('get-task-allow') is False, 'distribution must disable debugging'
     else:
         # Xcode adds the selected environment when exporting this development archive.
         assert environment in {None, 'Development', 'Production'}, 'unexpected archive iCloud environment'
     architectures = subprocess.check_output(['lipo', '-archs', str(app / info['CFBundleExecutable'])], text=True).split()
     assert architectures == ['arm64'], 'app must contain only the iPhone ARM64 executable'
-    print('Distribution identity, signature, ARM64 and production iCloud verified.' if distribution
-          else 'Archive identity, signature, ARM64 and iCloud container verified; distribution export is checked separately.')
+    print(f'{bundle}: identity, signature, ARM64 and entitlement policy verified ({"distribution" if distribution else "archive"}).')
 
 
 if __name__ == '__main__':

@@ -19,6 +19,13 @@ one GitHub-hosted Apple silicon (`macos-26`) `build` job. A reusable `website`
 job follows either lane. Each job gets its own runner, per-run build directory,
 and disposable signet fixture.
 
+A [Swift Lightning](ci-lightning.yml) job runs beside the lane on hosted
+`macos-26`: Winnow Lightning against Core Lightning and LDK, the recorded
+Lightning app journey and CRAP for the Lightning app's own code; `validation`
+requires it. [lightning-release.yml](lightning-release.yml) ships Winnow
+Lightning to its own TestFlight app from a `lightning-vX.Y.Z` tag
+([Swift Lightning](../../docs/engineering/swift-lightning.md)).
+
 The hosted build job owns lint and test gates, package and debugging tests, fixed fuzz
 smoke, dependency and provenance checks, and the app's Debug and Release checks.
 It builds the Debug app and both test runners once,

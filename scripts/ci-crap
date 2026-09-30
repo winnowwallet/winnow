@@ -33,13 +33,13 @@ def package_inputs(build):
     return profiles[0], binaries
 
 
-def app_binaries(derived, variant):
+def app_binaries(derived, variant, app_name='WinnowApp'):
     products = derived / 'Build/Products' / f'{variant}-iphonesimulator'
-    app = products / 'WinnowApp.app'
-    if not (app / 'WinnowApp').is_file():
+    app = products / f'{app_name}.app'
+    if not (app / app_name).is_file():
         raise ValueError(f'Missing instrumented {variant} app executable')
-    binaries = [app / 'WinnowApp', app / 'WinnowApp.debug.dylib']
-    bundles = list(products.rglob('WinnowAppTests.xctest'))
+    binaries = [app / app_name, app / f'{app_name}.debug.dylib']
+    bundles = list(products.rglob(f'{app_name}Tests.xctest'))
     binaries += [binary for bundle in bundles if (binary := test_binary(bundle))]
     binaries = sorted({path.resolve() for path in binaries if path.is_file()})
     return binaries
@@ -265,8 +265,8 @@ def export_app(args):
     receipt['frameworks'] = {'profile': str(profile), 'binaries': list(map(str, frameworks)),
                              'sources': validate_package_sources(args.output / 'frameworks.lcov',
                                                                  args.manifest.resolve(), args.manifest.resolve())}
-    binaries = app_binaries(derived, args.variant)
-    receipt['application'] = {'variant': args.variant, 'derived_data': str(derived),
+    binaries = app_binaries(derived, args.variant, args.app_name)
+    receipt['application'] = {'variant': args.variant, 'app': args.app_name, 'derived_data': str(derived),
                               'binary_hashes_at_collection': {str(path): hashlib.sha256(path.read_bytes()).hexdigest()
                                                               for path in binaries}}
     (args.output / 'app-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
@@ -326,6 +326,7 @@ def main():
     app.add_argument('--result', type=Path, required=True)
     app.add_argument('--derived-data', type=Path, required=True)
     app.add_argument('--variant', default='Debug')
+    app.add_argument('--app-name', default='WinnowApp', help='The app product, e.g. WinnowLightning')
     app.add_argument('--manifest', type=Path, required=True)
     app.add_argument('--output', type=Path, required=True)
     report = commands.add_parser('report', help='Union exported runs and enforce the cap')

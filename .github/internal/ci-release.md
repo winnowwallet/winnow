@@ -10,6 +10,8 @@ is swift-secp256k1. Xcode resolution must match that root lockfile.
 | Workflow | When | Responsibility |
 | --- | --- | --- |
 | CI | PR, main push, nightly, manual, release caller | One validation lane (tdx guests or one hosted build job) owns lint/test gates, package and debugging tests, app/Keychain tests and signet UI journey, release warning and E2E exclusion gates, inspection smoke, provenance, fixed fuzz corpus, and website preparation |
+| Swift Lightning | Every CI run (a job in CI) | Winnow Lightning against Core Lightning and LDK built from pinned sources, the recorded Lightning app journey, and CRAP for `Sources/WinnowLightningApp`; skipped when an identical tree already passed ([details](../../docs/engineering/swift-lightning.md)) |
+| Lightning release | `lightning-vX.Y.Z` tag | Calls CI, then archives, verifies, uploads Winnow Lightning (`com.btcswift.lightning`) to its TestFlight app and its internal group; export compliance follows the reviewed `LIGHTNING_NONEXEMPT_ENCRYPTION` variable |
 | Fuzz sanitizers | Weekly or manual seed replay | Sustained address/thread sanitizer coverage; does not repeat normal suites |
 | Release | New stable version tag or manual validation | Calls CI, then signs/uploads and publishes only for tag pushes |
 | TestFlight recovery | Manual, exact version and build number | Finish notes/group assignment for an existing upload |

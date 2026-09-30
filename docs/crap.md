@@ -40,6 +40,13 @@ other two and runs `ci-crap report`. Its lane record carries the result, and
 least 1,000 measured methods. The hosted fallback does the same in one job,
 except on fork PRs that skip the journey; main's tdx run measures those.
 
+Two reports partition `Sources`. The tdx report above leaves out only
+`Sources/WinnowLightningApp` (`--without`), which only the Winnow Lightning app
+compiles; `ci-validation` pins that one exclusion. The Swift Lightning job
+(`.github/workflows/ci-lightning.yml`) reports exactly that directory
+(`--scope`) from the Lightning app tests and its recorded journey. Every method
+is gated by one of the two.
+
 For a local audit:
 
 ```sh

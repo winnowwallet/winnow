@@ -1,0 +1,199 @@
+name: Swift Lightning
+
+# Winnow Lightning against independent peers: Core Lightning and LDK built from
+# pinned sources (posix4e/lightning-reference), Bitcoin Core regtest, and the
+# recorded Winnow Lightning app journey. Also measures and gates CRAP for the
+# code only the Lightning app compiles (Sources/WinnowLightningApp); the tdx
+# lanes gate everything else. A tree that already passed here is not re-run.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  lightning:
+    name: Swift Lightning independent peers
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      RUSTUP_TOOLCHAIN: '1.89.0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      # Everything that decides the result; documentation alone does not.
+      - name: Identify the validated inputs
+        id: inputs
+        run: |
+          {
+            git rev-parse HEAD:Sources HEAD:Tests HEAD:AppTests HEAD:UITests HEAD:Tools HEAD:scripts \
+              HEAD:.github/workflows HEAD:Resources HEAD:Package.swift HEAD:Package.resolved HEAD:project.yml
+            echo "$ImageOS $ImageVersion $RUSTUP_TOOLCHAIN"
+          } | shasum -a 256 | awk '{print "fingerprint=" $1}' >> "$GITHUB_OUTPUT"
+
+      - name: Reuse a passing run of the same inputs
+        id: evidence
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/lightning-evidence
+          key: lightning-evidence-${{ steps.inputs.outputs.fingerprint }}
+          lookup-only: true
+
+      - name: Use the same Python runtime as Winnow validation
+        if: steps.evidence.outputs.cache-hit != 'true'
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Prepare host-only reference tools
+        if: steps.evidence.outputs.cache-hit != 'true'
+        run: |
+          brew install autoconf automake libtool gnu-sed gettext libsodium lowdown pkgconf openssl@3 make sqlite uv bitcoin
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+          mkdir -p "$RUNNER_TEMP/lightning-results" "$RUNNER_TEMP/lightning-crap"
+          {
+            echo "REFERENCE_DIR=$RUNNER_TEMP/lightning-references"
+            echo "WINNOW_LIGHTNING_RESULTS=$RUNNER_TEMP/lightning-results"
+            echo "WINNOW_BITCOIN_DIR=$(dirname "$(command -v bitcoind)")"
+            echo "WINNOW_CLN_DIR=$RUNNER_TEMP/lightning-references/cln"
+            echo "WINNOW_LDK_HARNESS=$RUNNER_TEMP/lightning-references/harness/target/debug/winnow-lightning-reference"
+            echo "CRAP_RESULTS=$RUNNER_TEMP/lightning-crap"
+            echo "DERIVED_DATA=$RUNNER_TEMP/lightning-app-build"
+          } >> "$GITHUB_ENV"
+
+      # The reference peers are pinned by scripts/ci-lightning-references; a
+      # build of the same pins on the same image is reused.
+      - name: Restore the reference peer build
+        id: references
+        if: steps.evidence.outputs.cache-hit != 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/lightning-references
+          key: lightning-references-${{ runner.os }}-${{ env.ImageVersion }}-${{ env.RUSTUP_TOOLCHAIN }}-${{ hashFiles('scripts/ci-lightning-references') }}
+
+      - name: Build released reference peers and labeled macOS UI HSM override
+        if: steps.evidence.outputs.cache-hit != 'true' && steps.references.outputs.cache-hit != 'true'
+        run: scripts/ci-lightning-references "$REFERENCE_DIR" > "$WINNOW_LIGHTNING_RESULTS/reference-build.log" 2>&1
+
+      - name: Capture the source identity for CRAP
+        if: steps.evidence.outputs.cache-hit != 'true'
+        run: scripts/check-crap snapshot --output "$CRAP_RESULTS/source-manifest.json"
+
+      - name: Upstream LDK offer, request and static-invoice checks
+        if: steps.evidence.outputs.cache-hit != 'true'
+        run: scripts/ci-lightning-offers
+      - name: Swift-to-LDK async settlement with both clients offline
+        if: steps.evidence.outputs.cache-hit != 'true'
+        run: scripts/ci-lightning-async --direction swift-to-ldk
+      - name: LDK-to-Swift async settlement with both clients offline
+        if: steps.evidence.outputs.cache-hit != 'true'
+        run: scripts/ci-lightning-async --direction ldk-to-swift
+      - name: Swift-to-LDK async settlement across provider crashes
+        if: steps.evidence.outputs.cache-hit != 'true'
+        run: scripts/ci-lightning-async --direction swift-to-ldk --restart-providers
+      - name: LDK-to-Swift async settlement across provider crashes
+        if: steps.evidence.outputs.cache-hit != 'true'
+        run: scripts/ci-lightning-async --direction ldk-to-swift --restart-providers
+      - name: Recipient never returns; Swift recovers without either provider
+        if: steps.evidence.outputs.cache-hit != 'true'
+        run: scripts/ci-lightning-timeout
+      - name: Stock-peer payments, process restart and force close
+        if: steps.evidence.outputs.cache-hit != 'true'
+        run: scripts/ci-lightning-peer --close force
+      - name: Stock-peer payments, process restart and cooperative close
+        if: steps.evidence.outputs.cache-hit != 'true'
+        run: scripts/ci-lightning-peer --close cooperative --offers
+      - name: Stock anchor peer, restart and bounded CPFP replacement
+        if: ${{ !cancelled() && steps.evidence.outputs.cache-hit != 'true' }}
+        run: WINNOW_LIGHTNING_RESULTS="$WINNOW_LIGHTNING_RESULTS/anchors" scripts/ci-lightning-peer --format anchors --close force
+      - name: Stale backup recovery from stock peer latest unilateral close
+        if: ${{ !cancelled() && steps.evidence.outputs.cache-hit != 'true' }}
+        run: scripts/ci-lightning-peer --format anchors --close recovery
+
+      - name: Install pinned app project generator
+        if: ${{ !cancelled() && steps.evidence.outputs.cache-hit != 'true' }}
+        run: scripts/install-xcodegen
+
+      # Builds WinnowLightning with coverage once; the app tests below reuse it.
+      - name: Record Winnow Lightning sharing, offline payment, crashes and returned funds
+        if: ${{ !cancelled() && steps.evidence.outputs.cache-hit != 'true' }}
+        env:
+          WINNOW_CLN_UI_MANIFEST: ${{ runner.temp }}/lightning-references/cln-ui-manifest.json
+        run: |
+          scripts/ci-lightning-ui "$RUNNER_TEMP/lightning-ui"
+          scripts/ci-crap export-app --result "$RUNNER_TEMP/lightning-ui/LightningUI.xcresult" \
+            --derived-data "$DERIVED_DATA" --app-name WinnowLightning --manifest "$CRAP_RESULTS/source-manifest.json" \
+            --output "$CRAP_RESULTS/journey"
+
+      - name: Winnow Lightning app tests with coverage
+        if: ${{ !cancelled() && steps.evidence.outputs.cache-hit != 'true' }}
+        run: |
+          simulator=$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/lightning-ui/manifest.json"))["simulator"])')
+          specs=("$DERIVED_DATA"/Build/Products/WinnowLightning_*.xctestrun)
+          test "${#specs[@]}" = 1
+          xcodebuild test-without-building -xctestrun "${specs[0]}" -derivedDataPath "$DERIVED_DATA" \
+            -destination "platform=iOS Simulator,id=$simulator" -only-testing:WinnowLightningTests \
+            -enableCodeCoverage YES -collect-test-diagnostics never \
+            -resultBundlePath "$CRAP_RESULTS/LightningAppTests.xcresult" 2>&1 | tee "$CRAP_RESULTS/app-tests.log"
+          scripts/ci-crap export-app --result "$CRAP_RESULTS/LightningAppTests.xcresult" \
+            --derived-data "$DERIVED_DATA" --app-name WinnowLightning --manifest "$CRAP_RESULTS/source-manifest.json" \
+            --output "$CRAP_RESULTS/units"
+
+      # docs/crap.md: the tdx report gates everything except this directory.
+      - name: CRAP at most 12 across the Lightning app's own methods
+        if: ${{ !cancelled() && steps.evidence.outputs.cache-hit != 'true' }}
+        run: |
+          scripts/install-crap-swiftlint
+          scripts/ci-crap report --app "$CRAP_RESULTS/units" --app "$CRAP_RESULTS/journey" \
+            --scope Sources/WinnowLightningApp --manifest "$CRAP_RESULTS/source-manifest.json" \
+            --output "$CRAP_RESULTS/report"
+
+      - name: Compile the Winnow Lightning device release and exclude test activation
+        if: ${{ !cancelled() && steps.evidence.outputs.cache-hit != 'true' }}
+        run: |
+          xcodebuild build -project WinnowApp.xcodeproj -scheme WinnowLightning -configuration Release \
+            -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/lightning-release-build" \
+            -skipPackagePluginValidation -skipMacroValidation CODE_SIGNING_ALLOWED=NO \
+            > "$RUNNER_TEMP/lightning-ui/release-build.log" 2>&1
+          scripts/check-swift-warnings "$RUNNER_TEMP/lightning-ui/release-build.log"
+          app="$RUNNER_TEMP/lightning-release-build/Build/Products/Release-iphoneos/WinnowLightning.app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")" = com.btcswift.lightning
+          test "$(lipo -archs "$app/WinnowLightning")" = arm64
+          scripts/verify-release-e2e-exclusion "$app"
+          scripts/check-dependencies --xcode "$RUNNER_TEMP/lightning-release-build"
+
+      - name: Preserve interoperability, recording and CRAP evidence
+        if: always() && steps.evidence.outputs.cache-hit != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: swift-lightning-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.WINNOW_LIGHTNING_RESULTS }}
+            ${{ env.REFERENCE_DIR }}/reference-manifest.json
+            ${{ env.REFERENCE_DIR }}/cln-ui-manifest.json
+            ${{ runner.temp }}/lightning-ui/journey.mp4
+            ${{ runner.temp }}/lightning-ui/screenshots
+            ${{ runner.temp }}/lightning-ui/*.log
+            ${{ runner.temp }}/lightning-ui/manifest.json
+            ${{ runner.temp }}/lightning-ui/journey.json
+            ${{ runner.temp }}/lightning-ui/fixture/evidence
+            ${{ env.CRAP_RESULTS }}/report
+            ${{ env.CRAP_RESULTS }}/*.log
+          retention-days: 14
+
+      - name: Record this tree as passing
+        if: success() && steps.evidence.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/lightning-evidence"
+          printf '{"run":"%s","sha":"%s","fingerprint":"%s"}\n' "$GITHUB_RUN_ID" "$GITHUB_SHA" \
+            "${{ steps.inputs.outputs.fingerprint }}" > "$RUNNER_TEMP/lightning-evidence/passed.json"
+      - name: Keep the passing record for identical trees
+        if: success() && steps.evidence.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/lightning-evidence
+          key: lightning-evidence-${{ steps.inputs.outputs.fingerprint }}
