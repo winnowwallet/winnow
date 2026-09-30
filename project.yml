@@ -166,6 +166,9 @@ schemes:
       config: Debug
     test:
       config: Debug
+      # Coverage for every target, including the WalletCore package, so the
+      # CRAP gate (docs/crap.md) sees what app tests and the journey reach.
+      gatherCoverageData: true
       # ci-ui-journey records one continuous video; avoid a second encoder.
       captureScreenshotsAutomatically: false
       preferredScreenCaptureFormat: screenshots

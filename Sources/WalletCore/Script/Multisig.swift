@@ -57,22 +57,33 @@ public enum Multisig {
     private static func parseTrailer(_ bytes: Data) -> Int? {
         guard bytes.count >= 2, bytes.last == Script.Op.numEqual else { return nil }
         let head = bytes[bytes.startIndex]
-        switch head {
-        case 0x51 ... 0x60: // OP_1...OP_16 (k = 0 is invalid for multi_a, BIP387)
+        // OP_1...OP_16 (k = 0 is invalid for multi_a, BIP387).
+        if (0x51 ... 0x60).contains(head) {
             return bytes.count == 2 ? Int(head - 0x50) : nil
-        default:
-            // k > 16: minimally-encoded script number push.
-            let length = Int(head)
-            guard length >= 1, bytes.count == 2 + length else { return nil }
-            var value = 0
-            for index in 0 ..< length {
-                value |= Int(bytes[bytes.startIndex + 1 + index]) << (8 * index)
-            }
-            // Minimal encoding: no trailing zero byte unless the sign bit needs it.
-            let top = bytes[bytes.startIndex + length]
-            if top == 0, length > 1, bytes[bytes.startIndex + length - 1] & 0x80 == 0 { return nil }
-            guard top & 0x80 == 0 else { return nil } // negative
-            return value
         }
+        return pushedThreshold(bytes)
+    }
+
+    /// k > 16: a minimally encoded, positive script number push.
+    private static func pushedThreshold(_ bytes: Data) -> Int? {
+        // Script numbers are at most four bytes; BIP387's maximum of 999
+        // participants needs two. Longer pushes are never shifted into k.
+        let length = Int(bytes[bytes.startIndex])
+        guard (1 ... 4).contains(length), bytes.count == 2 + length,
+              minimallyPositive(bytes, length: length)
+        else { return nil }
+        var value = 0
+        for index in 0 ..< length {
+            value |= Int(bytes[bytes.startIndex + 1 + index]) << (8 * index)
+        }
+        return value
+    }
+
+    private static func minimallyPositive(_ bytes: Data, length: Int) -> Bool {
+        let top = bytes[bytes.startIndex + length]
+        guard top & 0x80 == 0 else { return false } // negative
+        // Minimal encoding: no trailing zero byte unless the sign bit needs it.
+        if top == 0, length > 1, bytes[bytes.startIndex + length - 1] & 0x80 == 0 { return false }
+        return true
     }
 }
