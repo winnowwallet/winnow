@@ -70,7 +70,7 @@ jobs:
       - name: Restore the reference peer build
         id: references
         if: steps.evidence.outputs.cache-hit != 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/lightning-references
           key: lightning-references-${{ runner.os }}-${{ env.ImageVersion }}-${{ env.RUSTUP_TOOLCHAIN }}-${{ hashFiles('scripts/ci-lightning-references') }}
@@ -78,6 +78,15 @@ jobs:
       - name: Build released reference peers and labeled macOS UI HSM override
         if: steps.evidence.outputs.cache-hit != 'true' && steps.references.outputs.cache-hit != 'true'
         run: scripts/ci-lightning-references "$REFERENCE_DIR" > "$WINNOW_LIGHTNING_RESULTS/reference-build.log" 2>&1
+
+      # Saved as soon as it is built, so a later failing step does not cost the
+      # next run the whole reference build again.
+      - name: Keep the reference peer build
+        if: steps.evidence.outputs.cache-hit != 'true' && steps.references.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/lightning-references
+          key: ${{ steps.references.outputs.cache-primary-key }}
 
       - name: Capture the source identity for CRAP
         if: steps.evidence.outputs.cache-hit != 'true'
