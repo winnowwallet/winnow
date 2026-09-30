@@ -1,8 +1,7 @@
-"""A cold simulator needs the selected Xcode's GUI before recording can start."""
+"""The Lightning journey records from its first frame, rebooting an idle simulator."""
 import importlib.machinery
 import importlib.util
 from pathlib import Path
-import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -15,67 +14,67 @@ ui = importlib.util.module_from_spec(spec)
 loader.exec_module(ui)
 
 
-class DisplayBootstrapTests(unittest.TestCase):
+class Process:
+    """One recordVideo process; exits once signalled."""
+    def __init__(self):
+        self.signals = []
+
+    def poll(self):
+        return None if not self.signals else 0
+
+    def send_signal(self, sig):
+        self.signals.append(sig)
+
+    def wait(self, timeout=None):
+        return 0
+
+
+class Recorder:
+    """recordVideo stand-in: its log reports a frame only on chosen attempts."""
+    def __init__(self, starts):
+        self.starts = starts
+
+    def __call__(self, args, stdout, stderr):
+        stdout.write('Recording started\n' if self.starts.pop(0) else '')
+        stdout.flush()
+        return Process()
+
+
+class RecordingStartTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
-        self.developer = self.root / 'Selected Xcode.app/Contents/Developer'
-        self.developer.mkdir(parents=True)
-        self.results = self.root / 'results'
-        self.results.mkdir()
+        self.results = Path(temporary.name)
+        self.commands = []
 
-    def selected_xcode(self):
-        return patch.object(ui.subprocess, 'check_output',
-                            return_value=str(self.developer) + '\n')
+    def run_command(self, args, log, **kwargs):
+        self.commands.append(args[2] if args[:2] == ['xcrun', 'simctl'] else args[0])
 
-    def render(self, args, log, **kwargs):
-        if args[1:4] == ['simctl', 'io', 'owned-device']:
-            Path(args[-1]).write_bytes(b'nonempty screenshot')
+    def start(self, starts):
+        recorder = Recorder(list(starts))
+        waits = iter(starts)
+        def fake_wait(check, seconds=90):
+            if not next(waits):
+                raise TimeoutError('no frame')
+            self.assertTrue(check())
+        with patch.object(ui, 'run', self.run_command), patch.object(ui.subprocess, 'Popen', recorder), \
+                patch.object(ui, 'wait', fake_wait):
+            return ui.start_recording('owned-device', self.results)
 
-    def test_supported_xcode_layouts_open_exact_bundle_before_rendering(self):
-        for application in (self.developer / 'Applications/Simulator.app',
-                            self.developer.parent / 'Applications/DeviceHub.app'):
-            with self.subTest(application=application.name):
-                application.mkdir(parents=True)
-                with self.selected_xcode(), patch.object(ui, 'run', side_effect=self.render) as run:
-                    ui.prepare_display('owned-device', self.results)
-                calls = run.call_args_list
-                self.assertEqual(calls[0].args[0], ['open', '-a', str(application)])
-                self.assertEqual(len(calls), 2)
-                self.assertEqual(calls[1].args[0][0:5],
-                                 ['xcrun', 'simctl', 'io', 'owned-device', 'screenshot'])
-                self.assertTrue(all(call.kwargs['timeout'] == 60 for call in calls))
-                application.rmdir()
+    def test_a_ready_simulator_records_on_the_first_boot(self):
+        self.start([True])
+        self.assertEqual(self.commands, ['bootstatus'])
 
-    def test_missing_selected_gui_does_not_fall_back_or_render(self):
-        with self.selected_xcode(), patch.object(ui, 'run') as run:
-            with self.assertRaisesRegex(FileNotFoundError, 'selected Xcode'):
-                ui.prepare_display('owned-device', self.results)
-        run.assert_not_called()
+    def test_an_idle_simulator_is_rebooted_until_it_records(self):
+        self.start([False, True])
+        self.assertEqual(self.commands, ['bootstatus', 'shutdown', 'bootstatus'])
 
-    def test_gui_launch_failure_stops_before_rendering(self):
-        (self.developer / 'Applications/Simulator.app').mkdir(parents=True)
-        with self.selected_xcode(), patch.object(ui, 'run',
-                side_effect=subprocess.CalledProcessError(1, ['open'])) as run:
-            with self.assertRaises(subprocess.CalledProcessError):
-                ui.prepare_display('owned-device', self.results)
-        self.assertEqual(run.call_count, 1)
-
-    def test_screenshot_timeout_fails_without_claiming_display_ready(self):
-        (self.developer / 'Applications/Simulator.app').mkdir(parents=True)
-        failure = subprocess.TimeoutExpired(['xcrun', 'simctl', 'io'], 60)
-        with self.selected_xcode(), patch.object(ui, 'run', side_effect=[None, failure]):
-            with self.assertRaises(subprocess.TimeoutExpired):
-                ui.prepare_display('owned-device', self.results)
-        self.assertFalse((self.results / 'display-ready.png').exists())
-
-    def test_empty_frame_is_not_display_readiness(self):
-        (self.developer / 'Applications/Simulator.app').mkdir(parents=True)
-        (self.results / 'display-ready.png').write_bytes(b'')
-        with self.selected_xcode(), patch.object(ui, 'run'):
-            with self.assertRaisesRegex(AssertionError, 'no screenshot'):
-                ui.prepare_display('owned-device', self.results)
+    def test_three_frameless_boots_fail_without_a_partial_recording(self):
+        (self.results / 'journey.mp4').write_bytes(b'partial')
+        with self.assertRaises(TimeoutError):
+            self.start([False, False, False])
+        self.assertFalse((self.results / 'journey.mp4').exists())
+        self.assertEqual(self.commands.count('bootstatus'), 3)
 
 
 if __name__ == '__main__':

@@ -215,7 +215,7 @@ targets:
     sources:
       - path: UITests
         # The Lightning journeys drive WinnowLightning (WinnowLightningUITests).
-        excludes: ["README.md", "LightningAppUITests.swift"]
+        excludes: ["README.md", "Lightning/**"]
     dependencies:
       - target: WinnowApp
       - package: Winnow
@@ -267,7 +267,7 @@ targets:
     platform: iOS
     deploymentTarget: "17.0"
     sources:
-      - path: UITests/LightningAppUITests.swift
+      - path: UITests/Lightning/LightningAppUITests.swift
       - path: UITests/TestHelpers.swift
     dependencies:
       - target: WinnowLightning

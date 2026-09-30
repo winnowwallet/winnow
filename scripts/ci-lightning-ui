@@ -33,26 +33,30 @@ def run(args, log, env=None, timeout=None):
         raise
 
 
-def prepare_display(simulator, results):
-    # bootstatus can finish on a cold hosted runner without recordVideo ever
-    # receiving a display frame. Open the selected Xcode's simulator GUI before
-    # checking display output. Xcode 27 moved this GUI to DeviceHub; do not let
-    # Launch Services choose a different installed Xcode's Simulator.app.
-    developer = Path(subprocess.check_output(['xcode-select', '-p'], text=True).strip())
-    applications = (developer / 'Applications/Simulator.app',
-                    developer.parent / 'Applications/DeviceHub.app')
-    application = next((path for path in applications if path.is_dir()), None)
-    if application is None:
-        raise FileNotFoundError(f'no simulator GUI in selected Xcode: {developer}')
-    run(['open', '-a', str(application)], results / 'display-gui.log', timeout=60)
-    print(f'Lightning UI simulator GUI opened: {application}', flush=True)
-    # The booted device's Home screen is sufficient to verify display output.
-    # Do not launch Winnow until recording is acknowledged, so onboarding and
-    # every financial action remain captured.
-    run(['xcrun', 'simctl', 'io', simulator, 'screenshot', str(results / 'display-ready.png')],
-        results / 'display-screenshot.log', timeout=60)
-    assert (results / 'display-ready.png').stat().st_size > 0, 'simulator display produced no screenshot'
-    print('Lightning UI simulator display ready', flush=True)
+def start_recording(simulator, results, attempts=3):
+    """Record from the first frame, as ci-ui-journey does. Fixture setup can
+    leave the simulator idle for minutes; a hosted simulator in that state may
+    never hand the recorder a frame, so it is rebooted and asked again."""
+    for attempt in range(1, attempts + 1):
+        run(['xcrun', 'simctl', 'bootstatus', simulator, '-b'], results / f'boot-{attempt}.log', timeout=300)
+        log = results / 'video.log'
+        with log.open('w') as out:
+            video = subprocess.Popen(['xcrun', 'simctl', 'io', simulator, 'recordVideo', '--codec=h264',
+                                      str(results / 'journey.mp4')], stdout=out, stderr=subprocess.STDOUT)
+        def recording():
+            assert video.poll() is None, 'recorder exited'
+            return 'Recording started' in log.read_text()
+        try:
+            wait(recording, 60)
+            print(f'Lightning UI recording acknowledged (attempt {attempt})', flush=True)
+            return video
+        except (AssertionError, TimeoutError) as error:
+            print(f'Recorder had no frame on attempt {attempt}: {error}; rebooting the simulator', flush=True)
+            stop(video, signal.SIGINT)
+            (results / 'journey.mp4').unlink(missing_ok=True)
+            if attempt < attempts:
+                run(['xcrun', 'simctl', 'shutdown', simulator], results / f'shutdown-{attempt}.log', timeout=120)
+    raise TimeoutError(f'simulator produced no recordable frame after {attempts} boots')
 
 
 def wait(check, seconds=90):
@@ -142,16 +146,9 @@ def main():
             assert fixture.poll() is None, 'fixture exited'
             return (results / 'fixture/connection.json').is_file()
         wait(fixture_ready, 180)
-        # Fixture setup can take minutes. Render immediately before recording,
-        # so display readiness is checked after that potentially idle interval.
-        prepare_display(simulator, results)
-        with (results / 'video.log').open('w') as log:
-            video = subprocess.Popen(['xcrun', 'simctl', 'io', simulator, 'recordVideo', '--codec=h264', str(results / 'journey.mp4')],
-                                     stdout=log, stderr=subprocess.STDOUT)
-        def recording():
-            assert video.poll() is None, 'recorder exited'
-            return 'Recording started' in (results / 'video.log').read_text()
-        wait(recording, 60)
+        # Fixture setup can take minutes; recording starts only after it, so
+        # onboarding and every financial action are captured.
+        video = start_recording(simulator, results)
         print('Lightning UI recording acknowledged; starting XCTest', flush=True)
         # This journey intentionally SIGKILLs the app. Xcode's verbose whole-
         # simulator diagnostics can stall even after XCTest finishes; retain
