@@ -25,8 +25,11 @@ else
   args=(-project WinnowApp.xcodeproj -scheme WinnowApp -configuration Debug
         -derivedDataPath "$APP_DERIVED_DATA" -skipPackagePluginValidation -skipMacroValidation)
 fi
+# WINNOW_APP_CODE_COVERAGE=YES keeps executable-line coverage in the result
+# bundle for the CRAP gate (scripts/ci-crap export-app).
 xcodebuild "$APP_TEST_ACTION" "${args[@]}" \
   -destination "platform=iOS Simulator,id=$APP_SIMULATOR_ID" \
+  -enableCodeCoverage "${WINNOW_APP_CODE_COVERAGE:-NO}" \
   -resultBundlePath "$APP_RESULTS/AppTests.xcresult" \
   -only-testing:WinnowAppTests \
   2>&1 | tee "$APP_RESULTS/app-tests.log"

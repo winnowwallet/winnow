@@ -1,0 +1,19 @@
+#!/bin/bash
+# CRAP decision counts are audited against this exact SwiftLint release.
+set -euo pipefail
+CRAP_SWIFTLINT_VERSION=0.65.1
+CRAP_SWIFTLINT_SHA256=c1e429b0599cf1b516f369a2d9ec04eaf0e436f3c12b637df8851fa52ff694d0
+CRAP_SWIFTLINT_DIR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/winnow-crap-swiftlint-$CRAP_SWIFTLINT_VERSION"
+install -d -m 700 "$CRAP_SWIFTLINT_DIR"
+curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
+  "https://github.com/realm/SwiftLint/releases/download/$CRAP_SWIFTLINT_VERSION/portable_swiftlint.zip" \
+  --output "$CRAP_SWIFTLINT_DIR/swiftlint.zip"
+CRAP_SWIFTLINT_ACTUAL=$(shasum -a 256 "$CRAP_SWIFTLINT_DIR/swiftlint.zip" | awk '{print $1}')
+test "$CRAP_SWIFTLINT_ACTUAL" = "$CRAP_SWIFTLINT_SHA256" || { echo 'SwiftLint checksum mismatch' >&2; exit 1; }
+unzip -q -o "$CRAP_SWIFTLINT_DIR/swiftlint.zip" -d "$CRAP_SWIFTLINT_DIR"
+test "$("$CRAP_SWIFTLINT_DIR/swiftlint" version)" = "$CRAP_SWIFTLINT_VERSION"
+if [[ -n "${GITHUB_PATH:-}" ]]; then
+  printf '%s\n' "$CRAP_SWIFTLINT_DIR" >> "$GITHUB_PATH"
+else
+  echo "CRAP SwiftLint installed at $CRAP_SWIFTLINT_DIR/swiftlint"
+fi
