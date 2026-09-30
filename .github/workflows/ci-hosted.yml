@@ -255,12 +255,17 @@ jobs:
           scripts/ci-crap export-app --result "$APP_RESULTS/journey/NodeUI.xcresult" --derived-data "$DERIVED_DATA" \
             --manifest "$CI_RESULTS/crap/source-manifest.json" --output "$CI_RESULTS/crap/journey"
 
+      # Its own step: the installer adds SwiftLint to GITHUB_PATH, which only
+      # later steps see.
+      - name: Install the audited SwiftLint for CRAP
+        if: steps.validate_media.outcome != 'success' && env.RUN_UI_JOURNEY == 'true'
+        run: scripts/install-crap-swiftlint
+
       # docs/crap.md. Needs the journey's coverage, so fork PRs that skip the
       # journey are measured by the tdx run on main instead.
       - name: CRAP at most 12 across first-party methods
         if: steps.validate_media.outcome != 'success' && env.RUN_UI_JOURNEY == 'true'
         run: |
-          scripts/install-crap-swiftlint
           scripts/ci-crap report --package "$CI_RESULTS/crap/package" --app "$CI_RESULTS/crap/units" \
             --app "$CI_RESULTS/crap/journey" --without Sources/WinnowLightningApp \
             --manifest "$CI_RESULTS/crap/source-manifest.json" \

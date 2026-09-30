@@ -314,6 +314,14 @@ class ReferenceStartupFailure(RuntimeError):
     """Stock CLN lost its channel subdaemon before funding_signed."""
 
 
+# Stock v26.06.8 on macOS can hand channeld an unreadable HSM socket (upstream
+# #5808/#9323, fixed by #9564, which only the labeled UI HSM carries). It hit 5
+# of 12 openings in one hosted run, so a single retry still failed a step about
+# one time in six. Each attempt is a fresh disposable fixture, and only this
+# exact pre-funding_signed failure is retried.
+REFERENCE_STARTUP_ATTEMPTS = 5
+
+
 def funding_signature(swift, log):
     try:
         return swift.receive(35)
@@ -699,7 +707,7 @@ def check_congested_package_relay(primary_rpc, committed, replacement, context, 
 def check_peer(close_mode, evidence, channel_format="staticRemoteKey", offers=False):
     evidence.mkdir(parents=True, exist_ok=False)
     attempts = []
-    for number in (1, 2):
+    for number in range(1, REFERENCE_STARTUP_ATTEMPTS + 1):
         attempt = evidence / f'attempt-{number}'
         # Retain every failed fixture; never retry inside an existing channel.
         attempt.mkdir(exist_ok=False)
@@ -708,9 +716,10 @@ def check_peer(close_mode, evidence, channel_format="staticRemoteKey", offers=Fa
         except ReferenceStartupFailure as error:
             attempts.append(dict(attempt=number, result='reference-startup-failure', error=str(error)))
             (evidence / 'attempts.json').write_text(json.dumps(attempts, indent=2) + '\n')
-            if number == 2:
+            if number == REFERENCE_STARTUP_ATTEMPTS:
                 raise
-            print(f'{error}. Retrying once with a fresh disposable fixture; failed attempt retained.', flush=True)
+            print(f'{error}. Retrying with a fresh disposable fixture ({number + 1} of {REFERENCE_STARTUP_ATTEMPTS}); '
+                  'failed attempt retained.', flush=True)
         else:
             attempts.append(dict(attempt=number, result='passed'))
             (evidence / 'attempts.json').write_text(json.dumps(attempts, indent=2) + '\n')

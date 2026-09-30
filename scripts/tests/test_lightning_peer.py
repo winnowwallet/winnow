@@ -75,9 +75,10 @@ class PeerStartupTests(unittest.TestCase):
         receipt = json.loads((evidence / 'opening-receipt.json').read_text())
         self.assertEqual([item['result'] for item in receipt['attempts']], ['reference-startup-failure', 'passed'])
 
-    def test_second_crash_or_any_other_failure_remains_fatal(self):
+    def test_last_crash_or_any_other_failure_remains_fatal(self):
         check = self.module['check_peer']
-        for index, (error, calls) in enumerate(((self.failure('startup'), 2),
+        attempts = self.module['REFERENCE_STARTUP_ATTEMPTS']
+        for index, (error, calls) in enumerate(((self.failure('startup'), attempts),
                                               (AssertionError('bad signature or balance'), 1),
                                               (TimeoutError('payment stalled'), 1))):
             with self.subTest(error=error):
@@ -185,7 +186,7 @@ class RoutedReferenceStartupTests(unittest.TestCase):
         with patch('sys.platform', 'darwin'), self.assertRaises(type(self.error)):
             self.invoke(Mock(side_effect=[self.error, duplicate]))
 
-    def test_classified_stock_failure_stops_after_two_fresh_retained_attempts(self):
+    def test_classified_stock_failure_stops_after_the_last_fresh_retained_attempt(self):
         check = self.module['check_peer']
         directories = []
         def run(mode, evidence, channel_format='staticRemoteKey', offers=False):
@@ -198,11 +199,12 @@ class RoutedReferenceStartupTests(unittest.TestCase):
         with patch('sys.platform', 'darwin'), patch.dict(check.__globals__, run_peer=run):
             with self.assertRaises(self.failure):
                 check('cooperative', evidence)
-        self.assertEqual(directories, [evidence / 'attempt-1', evidence / 'attempt-2'])
-        self.assertFalse((evidence / 'attempt-3').exists())
+        attempts = self.module['REFERENCE_STARTUP_ATTEMPTS']
+        self.assertEqual(directories, [evidence / f'attempt-{number}' for number in range(1, attempts + 1)])
+        self.assertFalse((evidence / f'attempt-{attempts + 1}').exists())
         self.assertFalse((evidence / 'opening-receipt.json').exists())
         history = json.loads((evidence / 'attempts.json').read_text())
-        self.assertEqual([item['result'] for item in history], ['reference-startup-failure'] * 2)
+        self.assertEqual([item['result'] for item in history], ['reference-startup-failure'] * attempts)
         for attempt in directories:
             receipt = json.loads((attempt / 'routed-funding-failure.json').read_text())
             self.assertTrue(receipt['classified'])

@@ -152,11 +152,16 @@ jobs:
             --derived-data "$DERIVED_DATA" --app-name WinnowLightning --manifest "$CRAP_RESULTS/source-manifest.json" \
             --output "$CRAP_RESULTS/units"
 
+      # Its own step: the installer adds SwiftLint to GITHUB_PATH, which only
+      # later steps see.
+      - name: Install the audited SwiftLint for CRAP
+        if: ${{ !cancelled() && steps.evidence.outputs.cache-hit != 'true' }}
+        run: scripts/install-crap-swiftlint
+
       # docs/crap.md: the tdx report gates everything except this directory.
       - name: CRAP at most 12 across the Lightning app's own methods
         if: ${{ !cancelled() && steps.evidence.outputs.cache-hit != 'true' }}
         run: |
-          scripts/install-crap-swiftlint
           scripts/ci-crap report --app "$CRAP_RESULTS/units" --app "$CRAP_RESULTS/journey" \
             --scope Sources/WinnowLightningApp --manifest "$CRAP_RESULTS/source-manifest.json" \
             --output "$CRAP_RESULTS/report"
