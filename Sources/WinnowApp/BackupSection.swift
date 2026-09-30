@@ -1,5 +1,4 @@
 import WalletCore
-import LocalAuthentication
 import SwiftUI
 
 /// The backup file and the recovery words: one section, shown on the
@@ -14,10 +13,7 @@ struct BackupSection: View {
     @State private var showExport = false
     @State private var showCloudBackup = false
     @State private var revealedMnemonic: String?
-    @State private var revealError: String?
-    @State private var revealing = false
-    @State private var revealEpoch = SensitivePresentationEpoch()
-    @State private var revealTask: Task<Void, Never>?
+    @State private var revealing = SensitiveAction()
 
     var body: some View {
         // The sheets and the lifecycle hooks hang on the rows, not on the
@@ -41,13 +37,13 @@ struct BackupSection: View {
                 .onDisappear { clearSensitivePresentations() }
             if model.advancedMode {
             Button("Show recovery phrase") { reveal() }
-                .disabled(model.walletID == nil || revealing)
+                .disabled(model.walletID == nil || revealing.busy)
                 .accessibilityIdentifier("revealPhraseButton")
                 .sheet(item: revealedItem) { words in
                     RevealPhraseView(mnemonic: words.text)
                 }
             }
-            if let revealError {
+            if let revealError = revealing.error {
                 Text(revealError).foregroundStyle(.red).font(.footnote)
             }
         } header: {
@@ -71,44 +67,16 @@ struct BackupSection: View {
     }
 
     private func reveal() {
-        revealTask?.cancel()
-        let token = revealEpoch.begin()
-        revealing = true
-        revealError = nil
-        revealTask = Task { @MainActor in
-            do {
-                let words = try await model.revealMnemonic()
-                try Task.checkCancellation()
-                guard revealEpoch.accepts(
-                    token, whilePresentationIsAllowed: scenePhase != .background
-                ) else { return }
-                revealedMnemonic = words
-            } catch let error as LAError where error.code == .userCancel {
-                // Cancelling the auth prompt is a decision, not a failure.
-            } catch is CancellationError {
-                // Leaving the active scene is an intentional fail-closed exit.
-            } catch {
-                if revealEpoch.accepts(token, whilePresentationIsAllowed: scenePhase != .background) {
-                    revealError = error.localizedDescription
-                }
-            }
-            guard revealEpoch.accepts(
-                token, whilePresentationIsAllowed: scenePhase != .background
-            ) else {
-                return
-            }
-            revealing = false
-            revealTask = nil
+        revealing.start(presentable: { scenePhase != .background }) {
+            try await model.revealMnemonic()
+        } apply: { words in
+            revealedMnemonic = words
         }
     }
 
     private func clearSensitivePresentations() {
-        revealEpoch.invalidate()
-        revealTask?.cancel()
-        revealTask = nil
+        revealing.reset()
         revealedMnemonic = nil
-        revealError = nil
-        revealing = false
         showExport = false
         showCloudBackup = false
     }

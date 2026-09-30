@@ -408,6 +408,9 @@ final class AppModel {
     private var phaseTask: Task<Void, Never>?
     private var broadcasterEventTask: Task<Void, Never>?
     private var isActive = false
+    /// App tests run the real stack against a loopback chain with its own
+    /// genesis; the app itself never sets this.
+    private let networkParamsOverride: NetworkParams?
     private var bootTask: Task<Void, Never>?
     /// A BGTask's scan. Foreground networking and a background check never
     /// run together: returning to the app cancels this before `activate()`.
@@ -459,10 +462,12 @@ final class AppModel {
          e2e: E2EMode? = E2EMode.current, defaults: UserDefaults = .standard,
          storeKeys: (any StoreKeyVault)? = nil, keyStore: (any KeyStore)? = nil,
          cloudBackups: CloudBackupController? = nil,
+         networkParams: NetworkParams? = nil,
          discoverGateways: @escaping @Sendable () async -> PeerGatewayConfiguration = {
              await TailnetGatewayDiscovery().discover()
          }) {
         self.discoverGateways = discoverGateways
+        networkParamsOverride = networkParams
         self.cloudBackups = cloudBackups ?? CloudBackupController()
         allowsCloudBackup = e2e == nil || cloudBackups != nil
         self.deviceAuthenticator = deviceAuthenticator
@@ -888,7 +893,7 @@ final class AppModel {
         await preparePeerGateways()
         guard epoch == networkGeneration, isActive || backgroundRunning, !Task.isCancelled else { return }
         do {
-            let params = e2e?.networkParams ?? NetworkParams.params(for: network)
+            let params = networkParamsOverride ?? e2e?.networkParams ?? NetworkParams.params(for: network)
             // relayPreference: peers inv us relayed transactions so bounded
             // mempool windows (§2.8) can open on live connections without a
             // reconnect. With no window open the invs are dropped unanswered —
@@ -2419,6 +2424,28 @@ final class AppModel {
         await refresh()
     }
 
+    /// The payment screen's load: nil once the details arrived, or when the
+    /// screen went away first; otherwise what to tell the user.
+    func paymentDetailsError(_ entry: HistoryEntry) async -> String? {
+        do {
+            try await loadPaymentDetails(entry)
+            return nil
+        } catch is CancellationError {
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    /// What the iCloud restore sheet adds once a restore finished: nothing
+    /// when the chain agreed with the backup.
+    static func cloudRestoreMessage(for report: ImportReport?) -> String? {
+        guard let report else { return "Restored. Network verification will resume when peers are reachable." }
+        return report.matchesBundle
+            ? nil
+            : "Some payments changed since this backup. Winnow updated the wallet from the network; review the restored balances."
+    }
+
     /// The address the next payment to `person` derives, peeked without
     /// advancing anything: the counter moves only when a send commits.
     func nextPaymentAddress(for person: PersonRecord) throws -> (address: String, index: UInt32) {
@@ -3233,7 +3260,8 @@ extension AppModel {
     }
 
     private func scheduleCloudBackup() {
-        guard e2e == nil else { return }
+        // E2E journeys never touch iCloud; tests that inject a controller do.
+        guard allowsCloudBackup else { return }
         cloudBackups.configure(directory: storageDirectory(), walletID: walletID)
         guard isActive, let walletID else { return }
         let selectedNetwork = network
