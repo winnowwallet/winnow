@@ -27,9 +27,14 @@ def digest(path):
 def captures(root):
     names = []
     for path in sorted((root / "UITests").glob("*.swift")):
-        names.extend(re.findall(r'Screenshots\.capture\(app, "([a-z0-9-]+)", testCase: self\)', path.read_text()))
-    if len(names) != 16 or len(set(names)) != 16:
-        raise ValueError("expected the focused journey's 16 unique checkpoint captures")
+        source = path.read_text()
+        # This site packages the ordinary wallet story and its extensions.
+        # Separate suites, such as Lightning, retain their own CI artifacts.
+        if not re.search(r'\b(?:class|extension)\s+WinnowAppUITests\b', source):
+            continue
+        names.extend(re.findall(r'Screenshots\.capture\(app, "([a-z0-9-]+)", testCase: self\)', source))
+    if len(names) != 17 or len(set(names)) != 17:
+        raise ValueError("expected the focused journey's 17 unique checkpoint captures")
     return sorted(name + ".png" for name in names)
 
 

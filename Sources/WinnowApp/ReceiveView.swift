@@ -14,6 +14,7 @@ struct ReceiveView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     /// One unconfirmed payment seen via the mempool window.
     struct UnconfirmedPayment: Identifiable, Equatable {
@@ -30,6 +31,12 @@ struct ReceiveView: View {
     @State private var unconfirmed: [UnconfirmedPayment] = []
     @State private var window: MempoolWindow?
     @State private var windowTask: Task<Void, Never>?
+
+    private var receiveActionsLayout: AnyLayout {
+        typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(spacing: 16))
+            : AnyLayout(HStackLayout(spacing: 16))
+    }
 
     var body: some View {
         NavigationStack {
@@ -60,7 +67,7 @@ struct ReceiveView: View {
                             .padding(.horizontal)
                             .accessibilityIdentifier("receiveAddress")
                             .accessibilityValue(address)
-                        HStack(spacing: 16) {
+                        receiveActionsLayout {
                             Button("Copy") { ClipboardPolicy.interchange.apply(address) }
                             ShareLink(item: address)
                             Button("New address") { newAddress() }
@@ -170,12 +177,15 @@ struct ReceiveView: View {
         let events = await window.events()
         windowTask = Task {
             for await event in events {
-                guard case let .paymentSeen(txid, amount, _) = event else { continue }
-                if !unconfirmed.contains(where: { $0.txid == txid }) {
-                    unconfirmed.append(UnconfirmedPayment(txid: txid, amount: amount))
-                }
+                recordUnconfirmedPayment(event)
             }
         }
+    }
+
+    private func recordUnconfirmedPayment(_ event: MempoolWindow.Event) {
+        guard case let .paymentSeen(txid, amount, _) = event else { return }
+        guard !unconfirmed.contains(where: { $0.txid == txid }) else { return }
+        unconfirmed.append(UnconfirmedPayment(txid: txid, amount: amount))
     }
 
     private func closeWindow() {

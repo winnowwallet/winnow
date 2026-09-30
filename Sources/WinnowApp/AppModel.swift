@@ -220,8 +220,20 @@ final class AppModel {
 
     /// What Simple mode shows under the balance. Advanced shows every error.
     var simpleSyncError: String? {
-        Self.simpleSyncError(lastError: status.lastSyncError, transientError: transientSyncError,
-                             failures: transientSyncFailures)
+        guard !Self.peersReturned(after: status.lastSyncError, phase: syncPhase) else { return nil }
+        return Self.simpleSyncError(lastError: status.lastSyncError, transientError: transientSyncError,
+                                    failures: transientSyncFailures)
+    }
+
+    /// "No peers" is stale once peers are connected again or the scan is
+    /// moving; the failed attempt stays in `lastSyncError` for Advanced.
+    static func peersReturned(after lastError: String?, phase: SyncPhase) -> Bool {
+        guard lastError == FilterSyncError.noPeers.errorDescription else { return false }
+        switch phase {
+        case .headers, .filters, .synced: return true
+        case let .connecting(connected, _): return connected > 0
+        case .idle, .peerDiscoveryFailed: return false
+        }
     }
 
     /// A peer dropping mid-scan is routine, and the next pass recovers on

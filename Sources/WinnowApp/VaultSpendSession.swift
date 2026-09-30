@@ -295,19 +295,26 @@ struct ApprovalView: View {
 
     @ViewBuilder
     private func content(_ session: VaultSpendSession) -> some View {
-        if let txid = session.broadcastTxid {
-            sentSection(txid)
-        } else {
-            requestSection(session)
-            if session.working != nil {
-                reviewSection(session)
-                decisionSection(session)
-            }
-            if let error = session.error, session.review != nil || session.working == nil {
-                Section { Text(error).foregroundStyle(.red).font(.footnote).accessibilityIdentifier("approvalError") }
-            }
-            if let output = session.output { shareSection(output, session: session) }
+        if let txid = session.broadcastTxid { sentSection(txid) }
+        else { pendingContent(session) }
+    }
+
+    @ViewBuilder
+    private func pendingContent(_ session: VaultSpendSession) -> some View {
+        requestSection(session)
+        if session.working != nil {
+            reviewSection(session)
+            decisionSection(session)
         }
+        approvalFeedback(session)
+    }
+
+    @ViewBuilder
+    private func approvalFeedback(_ session: VaultSpendSession) -> some View {
+        if let error = session.error, session.review != nil || session.working == nil {
+            Section { Text(error).foregroundStyle(.red).font(.footnote).accessibilityIdentifier("approvalError") }
+        }
+        if let output = session.output { shareSection(output, session: session) }
     }
 
     /// Where the request comes in.

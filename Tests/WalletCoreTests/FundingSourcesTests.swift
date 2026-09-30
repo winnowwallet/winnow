@@ -5,6 +5,24 @@ import Testing
 
 @Suite("Funding source reconstruction from transaction inputs")
 struct FundingSourcesTests {
+    @Test("Every PUSHDATA width reconstructs the same redeem script, including a Data slice")
+    func pushDataWidths() {
+        let redeem = Data([0, 20]) + Self.generatorHash160
+        for length in [Data([0x4c, 22]), Data([0x4d, 22, 0]), Data([0x4e, 22, 0, 0, 0])] {
+            let prefixed = Data([0xff]) + length + redeem
+            let tx = Self.transaction([Self.input(scriptSig: prefixed.dropFirst())])
+            #expect(FundingSources.sources(of: tx).first?.scriptPubKey == Data([0xa9, 20]) + Hash160.hash(redeem) + Data([0x87]))
+        }
+    }
+    @Test("Truncated lengths, impossible payloads, and non-push scriptSigs reveal no funder")
+    func pushDataTruncation() {
+        for script in [Data([0x4c]), Data([0x4c, 1]), Data([0x4d, 1]), Data([0x4d, 1, 0]),
+                       Data([0x4e, 1, 0, 0]), Data([0x4e, 0xff, 0xff, 0xff, 0xff]), Data([0x76])] {
+            let tx = Self.transaction([Self.input(scriptSig: script)])
+            #expect(FundingSources.sources(of: tx).first?.revelation == .unrecognized)
+            #expect(FundingSources.fundingScripts(of: tx).isEmpty)
+        }
+    }
     /// The secp256k1 generator in compressed form; its hash160 is the BIP173
     /// reference value reused as ground truth throughout.
     static let generator = Data(hex: "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")!

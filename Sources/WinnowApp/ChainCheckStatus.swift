@@ -11,6 +11,7 @@ struct ChainCheckStatus: View {
             if let checked = model.lastCompleteCheck {
                 Text("Chain last checked \(checked, style: .relative) ago")
                     .accessibilityIdentifier("lastCompleteChainCheck")
+                OverdueChainCheck(checked: checked)
             } else {
                 Text("Chain not fully checked yet")
                     .accessibilityIdentifier("lastCompleteChainCheck")
@@ -24,5 +25,21 @@ struct ChainCheckStatus: View {
             }
         }
         .font(.footnote)
+    }
+}
+
+/// An hour without a complete check while Winnow is open means the foreground
+/// sync is not finishing. Re-evaluated each minute, without a sync.
+struct OverdueChainCheck: View {
+    let checked: Date
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            if context.date.timeIntervalSince(checked) > 60 * 60 {
+                Text("Check overdue. Keep Winnow open until it finishes syncing.")
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("chainCheckOverdue")
+            }
+        }
     }
 }

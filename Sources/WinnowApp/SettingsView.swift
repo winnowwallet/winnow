@@ -53,7 +53,9 @@ struct SettingsView: View {
                                 Text("Regtest").tag(BitcoinNetwork.regtest)
                             }
                         }
-                        .disabled(model.e2e?.forcedNetwork != nil)
+                        // One switch at a time: the old network's work must stop first.
+                        .disabled(model.e2e?.forcedNetwork != nil || model.changingNetwork)
+                        .accessibilityIdentifier("networkPicker")
                     } footer: {
                         if model.e2e?.forcedNetwork != nil {
                             Text("This debug session is locked to \(model.network.rawValue).")

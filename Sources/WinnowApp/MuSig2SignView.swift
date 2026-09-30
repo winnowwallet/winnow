@@ -395,138 +395,153 @@ struct MuSig2SignView: View {
             error = SignError.noWorkingPSBT.localizedDescription
             return
         }
-        operationTask?.cancel()
-        let token = operationEpoch.begin()
-        authorizing = true
-        error = nil
+        let token = beginAuthorization()
         operationTask = Task { @MainActor in
-            do {
+            await runOperation(token, finished: { authorizing = false }) {
                 let result = try await model.withMasterKey(
                     reason: "Start signing this MuSig2 vault transaction") { master in
-                    let inputs = try authorizationInputs()
-                    var psbt = initial
-                    var nonces: [Int: [Data: Data]] = [:]
-                    for index in psbt.inputs.indices {
-                        let signingContext = try context(
-                            for: psbt.inputs[index], vault: inputs.vault, record: inputs.record)
-                        nonces[index] = try inputs.vault.muSig2AttachNonce(
-                            &psbt, input: index, context: signingContext, master: master,
-                            knownUTXOs: inputs.record.utxos,
-                            ownedOutputCoordinates: inputs.coordinates,
-                            chainTip: model.status.tipHeight)
-                    }
-                    return (psbt, nonces)
+                    try nonceProposal(initial, master: master)
                 }
                 try Task.checkCancellation()
-                guard accepts(token) else { return }
-                let reply = try result.0.base64V0()
-                secretNonces = result.1
-                nonceSessionStarted = true
-                working = result.0
-                output = reply
-                model.journalPSBT(stage: "musig2-public-nonces", psbt: result.0)
-            } catch is CancellationError {
-                // Secret nonces produced for an invalidated presentation are
-                // never installed into view state or exposed for round two.
-            } catch {
-                if accepts(token) { self.error = error.localizedDescription }
+                try installNonceProposal(result, token: token)
             }
-            guard accepts(token) else { return }
-            authorizing = false
-            operationTask = nil
         }
+    }
+
+    /// Generate the complete round-one proposal inside the master-key lease.
+    /// No secret nonce becomes live view state until the presentation is checked.
+    private func nonceProposal(_ initial: PSBT, master: HDKey) throws -> (PSBT, [Int: [Data: Data]]) {
+        let inputs = try authorizationInputs()
+        var psbt = initial
+        var nonces: [Int: [Data: Data]] = [:]
+        for index in psbt.inputs.indices {
+            let signingContext = try context(for: psbt.inputs[index], vault: inputs.vault, record: inputs.record)
+            nonces[index] = try inputs.vault.muSig2AttachNonce(
+                &psbt, input: index, context: signingContext, master: master,
+                knownUTXOs: inputs.record.utxos, ownedOutputCoordinates: inputs.coordinates,
+                chainTip: model.status.tipHeight)
+        }
+        return (psbt, nonces)
+    }
+
+    private func installNonceProposal(_ result: (PSBT, [Int: [Data: Data]]), token: SensitivePresentationEpoch.Token) throws {
+        guard accepts(token) else { return }
+        let reply = try result.0.base64V0()
+        secretNonces = result.1
+        nonceSessionStarted = true
+        working = result.0
+        output = reply
+        model.journalPSBT(stage: "musig2-public-nonces", psbt: result.0)
     }
 
     private func signMuSig2() {
         guard let initial = working else { return }
         var initialNonces = secretNonces
-        operationTask?.cancel()
-        let token = operationEpoch.begin()
-        authorizing = true
-        error = nil
+        let token = beginAuthorization()
         operationTask = Task { @MainActor in
-            // Whatever happens below, the copy this task took of the secret
-            // nonces is overwritten before it is freed.
+            // Scrub this task's captured copy on success, failure or cancellation.
             defer { Self.scrub(&initialNonces) }
-            do {
+            await runOperation(token, finished: { authorizing = false }) {
                 let psbt = try await model.withMasterKey(
                     reason: "Complete signing this MuSig2 vault transaction") { master in
-                    let inputs = try authorizationInputs()
-                    // Stage nonce mutations beside the PSBT. Authentication
-                    // cancellation or any later failure leaves the live nonce
-                    // session untouched and retryable.
-                    var psbt = initial
-                    var stagedNonces = initialNonces
-                    defer { Self.scrub(&stagedNonces) }
-                    for index in psbt.inputs.indices {
-                        let signingContext = try context(
-                            for: psbt.inputs[index], vault: inputs.vault, record: inputs.record)
-                        var nonces = stagedNonces[index] ?? [:]
-                        try inputs.vault.muSig2Sign(
-                            &psbt, input: index, context: signingContext, master: master,
-                            secretNonces: &nonces, knownUTXOs: inputs.record.utxos,
-                            ownedOutputCoordinates: inputs.coordinates,
-                            chainTip: model.status.tipHeight)
-                        stagedNonces[index] = nonces
-                    }
-                    return psbt
+                    try signedProposal(initial, nonces: initialNonces, master: master)
                 }
                 try Task.checkCancellation()
-                guard accepts(token) else { return }
-                let reply = try psbt.base64V0()
-                working = psbt
-                output = reply
-                Self.scrub(&secretNonces)
-                signedMuSig2ThisSession = true
-                model.journalPSBT(stage: "musig2-partial-signed", psbt: psbt)
-            } catch is CancellationError {
-                // The presentation was invalidated; the session cannot be
-                // resumed with the old nonce material.
-            } catch {
-                if accepts(token) { self.error = error.localizedDescription }
+                try installSignedProposal(psbt, token: token)
             }
-            guard accepts(token) else { return }
-            authorizing = false
-            operationTask = nil
         }
+    }
+
+    /// Nonce mutations are staged beside the PSBT. Authentication cancellation
+    /// or signing failure leaves the live session untouched and retryable.
+    private func signedProposal(_ initial: PSBT, nonces: [Int: [Data: Data]], master: HDKey) throws -> PSBT {
+        let inputs = try authorizationInputs()
+        var psbt = initial
+        var stagedNonces = nonces
+        defer { Self.scrub(&stagedNonces) }
+        for index in psbt.inputs.indices {
+            let signingContext = try context(for: psbt.inputs[index], vault: inputs.vault, record: inputs.record)
+            var inputNonces = stagedNonces[index] ?? [:]
+            try inputs.vault.muSig2Sign(
+                &psbt, input: index, context: signingContext, master: master,
+                secretNonces: &inputNonces, knownUTXOs: inputs.record.utxos,
+                ownedOutputCoordinates: inputs.coordinates, chainTip: model.status.tipHeight)
+            stagedNonces[index] = inputNonces
+        }
+        return psbt
+    }
+
+    private func installSignedProposal(_ psbt: PSBT, token: SensitivePresentationEpoch.Token) throws {
+        guard accepts(token) else { return }
+        let reply = try psbt.base64V0()
+        working = psbt
+        output = reply
+        Self.scrub(&secretNonces)
+        signedMuSig2ThisSession = true
+        model.journalPSBT(stage: "musig2-partial-signed", psbt: psbt)
     }
 
     private func aggregateAndBroadcast() {
         guard !broadcasting, broadcastTxid == nil,
-              var psbt = working, let vault, let record else { return }
+              let psbt = working, let vault, let record else { return }
         operationTask?.cancel()
         let token = operationEpoch.begin()
         broadcasting = true
         operationTask = Task { @MainActor in
-            do {
+            await runOperation(token, finished: { broadcasting = false }) {
                 try Task.checkCancellation()
-                let inputs = try authorizationInputs()
-                for index in psbt.inputs.indices {
-                    let context = try context(for: psbt.inputs[index], vault: vault, record: record)
-                    try vault.muSig2Aggregate(
-                        &psbt, input: index, context: context,
-                        knownUTXOs: inputs.record.utxos,
-                        ownedOutputCoordinates: inputs.coordinates,
-                        chainTip: model.status.tipHeight)
-                }
-                model.journalPSBT(stage: "musig2-aggregated", psbt: psbt)
-                let transaction = try vault.finalizeSpend(
-                    &psbt, knownUTXOs: inputs.record.utxos,
-                    ownedOutputCoordinates: inputs.coordinates,
-                    chainTip: model.status.tipHeight)
+                let transaction = try aggregatedTransaction(psbt, vault: vault, record: record)
                 let txid = try await commitAndBroadcast(transaction, vault: vault, record: record)
-                guard accepts(token) else { return }
-                broadcastTxid = txid
-            } catch is CancellationError {
-                // The persistent model reconciles an operation that already
-                // crossed the broadcast boundary.
-            } catch {
-                if accepts(token) { self.error = error.localizedDescription }
+                installBroadcast(txid, token: token)
             }
-            guard accepts(token) else { return }
-            broadcasting = false
-            operationTask = nil
         }
+    }
+
+    private func aggregatedTransaction(_ initial: PSBT, vault: Vault, record: VaultRecord) throws -> WalletCore.Transaction {
+        let inputs = try authorizationInputs()
+        var psbt = initial
+        for index in psbt.inputs.indices {
+            let context = try context(for: psbt.inputs[index], vault: vault, record: record)
+            try vault.muSig2Aggregate(
+                &psbt, input: index, context: context, knownUTXOs: inputs.record.utxos,
+                ownedOutputCoordinates: inputs.coordinates, chainTip: model.status.tipHeight)
+        }
+        model.journalPSBT(stage: "musig2-aggregated", psbt: psbt)
+        return try vault.finalizeSpend(&psbt, knownUTXOs: inputs.record.utxos,
+                                      ownedOutputCoordinates: inputs.coordinates, chainTip: model.status.tipHeight)
+    }
+
+    private func installBroadcast(_ txid: Data, token: SensitivePresentationEpoch.Token) {
+        guard accepts(token) else { return }
+        broadcastTxid = txid
+    }
+
+    private func beginAuthorization() -> SensitivePresentationEpoch.Token {
+        operationTask?.cancel()
+        let token = operationEpoch.begin()
+        authorizing = true
+        error = nil
+        return token
+    }
+
+    /// Stale presentation results never change errors, busy flags or task state.
+    /// The model still reconciles operations which crossed the broadcast boundary.
+    private func runOperation(_ token: SensitivePresentationEpoch.Token, finished: () -> Void,
+                              action: () async throws -> Void) async {
+        do { try await action() }
+        catch is CancellationError {} catch { recordOperationError(error, token: token) }
+        finishOperation(token, finished: finished)
+    }
+
+    private func recordOperationError(_ error: Error, token: SensitivePresentationEpoch.Token) {
+        guard accepts(token) else { return }
+        self.error = error.localizedDescription
+    }
+
+    private func finishOperation(_ token: SensitivePresentationEpoch.Token, finished: () -> Void) {
+        guard accepts(token) else { return }
+        finished()
+        operationTask = nil
     }
 
     // MARK: - Broadcast
