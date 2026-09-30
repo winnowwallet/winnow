@@ -74,6 +74,12 @@ wait_coverage() {
       gh run download "$GITHUB_RUN_ID" -R "$GITHUB_REPOSITORY" -n "$name" -D "$CI_RESULTS/crap/$1"
       return
     fi
+    # A lane that already failed never publishes; say so instead of waiting.
+    lane_state=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" \
+      --jq ".jobs[] | select(.name | endswith(\"/ $1\")) | .conclusion // \"\"" | head -n 1)
+    if [[ $lane_state == failure || $lane_state == cancelled ]]; then
+      echo "the $1 lane ended ($lane_state) without publishing coverage" >&2; return 1
+    fi
     sleep 5
   done
   echo "$1 coverage did not arrive within 15 minutes" >&2; return 1
