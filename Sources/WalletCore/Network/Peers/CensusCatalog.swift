@@ -83,7 +83,9 @@ public struct CensusCatalog: Codable, Equatable, Sendable {
     }
 
     private func validatedOverlayEntries(_ entries: [Entry], network: PeerNetwork) throws -> [Entry] {
-        guard entries.count <= 2_000 else { throw Invalid.size }
+        // Every verified overlay peer is kept; only the bound every list has
+        // applies. The census found 3,212 usable Tor peers on 2026-09-29.
+        guard entries.count <= Self.maximumEntries else { throw Invalid.size }
         var seen = Set<PeerEndpoint>()
         return try entries.map { input in
             var entry = input

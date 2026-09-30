@@ -1,4 +1,6 @@
-Winnow 0.7.12: background chain checks
+Winnow 0.7.13: every verified Tor and I2P peer, plus background chain checks
+
+The daily peer list is no longer cut to 2,000 Tor and 2,000 I2P peers; Winnow now keeps every one the census verified (3,212 Tor and 2,451 I2P on 2026-09-29). Once the census publishes the full list, Tor-only and I2P-only routing should connect as before, just with more peers to choose from. Advanced → Settings → Refresh peer list should succeed.
 
 Winnow now asks iOS to let it check the chain while closed. iOS decides when these run, usually no more than every 15 minutes and often less, and never after you force-quit Winnow or with Background App Refresh off (Settings → General → Background App Refresh).
 

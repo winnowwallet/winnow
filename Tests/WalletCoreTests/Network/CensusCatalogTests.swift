@@ -35,6 +35,27 @@ struct CensusCatalogTests {
         c.networks["tor"] = [.init(host: "not an onion", port: 0, userAgent: "", startHeight: -1)]
         #expect(throws: CensusCatalog.Invalid.endpoint) { try c.validated(now: now, minimumEntries: 1) }
     }
+    /// Overlay lists are not capped: a census with thousands of Tor and I2P
+    /// peers is kept whole, and only the bound every list has refuses one.
+    @Test func largeOverlayListsAreKeptWhole() throws {
+        func name(_ index: Int, length: Int) -> String {
+            let alphabet = Array("abcdefghijklmnopqrstuvwxyz234567")
+            var value = index
+            return String((0..<length).map { _ in defer { value /= 32 }; return alphabet[value % 32] })
+        }
+        func entries(_ count: Int, _ suffix: String, length: Int) -> [CensusCatalog.Entry] {
+            (0..<count).map { .init(host: name($0, length: length) + suffix, port: 8333,
+                                    userAgent: "/Satoshi:30/", startHeight: 899_900) }
+        }
+        var c = catalog()
+        c.networks["tor"] = entries(5_000, ".onion", length: 56)
+        c.networks["i2p"] = entries(3_000, ".b32.i2p", length: 52)
+        let validated = try c.validated(now: now)
+        #expect(validated.networks["tor"]?.count == 5_000)
+        #expect(validated.networks["i2p"]?.count == 3_000)
+        c.networks["tor"] = entries(CensusCatalog.maximumEntries + 1, ".onion", length: 56)
+        #expect(throws: CensusCatalog.Invalid.size) { try c.validated(now: now) }
+    }
     @Test func extremeHeightsAndAliases() throws {
         #expect(!CensusCatalog.nearTip(.min, tip: .max))
         #expect(!CensusCatalog.nearTip(.max, tip: .min))
