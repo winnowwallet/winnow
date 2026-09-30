@@ -41,33 +41,25 @@ struct RoutedSeedTests {
     }
 
     /// The unrouted resolver's own DoH request: dns-json with the name and
-    /// type in the query, a 2xx answer read in full, and anything else refused.
+    /// type in the query, a 2xx answer read in full, and anything else refused,
+    /// whether the size is declared up front or only found while streaming.
     @Test func liveDoHRequestAcceptsOnlyABoundedSuccessfulAnswer() async throws {
-        let body = Data(#"{"Status":0,"Answer":[]}"#.utf8)
-        func reply(_ status: String, length: Int, body: Data) -> Data {
-            Data("HTTP/1.1 \(status)\r\nContent-Length: \(length)\r\nConnection: close\r\n\r\n".utf8) + body
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubDoH.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        func get(_ path: String) async throws -> Data {
+            try await SeedResolver.dohGET(endpoint: URL(string: "https://doh.test\(path)")!, session: session,
+                                          name: "seed.invalid", type: "AAAA")
         }
-        let server = LoopbackHTTPServer(response: reply("200 OK", length: body.count, body: body))
-        try await server.start()
-        let session = URLSession(configuration: .ephemeral)
-        let endpoint = await server.url("/dns-query")
-        let data = try await SeedResolver.dohGET(endpoint: endpoint, session: session, name: "seed.invalid", type: "AAAA")
-        #expect(data == body)
-        let request = try #require(await server.httpRequests.last).lowercased()
-        #expect(request.contains("name=seed.invalid") && request.contains("type=aaaa"))
-        #expect(request.contains("accept: application/dns-json\r\n"))
-        await server.stop()
-
-        for (status, length) in [("503 Unavailable", 0), ("200 OK", SeedResolver.maximumDoHBytes + 1)] {
-            let refusing = LoopbackHTTPServer(response: reply(status, length: length, body: Data()))
-            try await refusing.start()
-            await #expect(throws: URLError.self) {
-                _ = try await SeedResolver.dohGET(endpoint: await refusing.url("/dns-query"), session: session,
-                                                 name: "seed.invalid", type: "A")
-            }
-            await refusing.stop()
+        #expect(try await get("/ok") == StubDoH.body)
+        let request = try #require(StubDoH.requests.withLock { $0.first { $0.url?.path == "/ok" } })
+        let query = request.url?.query ?? ""
+        #expect(query.contains("name=seed.invalid") && query.contains("type=AAAA"))
+        #expect(request.value(forHTTPHeaderField: "Accept") == "application/dns-json")
+        for refused in ["/unavailable", "/declared-oversize", "/streamed-oversize"] {
+            await #expect(throws: URLError.self, "\(refused)") { _ = try await get(refused) }
         }
-        session.invalidateAndCancel()
     }
 
     /// The system fallback answers numeric hosts without touching DNS, keeps
@@ -93,4 +85,32 @@ struct RoutedSeedTests {
         #expect(endpoints.count == 2)
         #expect(asked.withLock { $0 }.sorted() == ["a.seed", "b.seed"])
     }
+}
+/// Canned DoH answers by path, served without a socket.
+private final class StubDoH: URLProtocol {
+    static let body = Data(#"{"Status":0,"Answer":[]}"#.utf8)
+    static let requests = OSAllocatedUnfairLock(initialState: [URLRequest]())
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let received = request
+        Self.requests.withLock { $0.append(received) }
+        let oversized = Data(count: SeedResolver.maximumDoHBytes + 1)
+        let (status, length, body): (Int, Int?, Data) = switch request.url?.path {
+        case "/ok": (200, Self.body.count, Self.body)
+        case "/declared-oversize": (200, oversized.count, oversized)
+        case "/streamed-oversize": (200, nil, oversized)
+        default: (503, 0, Data())
+        }
+        let headers = length.map { ["Content-Length": String($0)] } ?? [:]
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1",
+                                       headerFields: headers)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }
