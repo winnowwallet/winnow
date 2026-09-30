@@ -105,7 +105,9 @@ jobs:
         if: steps.validate_media.outcome != 'success'
         run: |
           scripts/check-dependencies
-          swift test
+          scripts/check-crap snapshot --output "$CI_RESULTS/crap/source-manifest.json"
+          swift test --enable-code-coverage
+          scripts/ci-crap export-package --package-build .build --manifest "$CI_RESULTS/crap/source-manifest.json" --output "$CI_RESULTS/crap/package"
           scripts/ci-debug
 
       - name: Release-build production package and reject first-party warnings
@@ -195,12 +197,16 @@ jobs:
             -configuration Debug \
             -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
             -derivedDataPath "$DERIVED_DATA" \
+            -enableCodeCoverage YES \
             -skipPackagePluginValidation -skipMacroValidation \
             2>&1 | tee "$APP_RESULTS/debug-build.log"
 
       - name: App unit tests (required)
         if: steps.validate_media.outcome != 'success'
-        run: scripts/ci-app-tests "$APP_RESULTS/units" --skip-build
+        run: |
+          WINNOW_APP_CODE_COVERAGE=YES scripts/ci-app-tests "$APP_RESULTS/units" --skip-build
+          scripts/ci-crap export-app --result "$APP_RESULTS/units/AppTests.xcresult" --derived-data "$DERIVED_DATA" \
+            --manifest "$CI_RESULTS/crap/source-manifest.json" --output "$CI_RESULTS/crap/units"
 
       - name: Verify resolved Debug dependencies
         if: steps.validate_media.outcome != 'success'
@@ -239,7 +245,20 @@ jobs:
       - name: Recorded signet UI journey
         if: steps.validate_media.outcome != 'success' && env.RUN_UI_JOURNEY == 'true'
         timeout-minutes: 15
-        run: scripts/ci-ui-journey "$APP_RESULTS/journey" --skip-build
+        run: |
+          WINNOW_UI_CODE_COVERAGE=YES scripts/ci-ui-journey "$APP_RESULTS/journey" --skip-build
+          scripts/ci-crap export-app --result "$APP_RESULTS/journey/NodeUI.xcresult" --derived-data "$DERIVED_DATA" \
+            --manifest "$CI_RESULTS/crap/source-manifest.json" --output "$CI_RESULTS/crap/journey"
+
+      # docs/crap.md. Needs the journey's coverage, so fork PRs that skip the
+      # journey are measured by the tdx run on main instead.
+      - name: CRAP at most 12 across first-party methods
+        if: steps.validate_media.outcome != 'success' && env.RUN_UI_JOURNEY == 'true'
+        run: |
+          scripts/install-crap-swiftlint
+          scripts/ci-crap report --package "$CI_RESULTS/crap/package" --app "$CI_RESULTS/crap/units" \
+            --app "$CI_RESULTS/crap/journey" --manifest "$CI_RESULTS/crap/source-manifest.json" \
+            --output "$CI_RESULTS/crap/report"
 
       - name: Stop the trusted run's simulator and fixture
         if: always() && steps.validate_media.outcome != 'success' && env.RUN_UI_JOURNEY == 'true'
@@ -276,6 +295,7 @@ jobs:
             ${{ env.APP_RESULTS }}/units/
             ${{ env.APP_RESULTS }}/journey/
             ${{ env.APP_RESULTS }}/release-build.log
+            ${{ env.CI_RESULTS }}/crap/report/
           if-no-files-found: error
           retention-days: 14
 
