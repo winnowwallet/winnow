@@ -36,7 +36,7 @@ final class LoopbackWalletTests: XCTestCase {
         guard case let .active(mode) = E2EMode.resolve(environment: environment),
               case let .active(cleanup) = E2EMode.resolve(
                 environment: environment.merging(["WINNOW_E2E_RESET": "1"]) { _, reset in reset })
-        else { throw XCTSkip("unreachable: the environment above is complete") }
+        else { throw CocoaError(.featureUnsupported, userInfo: [NSDebugDescriptionErrorKey: "E2E environment rejected"]) }
         let model = AppModel(deviceAuthenticator: SilentAuthenticator(), e2e: mode,
                              storeKeys: InMemoryStoreKeyVault(), keyStore: InMemoryKeyStore(),
                              cloudBackups: cloudBackups, networkParams: chain.params)
