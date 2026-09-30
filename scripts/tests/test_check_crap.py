@@ -26,6 +26,25 @@ class CrapEvidenceTests(unittest.TestCase):
         self.assertTrue(in_scope('Sources/WinnowLightningApp/a.swift', ['Sources/WinnowLightningApp/'], []))
         self.assertFalse(in_scope('Sources/WinnowApp/a.swift', ['Sources/WinnowLightningApp'], []))
 
+    def test_only_a_compiler_that_dies_by_a_signal_is_rerun(self):
+        from unittest.mock import patch
+        import subprocess
+        results = lambda *codes: [subprocess.CompletedProcess([], code, stdout='dump' if code == 0 else '', stderr='')
+                                  for code in codes]
+        parse = TOOL['parse_dump']
+        with patch.dict(parse.__globals__['subprocess'].__dict__, run=lambda *a, **k: next(runs)), \
+                patch.object(parse.__globals__['sys'], 'stderr'):
+            runs = iter(results(-11, 0))
+            self.assertEqual(parse('/tmp/a.swift'), 'dump')
+            runs = iter(results(1))
+            with self.assertRaises(subprocess.CalledProcessError):
+                parse('/tmp/a.swift')
+            runs = iter(results(-11, -11, -11, 0))
+            with self.assertRaises(subprocess.CalledProcessError) as caught:
+                parse('/tmp/a.swift')
+            self.assertEqual(caught.exception.returncode, -11)
+            self.assertEqual(next(runs).returncode, 0, 'three crashes are the limit')
+
     def test_entry_path_and_exact_twelve_boundary(self):
         uncovered = self.row(2, {3: 0, 4: 0, 7: 0})
         self.assertEqual(uncovered['complexity'], 3)
