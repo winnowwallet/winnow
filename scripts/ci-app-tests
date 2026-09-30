@@ -20,13 +20,17 @@ if [[ "$APP_TEST_ACTION" == test-without-building ]]; then
   shopt -s nullglob
   specs=("$APP_DERIVED_DATA"/Build/Products/WinnowApp_*.xctestrun)
   [[ ${#specs[@]} == 1 ]] || { echo 'Expected exactly one app test specification' >&2; exit 1; }
-  args=(-xctestrun "${specs[0]}")
+  # The run's coverage profile lands in this DerivedData for ci-crap.
+  args=(-xctestrun "${specs[0]}" -derivedDataPath "$APP_DERIVED_DATA")
 else
   args=(-project WinnowApp.xcodeproj -scheme WinnowApp -configuration Debug
         -derivedDataPath "$APP_DERIVED_DATA" -skipPackagePluginValidation -skipMacroValidation)
 fi
+# WINNOW_APP_CODE_COVERAGE=YES keeps executable-line coverage in the result
+# bundle for the CRAP gate (scripts/ci-crap export-app).
 xcodebuild "$APP_TEST_ACTION" "${args[@]}" \
   -destination "platform=iOS Simulator,id=$APP_SIMULATOR_ID" \
+  -enableCodeCoverage "${WINNOW_APP_CODE_COVERAGE:-NO}" \
   -resultBundlePath "$APP_RESULTS/AppTests.xcresult" \
   -only-testing:WinnowAppTests \
   2>&1 | tee "$APP_RESULTS/app-tests.log"

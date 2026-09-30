@@ -771,6 +771,44 @@ struct PeerPoolTests {
         await pool.stop()
     }
 
+    /// After the primary sync, peers claiming a tip far beyond it are asked
+    /// to catch the chain up. How each one fails decides its fate exactly as
+    /// in the primary sync: a peer that stalls is cooled off, one that serves
+    /// a header that does not link is refused for the session.
+    @Test("catch-up cools a stalled peer and refuses one serving a disconnected header")
+    func catchUpClassifiesPeerFailures() async throws {
+        let synthetic = makeSyntheticChain(length: 150, watchHeight: 3)
+        let tip = try #require(synthetic.blocks.last)
+        let unlinked = Block(header: minedHeader(previousHash: Data(repeating: 0xAB, count: 32),
+                                                 merkleRoot: Data(count: 32), time: tip.header.time + 600),
+                             transactions: [])
+        let honest = LoopbackNode(params: synthetic.params, chain: synthetic.blocks)
+        // Both claim a tip 250 blocks past the chain and answer after the
+        // honest node, so the honest one is the primary.
+        let stalling = LoopbackNode(params: synthetic.params, chain: synthetic.blocks, withholdHeaders: true,
+                                    claimedStartHeight: 400, versionDelay: .milliseconds(300))
+        let lying = LoopbackNode(params: synthetic.params, chain: synthetic.blocks + [unlinked],
+                                 claimedStartHeight: 400, versionDelay: .milliseconds(300))
+        for node in [honest, stalling, lying] { try await node.start() }
+        defer { for node in [honest, stalling, lying] { Task { await node.stop() } } }
+        let stallingEndpoint = await stalling.endpoint
+        let lyingEndpoint = await lying.endpoint
+
+        let pool = PeerPool(params: synthetic.params, peerCount: 3,
+                            manualPeers: [await honest.endpoint, stallingEndpoint, lyingEndpoint])
+        await pool.start()
+        _ = await settle(pool) { $0.count == 3 }
+        let chain = try HeaderChain(params: synthetic.params)
+        _ = try await pool.syncHeaders(chain, timeoutPerPeer: .seconds(2))
+
+        #expect(await chain.height == UInt32(synthetic.blocks.count - 1),
+                "the honest chain stands; nothing unlinked was connected")
+        #expect(await pool.isCoolingDown(stallingEndpoint), "stalling is a transport failure, cooled off")
+        #expect(await pool.isCoolingDown(lyingEndpoint) == false, "a data fault is not waited out")
+        #expect(await pool.rejectionReason(lyingEndpoint)?.contains("do not connect") == true)
+        await pool.stop()
+    }
+
     @Test("the tolerance is the wallet's reorg horizon")
     func toleranceMatchesHorizon() {
         #expect(PeerPool.staleTipTolerance == 100)

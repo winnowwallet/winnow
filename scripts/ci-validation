@@ -17,7 +17,10 @@ LANES = {'package', 'build', 'units', 'journey'}
 POLICY = {'schema': 1, 'image': 'tdx-macos15.7.9-xcode26.6-17F113-v1',
           'boot_image_sha256': '7368770e6d387e7b993cc8eceb6641ca6d9ea3c00a847034646aebea24748e02',
           'xcode': '17F113', 'runtime': 'iOS 26.5 (23F77)', 'architecture': 'x86_64', 'max_age_days': 7,
-          'minimum_tests': {'package': 647, 'units': 232, 'journey': 1}}
+          'minimum_tests': {'package': 647, 'units': 232, 'journey': 1},
+          # docs/crap.md: every first-party method at or below the cap, measured
+          # over a report that saw at least this many methods.
+          'crap': {'threshold': 12, 'minimum_functions': 1000}}
 
 
 def sha(path):
@@ -54,6 +57,7 @@ def validate(record, expected, repository, now=None):
                         and v['runtime'] == POLICY['runtime']
                         and v['source_sha'] == record['source_sha'] for v in record['lanes'].values())
                 and record['lanes']['build']['release_inspected'] is True
+                and crap_passed(record['lanes']['journey'].get('crap'))
                 and re.fullmatch(r'[0-9a-f]{64}', record['lanes']['build']['debug_sha256']) is not None
                 and all(record['lanes'][lane]['debug_sha256'] == record['lanes']['build']['debug_sha256']
                         for lane in ('units', 'journey'))
@@ -65,6 +69,11 @@ def validate(record, expected, repository, now=None):
                 and 'media/journey-provenance.json' in record['files'])
     except (KeyError, ValueError, TypeError):
         return False
+
+
+def crap_passed(crap):
+    return (isinstance(crap, dict) and crap['threshold'] == POLICY['crap']['threshold']
+            and crap['above_threshold'] == 0 and crap['functions'] >= POLICY['crap']['minimum_functions'])
 
 
 def verify_files(directory, record):

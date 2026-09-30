@@ -49,9 +49,12 @@ public struct SyntheticChain {
 }
 
 /// Builds a chain of single-transaction blocks; the block at `watchHeight`
-/// pays to `watchScript` (a P2TR-shaped output).
-public func makeSyntheticChain(length: Int = 6, watchHeight: UInt32 = 3) -> SyntheticChain {
-    let watchScript = Data([0x51, 0x20] + repeatElement(0x42, count: 32))
+/// pays `watchAmount` to `watchScript` (by default a P2TR-shaped output).
+/// The payment is a coinbase output, so a wallet can spend it only once the
+/// chain is `Wallet.coinbaseMaturity` blocks past it.
+public func makeSyntheticChain(length: Int = 6, watchHeight: UInt32 = 3,
+                               watchScript: Data = Data([0x51, 0x20] + repeatElement(0x42, count: 32)),
+                               watchAmount: Int64 = 1_000) -> SyntheticChain {
 
     func coinbase(height: Int, includeWatch: Bool) -> Transaction {
         let input = Transaction.Input(
@@ -59,7 +62,7 @@ public func makeSyntheticChain(length: Int = 6, watchHeight: UInt32 = 3) -> Synt
             scriptSig: Data([UInt8(height & 0xFF), UInt8(height >> 8 & 0xFF)]), sequence: 0xFFFF_FFFF)
         var outputs = [Transaction.Output(value: 5_000_000_000, scriptPubKey: Data([0x51]))]
         if includeWatch {
-            outputs.append(Transaction.Output(value: 1_000, scriptPubKey: watchScript))
+            outputs.append(Transaction.Output(value: watchAmount, scriptPubKey: watchScript))
         }
         return Transaction(version: 2, inputs: [input], outputs: outputs, locktime: 0)
     }

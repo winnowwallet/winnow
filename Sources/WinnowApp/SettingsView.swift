@@ -294,11 +294,8 @@ struct ExportBundleView: View {
     @State private var includeMnemonic = false
     @State private var confirmSeed = false
     @State private var fileURL: URL?
-    @State private var error: String?
-    @State private var busy = false
+    @State private var exporting = SensitiveAction()
     @State private var staging = ExportStagingFile()
-    @State private var exportEpoch = SensitivePresentationEpoch()
-    @State private var exportTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
@@ -317,7 +314,7 @@ struct ExportBundleView: View {
                 } footer: {
                     Text("The file saves your history and shared accounts. Each signer needs their own key backup.")
                 }
-                if let error {
+                if let error = exporting.error {
                     Section { Text(error).foregroundStyle(.red).font(.footnote) }
                 }
                 if let fileURL {
@@ -338,7 +335,7 @@ struct ExportBundleView: View {
                                 export()
                             }
                         }
-                        .disabled(busy)
+                        .disabled(exporting.busy)
                         .accessibilityIdentifier("exportConfirmButton")
                     }
                 }
@@ -369,12 +366,8 @@ struct ExportBundleView: View {
     }
 
     private func resetExport() {
-        exportEpoch.invalidate()
-        exportTask?.cancel()
-        exportTask = nil
+        exporting.reset()
         fileURL = nil
-        error = nil
-        busy = false
         staging.remove()
     }
 
@@ -385,48 +378,17 @@ struct ExportBundleView: View {
     }
 
     private func export() {
-        exportTask?.cancel()
-        let token = exportEpoch.begin()
         let seedBearing = includeMnemonic
-        busy = true
-        error = nil
-        exportTask = Task { @MainActor in
-            // Each operation owns its staging object. A cancelled, stale task
-            // can therefore delete only its own file, never a newer export.
-            let operationStaging = ExportStagingFile()
-            do {
-                let text = try await model.exportWalletBundle(includeMnemonic: seedBearing)
-                try Task.checkCancellation()
-                guard exportEpoch.accepts(
-                    token, whilePresentationIsAllowed: scenePhase != .background
-                ) else { return }
-                let name = "winnow-\(model.network.rawValue)-\(model.walletID ?? "wallet").json"
-                let url = try operationStaging.write(text, suggestedName: name)
-                guard exportEpoch.accepts(
-                    token, whilePresentationIsAllowed: scenePhase != .background
-                ) else {
-                    operationStaging.remove()
-                    return
-                }
-                staging.remove()
-                staging = operationStaging
-                fileURL = url
-            } catch is CancellationError {
-                operationStaging.remove()
-            } catch {
-                operationStaging.remove()
-                if exportEpoch.accepts(token, whilePresentationIsAllowed: scenePhase != .background) {
-                    fileURL = nil
-                    self.error = error.localizedDescription
-                }
-            }
-            guard exportEpoch.accepts(
-                token, whilePresentationIsAllowed: scenePhase != .background
-            ) else {
-                return
-            }
-            busy = false
-            exportTask = nil
+        exporting.start(presentable: { scenePhase != .background }) {
+            try await model.exportWalletBundle(includeMnemonic: seedBearing)
+        } apply: { text in
+            // Written only for a current request; each export owns its file,
+            // so replacing it can never delete a newer one.
+            let fresh = ExportStagingFile()
+            let url = try fresh.write(text, suggestedName: "winnow-\(model.network.rawValue)-\(model.walletID ?? "wallet").json")
+            staging.remove()
+            staging = fresh
+            fileURL = url
         }
     }
 }

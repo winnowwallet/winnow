@@ -1001,7 +1001,14 @@ public struct Vault: Sendable {
         var key = master
         for step in origin.path { key = try key.child(at: step) }
         guard key.publicKey == base.publicKey else { return nil } // origin/base mismatch
-        for element in single.derivation.elements {
+        return try derivedParticipantKey(key, derivation: single.derivation, context: context)?.privateKey
+    }
+
+    /// The key's own derivation suffix at the context's coordinates.
+    private func derivedParticipantKey(_ ancestor: HDKey, derivation: Descriptor.Derivation,
+                                       context: MuSig2Context) throws -> HDKey? {
+        var key = ancestor
+        for element in derivation.elements {
             switch element {
             case let .step(step): key = try key.child(at: step)
             case let .multipath(values): key = try key.child(at: values[context.choice])
@@ -1010,6 +1017,6 @@ public struct Vault: Sendable {
                 key = try key.child(at: context.index)
             }
         }
-        return key.privateKey
+        return key
     }
 }

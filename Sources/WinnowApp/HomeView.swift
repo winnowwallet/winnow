@@ -413,9 +413,7 @@ struct PaymentDetailView: View {
         loading = true
         error = nil
         defer { loading = false }
-        do { try await model.loadPaymentDetails(entry) }
-        catch is CancellationError { }
-        catch { self.error = error.localizedDescription }
+        error = await model.paymentDetailsError(entry)
     }
 }
 
@@ -423,47 +421,32 @@ struct PaymentDetailView: View {
 /// current effective rate; WalletCore may raise the actual result further to
 /// satisfy BIP125's incremental-relay-fee rule.
 private struct FeeBumpView: View {
-    private struct ReviewedFeeBump {
-        let request: FeeBumpReviewInputs
-        let preview: FeeBumpPreview
-    }
-
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    @State private var review: FeeBumpReview
 
-    let txid: Data
-    @State private var currentRate: Double?
-    @State private var targetRateText = ""
-    @State private var reviewedFeeBump: ReviewedFeeBump?
-    @State private var error: String?
-    @State private var bumping = false
-    @State private var replacementTxid: Data?
-
-    private var targetRate: Double? {
-        Double(targetRateText.trimmingCharacters(in: .whitespacesAndNewlines))
-    }
-
-    private var reviewInputs: FeeBumpReviewInputs {
-        FeeBumpReviewInputs(txid: txid, targetRateText: targetRateText)
+    init(txid: Data) {
+        _review = State(initialValue: FeeBumpReview(txid: txid))
     }
 
     var body: some View {
+        @Bindable var review = review
         NavigationStack {
             Form {
                 Section("Transaction") {
-                    CopyableIdentifier(value: txid.displayHex,
+                    CopyableIdentifier(value: review.txid.displayHex,
                                        accessibilityID: "copyOriginalTransactionIDButton")
-                    LabeledContent("Current rate", value: currentRate.map(feeRateText) ?? "—")
+                    LabeledContent("Current rate", value: review.currentRate.map(feeRateText) ?? "—")
                 }
 
-                if replacementTxid == nil {
+                if review.replacementTxid == nil {
                     Section {
-                        TextField("Higher rate (sat/vB)", text: $targetRateText)
+                        TextField("Higher rate (sat/vB)", text: $review.targetRateText)
                             .keyboardType(.decimalPad)
                             .accessibilityIdentifier("bumpFeeRateField")
-                        Button("Review replacement") { review() }
+                        Button("Review replacement") { Task { await review.review(using: model) } }
                             .accessibilityIdentifier("reviewFeeBumpButton")
-                            .disabled(targetRate == nil)
+                            .disabled(review.inputs.targetRate == nil)
                     } header: {
                         Text("Replacement fee")
                     } footer: {
@@ -471,8 +454,8 @@ private struct FeeBumpView: View {
                     }
                 }
 
-                if let reviewedFeeBump, replacementTxid == nil {
-                    let preview = reviewedFeeBump.preview
+                if let reviewed = review.reviewed, review.replacementTxid == nil {
+                    let preview = reviewed.preview
                     Section("Review") {
                         LabeledContent("Actual rate", value: feeRateText(preview.feeRateSatPerVByte))
                         LabeledContent("Replacement fee", value: satsText(preview.fee))
@@ -481,13 +464,15 @@ private struct FeeBumpView: View {
                         } else {
                             LabeledContent("Change back", value: "none (remainder becomes fee)")
                         }
-                        Button(bumping ? "Signing & broadcasting…" : "Sign & replace") { bump() }
-                            .accessibilityIdentifier("confirmFeeBumpButton")
-                            .disabled(bumping)
+                        Button(review.bumping ? "Signing & broadcasting…" : "Sign & replace") {
+                            Task { await review.bump(using: model) }
+                        }
+                        .accessibilityIdentifier("confirmFeeBumpButton")
+                        .disabled(review.bumping)
                     }
                 }
 
-                if let replacementTxid {
+                if let replacementTxid = review.replacementTxid {
                     Section("Replacement broadcast") {
                         Label("Original marked replaced", systemImage: "arrow.triangle.2.circlepath")
                             .foregroundStyle(.green)
@@ -497,7 +482,7 @@ private struct FeeBumpView: View {
                     }
                 }
 
-                if let error {
+                if let error = review.error {
                     Section {
                         Text(error)
                             .font(.footnote)
@@ -512,60 +497,8 @@ private struct FeeBumpView: View {
                     Button("Close") { dismiss() }
                 }
             }
-            .onChange(of: reviewInputs) { _, _ in
-                reviewedFeeBump = nil
-                error = nil
-            }
-            .task { await load() }
-        }
-    }
-
-    private func load() async {
-        do {
-            let rate = try await model.pendingFeeRate(txid: txid)
-            currentRate = rate
-            let suggestedRate = ceil(rate + 1)
-            targetRateText = String(format: "%.0f", suggestedRate)
-            let requested = reviewInputs
-            guard let targetRate = requested.targetRate else { return }
-            let candidate = try await model.previewFeeBump(
-                txid: requested.txid, feeRateSatPerVByte: targetRate)
-            guard requested == reviewInputs else { return }
-            reviewedFeeBump = ReviewedFeeBump(request: requested, preview: candidate)
-        } catch {
-            self.error = error.localizedDescription
-        }
-    }
-
-    private func review() {
-        let requested = reviewInputs
-        guard let targetRate = requested.targetRate else { return }
-        error = nil
-        reviewedFeeBump = nil
-        Task {
-            do {
-                let candidate = try await model.previewFeeBump(
-                    txid: requested.txid, feeRateSatPerVByte: targetRate)
-                guard requested == reviewInputs else { return }
-                reviewedFeeBump = ReviewedFeeBump(request: requested, preview: candidate)
-            } catch {
-                guard requested == reviewInputs else { return }
-                self.error = error.localizedDescription
-            }
-        }
-    }
-
-    private func bump() {
-        guard let reviewedFeeBump else { return }
-        bumping = true
-        error = nil
-        Task {
-            do {
-                replacementTxid = try await model.bumpFee(preview: reviewedFeeBump.preview)
-            } catch {
-                self.error = error.localizedDescription
-            }
-            bumping = false
+            .onChange(of: review.inputs) { _, _ in review.inputsChanged() }
+            .task { await review.load(using: model) }
         }
     }
 }

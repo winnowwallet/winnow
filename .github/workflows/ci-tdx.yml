@@ -62,6 +62,13 @@ jobs:
           key: tdx-v1-17F113-x86_64-package-${{ needs.evidence.outputs.fingerprint }}
       - name: package validation
         run: scripts/ci-tdx-lane package
+      - name: Publish package coverage for the CRAP report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tdx-crap-package-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /Users/macdev/winnow-ci/results/crap/package/
+          if-no-files-found: error
+          retention-days: 14
       - name: Preserve package evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -144,6 +151,13 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: units validation
         run: scripts/ci-tdx-lane units
+      - name: Publish units coverage for the CRAP report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tdx-crap-units-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /Users/macdev/winnow-ci/results/crap/units/
+          if-no-files-found: error
+          retention-days: 14
       - name: Preserve units evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -186,6 +200,7 @@ jobs:
         with:
           name: tdx-journey-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
+            /Users/macdev/winnow-ci/results/crap/report/
             /Users/macdev/winnow-ci/results/lanes/
             /Users/macdev/winnow-ci/results/*.log
             /Users/macdev/winnow-ci/results/app/

@@ -437,3 +437,51 @@ final class LocktimeLagNoticeTests: XCTestCase {
         XCTAssertEqual(preview, lagged)
     }
 }
+
+// MARK: - ReviewWarningTests
+
+/// What the review screen warns about is decided on the preview, so every
+/// warning and its wording is checked here rather than only when a UI
+/// journey happens to reach it.
+final class ReviewWarningTests: XCTestCase {
+    private func preview(amount: Int64 = 50_000, fee: Int64 = 500,
+                         recipient: AppModel.SendPreview.Recipient? = nil,
+                         lagging: Bool = false) -> AppModel.SendPreview {
+        var preview = AppModel.SendPreview(
+            destination: "tb1p-recipient", payments: [Payment(amount: amount, scriptPubKey: recipientScript)],
+            feeRateSatPerVByte: 2, fee: fee, changeAmount: nil, inputCount: 1,
+            selectedOutpoints: [.init(txid: txidA, vout: 0)], change: nil)
+        preview.recipient = recipient
+        preview.locktimeLagsTip = lagging
+        return preview
+    }
+
+    func testAnOrdinarySendToAFreshAddressWarnsAboutNothing() {
+        let fresh = AppModel.SendPreview.Recipient(personID: "p", name: "Alice", paymentIndex: 3)
+        XCTAssertEqual(preview(recipient: fresh).reviewWarnings, [])
+        XCTAssertEqual(preview().reviewWarnings, [])
+    }
+
+    func testEveryConcernIsListedInScreenOrder() {
+        let reused = AppModel.SendPreview.Recipient(personID: "p", name: "Alice", paymentIndex: nil,
+                                                    hasUnverifiedFundingDestination: true)
+        let warnings = preview(amount: 500, fee: 715, recipient: reused, lagging: true).reviewWarnings
+        XCTAssertEqual(warnings, [.unverifiedFundingDestination(name: "Alice"), .addressReuse(name: "Alice"),
+                                  .disproportionateFee(.init(fee: 715, amount: 500)), .locktimeLagsTip])
+        XCTAssertEqual(warnings.map(\.accessibilityIdentifier),
+                       ["unverifiedFundingWarning", "addressReuseWarning", "feeProportionWarning", "locktimeLagWarning"])
+        XCTAssertEqual(warnings.map(\.systemImage),
+                       ["exclamationmark.triangle", "eye", "exclamationmark.triangle", "clock.arrow.circlepath"])
+    }
+
+    func testEachWarningNamesWhatTheUserCanActOn() {
+        let sats: (Int64) -> String = { "\($0) sats" }
+        XCTAssertTrue(AppModel.ReviewWarning.unverifiedFundingDestination(name: "Bob").message(sats: sats)
+            .contains("has not verified that it belongs to Bob"))
+        XCTAssertTrue(AppModel.ReviewWarning.addressReuse(name: "Bob").message(sats: sats)
+            .contains("Ask Bob for a fresh address"))
+        let fee = AppModel.FeeProportion(fee: 715, amount: 500)
+        XCTAssertEqual(AppModel.ReviewWarning.disproportionateFee(fee).message(sats: sats), fee.message(sats: sats))
+        XCTAssertTrue(AppModel.ReviewWarning.locktimeLagsTip.message(sats: sats).contains("still syncing"))
+    }
+}

@@ -332,30 +332,10 @@ struct SendView: View {
     }
 
     private func reviewWarnings(_ preview: AppModel.SendPreview) -> some View {
-        Group {
-            if let recipient = preview.recipient, recipient.hasUnverifiedFundingDestination {
-                Section {
-                    Label("This destination was inferred from transaction funding. Winnow has not verified that it belongs to \(recipient.name). Confirm it with them before sending.", systemImage: "exclamationmark.triangle")
-                        .accessibilityIdentifier("unverifiedFundingWarning")
-                }
-            }
-            if let recipient = preview.recipient, !recipient.derivesFreshAddresses {
-                Section {
-                    Label("This address has been saved for reuse. Repeated payments can be linked. Ask \(recipient.name) for a fresh address or Winnow contact card.", systemImage: "eye")
-                        .accessibilityIdentifier("addressReuseWarning")
-                }
-            }
-            if let proportion = preview.feeProportion {
-                Section {
-                    Label(proportion.message(sats: satsText), systemImage: "exclamationmark.triangle")
-                        .accessibilityIdentifier("feeProportionWarning")
-                }
-            }
-            if preview.locktimeLagsTip {
-                Section {
-                    Label("Your wallet is still syncing. Sending now can reveal that on the Bitcoin network. Wait for sync to finish for better privacy.", systemImage: "clock.arrow.circlepath")
-                        .accessibilityIdentifier("locktimeLagWarning")
-                }
+        ForEach(preview.reviewWarnings, id: \.accessibilityIdentifier) { warning in
+            Section {
+                Label(warning.message(sats: satsText), systemImage: warning.systemImage)
+                    .accessibilityIdentifier(warning.accessibilityIdentifier)
             }
         }
         .font(.footnote)

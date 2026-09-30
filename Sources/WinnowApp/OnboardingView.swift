@@ -105,12 +105,11 @@ private struct ImportBundleView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var json = ""
-    @State private var busy = false
-    @State private var error: String?
+    @State private var importing = SensitiveAction()
+    /// Imported but not yet verified: said where an error would be.
+    @State private var notice: String?
     @State private var report: ImportReport?
     @State private var imported = false
-    @State private var importEpoch = SensitivePresentationEpoch()
-    @State private var importTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
@@ -137,10 +136,10 @@ private struct ImportBundleView: View {
                         Text("Use the file saved from Back up wallet. Keep your recovery words too. Backups from other wallets may not include every coin type.")
                     }
                 }
-                if busy {
+                if importing.busy {
                     Section { BusyIndicator(text: "Importing and verifying…") }
                 }
-                if let error {
+                if let error = importing.error ?? notice {
                     Section { Text(error).foregroundStyle(.red).font(.footnote) }
                 }
                 if report != nil || imported
@@ -173,7 +172,7 @@ private struct ImportBundleView: View {
                     Section {
                         Button("Import and verify") { importBundle() }
                             .accessibilityIdentifier("importVerifyButton")
-                            .disabled(json.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || busy)
+                            .disabled(json.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || importing.busy)
                     }
                 }
             }
@@ -194,51 +193,28 @@ private struct ImportBundleView: View {
     }
 
     private func importBundle() {
-        importTask?.cancel()
-        let token = importEpoch.begin()
         let payload = json
-        busy = true
-        error = nil
-        importTask = Task { @MainActor in
-            do {
-                let result = try await model.importWallet(bundleJSON: payload)
-                try Task.checkCancellation()
-                guard importEpoch.accepts(
-                    token, whilePresentationIsAllowed: scenePhase != .background
-                ) else { return }
-                report = result
-                // A seed-bearing bundle must not remain in view state after
-                // it has been handed to WalletCore/Keychain.
-                json = ""
-                imported = true
-                if result == nil {
-                    error = "Imported, but no peers were reachable for verification yet — the regular sync will verify from the bundle's height."
-                }
-            } catch is CancellationError {
-                // The text is cleared below; an import that already crossed
-                // its commit boundary remains discoverable through AppModel.
-            } catch {
-                if importEpoch.accepts(token, whilePresentationIsAllowed: scenePhase != .background) {
-                    self.error = error.localizedDescription
-                }
-            }
-            guard importEpoch.accepts(
-                token, whilePresentationIsAllowed: scenePhase != .background
-            ) else {
-                return
-            }
-            busy = false
-            importTask = nil
+        notice = nil
+        importing.start(presentable: { scenePhase != .background }) {
+            try await model.importWallet(bundleJSON: payload)
+        } apply: { result in
+            report = result
+            // A seed-bearing bundle must not remain in view state after it
+            // has been handed to WalletCore/Keychain.
+            json = ""
+            imported = true
+            notice = result == nil ? Self.unverifiedNotice : nil
         }
     }
 
+    static let unverifiedNotice = "Imported, but no peers were reachable for verification yet — the regular sync will verify from the bundle's height."
+
     private func clearSensitiveImport() {
-        importEpoch.invalidate()
-        importTask?.cancel()
-        importTask = nil
+        // An import that already crossed its commit boundary remains
+        // discoverable through AppModel.
+        importing.reset()
         json = ""
-        busy = false
-        error = nil
+        notice = nil
         report = nil
     }
 }

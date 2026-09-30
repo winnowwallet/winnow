@@ -1,0 +1,202 @@
+#!/usr/bin/env python3
+"""Measure method CRAP against compiler executable-line coverage, fail above 12.
+
+SwiftLint 0.65.1 supplies syntax-based decision counts, including switch cases.
+Its count starts at zero: McCabe complexity is that count plus the entry path.
+Swift compiler declaration ranges, rather than guessed braces, bind coverage
+to methods and initializers. Compiler LCOV DA records define executable lines,
+including LLVM exports and Xcode archive records converted without omitting zeros.
+Missing coverage is reported as unmeasured, with a conservative zero-coverage
+upper bound. Accessors and standalone closures are explicitly outside the
+SwiftLint function/initializer rule; their executable lines remain visible in
+the coverage totals. No file, method, case, or uncovered line is suppressed.
+"""
+import argparse
+from concurrent.futures import ThreadPoolExecutor
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+
+ROOT = Path(__file__).resolve().parent.parent
+SWIFTLINT_VERSION = '0.65.1'
+FORMULA = 'CC^2 * (1 - executable_line_coverage)^3 + CC'
+DECL = re.compile(r'^\s*\((func_decl|constructor_decl).*?range=\[(.*?):(\d+):(\d+) - line:(\d+):(\d+)\] "([^"]*)"')
+
+
+def source_files(root):
+    return sorted((root / 'Sources').rglob('*.swift'))
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def manifest(root):
+    return {str(path.relative_to(root)): digest(path) for path in source_files(root)}
+
+
+def declarations(path):
+    # dump-parse omits #if blocks entirely before type checking. Blank only
+    # directive lines to inventory ALL build variants at their original lines;
+    # complexity still comes from the untouched SwiftSyntax source tree.
+    source = re.sub(r'(?m)^\s*#(?:if|elseif|else|endif)\b[^\n]*',
+                    lambda match: ''.join('\n' if c == '\n' else ' ' for c in match.group()), path.read_text())
+    with tempfile.TemporaryDirectory(prefix='winnow-crap-parse-') as directory:
+        input = Path(directory) / path.name
+        input.write_text(source)
+        result = subprocess.run(['xcrun', 'swiftc', '-frontend', '-dump-parse', str(input)],
+                                text=True, capture_output=True, check=True)
+    found = []
+    for line in result.stdout.splitlines():
+        if match := DECL.match(line):
+            _, _, start, column, end, _, name = match.groups()
+            found.append({'start': int(start), 'column': int(column), 'end': int(end), 'name': name})
+    return path, found
+
+
+def complexities(root):
+    version = subprocess.check_output(['swiftlint', 'version'], text=True).strip()
+    if version != SWIFTLINT_VERSION:
+        raise ValueError(f'CRAP decision-count definition requires SwiftLint {SWIFTLINT_VERSION}; found {version}')
+    # -1 emits even zero-decision bodies; an empty body still has entry CC=1.
+    config = ('only_rules:\n  - cyclomatic_complexity\ncyclomatic_complexity:\n'
+              '  warning: -1\n  error: -1\n  ignores_case_statements: false\n')
+    with tempfile.TemporaryDirectory(prefix='winnow-crap-') as directory:
+        path = Path(directory) / 'swiftlint.yml'
+        path.write_text(config)
+        command = ['swiftlint', 'lint', '--config', str(path), '--reporter', 'json',
+                   '--quiet', '--no-cache', str(root / 'Sources')]
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode not in (0, 2):
+            raise ValueError('SwiftLint inventory failed: ' + result.stderr)
+        return json.loads(result.stdout)
+
+
+def line_coverage(paths, root):
+    """Union covered executable lines across independent package/app runs."""
+    coverage = {}
+    for path in paths:
+        current = None
+        for line in path.read_text().splitlines():
+            if line.startswith('SF:'):
+                # Coverage may be produced in a different absolute checkout.
+                parts = Path(line[3:]).parts
+                current = '/'.join(parts[parts.index('Sources'):]) if 'Sources' in parts else None
+            elif current and line.startswith('DA:'):
+                number, count, *_ = line[3:].split(',')
+                file = coverage.setdefault(current, {})
+                file[int(number)] = max(file.get(int(number), 0), int(count))
+    return coverage
+
+
+def method(violation, parsed):
+    line = violation['line']
+    candidates = [decl for decl in parsed if decl['start'] <= line <= decl['end']]
+    if not candidates:
+        raise ValueError(f"No compiler declaration for {violation['file']}:{line}")
+    # Nested functions belong to their narrowest declaration, never a parent.
+    return min(candidates, key=lambda decl: (decl['end'] - decl['start'], -decl['column']))
+
+
+def records(root, inventory, parsed, coverage):
+    output = []
+    for violation in inventory:
+        path = Path(violation['file']).resolve()
+        relative = str(path.relative_to(root))
+        decl = method(violation, parsed[path])
+        cc = int(violation['reason'].rsplit(' ', 1)[1]) + 1
+        counts = coverage.get(relative, {})
+        nested = [other for other in parsed[path] if decl['start'] < other['start'] <= other['end'] <= decl['end']]
+        executable = [count for number, count in counts.items()
+                      if decl['start'] <= number <= decl['end']
+                      and not any(other['start'] <= number <= other['end'] for other in nested)]
+        measured = bool(executable)
+        covered = sum(count > 0 for count in executable)
+        fraction = covered / len(executable) if measured else 0.0
+        score = cc * cc * (1 - fraction) ** 3 + cc
+        output.append({'file': relative, 'line': violation['line'], 'function': decl['name'],
+                       'end_line': decl['end'], 'complexity': cc, 'coverage_measured': measured,
+                       'covered_lines': covered, 'executable_lines': len(executable),
+                       'coverage': fraction if measured else None,
+                       'crap': score if measured else None, 'conservative_crap': score})
+    return sorted(output, key=lambda item: (-item['conservative_crap'], item['file'], item['line']))
+
+
+def report(args):
+    root = args.source_root.resolve()
+    expected = json.loads(args.manifest.read_text())['files']
+    actual = manifest(root)
+    if expected != actual:
+        changed = sorted(key for key in expected.keys() | actual.keys() if expected.get(key) != actual.get(key))
+        raise ValueError('Coverage source manifest mismatch: ' + ', '.join(changed[:12]))
+    inventory = json.loads(args.complexity_json.read_text()) if args.complexity_json else complexities(root)
+    # Archived immutable baseline sources may have a different absolute prefix.
+    for item in inventory:
+        parts = Path(item['file']).parts
+        item['file'] = str(root.joinpath(*parts[parts.index('Sources'):]))
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        parsed = dict(pool.map(declarations, source_files(root)))
+    rows = records(root, inventory, parsed, line_coverage(args.coverage, root))
+    high = [row for row in rows if row['conservative_crap'] > args.threshold]
+    result = {'schema': 1, 'formula': FORMULA, 'threshold': args.threshold,
+              'scope': 'All Sources Swift function and initializer bodies, including switch cases; CC entry path is 1',
+              'limitations': 'Accessors and standalone closures are not declarations covered by the SwiftLint function/initializer rule',
+              'decision_tool': f'SwiftLint {SWIFTLINT_VERSION}',
+              'coverage': 'Compiler executable-line records (LLVM LCOV and/or xccov archive lines), union across supplied test runs',
+              'unmeasured_policy': 'Explicitly unmeasured; zero coverage conservative bound, never assumed covered',
+              'coverage_inputs': [str(path.resolve()) for path in args.coverage],
+              'source_manifest': actual, 'functions': rows,
+              'function_count': len(rows), 'above_threshold_count': len(high),
+              'unmeasured_count': sum(not row['coverage_measured'] for row in rows)}
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(result, indent=2) + '\n')
+    for row in high:
+        coverage = f"{100 * row['coverage']:.1f}%" if row['coverage_measured'] else 'unmeasured'
+        print(f"{row['file']}:{row['line']} {row['function']}: CC {row['complexity']}, coverage {coverage}, CRAP bound {row['conservative_crap']:.3f}")
+    print(f"{len(rows)} methods; {len(high)} exceed {args.threshold:g}; {result['unmeasured_count']} unmeasured")
+    return 1 if high and not args.report_only else 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--source-root', type=Path, default=ROOT)
+    commands = parser.add_subparsers(dest='command', required=True)
+    snapshot = commands.add_parser('snapshot', help='Capture source identity immediately before instrumented build')
+    snapshot.add_argument('--output', type=Path, required=True)
+    export = commands.add_parser('export-llvm', help='Export merged LLVM coverage from package or app test binaries')
+    export.add_argument('--profile', type=Path, required=True)
+    export.add_argument('--binary', type=Path, required=True, action='append')
+    export.add_argument('--output', type=Path, required=True)
+    check = commands.add_parser('report')
+    check.add_argument('--manifest', type=Path, required=True)
+    check.add_argument('--coverage', type=Path, action='append', default=[])
+    check.add_argument('--complexity-json', type=Path)
+    check.add_argument('--output', type=Path, required=True)
+    check.add_argument('--threshold', type=float, default=12)
+    check.add_argument('--report-only', action='store_true')
+    args = parser.parse_args()
+    try:
+        if args.command == 'snapshot':
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(json.dumps({'schema': 1, 'files': manifest(args.source_root.resolve())}, indent=2) + '\n')
+            return 0
+        if args.command == 'export-llvm':
+            command = ['xcrun', 'llvm-cov', 'export', '--format=lcov',
+                       '-instr-profile=' + str(args.profile), str(args.binary[0])]
+            command.extend('-object=' + str(binary) for binary in args.binary[1:])
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            with args.output.open('w') as stream:
+                subprocess.run(command, stdout=stream, check=True)
+            return 0
+        return report(args)
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+        print('CRAP evidence failed: ' + str(error), file=sys.stderr)
+        return 2
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

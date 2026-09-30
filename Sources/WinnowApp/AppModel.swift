@@ -408,6 +408,9 @@ final class AppModel {
     private var phaseTask: Task<Void, Never>?
     private var broadcasterEventTask: Task<Void, Never>?
     private var isActive = false
+    /// App tests run the real stack against a loopback chain with its own
+    /// genesis; the app itself never sets this.
+    private let networkParamsOverride: NetworkParams?
     private var bootTask: Task<Void, Never>?
     /// A BGTask's scan. Foreground networking and a background check never
     /// run together: returning to the app cancels this before `activate()`.
@@ -459,10 +462,12 @@ final class AppModel {
          e2e: E2EMode? = E2EMode.current, defaults: UserDefaults = .standard,
          storeKeys: (any StoreKeyVault)? = nil, keyStore: (any KeyStore)? = nil,
          cloudBackups: CloudBackupController? = nil,
+         networkParams: NetworkParams? = nil,
          discoverGateways: @escaping @Sendable () async -> PeerGatewayConfiguration = {
              await TailnetGatewayDiscovery().discover()
          }) {
         self.discoverGateways = discoverGateways
+        networkParamsOverride = networkParams
         self.cloudBackups = cloudBackups ?? CloudBackupController()
         allowsCloudBackup = e2e == nil || cloudBackups != nil
         self.deviceAuthenticator = deviceAuthenticator
@@ -561,32 +566,7 @@ final class AppModel {
         if let clipboard = e2e?.clipboard {
             UIPasteboard.general.string = clipboard
         }
-        if case let .damaged(message) = await vaultStore.configure(
-            storageURL: vaultsURL(), network: network)
-        {
-            stage = .storageDamaged(message)
-            return
-        }
-        await configurePeople()
-        guard let walletURL = walletURL() else {
-            stage = .storageDamaged(
-                "Winnow could not access its protected local storage. No wallet files or keys were changed.")
-            return
-        }
-        switch Self.openPersistedWallet(at: walletURL, keyStore: keyStore) {
-        case let .opened(wallet):
-            self.wallet = wallet
-            walletID = await wallet.id
-            walletDescriptor = await wallet.descriptor
-            upgradeKeyProtection()
-            defaults.removeObject(forKey: DefaultsKey.backupPending(walletID ?? ""))
-            stage = .ready
-        case .missing:
-            stage = .onboarding
-        case let .damaged(details):
-            stage = .storageDamaged(details)
-            return
-        }
+        guard await openSavedWalletForCurrentNetwork() else { return }
         e2e?.journal("app.booted", fields: [
             "stage": stage == .ready ? "ready" : "onboarding",
             "walletID": walletID ?? "",
@@ -913,7 +893,7 @@ final class AppModel {
         await preparePeerGateways()
         guard epoch == networkGeneration, isActive || backgroundRunning, !Task.isCancelled else { return }
         do {
-            let params = e2e?.networkParams ?? NetworkParams.params(for: network)
+            let params = networkParamsOverride ?? e2e?.networkParams ?? NetworkParams.params(for: network)
             // relayPreference: peers inv us relayed transactions so bounded
             // mempool windows (§2.8) can open on live connections without a
             // reconnect. With no window open the invs are dropped unanswered —
@@ -1776,6 +1756,44 @@ final class AppModel {
         }
     }
 
+    enum ReviewWarning: Equatable {
+        case unverifiedFundingDestination(name: String)
+        case addressReuse(name: String)
+        case disproportionateFee(FeeProportion)
+        case locktimeLagsTip
+
+        func message(sats: (Int64) -> String) -> String {
+            switch self {
+            case let .unverifiedFundingDestination(name):
+                "This destination was inferred from transaction funding. Winnow has not verified that it belongs to \(name). Confirm it with them before sending."
+            case let .addressReuse(name):
+                "This address has been saved for reuse. Repeated payments can be linked. Ask \(name) for a fresh address or Winnow contact card."
+            case let .disproportionateFee(proportion):
+                proportion.message(sats: sats)
+            case .locktimeLagsTip:
+                "Your wallet is still syncing. Sending now can reveal that on the Bitcoin network. Wait for sync to finish for better privacy."
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .addressReuse: "eye"
+            case .locktimeLagsTip: "clock.arrow.circlepath"
+            case .unverifiedFundingDestination, .disproportionateFee: "exclamationmark.triangle"
+            }
+        }
+
+        /// UI tests find each warning by these.
+        var accessibilityIdentifier: String {
+            switch self {
+            case .unverifiedFundingDestination: "unverifiedFundingWarning"
+            case .addressReuse: "addressReuseWarning"
+            case .disproportionateFee: "feeProportionWarning"
+            case .locktimeLagsTip: "locktimeLagWarning"
+            }
+        }
+    }
+
     struct SendPreview: Equatable {
         enum Source: Equatable {
             case wallet
@@ -1835,6 +1853,20 @@ final class AppModel {
             guard amount > 0 else { return nil }
             let proportion = FeeProportion(fee: fee, amount: amount)
             return proportion.isDisproportionate ? proportion : nil
+        }
+
+        /// What the review screen warns about, in the order it shows them.
+        var reviewWarnings: [ReviewWarning] {
+            var warnings: [ReviewWarning] = []
+            if let recipient, recipient.hasUnverifiedFundingDestination {
+                warnings.append(.unverifiedFundingDestination(name: recipient.name))
+            }
+            if let recipient, !recipient.derivesFreshAddresses {
+                warnings.append(.addressReuse(name: recipient.name))
+            }
+            if let feeProportion { warnings.append(.disproportionateFee(feeProportion)) }
+            if locktimeLagsTip { warnings.append(.locktimeLagsTip) }
+            return warnings
         }
 
         /// Whether `built` is the transaction that was reviewed.
@@ -2392,6 +2424,28 @@ final class AppModel {
         await refresh()
     }
 
+    /// The payment screen's load: nil once the details arrived, or when the
+    /// screen went away first; otherwise what to tell the user.
+    func paymentDetailsError(_ entry: HistoryEntry) async -> String? {
+        do {
+            try await loadPaymentDetails(entry)
+            return nil
+        } catch is CancellationError {
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    /// What the iCloud restore sheet adds once a restore finished: nothing
+    /// when the chain agreed with the backup.
+    static func cloudRestoreMessage(for report: ImportReport?) -> String? {
+        guard let report else { return "Restored. Network verification will resume when peers are reachable." }
+        return report.matchesBundle
+            ? nil
+            : "Some payments changed since this backup. Winnow updated the wallet from the network; review the restored balances."
+    }
+
     /// The address the next payment to `person` derives, peeked without
     /// advancing anything: the counter moves only when a send commits.
     func nextPaymentAddress(for person: PersonRecord) throws -> (address: String, index: UInt32) {
@@ -2699,30 +2753,33 @@ final class AppModel {
         guard e2e?.forcedNetwork == nil || e2e?.forcedNetwork == newNetwork else { return }
         guard newNetwork != network else { return }
         suspendNetworking()
-        syncTask?.cancel()
-        syncTask = nil
-        await stack?.pool.stop()
-        await stack?.broadcaster.shutdown()
-        broadcasterEventTask?.cancel()
-        broadcasterEventTask = nil
-        stack = nil
+        await stopNetworking()
         wallet = nil
         walletID = nil
         walletDescriptor = nil
         network = newNetwork
         defaults.set(newNetwork.rawValue, forKey: DefaultsKey.network)
         loadNetworkScopedSettings()
+        guard await openSavedWalletForCurrentNetwork() else { return }
+        await refresh()
+        if isActive { await activate() }
+    }
+
+    /// Opens the current network's vaults, people and wallet, the same way at
+    /// launch and after a network switch. False when storage is damaged; the
+    /// stage then says so and nothing else runs.
+    private func openSavedWalletForCurrentNetwork() async -> Bool {
         if case let .damaged(message) = await vaultStore.configure(
             storageURL: vaultsURL(), network: network)
         {
             stage = .storageDamaged(message)
-            return
+            return false
         }
         await configurePeople()
         guard let walletURL = walletURL() else {
             stage = .storageDamaged(
                 "Winnow could not access its protected local storage. No wallet files or keys were changed.")
-            return
+            return false
         }
         switch Self.openPersistedWallet(at: walletURL, keyStore: keyStore) {
         case let .opened(wallet):
@@ -2736,10 +2793,9 @@ final class AppModel {
             stage = .onboarding
         case let .damaged(details):
             stage = .storageDamaged(details)
-            return
+            return false
         }
-        await refresh()
-        if isActive { await activate() }
+        return true
     }
 
     static func parsePeer(_ text: String) throws -> PeerEndpoint {
@@ -3204,7 +3260,8 @@ extension AppModel {
     }
 
     private func scheduleCloudBackup() {
-        guard e2e == nil else { return }
+        // E2E journeys never touch iCloud; tests that inject a controller do.
+        guard allowsCloudBackup else { return }
         cloudBackups.configure(directory: storageDirectory(), walletID: walletID)
         guard isActive, let walletID else { return }
         let selectedNetwork = network
