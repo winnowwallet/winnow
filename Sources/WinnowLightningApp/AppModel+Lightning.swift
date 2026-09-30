@@ -214,7 +214,7 @@ extension AppModel {
     /// that same wallet is already here. Holds the spending gate throughout,
     /// so no payment, channel action or network switch interleaves.
     func restorePortableLightningBackup(_ contents: CloudBackupContents) async throws -> ImportReport? {
-        try await exclusively(.spending) { try await restorePortableContents(contents) }
+        try await exclusively(.spending, repairingImport: true) { try await restorePortableContents(contents) }
     }
 
     private func restorePortableContents(_ contents: CloudBackupContents) async throws -> ImportReport? {
@@ -225,16 +225,18 @@ extension AppModel {
         defer { keychainAuthentication.revoke() }
         try Task.checkCancellation()
         guard network == selectedNetwork else { throw CancellationError() }
-        if walletID != nil {
+        if walletID != nil, !hasPendingWalletImport {
             try await restorePortableContext(state, onto: contents.bundle)
             return nil
         }
         // Commit the separate recovery-only journal before installing Bitcoin
         // keys. A crash during the import can never boot a restored channel as
-        // an active channel; retry selects the same durable recovery namespace.
-        try requireLightningWalletPreserved(importing: contents.bundle.descriptor)
+        // an active channel; retry selects the same durable recovery namespace,
+        // and an interrupted import of this wallet finishes with the same file.
+        let resuming = walletID != nil
+        try requireWalletImportAllowed(contents.bundle, resuming: resuming)
         try await restoreLightningPayload(state.lightning, descriptor: contents.bundle.descriptor)
-        let report = try await importWallet(bundle: contents.bundle, authenticate: false) { restoredID in
+        let report = try await importWallet(bundle: contents.bundle, authenticate: false, resumingImport: resuming) { restoredID in
             guard self.walletID == restoredID, self.network == selectedNetwork else { throw CancellationError() }
             try await self.applyCloudAppState(state.context)
         }
