@@ -1,3 +1,4 @@
+import LightningCore
 import SwiftUI
 import UniformTypeIdentifiers
 import WalletCore
@@ -41,33 +42,8 @@ struct LightningBackupView: View {
                     Section { Button("Prepare encrypted recovery file") { run { try await prepare() } }
                         .accessibilityIdentifier("lightningPrepareBackup") }
                 }
-                Section {
-                    Button("Choose encrypted recovery file") { importing = true }.accessibilityIdentifier("lightningImportBackup")
-                    if importedFile != nil {
-                        if capture.isCaptured { Text("Stop screen recording to enter the recovery phrase.") }
-                        else {
-                        TextField("Wallet recovery phrase", text: $phrase, axis: .vertical)
-                            .autocorrectionDisabled().textInputAutocapitalization(.never).privacySensitive()
-                            .accessibilityIdentifier("lightningBackupPhrase")
-                        }
-                        Button("Restore in recovery mode") { run { try await restore() } }
-                            .disabled(capture.isCaptured || (typedPhrase.isEmpty && model.walletID == nil))
-                            .accessibilityIdentifier("lightningRestoreBackup")
-                    }
-                } header: {
-                    Text("Restore a recovery file")
-                } footer: {
-                    Text(model.walletID == nil
-                         ? "Enter the recovery phrase of the wallet that saved the file. A file saved by Winnow 0.8.0 opens with the separate 24-word phrase shown when it was saved."
-                         : "Leave the phrase empty for a file this wallet saved. A file saved by Winnow 0.8.0 opens with the separate 24-word phrase shown when it was saved.")
-                }
-                if let status = model.lightning?.recoveryStatus {
-                    Section("Recovery progress") {
-                        LabeledContent("Backup saved", value: status.savedAt.formatted())
-                        LabeledContent("Counterparties responding", value: "\(status.respondingPeers)")
-                        Text("Connect to each original channel peer in Lightning settings and keep syncing. Spending and old commitment broadcasts stay disabled.")
-                    }
-                }
+                restoreSection
+                if let status = model.lightning?.recoveryStatus { recoveryProgress(status) }
                 if let error { Text(error).foregroundStyle(.red) }
                 if let message { Text(message).accessibilityIdentifier("lightningBackupResult") }
                 if busy { ProgressView() }
@@ -88,6 +64,35 @@ struct LightningBackupView: View {
             }
             .onChange(of: scenePhase) { _, phase in if phase == .background { clearSecrets() } }
             .onDisappear { clearSecrets() }
+        }
+    }
+    private var restoreSection: some View {
+        Section {
+            Button("Choose encrypted recovery file") { importing = true }.accessibilityIdentifier("lightningImportBackup")
+            if importedFile != nil {
+                if capture.isCaptured { Text("Stop screen recording to enter the recovery phrase.") }
+                else {
+                    TextField("Wallet recovery phrase", text: $phrase, axis: .vertical)
+                        .autocorrectionDisabled().textInputAutocapitalization(.never).privacySensitive()
+                        .accessibilityIdentifier("lightningBackupPhrase")
+                }
+                Button("Restore in recovery mode") { run { try await restore() } }
+                    .disabled(capture.isCaptured || (typedPhrase.isEmpty && model.walletID == nil))
+                    .accessibilityIdentifier("lightningRestoreBackup")
+            }
+        } header: {
+            Text("Restore a recovery file")
+        } footer: {
+            Text(model.walletID == nil
+                 ? "Enter the recovery phrase of the wallet that saved the file. A file saved by Winnow 0.8.0 opens with the separate 24-word phrase shown when it was saved."
+                 : "Leave the phrase empty for a file this wallet saved. A file saved by Winnow 0.8.0 opens with the separate 24-word phrase shown when it was saved.")
+        }
+    }
+    private func recoveryProgress(_ status: LightningEngine.RecoveryStatus) -> some View {
+        Section("Recovery progress") {
+            LabeledContent("Backup saved", value: status.savedAt.formatted())
+            LabeledContent("Counterparties responding", value: "\(status.respondingPeers)")
+            Text("Connect to each original channel peer in Lightning settings and keep syncing. Spending and old commitment broadcasts stay disabled.")
         }
     }
     private func prepare() async throws {

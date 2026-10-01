@@ -116,89 +116,14 @@ struct AddPersonView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    TextField("Name", text: $name).accessibilityIdentifier("personNameField")
-                    if person?.payTo == nil {
-                        TextField(forSigning ? "Paste a card or signer key" : "Paste an address or card",
-                                  text: $pasted, axis: .vertical)
-                            .autocorrectionDisabled().textInputAutocapitalization(.never)
-                            .accessibilityIdentifier("personPasteField")
-                        Button("Paste from clipboard") { pasted = model.pasteboardText() ?? "" }
-                            .accessibilityIdentifier("personPasteButton")
-                    }
-                }
-                if labelingSender, !model.people.isEmpty {
-                    Section("Or choose someone saved") {
-                        ForEach(model.people) { saved in
-                            Button(saved.name) { choose(saved) }
-                                .accessibilityIdentifier("chooseSenderPerson-\(saved.name)")
-                        }
-                    }
-                }
-                if choosingFundingDestination, !senderCandidates.isEmpty {
-                    Section {
-                        ForEach(senderCandidates) { candidate in
-                            Button(candidate.address) {
-                                pasted = candidate.address
-                                selectedFundingAddress = candidate.address
-                                selectedFundingProvenance = .localFunding
-                            }
-                                .font(.system(.footnote, design: .monospaced))
-                                .accessibilityIdentifier("senderCandidate-\(candidate.id)")
-                        }
-                    } header: {
-                        Text("Funding addresses this payment reveals")
-                    } footer: {
-                        Text(Self.fundingWarning)
-                            .accessibilityIdentifier("senderCandidateWarning")
-                    }
-                }
-                if choosingFundingDestination, senderCandidates.isEmpty {
-                    Section {
-                        Button(inferring ? "Looking up…" : "Find funding addresses with \(explorerHost)") {
-                            if let txid { lookupConsent = model.senderLookupConsent(txid: txid) }
-                            confirmInfer = true
-                        }
-                        .accessibilityIdentifier("inferSenderButton")
-                        .disabled(inferring)
-                    } footer: {
-                        Text("The locally stored payment does not reveal a funding address. You can request unverified funding addresses from \(explorerHost) after reviewing what the lookup discloses.")
-                    }
-                }
-                if !inferredAddresses.isEmpty {
-                    Section {
-                        ForEach(inferredAddresses, id: \.self) { address in
-                            Button(address) {
-                                pasted = address
-                                selectedFundingAddress = address
-                                selectedFundingProvenance = .explorerFunding
-                            }
-                                .font(.system(.footnote, design: .monospaced))
-                                .accessibilityIdentifier("inferredSender-\(address)")
-                        }
-                    } header: {
-                        Text("Funded by, according to \(explorerHost)")
-                    } footer: {
-                        Text(Self.fundingWarning)
-                    }
-                }
-                if let parsed, person == nil {
-                    Section {
-                        if let payTo = parsed.payTo {
-                            Text(payTo.derivesFreshAddresses ? "Fresh address each payment" : "Uses this same address each time")
-                                .accessibilityIdentifier("personPayToSummary")
-                        }
-                        if forSigning {
-                            Text(parsed.signerKey != nil ? "Can approve shared payments" : "Ask for their signer key or Winnow card")
-                                .accessibilityIdentifier("personSignerSummary")
-                        }
-                    }.font(.footnote).foregroundStyle(.secondary)
-                }
+                nameSection
+                if labelingSender, !model.people.isEmpty { savedPeopleSection }
+                if choosingFundingDestination, !senderCandidates.isEmpty { fundingCandidatesSection }
+                if choosingFundingDestination, senderCandidates.isEmpty { explorerLookupSection }
+                if !inferredAddresses.isEmpty { inferredAddressesSection }
+                if let parsed, person == nil { summarySection(parsed) }
                 if let error { Text(error).foregroundStyle(.red).accessibilityIdentifier("personError") }
-                Section {
-                    Button(saving ? "Saving…" : "Save") { save() }
-                        .accessibilityIdentifier("savePersonButton").disabled(!canSave)
-                }
+                saveSection
             }
             .navigationTitle(navigationTitle)
             .toolbar {
@@ -219,6 +144,99 @@ struct AddPersonView: View {
             } message: {
                 Text((lookupConsent?.disclosure ?? "No lookup selected.") + " Funding addresses do not establish who sent the payment or where they want a payment sent.")
             }
+        }
+    }
+
+    private var nameSection: some View {
+        Section {
+            TextField("Name", text: $name).accessibilityIdentifier("personNameField")
+            if person?.payTo == nil {
+                TextField(forSigning ? "Paste a card or signer key" : "Paste an address or card",
+                          text: $pasted, axis: .vertical)
+                    .autocorrectionDisabled().textInputAutocapitalization(.never)
+                    .accessibilityIdentifier("personPasteField")
+                Button("Paste from clipboard") { pasted = model.pasteboardText() ?? "" }
+                    .accessibilityIdentifier("personPasteButton")
+            }
+        }
+    }
+
+    private var savedPeopleSection: some View {
+        Section("Or choose someone saved") {
+            ForEach(model.people) { saved in
+                Button(saved.name) { choose(saved) }
+                    .accessibilityIdentifier("chooseSenderPerson-\(saved.name)")
+            }
+        }
+    }
+
+    private var fundingCandidatesSection: some View {
+        Section {
+            ForEach(senderCandidates) { candidate in
+                Button(candidate.address) {
+                    pasted = candidate.address
+                    selectedFundingAddress = candidate.address
+                    selectedFundingProvenance = .localFunding
+                }
+                    .font(.system(.footnote, design: .monospaced))
+                    .accessibilityIdentifier("senderCandidate-\(candidate.id)")
+            }
+        } header: {
+            Text("Funding addresses this payment reveals")
+        } footer: {
+            Text(Self.fundingWarning)
+                .accessibilityIdentifier("senderCandidateWarning")
+        }
+    }
+
+    private var explorerLookupSection: some View {
+        Section {
+            Button(inferring ? "Looking up…" : "Find funding addresses with \(explorerHost)") {
+                if let txid { lookupConsent = model.senderLookupConsent(txid: txid) }
+                confirmInfer = true
+            }
+            .accessibilityIdentifier("inferSenderButton")
+            .disabled(inferring)
+        } footer: {
+            Text("The locally stored payment does not reveal a funding address. You can request unverified funding addresses from \(explorerHost) after reviewing what the lookup discloses.")
+        }
+    }
+
+    private var inferredAddressesSection: some View {
+        Section {
+            ForEach(inferredAddresses, id: \.self) { address in
+                Button(address) {
+                    pasted = address
+                    selectedFundingAddress = address
+                    selectedFundingProvenance = .explorerFunding
+                }
+                    .font(.system(.footnote, design: .monospaced))
+                    .accessibilityIdentifier("inferredSender-\(address)")
+            }
+        } header: {
+            Text("Funded by, according to \(explorerHost)")
+        } footer: {
+            Text(Self.fundingWarning)
+        }
+    }
+
+    private func summarySection(_ parsed: PersonImport) -> some View {
+        Section {
+            if let payTo = parsed.payTo {
+                Text(payTo.derivesFreshAddresses ? "Fresh address each payment" : "Uses this same address each time")
+                    .accessibilityIdentifier("personPayToSummary")
+            }
+            if forSigning {
+                Text(parsed.signerKey != nil ? "Can approve shared payments" : "Ask for their signer key or Winnow card")
+                    .accessibilityIdentifier("personSignerSummary")
+            }
+        }.font(.footnote).foregroundStyle(.secondary)
+    }
+
+    private var saveSection: some View {
+        Section {
+            Button(saving ? "Saving…" : "Save") { save() }
+                .accessibilityIdentifier("savePersonButton").disabled(!canSave)
         }
     }
 

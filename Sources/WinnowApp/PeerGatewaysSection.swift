@@ -20,48 +20,16 @@ struct PeerGatewaysSection: View {
                 Text("Manual").tag(PeerGatewaySettings.Mode.manual)
             }
             .accessibilityIdentifier("gatewayRoutingMode")
-            if mode == .manual {
-                ForEach(PeerNetwork.allCases, id: \.self) { network in
-                    Toggle(network.rawValue == "i2p" ? "I2P peers" : "\(network.rawValue.capitalized) peers", isOn: Binding(
-                        get: { networks.contains(network) },
-                        set: { if $0 { networks.insert(network) } else { networks.remove(network) } }
-                    ))
-                    .accessibilityIdentifier("peerType_\(network.rawValue)")
-                }
-                if networks.contains(.tor) {
-                    TextField("Tor SOCKS gateway — host:port", text: $torAddress)
-                        .accessibilityIdentifier("torGatewayAddress")
-                }
-                if networks.contains(.i2p) {
-                    TextField("I2P SOCKS gateway — host:port", text: $i2pAddress)
-                        .accessibilityIdentifier("i2pGatewayAddress")
-                }
-            }
+            if mode == .manual { manualGatewayRows }
             Button(applying ? "Applying…" : "Apply routing") {
-                Task {
-                    applying = true
-                    defer { applying = false }
-                    do {
-                        var manual = model.gatewaySettings.manual
-                        if mode == .manual {
-                            manual = .init(networks: networks,
-                                torProxy: networks.contains(.tor) ? try PeerGatewayConfiguration.parseProxy(torAddress) : nil,
-                                i2pProxy: networks.contains(.i2p) ? try PeerGatewayConfiguration.parseProxy(i2pAddress) : nil)
-                        }
-                        try await model.setPeerGatewaySettings(.init(mode: mode, manual: manual))
-                        error = nil
-                    } catch { self.error = error.localizedDescription }
-                }
+                Task { await applyRouting() }
             }
             .accessibilityIdentifier("applyPeerRouting")
             if let error { Text(error).foregroundStyle(.red) }
             if model.discoveringGateways {
                 ProgressView("Checking Tailscale gateways…")
             } else {
-                if let tor = model.activePeerGateways.torProxy { LabeledContent("Active Tor gateway", value: address(tor)) }
-                if let i2p = model.activePeerGateways.i2pProxy { LabeledContent("Active I2P gateway", value: address(i2p)) }
-                if model.activePeerGateways.networks == [.clearnet] { Text("Using clearnet peers.").foregroundStyle(.secondary) }
-                if !model.activePeerGateways.isValid { Text("Gateway settings are invalid. Networking is offline.").foregroundStyle(.red) }
+                activeGatewayRows
             }
             Button("Check gateways and reconnect") { Task { await model.reconnect() } }
                 .disabled(model.discoveringGateways)
@@ -84,6 +52,48 @@ struct PeerGatewaysSection: View {
             torAddress = model.gatewaySettings.manual.torProxy.map(address) ?? ""
             i2pAddress = model.gatewaySettings.manual.i2pProxy.map(address) ?? ""
         }
+    }
+
+    @ViewBuilder
+    private var manualGatewayRows: some View {
+        ForEach(PeerNetwork.allCases, id: \.self) { network in
+            Toggle(network.rawValue == "i2p" ? "I2P peers" : "\(network.rawValue.capitalized) peers", isOn: Binding(
+                get: { networks.contains(network) },
+                set: { if $0 { networks.insert(network) } else { networks.remove(network) } }
+            ))
+            .accessibilityIdentifier("peerType_\(network.rawValue)")
+        }
+        if networks.contains(.tor) {
+            TextField("Tor SOCKS gateway — host:port", text: $torAddress)
+                .accessibilityIdentifier("torGatewayAddress")
+        }
+        if networks.contains(.i2p) {
+            TextField("I2P SOCKS gateway — host:port", text: $i2pAddress)
+                .accessibilityIdentifier("i2pGatewayAddress")
+        }
+    }
+
+    @ViewBuilder
+    private var activeGatewayRows: some View {
+        if let tor = model.activePeerGateways.torProxy { LabeledContent("Active Tor gateway", value: address(tor)) }
+        if let i2p = model.activePeerGateways.i2pProxy { LabeledContent("Active I2P gateway", value: address(i2p)) }
+        if model.activePeerGateways.networks == [.clearnet] { Text("Using clearnet peers.").foregroundStyle(.secondary) }
+        if !model.activePeerGateways.isValid { Text("Gateway settings are invalid. Networking is offline.").foregroundStyle(.red) }
+    }
+
+    private func applyRouting() async {
+        applying = true
+        defer { applying = false }
+        do {
+            var manual = model.gatewaySettings.manual
+            if mode == .manual {
+                manual = .init(networks: networks,
+                    torProxy: networks.contains(.tor) ? try PeerGatewayConfiguration.parseProxy(torAddress) : nil,
+                    i2pProxy: networks.contains(.i2p) ? try PeerGatewayConfiguration.parseProxy(i2pAddress) : nil)
+            }
+            try await model.setPeerGatewaySettings(.init(mode: mode, manual: manual))
+            error = nil
+        } catch { self.error = error.localizedDescription }
     }
 
     private func address(_ endpoint: PeerEndpoint) -> String {

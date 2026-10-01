@@ -145,25 +145,13 @@ struct SendView: View {
             }
             .disabled(sending)
             // Each step starts at the top, including after editing a long form.
-            .id(sentTxid != nil ? "sent" : preview != nil ? "review" : "form")
-            .navigationTitle(sentTxid != nil ? "Payment" : preview != nil ? "Review payment" : "Send")
+            .id(stepID)
+            .navigationTitle(navigationTitle)
             .navigationBarTitleDisplayMode(.inline)
             // iPad and hardware keyboards can supply Return even for a
             // decimal pad. End editing just as the accessory Done button does.
             .onSubmit { focusedField = nil }
-            .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") { focusedField = nil }
-                        .accessibilityIdentifier("sendKeyboardDone")
-                }
-                if presentedAsSheet {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button(sentTxid == nil ? "Cancel" : "Done") { dismiss() }
-                            .accessibilityIdentifier("closeSendButton")
-                    }
-                }
-            }
+            .toolbar { toolbarItems }
             .sheet(isPresented: $showLightning) {
                 if let controller = model.lightning { LightningInvoiceSendView(controller: controller) }
             }
@@ -173,13 +161,7 @@ struct SendView: View {
                     destination = ""
                 }
             }
-            .sheet(item: $approval, onDismiss: reset) { approval in
-                if (try? model.vault(for: approval.record).isScriptPath) == true {
-                    ApprovalView(recordID: approval.record.id, initialPSBT: approval.psbt)
-                } else {
-                    MuSig2SignView(recordID: approval.record.id, initialPSBT: approval.psbt)
-                }
-            }
+            .sheet(item: $approval, onDismiss: reset) { approvalView($0) }
             .task(id: feeInputs) {
                 let inputs = reviewInputs
                 resolvedRate = await model.resolvedFeeRate(
@@ -208,6 +190,34 @@ struct SendView: View {
                 else { return }
                 relayProgress.confirmedHeight = entry.height
             }
+        }
+    }
+
+    private var stepID: String { sentTxid != nil ? "sent" : preview != nil ? "review" : "form" }
+
+    private var navigationTitle: String { sentTxid != nil ? "Payment" : preview != nil ? "Review payment" : "Send" }
+
+    @ToolbarContentBuilder
+    private var toolbarItems: some ToolbarContent {
+        ToolbarItemGroup(placement: .keyboard) {
+            Spacer()
+            Button("Done") { focusedField = nil }
+                .accessibilityIdentifier("sendKeyboardDone")
+        }
+        if presentedAsSheet {
+            ToolbarItem(placement: .cancellationAction) {
+                Button(sentTxid == nil ? "Cancel" : "Done") { dismiss() }
+                    .accessibilityIdentifier("closeSendButton")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func approvalView(_ approval: Approval) -> some View {
+        if (try? model.vault(for: approval.record).isScriptPath) == true {
+            ApprovalView(recordID: approval.record.id, initialPSBT: approval.psbt)
+        } else {
+            MuSig2SignView(recordID: approval.record.id, initialPSBT: approval.psbt)
         }
     }
 

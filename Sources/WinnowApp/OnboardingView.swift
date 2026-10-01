@@ -123,28 +123,7 @@ private struct ImportBundleView: View {
     var body: some View {
         NavigationStack {
             Form {
-                if !imported {
-                    Section {
-                        TextEditor(text: $json)
-                            .font(.system(.caption, design: .monospaced))
-                            // Keep real bundles scrollable inside the editor. A
-                            // minimum-only height lets TextEditor expand to the
-                            // full JSON and can push the import action thousands
-                            // of points off-screen.
-                            .frame(height: 160)
-                            .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
-                            .accessibilityIdentifier("importJSONEditor")
-                        Button("Paste from clipboard") {
-                            json = model.pasteboardText() ?? ""
-                        }
-                        .accessibilityIdentifier("importPasteButton")
-                    } header: {
-                        Text("Paste your backup file (JSON)")
-                    } footer: {
-                        Text("Use the file saved from Back up wallet. Keep your recovery words too. Backups from other wallets may not include every coin type.")
-                    }
-                }
+                if !imported { pasteSection }
                 if importing.busy {
                     Section { BusyIndicator(text: "Importing and verifying…") }
                 }
@@ -153,36 +132,10 @@ private struct ImportBundleView: View {
                 }
                 if report != nil || imported
                     || model.walletID != nil {
-                    if let report {
-                        Section("Verification report") {
-                            LabeledContent("Scanned from block", value: "\(report.scannedFromHeight)")
-                            if let to = report.scannedToHeight {
-                                LabeledContent("Scanned to block", value: "\(to)")
-                            }
-                            LabeledContent("Claimed UTXOs confirmed", value: "\(report.confirmedUTXOs.count)")
-                            LabeledContent("Claimed but spent since", value: "\(report.spentSinceBundle.count)")
-                            LabeledContent("Discovered since bundle", value: "\(report.discoveredUTXOs.count)")
-                            if !report.matchesBundle {
-                                Text("Some claimed UTXOs were already spent — the bundle was stale or wrong. The chain won; check the report above.")
-                                    .foregroundStyle(.orange)
-                                    .font(.footnote)
-                            }
-                        }
-                        .accessibilityIdentifier("importReportSection")
-                    }
-                    Section {
-                        Button("Continue") {
-                            model.finishOnboarding()
-                            dismiss()
-                        }
-                        .accessibilityIdentifier("importContinueButton")
-                    }
+                    if let report { reportSection(report) }
+                    continueSection
                 } else {
-                    Section {
-                        Button("Import and verify") { importBundle() }
-                            .accessibilityIdentifier("importVerifyButton")
-                            .disabled(json.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || importing.busy)
-                    }
+                    importSection
                 }
             }
             .navigationTitle("Import wallet")
@@ -198,6 +151,65 @@ private struct ImportBundleView: View {
                 if phase == .background { clearSensitiveImport() }
             }
             .onDisappear { clearSensitiveImport() }
+        }
+    }
+
+    private var pasteSection: some View {
+        Section {
+            TextEditor(text: $json)
+                .font(.system(.caption, design: .monospaced))
+                // Keep real bundles scrollable inside the editor. A
+                // minimum-only height lets TextEditor expand to the
+                // full JSON and can push the import action thousands
+                // of points off-screen.
+                .frame(height: 160)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .accessibilityIdentifier("importJSONEditor")
+            Button("Paste from clipboard") {
+                json = model.pasteboardText() ?? ""
+            }
+            .accessibilityIdentifier("importPasteButton")
+        } header: {
+            Text("Paste your backup file (JSON)")
+        } footer: {
+            Text("Use the file saved from Back up wallet. Keep your recovery words too. Backups from other wallets may not include every coin type.")
+        }
+    }
+
+    private func reportSection(_ report: ImportReport) -> some View {
+        Section("Verification report") {
+            LabeledContent("Scanned from block", value: "\(report.scannedFromHeight)")
+            if let to = report.scannedToHeight {
+                LabeledContent("Scanned to block", value: "\(to)")
+            }
+            LabeledContent("Claimed UTXOs confirmed", value: "\(report.confirmedUTXOs.count)")
+            LabeledContent("Claimed but spent since", value: "\(report.spentSinceBundle.count)")
+            LabeledContent("Discovered since bundle", value: "\(report.discoveredUTXOs.count)")
+            if !report.matchesBundle {
+                Text("Some claimed UTXOs were already spent — the bundle was stale or wrong. The chain won; check the report above.")
+                    .foregroundStyle(.orange)
+                    .font(.footnote)
+            }
+        }
+        .accessibilityIdentifier("importReportSection")
+    }
+
+    private var continueSection: some View {
+        Section {
+            Button("Continue") {
+                model.finishOnboarding()
+                dismiss()
+            }
+            .accessibilityIdentifier("importContinueButton")
+        }
+    }
+
+    private var importSection: some View {
+        Section {
+            Button("Import and verify") { importBundle() }
+                .accessibilityIdentifier("importVerifyButton")
+                .disabled(json.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || importing.busy)
         }
     }
 

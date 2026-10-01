@@ -274,68 +274,20 @@ struct PaymentDetailView: View {
             if let entry {
                 Section { HistoryRow(entry: entry) }
                 ForEach(model.paymentRecipients(entry)) { recipient in
-                    Section {
-                        if let person = recipient.person { Text(person.name).font(.headline) }
-                        technical("Address") { CopyableTextBlock(text: recipient.address) }
-                        Text(satsText(recipient.amount))
-                        Button(recipient.person?.isSavedRecipient == true ? "Rename recipient" : "Save recipient") {
-                            editing = recipient
-                        }
-                        .accessibilityIdentifier("savePaymentRecipient-\(recipient.id)")
-                        .disabled(model.peopleStorageNotice != nil)
-                        if let person = recipient.person, person.isSavedRecipient {
-                            Button("Remove from saved recipients", role: .destructive) {
-                                Task {
-                                    do { try await model.updateRecipient(id: person.id, saved: false) }
-                                    catch { self.error = error.localizedDescription }
-                                }
-                            }
-                            .accessibilityIdentifier("removePaymentRecipient-\(recipient.id)")
-                        }
-                    }
+                    recipientSection(recipient)
                 }
                 let labeledOutputs = model.labeledReceiveOutputs(entry)
-                if !labeledOutputs.isEmpty {
-                    Section("Receive address labels") {
-                        ForEach(labeledOutputs) { output in
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text(output.label).font(.headline)
-                                technical("Address") { CopyableTextBlock(text: output.address) }
-                                Text(satsText(output.amount))
-                                Button("Edit address label") { editingReceiveLabel = output }
-                                    .accessibilityIdentifier("editPaymentReceiveLabel-\(output.id)")
-                            }
-                        }
-                        Text("These are your local notes about the addresses paid. They do not verify who sent the payment.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
+                if !labeledOutputs.isEmpty { receiveLabelsSection(labeledOutputs) }
                 if let notice = model.receiveLabelStorageNotice {
                     Text(notice).foregroundStyle(.orange)
                 }
                 if entry.received > 0 { senderSection(entry) }
-                if entry.rawTransaction == nil, entry.spent > 0 {
-                    Section {
-                        if loading || model.status.syncing { BusyIndicator(text: "Loading payment details…") }
-                        else { Button("Load payment details") { Task { await load() } } }
-                    }
-                }
+                if entry.rawTransaction == nil, entry.spent > 0 { loadDetailsSection }
                 if let error { Text(error).foregroundStyle(.red).accessibilityIdentifier("paymentDetailsError") }
                 if model.advancedMode {
-                    Section("Transaction") {
-                        CopyableIdentifier(value: txid.displayHex, accessibilityID: "copyTransactionIDButton")
-                        WarnedExplorerLink(title: "View transaction", url: model.esploraTransactionURL(txid),
-                                           exposedItem: "transaction ID", accessibilityID: "explorerTransactionButton")
-                        if model.status.feeBumpableTxids.contains(txid) {
-                            Button("Bump fee") { showFeeBump = true }.accessibilityIdentifier("bumpFeeButton")
-                        }
-                    }
+                    transactionSection
                 } else {
-                    Section {
-                        technical("Transaction ID") {
-                            CopyableIdentifier(value: txid.displayHex, accessibilityID: "copyTransactionIDButton")
-                        }
-                    }
+                    transactionIDSection
                 }
             } else { Text("This payment is no longer in the wallet’s history.") }
         }
@@ -362,6 +314,65 @@ struct PaymentDetailView: View {
         .sheet(isPresented: $showFeeBump) { FeeBumpView(txid: txid) }
         .task(id: model.status.syncing) {
             if !model.status.syncing { await load() }
+        }
+    }
+
+    private func recipientSection(_ recipient: AppModel.PaymentRecipient) -> some View {
+        Section {
+            if let person = recipient.person { Text(person.name).font(.headline) }
+            technical("Address") { CopyableTextBlock(text: recipient.address) }
+            Text(satsText(recipient.amount))
+            Button(recipient.person?.isSavedRecipient == true ? "Rename recipient" : "Save recipient") {
+                editing = recipient
+            }
+            .accessibilityIdentifier("savePaymentRecipient-\(recipient.id)")
+            .disabled(model.peopleStorageNotice != nil)
+            if let person = recipient.person, person.isSavedRecipient {
+                Button("Remove from saved recipients", role: .destructive) { removeSavedRecipient(person) }
+                    .accessibilityIdentifier("removePaymentRecipient-\(recipient.id)")
+            }
+        }
+    }
+
+    private func receiveLabelsSection(_ labeledOutputs: [AppModel.LabeledReceiveOutput]) -> some View {
+        Section("Receive address labels") {
+            ForEach(labeledOutputs) { output in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(output.label).font(.headline)
+                    technical("Address") { CopyableTextBlock(text: output.address) }
+                    Text(satsText(output.amount))
+                    Button("Edit address label") { editingReceiveLabel = output }
+                        .accessibilityIdentifier("editPaymentReceiveLabel-\(output.id)")
+                }
+            }
+            Text("These are your local notes about the addresses paid. They do not verify who sent the payment.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var loadDetailsSection: some View {
+        Section {
+            if loading || model.status.syncing { BusyIndicator(text: "Loading payment details…") }
+            else { Button("Load payment details") { Task { await load() } } }
+        }
+    }
+
+    private var transactionSection: some View {
+        Section("Transaction") {
+            CopyableIdentifier(value: txid.displayHex, accessibilityID: "copyTransactionIDButton")
+            WarnedExplorerLink(title: "View transaction", url: model.esploraTransactionURL(txid),
+                               exposedItem: "transaction ID", accessibilityID: "explorerTransactionButton")
+            if model.status.feeBumpableTxids.contains(txid) {
+                Button("Bump fee") { showFeeBump = true }.accessibilityIdentifier("bumpFeeButton")
+            }
+        }
+    }
+
+    private var transactionIDSection: some View {
+        Section {
+            technical("Transaction ID") {
+                CopyableIdentifier(value: txid.displayHex, accessibilityID: "copyTransactionIDButton")
+            }
         }
     }
 
@@ -406,6 +417,13 @@ struct PaymentDetailView: View {
                     .accessibilityIdentifier("saveSenderButton")
                     .disabled(model.peopleStorageNotice != nil)
             }
+        }
+    }
+
+    private func removeSavedRecipient(_ person: PersonRecord) {
+        Task {
+            do { try await model.updateRecipient(id: person.id, saved: false) }
+            catch { self.error = error.localizedDescription }
         }
     }
 
