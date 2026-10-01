@@ -217,16 +217,38 @@ extension AppModel {
         try await exclusively(.spending, repairingImport: true) { try await restorePortableContents(contents) }
     }
 
+    /// Opens a recovery file with the phrase of the wallet already here, for
+    /// instance one restored from iCloud, so nothing has to be typed.
+    func restorePortableLightningFileForThisWallet(_ file: Data) async throws -> ImportReport? {
+        try await exclusively(.spending, repairingImport: true) { try await restorePortableFileForThisWallet(file) }
+    }
+
+    private func restorePortableFileForThisWallet(_ file: Data) async throws -> ImportReport? {
+        guard let wallet else { throw AppError.noWallet }
+        let selectedNetwork = network
+        try await authenticateSensitiveAction(reason: "Restore encrypted Bitcoin and Lightning recovery keys")
+        defer { keychainAuthentication.revoke() }
+        guard let words = try await wallet.recoveryBundle(includeMnemonic: true).mnemonic else { throw WalletError.mnemonicUnavailable }
+        let contents = try PortableLightningBackup.restore(file, words: words, network: selectedNetwork)
+        let state = try PortableLightningState.decode(contents.appState, for: contents.bundle)
+        return try await installPortableContents(state, bundle: contents.bundle, network: selectedNetwork)
+    }
+
     private func restorePortableContents(_ contents: CloudBackupContents) async throws -> ImportReport? {
         let state = try PortableLightningState.decode(contents.appState, for: contents.bundle)
         let selectedNetwork = network
         guard contents.bundle.network == selectedNetwork.rawValue else { throw AppError.wrongNetwork(contents.bundle.network) }
         try await authenticateSensitiveAction(reason: "Restore encrypted Bitcoin and Lightning recovery keys")
         defer { keychainAuthentication.revoke() }
+        return try await installPortableContents(state, bundle: contents.bundle, network: selectedNetwork)
+    }
+
+    private func installPortableContents(_ state: PortableLightningState, bundle: ImportBundle,
+                                         network selectedNetwork: BitcoinNetwork) async throws -> ImportReport? {
         try Task.checkCancellation()
         guard network == selectedNetwork else { throw CancellationError() }
         if walletID != nil, !hasPendingWalletImport {
-            try await restorePortableContext(state, onto: contents.bundle)
+            try await restorePortableContext(state, onto: bundle)
             return nil
         }
         // Commit the separate recovery-only journal before installing Bitcoin
@@ -234,9 +256,9 @@ extension AppModel {
         // an active channel; retry selects the same durable recovery namespace,
         // and an interrupted import of this wallet finishes with the same file.
         let resuming = walletID != nil
-        try requireWalletImportAllowed(contents.bundle, resuming: resuming)
-        try await restoreLightningPayload(state.lightning, descriptor: contents.bundle.descriptor)
-        let report = try await importWallet(bundle: contents.bundle, authenticate: false, resumingImport: resuming) { restoredID in
+        try requireWalletImportAllowed(bundle, resuming: resuming)
+        try await restoreLightningPayload(state.lightning, descriptor: bundle.descriptor)
+        let report = try await importWallet(bundle: bundle, authenticate: false, resumingImport: resuming) { restoredID in
             guard self.walletID == restoredID, self.network == selectedNetwork else { throw CancellationError() }
             try await self.applyCloudAppState(state.context)
         }

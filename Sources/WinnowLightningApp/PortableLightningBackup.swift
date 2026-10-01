@@ -3,33 +3,51 @@ import Foundation
 import LightningCore
 import WalletCore
 
-/// Reuses Winnow's authenticated recovery container. A separate random
-/// 24-word phrase unwraps the file without an Apple Account or device key.
+/// Reuses Winnow's authenticated recovery container, keyed by the wallet's
+/// own recovery phrase. The file adds channel keys to the wallet those words
+/// already restore, so there is no second phrase to keep. Files saved by
+/// Winnow 0.8.0 still open with the separate 24-word phrase they were made with.
 @MainActor enum PortableLightningBackup {
-    struct Prepared {
-        let file: Data
-        let phrase: String
+    static func prepare(_ contents: CloudBackupContents) throws -> Data {
+        guard let words = contents.bundle.mnemonic else { throw WalletError.mnemonicUnavailable }
+        let id = UUID()
+        let key = try walletKey(normalized(words), id: id, network: contents.bundle.network)
+        return try CloudWalletBackup.create(bundle: contents.bundle, appState: contents.appState, id: id, key: key).encoded()
     }
-    static func prepare(_ contents: CloudBackupContents) throws -> Prepared {
-        let entropy = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }
-        let phrase = try BIP39.mnemonic(entropy: entropy), id = UUID()
-        let key = try wrappingKey(phrase, id: id, network: contents.bundle.network)
-        let backup = try CloudWalletBackup.create(bundle: contents.bundle, appState: contents.appState, id: id, key: key)
-        return try Prepared(file: backup.encoded(), phrase: phrase)
-    }
-    static func restore(_ file: Data, phrase: String, network: BitcoinNetwork) throws -> CloudBackupContents {
+    /// `words` is the recovery phrase of the wallet that saved the file, or
+    /// the separate phrase of a file saved by Winnow 0.8.0.
+    static func restore(_ file: Data, words: String, network: BitcoinNetwork) throws -> CloudBackupContents {
         let backup = try CloudWalletBackup.decode(file)
         guard backup.network == network.rawValue else { throw WalletError.invalidBundle("Recovery file belongs to another network.") }
-        let key = try wrappingKey(phrase, id: backup.id, network: backup.network)
-        let bundle = try backup.restoredBundle(key: key), appState = try backup.restoredAppState(key: key)
-        _ = try PortableLightningState.decode(appState, for: bundle)
-        return CloudBackupContents(bundle: bundle, appState: appState)
-    }
-    private static func wrappingKey(_ phrase: String, id: UUID, network: String) throws -> SymmetricKey {
+        let phrase = normalized(words)
         try BIP39.validate(mnemonic: phrase)
-        guard phrase.split(whereSeparator: \.isWhitespace).count == 24 else { throw WalletError.invalidBundle("Use this file's separate 24-word recovery phrase.") }
-        return try HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: BIP39.seed(mnemonic: phrase)),
-            salt: Data(id.uuidString.utf8), info: Data("Winnow Lightning portable recovery v1|\(network)".utf8), outputByteCount: 32)
+        for key in try keys(phrase, id: backup.id, network: backup.network) {
+            guard let bundle = try? backup.restoredBundle(key: key) else { continue }
+            let appState = try backup.restoredAppState(key: key)
+            _ = try PortableLightningState.decode(appState, for: bundle)
+            return CloudBackupContents(bundle: bundle, appState: appState)
+        }
+        throw WalletError.invalidBundle("That phrase does not open this file. Use the recovery phrase of the wallet that saved it.")
+    }
+    private static func keys(_ phrase: String, id: UUID, network: String) throws -> [SymmetricKey] {
+        let wallet = try walletKey(phrase, id: id, network: network)
+        guard phrase.split(separator: " ").count == 24 else { return [wallet] }
+        return [wallet, try legacyKey(phrase, id: id, network: network)]
+    }
+    private static func normalized(_ words: String) -> String {
+        words.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+    private static func walletKey(_ phrase: String, id: UUID, network: String) throws -> SymmetricKey {
+        try derive(phrase, id: id, info: "Winnow Lightning recovery file v2 wallet phrase|\(network)")
+    }
+    /// Winnow 0.8.0 wrapped each file with its own random 24-word phrase.
+    static func legacyKey(_ phrase: String, id: UUID, network: String) throws -> SymmetricKey {
+        try derive(phrase, id: id, info: "Winnow Lightning portable recovery v1|\(network)")
+    }
+    private static func derive(_ phrase: String, id: UUID, info: String) throws -> SymmetricKey {
+        let seed = try BIP39.seed(mnemonic: phrase)
+        return HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: seed), salt: Data(id.uuidString.utf8),
+            info: Data(info.utf8), outputByteCount: 32)
     }
 }
 
