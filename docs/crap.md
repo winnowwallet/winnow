@@ -13,8 +13,10 @@ compiler supplies declaration ranges. Package executable lines come from LLVM
 LCOV; app executable lines come from Xcode's retained `xccov` result archives.
 Covered lines are unioned across package tests, app tests and the recorded UI journey.
 Named nested functions are measured separately and their lines do not inflate
-the enclosing method. Accessors and standalone closures are outside the
-SwiftLint function/initializer rule; the report states this limitation.
+the enclosing method. A `defer` body is not a named function: SwiftLint counts
+its decisions in the enclosing method, and its lines stay there too.
+Accessors and standalone closures are outside the SwiftLint
+function/initializer rule; the report states this limitation.
 
 Unmeasured functions retain `coverage: null` and `crap: null`. The gate uses
 the conservative bound at zero coverage, never assuming missing tests passed.
