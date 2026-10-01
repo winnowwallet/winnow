@@ -411,7 +411,13 @@ final class LightningAppUITests: XCTestCase {
         // iPadOS 18 exposes the top tab strip outside the TabBar hierarchy.
         let button = app.buttons[name].firstMatch
         XCTAssertTrue(button.appears(within: 60), app.debugDescription)
-        button.tap()
+        // A tap while a sheet is still dismissing can be dropped: the tab is
+        // chosen only once it reports itself selected.
+        for _ in 0..<3 where !button.isSelected {
+            button.tap()
+            _ = button.wait(for: \.isSelected, toEqual: true, timeout: 5)
+        }
+        XCTAssertTrue(button.isSelected, "\(name) tab was not selected: \(app.debugDescription)")
     }
     private func launch(_ app: XCUIApplication, role: String, fresh: Bool) throws {
         let run = try XCTUnwrap(setup["run"] as? String)
