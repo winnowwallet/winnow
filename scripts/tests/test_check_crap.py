@@ -39,11 +39,26 @@ class CrapEvidenceTests(unittest.TestCase):
             runs = iter(results(1))
             with self.assertRaises(subprocess.CalledProcessError):
                 parse('/tmp/a.swift')
-            runs = iter(results(-11, -11, -11, 0))
+            runs = iter(results(-11, -11, -11, -11, -11, 0))
             with self.assertRaises(subprocess.CalledProcessError) as caught:
                 parse('/tmp/a.swift')
             self.assertEqual(caught.exception.returncode, -11)
-            self.assertEqual(next(runs).returncode, 0, 'three crashes are the limit')
+            self.assertEqual(next(runs).returncode, 0, 'five crashes are the limit')
+
+    def test_a_crash_prints_the_end_of_the_compilers_report(self):
+        from unittest.mock import patch
+        import io
+        import subprocess
+        report = '\n'.join(f'frame {n}' for n in range(60))
+        runs = iter([subprocess.CompletedProcess([], -11, stdout='', stderr=report),
+                     subprocess.CompletedProcess([], 0, stdout='dump', stderr='')])
+        parse, printed = TOOL['parse_dump'], io.StringIO()
+        with patch.dict(parse.__globals__['subprocess'].__dict__, run=lambda *a, **k: next(runs)), \
+                patch.object(parse.__globals__['sys'], 'stderr', printed):
+            self.assertEqual(parse('/tmp/a.swift'), 'dump')
+        self.assertIn('died by signal 11 (attempt 1 of 5)', printed.getvalue())
+        self.assertIn('  frame 59', printed.getvalue())
+        self.assertNotIn('frame 19\n', printed.getvalue(), 'only the end of a long report is printed')
 
     def test_entry_path_and_exact_twelve_boundary(self):
         uncovered = self.row(2, {3: 0, 4: 0, 7: 0})
