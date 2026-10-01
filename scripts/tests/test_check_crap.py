@@ -115,6 +115,26 @@ class CrapEvidenceTests(unittest.TestCase):
             self.assertEqual(path.read_text(), source)
         self.assertEqual(dumped, [source.replace(': ChainMonitor', ' ' * 14)])
 
+    def test_declarations_leave_defer_bodies_to_their_method(self):
+        from unittest.mock import patch
+        source = 'func example(x: Int) {\n    defer { if x > 0 { print(x) } }\n    func inner() {}\n}\n'
+
+        def dump(input):
+            return (f'  (func_decl decl_context=0x1 range=[{input}:1:1 - line:4:1] "example(x:)"\n'
+                    f'    (brace_stmt implicit range=[{input}:1:22 - line:4:1]\n'
+                    f'      (defer_stmt range=[{input}:2:5 - line:2:35]\n'
+                    f'        (func_decl decl_context=0x2 implicit range=[{input}:2:5 - line:2:35] "$defer()" '
+                    'result="()" thrown_type="<null>"\n'
+                    f'      (func_decl decl_context=0x2 range=[{input}:3:5 - line:3:19] "inner()" thrown_type="<null>"\n')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'Example.swift'
+            path.write_text(source)
+            with patch.dict(TOOL['declarations'].__globals__, parse_dump=dump):
+                self.assertEqual(TOOL['declarations'](path), (path, [
+                    {'start': 1, 'column': 1, 'end': 4, 'name': 'example(x:)'},
+                    {'start': 3, 'column': 5, 'end': 3, 'name': 'inner()'},
+                ]))
+
     def test_entry_path_and_exact_twelve_boundary(self):
         uncovered = self.row(2, {3: 0, 4: 0, 7: 0})
         self.assertEqual(uncovered['complexity'], 3)
