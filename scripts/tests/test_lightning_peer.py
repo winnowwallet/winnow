@@ -45,6 +45,37 @@ class PeerStartupTests(unittest.TestCase):
         with patch('sys.platform', 'linux'), self.assertRaises(TimeoutError):
             receive(peer, self.log)
 
+    def test_only_a_stock_daemons_hsm_socket_failure_retries_a_timed_out_scenario(self):
+        check = self.module['check_peer']
+        broken = ('2026-09-30T23:39:50.224Z **BROKEN** 031b-closingd-chan#1: STATUS_FAIL_HSM_IO: '
+                  'Bad hsm_sign_mutual_close_tx reply \n')
+        for logs, retried in (((broken, ''), True), (('', broken), True),
+                              ((broken + '**BROKEN** 031b-chan#1: Funding transaction spent\n', ''), False),
+                              (('', ''), False), ((broken.replace('STATUS_FAIL_HSM_IO', 'STATUS_FAIL_PEER_IO'), ''), False)):
+            with self.subTest(logs=logs):
+                calls = []
+                def run(mode, evidence, channel_format='staticRemoteKey', offers=False):
+                    calls.append(evidence)
+                    if len(calls) == 1:
+                        (evidence / 'cln.log').write_text(logs[0])
+                        (evidence / 'recipient-cln.log').write_text(logs[1])
+                        raise TimeoutError('Swift peer did not complete a protocol operation')
+                    (evidence / 'opening-receipt.json').write_text(json.dumps({'result': 'passed'}))
+                evidence = self.root / f'hsm-{len(logs[0])}-{len(logs[1])}-{retried}'
+                with patch('sys.platform', 'darwin'), patch.dict(check.__globals__, run_peer=run):
+                    if retried:
+                        check('cooperative', evidence)
+                        history = json.loads((evidence / 'attempts.json').read_text())
+                        self.assertEqual([item['result'] for item in history], ['reference-hsm-failure', 'passed'])
+                    else:
+                        with self.assertRaises(TimeoutError):
+                            check('cooperative', evidence)
+                        self.assertEqual(len(calls), 1)
+        with patch('sys.platform', 'linux'), patch.dict(check.__globals__, run_peer=Mock(side_effect=TimeoutError())):
+            evidence = self.root / 'linux'
+            (self.root / 'linux').mkdir()
+            self.assertFalse(self.module['reference_hsm_failure'](evidence))
+
     def test_protocol_rejection_and_success_are_not_reclassified(self):
         peer = Mock()
         peer.receive.side_effect = AssertionError('peer rejected protocol')
