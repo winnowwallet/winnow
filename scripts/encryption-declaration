@@ -13,6 +13,7 @@ Needs ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH.
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import runpy
 import subprocess
@@ -53,6 +54,9 @@ def load_answers(path):
     answers = json.loads(Path(path).read_text())
     if answers.get('approved') is not True:
         raise SystemExit(f'{path} is not approved; review it against docs/release/encryption-inventory.md first')
+    reviewer, reviewed = answers.get('reviewed_by'), answers.get('reviewed_on')
+    if not isinstance(reviewer, str) or not reviewer.strip() or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', str(reviewed)):
+        raise SystemExit(f'{path}: an approval names reviewed_by and reviewed_on (YYYY-MM-DD)')
     attributes = {}
     for key, name in ANSWERS.items():
         if not isinstance(answers.get(key), bool):

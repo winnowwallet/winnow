@@ -64,14 +64,13 @@ class EncryptionDeclarationTests(unittest.TestCase):
         return {'id': 'd1', 'attributes': {**attributes, 'appDescription': 'A wallet.',
                                            'appEncryptionDeclarationState': state, 'exempt': exempt}}
 
-    def test_the_committed_questionnaire_is_not_yet_approved(self):
-        committed = json.loads((ROOT / 'docs/release/encryption-questionnaire.json').read_text())
-        self.assertIs(committed['approved'], False)
-        with self.assertRaises(SystemExit):
-            DECLARE['load_answers'](ROOT / 'docs/release/encryption-questionnaire.json')
+    def test_the_committed_questionnaire_is_a_complete_reviewed_answer(self):
+        attributes = DECLARE['load_answers'](ROOT / 'docs/release/encryption-questionnaire.json')
+        self.assertEqual(set(attributes), set(DECLARE['ANSWERS'].values()) | {'appDescription'})
 
     def test_an_unapproved_or_unanswered_questionnaire_sends_nothing(self):
-        for change in ({'approved': False}, {'available_on_french_store': None},
+        for change in ({'approved': False}, {'reviewed_by': None}, {'reviewed_by': ' '}, {'reviewed_on': None},
+                       {'reviewed_on': 'yesterday'}, {'available_on_french_store': None},
                        {'contains_third_party_cryptography': 'yes'}, {'app_description': ''},
                        {'app_description': 'x' * 301}):
             with self.subTest(change=change):
