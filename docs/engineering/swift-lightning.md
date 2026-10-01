@@ -65,9 +65,12 @@ The reference peers are built from pinned sources by
 `scripts/ci-lightning-references` (posix4e/lightning-reference). The
 independent-peer steps and the recorded journey run in
 `.github/workflows/ci-lightning.yml`, which `validation` requires; a tree that
-already passed there is not run again. Unpatched Core Lightning on macOS can
-lose its channel daemon before `funding_signed` (upstream #9564). Only that
-exact failure is retried, with up to five fresh fixtures.
+already passed there is not run again. Core Lightning on macOS can hand a
+subdaemon an unreadable socket (upstream #9564). The peer scripts retry only
+that exact failure, with up to five fresh fixtures. The recorded journey, whose
+Core Lightning carries the HSM fix, reruns once from a fresh fixture when a
+channel daemon loses its peer socket while the app stays connected. Every
+other failure is final.
 
 CRAP (docs/crap.md) covers Lightning like every other source directory.
 

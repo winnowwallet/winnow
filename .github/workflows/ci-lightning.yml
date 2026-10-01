@@ -143,6 +143,9 @@ jobs:
             ${{ runner.temp }}/lightning-ui/manifest.json
             ${{ runner.temp }}/lightning-ui/journey.json
             ${{ runner.temp }}/lightning-ui/fixture/evidence
+            ${{ runner.temp }}/lightning-ui/attempt-*/fixture/evidence
+            ${{ runner.temp }}/lightning-ui/attempt-*/screenshots
+            ${{ runner.temp }}/lightning-ui/attempt-*/*.log
           retention-days: 14
 
       - name: Record this tree as passing

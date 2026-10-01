@@ -1,17 +1,81 @@
 #!/usr/bin/env python3
 """Build once, record the real Lightning UI journey, retain independent evidence."""
 import argparse
+from datetime import datetime, timedelta
 import hashlib
 import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import signal
 import subprocess
 import sys
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
+# The UI's Core Lightning carries the reviewed HSM fd-lifetime fix (#9564),
+# but its channel daemons can still receive an unreadable peer socket on
+# macOS. A journey that fails with exactly that reference failure reruns once
+# from a fresh fixture; the failed attempt is retained beside it.
+JOURNEY_ATTEMPTS = 2
+ATTEMPT_FILES = ('fixture', 'fixture.log', 'journey.mp4', 'video.log', 'ui-tests.log', 'LightningUI.xcresult', 'screenshots')
+LOST = re.compile(r'^(\S+) INFO\s+([0-9a-f]{66})-(openingd|channeld|closingd)-chan#(\d+): Peer connection lost$')
+DISCONNECTED = re.compile(r'^(\S+) DEBUG\s+([0-9a-f]{66})-lightningd: peer_disconnected$')
+HSM_IO = 'STATUS_FAIL_HSM_IO: '
+
+
+def reference_socket_failure(evidence):
+    """A stock CLN channel daemon lost its peer socket and died while the
+    app's connection stayed up (or lost its HSM), and nothing else broke."""
+    if sys.platform != 'darwin':
+        return False
+    found = False
+    for log in sorted(evidence.glob('*cln*.log')):
+        lines = log.read_text(errors='replace').splitlines()
+        if any('**BROKEN**' in line and HSM_IO not in line for line in lines):
+            return False
+        found |= any('**BROKEN**' in line for line in lines)
+        for index, line in enumerate(lines):
+            if not (lost := LOST.match(line)):
+                continue
+            when, peer, daemon, channel = lost.groups()
+            if not any(f'{peer}-chan#{channel}: Owning subdaemon {daemon} died' in later for later in lines[index + 1:index + 4]):
+                continue
+            if app_disconnected(lines[index:], peer, datetime.fromisoformat(when)):
+                return False
+            found = True
+    return found
+
+
+def app_disconnected(lines, peer, moment):
+    """lightningd saw the app's connection drop within five seconds."""
+    for line in lines:
+        if (closed := DISCONNECTED.match(line)) and closed.group(2) == peer:
+            if timedelta(0) <= datetime.fromisoformat(closed.group(1)) - moment <= timedelta(seconds=5):
+                return True
+    return False
+
+
+def retain_attempt(results, attempt):
+    kept = results / f'attempt-{attempt}'
+    kept.mkdir()
+    for path in [results / name for name in ATTEMPT_FILES] + sorted(results.glob('boot-*.log')) + sorted(results.glob('shutdown-*.log')):
+        if path.exists():
+            path.rename(kept / path.name)
+    return kept
+
+
+def with_reference_retry(results, journey, attempts=JOURNEY_ATTEMPTS):
+    for attempt in range(1, attempts + 1):
+        try:
+            return journey()
+        except subprocess.CalledProcessError:
+            if attempt == attempts or not reference_socket_failure(results / 'fixture/evidence'):
+                raise
+            kept = retain_attempt(results, attempt)
+            print(f'Stock CLN lost a channel daemon socket; rerunning the journey with a fresh fixture '
+                  f'({attempt + 1} of {attempts}); failed attempt retained in {kept}', flush=True)
 
 
 def run(args, log, env=None, timeout=None):
@@ -79,6 +143,53 @@ def stop(process, sig=signal.SIGTERM):
             raise
 
 
+def record_journey(results, spec, simulator, info, derived):
+    """One attempt: a fresh fixture, a recording, every journey test and the receipts."""
+    fixture = video = None
+    try:
+        with (results / 'fixture.log').open('w') as log:
+            fixture = subprocess.Popen([str(ROOT / 'scripts/lightning-ui-fixture'), str(results / 'fixture'), '--simulator', simulator,
+                                        '--bundle', info['CFBundleIdentifier']],
+                                       cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+        def fixture_ready():
+            assert fixture.poll() is None, 'fixture exited'
+            return (results / 'fixture/connection.json').is_file()
+        wait(fixture_ready, 180)
+        # Fixture setup can take minutes; recording starts only after it, so
+        # onboarding and every financial action are captured.
+        video = start_recording(simulator, results)
+        print('Lightning UI recording acknowledged; starting XCTest', flush=True)
+        # This journey intentionally SIGKILLs the app. Xcode's verbose whole-
+        # simulator diagnostics can stall even after XCTest finishes; retain
+        # the result bundle, screenshots, video and peer logs without sysdiagnose.
+        run(['xcodebuild', 'test-without-building', '-xctestrun', str(spec),
+             '-derivedDataPath', str(derived),
+             '-destination', f'platform=iOS Simulator,id={simulator}', '-only-testing:WinnowAppLightningUITests/LightningAppUITests',
+             '-enableCodeCoverage', 'YES',
+             '-collect-test-diagnostics', 'never',
+             '-test-timeouts-enabled', 'YES', '-maximum-test-execution-time-allowance', '900',
+             '-resultBundlePath', str(results / 'LightningUI.xcresult')], results / 'ui-tests.log')
+        receipt = json.loads((results / 'fixture/evidence/receipt.json').read_text())
+        assert receipt['result'] == 'passed'
+        invoice_receipt = json.loads((results / 'fixture/evidence/bolt11-receipt.json').read_text())
+        assert invoice_receipt['result'] == 'passed'
+        ui_reference = invoice_receipt.get('reference')
+        if os.environ.get('WINNOW_CLN_UI_MANIFEST'):
+            assert ui_reference and ui_reference['kind'] == 'released_cln_with_ui_hsmd_override'
+            assert ui_reference['manifest'] == 'ui-cln-reference.json'
+            assert ui_reference['manifest_sha256'] == hashlib.sha256((results / 'fixture/evidence/ui-cln-reference.json').read_bytes()).hexdigest()
+        else:
+            assert ui_reference is None, 'stock UI must not silently use the HSM override'
+    finally:
+        try:
+            if video:
+                stop(video, signal.SIGINT)
+                assert video.returncode == 0 and (results / 'journey.mp4').stat().st_size > 0
+        finally:
+            stop(fixture)
+    return ui_reference
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('results', type=Path)
@@ -136,48 +247,7 @@ def main():
     spec = results / 'Lightning.xctestrun'
     with spec.open('wb') as file:
         plistlib.dump(specification, file)
-    fixture = video = None
-    try:
-        with (results / 'fixture.log').open('w') as log:
-            fixture = subprocess.Popen([str(ROOT / 'scripts/lightning-ui-fixture'), str(results / 'fixture'), '--simulator', simulator,
-                                        '--bundle', info['CFBundleIdentifier']],
-                                       cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
-        def fixture_ready():
-            assert fixture.poll() is None, 'fixture exited'
-            return (results / 'fixture/connection.json').is_file()
-        wait(fixture_ready, 180)
-        # Fixture setup can take minutes; recording starts only after it, so
-        # onboarding and every financial action are captured.
-        video = start_recording(simulator, results)
-        print('Lightning UI recording acknowledged; starting XCTest', flush=True)
-        # This journey intentionally SIGKILLs the app. Xcode's verbose whole-
-        # simulator diagnostics can stall even after XCTest finishes; retain
-        # the result bundle, screenshots, video and peer logs without sysdiagnose.
-        run(['xcodebuild', 'test-without-building', '-xctestrun', str(spec),
-             '-derivedDataPath', str(derived),
-             '-destination', f'platform=iOS Simulator,id={simulator}', '-only-testing:WinnowAppLightningUITests/LightningAppUITests',
-             '-enableCodeCoverage', 'YES',
-             '-collect-test-diagnostics', 'never',
-             '-test-timeouts-enabled', 'YES', '-maximum-test-execution-time-allowance', '900',
-             '-resultBundlePath', str(results / 'LightningUI.xcresult')], results / 'ui-tests.log')
-        receipt = json.loads((results / 'fixture/evidence/receipt.json').read_text())
-        assert receipt['result'] == 'passed'
-        invoice_receipt = json.loads((results / 'fixture/evidence/bolt11-receipt.json').read_text())
-        assert invoice_receipt['result'] == 'passed'
-        ui_reference = invoice_receipt.get('reference')
-        if os.environ.get('WINNOW_CLN_UI_MANIFEST'):
-            assert ui_reference and ui_reference['kind'] == 'released_cln_with_ui_hsmd_override'
-            assert ui_reference['manifest'] == 'ui-cln-reference.json'
-            assert ui_reference['manifest_sha256'] == hashlib.sha256((results / 'fixture/evidence/ui-cln-reference.json').read_bytes()).hexdigest()
-        else:
-            assert ui_reference is None, 'stock UI must not silently use the HSM override'
-    finally:
-        try:
-            if video:
-                stop(video, signal.SIGINT)
-                assert video.returncode == 0 and (results / 'journey.mp4').stat().st_size > 0
-        finally:
-            stop(fixture)
+    ui_reference = with_reference_retry(results, lambda: record_journey(results, spec, simulator, info, derived))
     # Only a successful XCTest result AND a finalized recording produce this
     # receipt. Provider receipts alone do not prove that the app checks passed.
     completed = dict(result='passed', manifest=manifest,

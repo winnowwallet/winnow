@@ -79,3 +79,77 @@ class RecordingStartTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+PEER = '033881db148c4b2dc1cb1a1a0471380ac9af354fff921fe2c86eed8789a8416da6'
+SOCKET_LOSS = f'''2026-10-01T01:32:45.539Z DEBUG   {PEER}-connectd: Activating for message WIRE_OPEN_CHANNEL
+2026-10-01T01:32:46.299Z DEBUG   {PEER}-openingd-chan#1: pid 52439, msgfd 83
+2026-10-01T01:32:47.489Z DEBUG   {PEER}-hsmd: Got WIRE_HSMD_GET_PER_COMMITMENT_POINT
+2026-10-01T01:32:47.489Z INFO    {PEER}-openingd-chan#1: Peer connection lost
+2026-10-01T01:32:47.489Z INFO    {PEER}-chan#1: Owning subdaemon openingd died (62208)
+2026-10-01T01:34:22.122Z DEBUG   {PEER}-lightningd: peer_disconnected
+'''
+
+
+class ReferenceRetryTests(unittest.TestCase):
+    """Only the stock daemons' own socket failure reruns the journey."""
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.results = Path(temporary.name)
+        self.evidence = self.results / 'fixture/evidence'
+
+    def failure(self, log):
+        self.evidence.mkdir(parents=True, exist_ok=True)
+        (self.evidence / 'invoice-cln.log').write_text(log)
+        with patch.object(ui.sys, 'platform', 'darwin'):
+            return ui.reference_socket_failure(self.evidence)
+
+    def test_only_a_daemons_lost_socket_with_the_app_still_connected_is_classified(self):
+        self.assertTrue(self.failure(SOCKET_LOSS))
+        self.assertTrue(self.failure(f'2026-10-01T01:39:50.224Z **BROKEN** {PEER}-closingd-chan#1: STATUS_FAIL_HSM_IO: Bad reply\n'))
+        for log in (SOCKET_LOSS.replace('01:34:22.122Z', '01:32:48.000Z'),  # the app really disconnected
+                    SOCKET_LOSS.replace('Owning subdaemon openingd died', 'Peer transient failure'),
+                    SOCKET_LOSS + f'2026-10-01T01:35:00.000Z **BROKEN** {PEER}-chan#1: Funding transaction spent\n',
+                    ''):
+            with self.subTest(log=log[-80:]):
+                self.assertFalse(self.failure(log))
+        (self.evidence / 'invoice-cln.log').write_text(SOCKET_LOSS)
+        with patch.object(ui.sys, 'platform', 'linux'):
+            self.assertFalse(ui.reference_socket_failure(self.evidence))
+
+    def test_a_classified_failure_reruns_once_and_keeps_the_failed_attempt(self):
+        import subprocess
+        calls = []
+        def journey():
+            calls.append(len(calls) + 1)
+            if len(calls) == 1:
+                self.failure(SOCKET_LOSS)
+                (self.results / 'journey.mp4').write_bytes(b'first')
+                (self.results / 'ui-tests.log').write_text('failed')
+                raise subprocess.CalledProcessError(65, 'xcodebuild')
+            return {'kind': 'reference'}
+        with patch.object(ui.sys, 'platform', 'darwin'):
+            self.assertEqual(ui.with_reference_retry(self.results, journey), {'kind': 'reference'})
+        self.assertEqual(calls, [1, 2])
+        kept = self.results / 'attempt-1'
+        self.assertEqual((kept / 'journey.mp4').read_bytes(), b'first')
+        self.assertTrue((kept / 'fixture/evidence/invoice-cln.log').exists())
+        self.assertFalse((self.results / 'fixture').exists(), 'the rerun starts from a fresh fixture')
+
+    def test_any_other_failure_or_a_second_classified_one_is_final(self):
+        import subprocess
+        def unclassified():
+            self.failure('')
+            raise subprocess.CalledProcessError(65, 'xcodebuild')
+        with patch.object(ui.sys, 'platform', 'darwin'), self.assertRaises(subprocess.CalledProcessError):
+            ui.with_reference_retry(self.results, unclassified)
+        self.assertFalse((self.results / 'attempt-1').exists())
+        calls = []
+        def always():
+            calls.append(1)
+            self.failure(SOCKET_LOSS)
+            raise subprocess.CalledProcessError(65, 'xcodebuild')
+        with patch.object(ui.sys, 'platform', 'darwin'), self.assertRaises(subprocess.CalledProcessError):
+            ui.with_reference_retry(self.results, always)
+        self.assertEqual(len(calls), ui.JOURNEY_ATTEMPTS)
