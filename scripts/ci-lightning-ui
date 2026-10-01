@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import plistlib
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -60,7 +61,9 @@ def app_disconnected(lines, peer, moment):
 def retain_attempt(results, attempt):
     kept = results / f'attempt-{attempt}'
     kept.mkdir()
-    for path in [results / name for name in ATTEMPT_FILES] + sorted(results.glob('boot-*.log')) + sorted(results.glob('shutdown-*.log')):
+    retried = [path for pattern in ('boot-*.log', 'shutdown-*.log', 'ui-tests-no-destination-*.log', 'devices-*.log',
+                                    'reboot-status-*.log') for path in sorted(results.glob(pattern))]
+    for path in [results / name for name in ATTEMPT_FILES] + retried:
         if path.exists():
             path.rename(kept / path.name)
     return kept
@@ -143,6 +146,29 @@ def stop(process, sig=signal.SIGTERM):
             raise
 
 
+NO_DESTINATION = 'Unable to find a device matching the provided destination specifier'
+
+
+def run_tests(command, results, simulator, attempts=3):
+    """xcodebuild on a hosted runner can briefly list no simulators at all, even
+    with this one booted and recording. Nothing ran, so only that refusal is
+    retried, after asking CoreSimulator for its devices again."""
+    log = results / 'ui-tests.log'
+    for attempt in range(1, attempts + 1):
+        try:
+            return run(command, log)
+        except subprocess.CalledProcessError:
+            text = log.read_text(errors='replace')
+            if attempt == attempts or NO_DESTINATION not in text or 'Test Case' in text:
+                raise
+            log.rename(results / f'ui-tests-no-destination-{attempt}.log')
+            shutil.rmtree(results / 'LightningUI.xcresult', ignore_errors=True)
+            print(f'xcodebuild saw no simulator destination (attempt {attempt}); re-listing devices and retrying', flush=True)
+            run(['xcrun', 'simctl', 'list', 'devices', simulator], results / f'devices-{attempt}.log', timeout=120)
+            run(['xcrun', 'simctl', 'bootstatus', simulator, '-b'], results / f'reboot-status-{attempt}.log', timeout=300)
+            time.sleep(10)
+
+
 def record_journey(results, spec, simulator, info, derived):
     """One attempt: a fresh fixture, a recording, every journey test and the receipts."""
     fixture = video = None
@@ -162,13 +188,13 @@ def record_journey(results, spec, simulator, info, derived):
         # This journey intentionally SIGKILLs the app. Xcode's verbose whole-
         # simulator diagnostics can stall even after XCTest finishes; retain
         # the result bundle, screenshots, video and peer logs without sysdiagnose.
-        run(['xcodebuild', 'test-without-building', '-xctestrun', str(spec),
-             '-derivedDataPath', str(derived),
-             '-destination', f'platform=iOS Simulator,id={simulator}', '-only-testing:WinnowAppLightningUITests/LightningAppUITests',
-             '-enableCodeCoverage', 'YES',
-             '-collect-test-diagnostics', 'never',
-             '-test-timeouts-enabled', 'YES', '-maximum-test-execution-time-allowance', '900',
-             '-resultBundlePath', str(results / 'LightningUI.xcresult')], results / 'ui-tests.log')
+        run_tests(['xcodebuild', 'test-without-building', '-xctestrun', str(spec),
+                   '-derivedDataPath', str(derived),
+                   '-destination', f'platform=iOS Simulator,id={simulator}', '-only-testing:WinnowAppLightningUITests/LightningAppUITests',
+                   '-enableCodeCoverage', 'YES',
+                   '-collect-test-diagnostics', 'never',
+                   '-test-timeouts-enabled', 'YES', '-maximum-test-execution-time-allowance', '900',
+                   '-resultBundlePath', str(results / 'LightningUI.xcresult')], results, simulator)
         receipt = json.loads((results / 'fixture/evidence/receipt.json').read_text())
         assert receipt['result'] == 'passed'
         invoice_receipt = json.loads((results / 'fixture/evidence/bolt11-receipt.json').read_text())

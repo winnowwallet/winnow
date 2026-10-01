@@ -153,3 +153,45 @@ class ReferenceRetryTests(unittest.TestCase):
         with patch.object(ui.sys, 'platform', 'darwin'), self.assertRaises(subprocess.CalledProcessError):
             ui.with_reference_retry(self.results, always)
         self.assertEqual(len(calls), ui.JOURNEY_ATTEMPTS)
+
+
+class DestinationRetryTests(unittest.TestCase):
+    """Only xcodebuild's refusal to see the booted simulator is retried."""
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.results = Path(temporary.name)
+
+    def outcomes(self, *texts):
+        import subprocess
+        calls = []
+        def run(command, log, env=None, timeout=None):
+            calls.append(command[0])
+            if command[0] != 'xcodebuild':
+                return
+            text = texts[sum(1 for c in calls if c == 'xcodebuild') - 1]
+            log.write_text(text)
+            if text != 'passed':
+                raise subprocess.CalledProcessError(70, command)
+        return calls, run
+
+    def test_a_missing_destination_before_any_test_is_retried(self):
+        calls, run = self.outcomes(ui.NO_DESTINATION, 'passed')
+        with patch.object(ui, 'run', run), patch.object(ui.time, 'sleep'):
+            ui.run_tests(['xcodebuild', 'test-without-building'], self.results, 'SIM')
+        self.assertEqual(calls.count('xcodebuild'), 2)
+        self.assertIn('xcrun', calls, 'CoreSimulator is asked for its devices before retrying')
+        self.assertTrue((self.results / 'ui-tests-no-destination-1.log').exists())
+        self.assertEqual((self.results / 'ui-tests.log').read_text(), 'passed')
+
+    def test_a_test_failure_or_repeated_refusal_is_final(self):
+        import subprocess
+        for texts, expected in (((ui.NO_DESTINATION + "\nTest Case '-[x]' started.",), 1),
+                                (('XCTAssertTrue failed',), 1),
+                                ((ui.NO_DESTINATION,) * 3, 3)):
+            with self.subTest(texts=texts[0][:30]):
+                calls, run = self.outcomes(*texts)
+                with patch.object(ui, 'run', run), patch.object(ui.time, 'sleep'), \
+                        self.assertRaises(subprocess.CalledProcessError):
+                    ui.run_tests(['xcodebuild'], self.results, 'SIM')
+                self.assertEqual(calls.count('xcodebuild'), expected)
