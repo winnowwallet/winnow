@@ -36,6 +36,8 @@ extension LightningEngine {
         let amountMsat: UInt64
         let expiry: UInt32
         var expiresAt: UInt64? = nil
+        /// A just-in-time receive: the provider may keep up to this fee.
+        var jit: JITReceive? = nil
     }
     public struct ReceiveInvoice: Sendable {
         public let id: Data, paymentHash: Data, paymentSecret: Data
@@ -134,7 +136,7 @@ extension LightningEngine {
         let request = blinding.map {
             validOrdinaryReceive(htlc, peeled: peeled, blinding: $0, state: state)
                 ?? validAsyncReceive(htlc, peeled: peeled, blinding: $0, state: state)
-        } ?? validReceive(htlc, peeled: peeled, state: state)
+        } ?? validReceive(htlc, peeled: peeled, channel: channel, state: state)
         guard let request else {
             try failIncoming(htlc, onion: onion, sharedSecret: peeled.sharedSecret, channel: &channel, state: &state)
             return
@@ -143,17 +145,30 @@ extension LightningEngine {
         if !channel.learnedPreimages.contains(request.preimage) { channel.learnedPreimages.append(request.preimage) }
         var writer = LightningWire.Writer(); writer.append(channel.id); writer.u64(htlc.id); writer.append(request.preimage)
         try Self.enqueue(.init(type: 130, payload: writer.data), channel: channel, in: &state)
-        let payment = Payment(id: request.id, hash: htlc.paymentHash, amountMsat: request.amountMsat, incoming: true, phase: .inFlight)
-        state.payments.append(PaymentRecord(payment: payment, channelID: channel.id, htlcID: htlc.id, request: nil))
+        state.payments.append(PaymentRecord(payment: Self.incomingPayment(request, htlc: htlc, channel: channel),
+                                            channelID: channel.id, htlcID: htlc.id, request: nil))
+        Self.markClaimed(request, in: &state)
     }
-    private func validReceive(_ htlc: ChannelTransactions.HTLC, peeled: OnionPacket.Peeled, state: State) -> ReceiveRequest? {
+    /// A just-in-time payment arrives short by the provider's fee: record what
+    /// arrived and what the provider kept.
+    private static func incomingPayment(_ request: ReceiveRequest, htlc: ChannelTransactions.HTLC, channel: ChannelState) -> Payment {
+        guard request.jit != nil else {
+            return Payment(id: request.id, hash: htlc.paymentHash, amountMsat: request.amountMsat, incoming: true, phase: .inFlight)
+        }
+        var payment = Payment(id: request.id, hash: htlc.paymentHash, amountMsat: htlc.amountMsat, incoming: true, phase: .inFlight)
+        payment.feeMsat = channel.incomingExtraFee?[htlc.id] ?? 0
+        return payment
+    }
+    private func validReceive(_ htlc: ChannelTransactions.HTLC, peeled: OnionPacket.Peeled, channel: ChannelState,
+                              state: State) -> ReceiveRequest? {
         guard peeled.next == nil, let request = state.incoming.first(where: { ChannelKeys.hash($0.preimage) == htlc.paymentHash }),
               !state.payments.contains(where: { $0.payment.hash == htlc.paymentHash }), htlc.expiry <= request.expiry,
               request.expiresAt.map({ $0 > UInt64(Date().timeIntervalSince1970) }) ?? true,
+              let deducted = Self.deduction(htlc, request: request, channel: channel),
               let payload = try? PaymentPayload(bytes: peeled.payload) else { return nil }
         do {
             try payload.validate(expectedSecret: request.secret, expectedAmount: request.amountMsat, receivedAmount: htlc.amountMsat,
-                receivedExpiry: htlc.expiry, height: chainHeight, minimumDelta: 18)
+                receivedExpiry: htlc.expiry, height: chainHeight, minimumDelta: 18, deductedMsat: deducted)
             return request
         } catch { return nil }
     }

@@ -6,7 +6,7 @@ extension LightningEngine {
         try operational(peer)
         let index = try channelIndex(channelID, peer: peer)
         var channel = state.channels[index]
-        guard [.ready, .closing].contains(channel.phase), channel.fundingIsConfirmed, !reestablishing.contains(channelID),
+        guard [.ready, .closing].contains(channel.phase), channel.fundingUsable, !reestablishing.contains(channelID),
               ChannelTerms.validShutdown(destination, anySegwit: peers[peer]?.supports(LightningFeatures.shutdownAnySegwit) == true), feeSat <= maximumFeeSat, maximumFeeSat < channel.capacity
         else { throw LightningError.invalidState }
         try channel.requireQuiescent()
@@ -25,7 +25,7 @@ extension LightningEngine {
         var reader = LightningWire.Reader(message.payload)
         let id = try reader.take(32), index = try channelIndex(id, peer: peer)
         var channel = state.channels[index]
-        guard [.ready, .closing].contains(channel.phase), channel.fundingIsConfirmed,
+        guard [.ready, .closing].contains(channel.phase), channel.fundingUsable,
               channel.observedFundingSpend == nil, !reestablishing.contains(id) else { throw LightningError.invalidState }
         var next = state
         if message.type == 38 {

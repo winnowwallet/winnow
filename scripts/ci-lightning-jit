@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""Swift instant receive (LSPS2, bLIP-52) against stock LDK's lightning-liquidity provider.
+
+A payer pays Winnow's just-in-time invoice through the provider. The provider
+opens a zero-conf channel to Winnow and keeps its fee out of the payment;
+Winnow claims before the funding confirms, survives a restart, receives again
+through the provider's alias, and receives once more after confirmation.
+"""
+import argparse
+import json
+import os
+from pathlib import Path
+import runpy
+import subprocess
+import tempfile
+
+ROOT = Path(__file__).resolve().parent.parent
+ASYNC = runpy.run_path(str(ROOT / 'scripts/ci-lightning-async'))
+Fixture, Peer, wait, LDK_COMMIT = ASYNC['Fixture'], ASYNC['Peer'], ASYNC['wait'], ASYNC['LDK_COMMIT']
+
+PAYMENT_MSAT = 50_000_000
+# The provider's fixed regtest terms (harness/src/node/lsps2.rs).
+MIN_FEE_MSAT, PROPORTIONAL_PPM = 1_000_000, 10_000
+
+
+def opening_fee(payment_msat):
+    """bLIP-52: ceil(payment * ppm / 1e6), at least the minimum fee."""
+    return max(MIN_FEE_MSAT, (payment_msat * PROPORTIONAL_PPM + 999_999) // 1_000_000)
+
+
+def provider_environment(args):
+    return {'REFERENCE_LSPS2_CLIENT_TRUSTS_LSP': '1' if args.client_trusts_lsp else '0',
+            'REFERENCE_LSPS2_SCID_PRIVACY': '1' if args.scid_privacy else '0',
+            'REFERENCE_LSPS2_ZERO_RESERVE': '1' if args.zero_reserve else '0',
+            'REFERENCE_LSPS2_ANCHORS': '1' if args.anchors else '0'}
+
+
+def scenario(args):
+    parts = ['trusts-lsp' if args.client_trusts_lsp else 'lsp-broadcasts',
+             'scid-privacy' if args.scid_privacy else 'real-scid', 'anchors' if args.anchors else 'static-key',
+             'zero-reserve' if args.zero_reserve else 'reserve']
+    return 'jit-' + '-'.join(parts)
+
+
+class Run:
+    def __init__(self, fixture, args):
+        self.fixture, self.args = fixture, args
+        self.destination = fixture.rpc('getaddressinfo', fixture.address)['scriptPubKey']
+
+    def start(self):
+        f = self.fixture
+        os.environ.update(provider_environment(self.args))
+        self.lsp = Peer([str(f.harness), 'node', str(f.root / 'lsp'), '31', 'lsps2'], f.log('lsp'))
+        f.peers.append(self.lsp)
+        self.payer = f.ldk('payer', 32)
+        f.sync([self.lsp])
+        f.open_ldk(self.payer, self.lsp, public=False)
+        print('Payer has a channel to the LSPS2 provider', flush=True)
+        os.environ['WINNOW_JIT_CLIENT'] = '1'
+        self.swift = f.swift_peer('swift', 2, self.lsp)
+        wait(lambda: self.swift.node in self.lsp.call('status')['peers'])
+
+    def paid(self, payment_id, fee):
+        def settled():
+            payment = self.swift.call('payment', id=payment_id)
+            return payment if payment['phase'] == 'settled' else None
+        payment = wait(settled, timeout=90)
+        assert payment['fee'] == str(fee), payment
+        return payment
+
+    def first_receive(self):
+        f, lsp = self.fixture, self.lsp
+        payment_id = '61' * 32
+        reply = self.swift.call('jit_invoice', id=payment_id, amount_msat=str(PAYMENT_MSAT), destination=self.destination)
+        assert 'invoice' in reply, reply
+        fee = opening_fee(PAYMENT_MSAT)
+        assert reply['fee_msat'] == str(fee), reply
+        assert reply['client_trusts_lsp'] == str(self.args.client_trusts_lsp).lower(), reply
+        self.payer.call('pay_invoice', invoice=reply['invoice'])
+        ready = wait(lambda: lsp.event('funding'), timeout=60)
+        lsp.events.remove(ready)
+        funding, _ = f.funding(ready['script'], ready['amount'])
+        funded = lsp.call('fund', id=ready['temporary_id'], peer=self.swift.node, transaction=funding)
+        assert funded['manual_broadcast'] == self.args.client_trusts_lsp, funded
+        payment = self.paid(payment_id, fee)
+        print(f'Swift received {PAYMENT_MSAT - fee} msat before confirmation; provider kept {fee}', flush=True)
+        wait(lambda: self.payer.event('sent'))
+        # With client_trusts_lsp the provider publishes only after the claim.
+        wait(lambda: (lsp.drain(), funding in lsp.broadcasts)[1])
+        snapshot = self.swift.call('snapshot')
+        assert snapshot['phase'] == 'ready' and snapshot['trusted_unconfirmed'] == 'true', snapshot
+        return funding, payment
+
+    def restart_swift(self):
+        self.swift.close()
+        self.swift.start()
+        wait(lambda: self.swift.node in self.lsp.call('status')['peers'])
+        snapshot = self.swift.call('snapshot')
+        assert snapshot['trusted_unconfirmed'] == 'true', snapshot
+        print('Unconfirmed bought channel survived a Swift restart', flush=True)
+
+    def ordinary_receive(self, payment_id, amount_sat):
+        wait(lambda: int(self.swift.call('receivable')['maximum_msat']) >= amount_sat * 1000, timeout=60)
+        invoice = self.swift.call('bolt11_invoice', id=payment_id, amount_sat=str(amount_sat))['invoice']
+        self.payer.call('pay_invoice', invoice=invoice)
+        self.paid(payment_id, 0)
+
+    def confirm(self, funding):
+        f = self.fixture
+        f.rpc('sendrawtransaction', funding)
+        f.rpc('generatetoaddress', 6, f.address)
+        f.sync()
+        def confirmed():
+            self.swift.drain()
+            return self.swift.call('snapshot')['trusted_unconfirmed'] == 'false'
+        wait(confirmed, timeout=60)
+        print('Bought channel confirmed', flush=True)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--client-trusts-lsp', action='store_true')
+    parser.add_argument('--scid-privacy', action='store_true')
+    parser.add_argument('--anchors', action='store_true')
+    parser.add_argument('--zero-reserve', action='store_true', help='LDK requires --anchors with it')
+    args = parser.parse_args()
+    if args.zero_reserve and not args.anchors:
+        parser.error('LDK allows a zero client reserve only on anchor channels; add --anchors')
+    harness = Path(os.environ['WINNOW_LDK_HARNESS'])
+    bitcoin = Path(os.environ['WINNOW_BITCOIN_DIR'])
+    reference = harness.resolve().parents[3] / 'ldk'
+    assert subprocess.check_output(['git', '-C', str(reference), 'rev-parse', 'HEAD'], text=True).strip() == LDK_COMMIT
+    subprocess.run(['swift', 'build', '--product', 'winnow-lightning-peer-fixture'], cwd=ROOT, check=True)
+    binary_dir = subprocess.check_output(['swift', 'build', '--show-bin-path'], cwd=ROOT, text=True).strip()
+    swift = Path(binary_dir) / 'winnow-lightning-peer-fixture'
+    evidence = Path(os.environ.get('WINNOW_LIGHTNING_RESULTS', ROOT / '.build/lightning-peer-results')) / scenario(args)
+    evidence.mkdir(parents=True, exist_ok=True)
+    root = Path(tempfile.mkdtemp(prefix='winnow-jit-'))
+    fixture = None
+    try:
+        fixture = Fixture(root, evidence, harness, swift, bitcoin)
+        run = Run(fixture, args)
+        run.start()
+        funding, payment = run.first_receive()
+        run.restart_swift()
+        run.ordinary_receive('62' * 32, 10_000)
+        print('Second invoice settled through the provider before confirmation', flush=True)
+        run.confirm(funding)
+        run.ordinary_receive('63' * 32, 2_000)
+        receipt = dict(scenario=scenario(args), opening_fee_msat=opening_fee(PAYMENT_MSAT), first_payment=payment['hash'],
+                       funding_txid=fixture.rpc('decoderawtransaction', funding)['txid'])
+        (evidence / 'receipt.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n')
+        print(f'{scenario(args)}: instant receive, restart, alias and confirmed receives passed', flush=True)
+    finally:
+        if fixture is not None:
+            fixture.close()
+
+
+if __name__ == '__main__':
+    main()

@@ -7,15 +7,75 @@ signed routing policy. An empty wallet does not invent capacity or an invoice.
 A Lightning withdrawal uses the Lightning invoice; an on-chain withdrawal
 uses the Bitcoin address. Copy and Share preserve the exact invoice bytes.
 
-Fresh mainnet wallets recommend Olympus by ZEUS. The provider picker contains
-three choices, connects to one, and opens no channels or makes payments just
-because a choice is selected:
+Fresh mainnet wallets recommend Megalith Instant. The provider picker contains
+four choices, connects to one, and opens no channels or makes payments just
+because a choice is selected. A wallet that already used a provider (a channel
+with it, or a stored setup order) keeps it when the default changes.
 
 | Provider | Setup |
 | --- | --- |
+| Megalith Instant | LSPS2 (bLIP-52) just-in-time channels over the authenticated Lightning connection |
 | Olympus by ZEUS | LSPS1 quotes over the authenticated Lightning connection |
 | Megalith | LSPS1 quotes over its HTTPS API while the Lightning peer is connected |
 | LNServer Wave | Clearly labeled website setup; copy the durable wallet node ID and choose a private channel |
+
+## Instant receive (LSPS2)
+
+With Megalith Instant and no receiving capacity, the first receive is one
+invoice:
+
+1. Enter the amount and tap **Show the provider's fee**. Winnow reads the
+   provider's fee menu (`lsps2.get_info`) and shows what the provider keeps,
+   what arrives, and how long it promises to keep the channel open.
+2. Approve with Face ID. Only then does Winnow reserve the channel
+   (`lsps2.buy`) and show the invoice. Its one route hint names the provider's
+   intercept scid with zero fees; it expires before the fee terms do, and its
+   final CLTV delta is 20 (18 plus the two blocks bLIP-52 adds).
+3. The payer pays it. The provider opens a private channel to Winnow and
+   forwards the payment minus its fee, declaring the fee in `update_add_htlc`'s
+   `extra_fee` TLV (65537). Winnow accepts that channel before it confirms and
+   claims the payment.
+
+What Winnow checks:
+
+- **Zero-conf is granted, not inferred.** Only an `open_channel` from the
+  provider Winnow bought from, private, with no push, at least as large as the
+  payment minus the fee, for a purchase that is live and not already bound,
+  gets the grant. It is a persisted per-channel field; `fundingIsConfirmed`
+  keeps its meaning, so a remote `channel_ready` is still never evidence of
+  funding for any other channel. A `channel_type` with option_zeroconf and no
+  matching purchase is refused.
+- **The fee.** The payment is claimed only if the HTLC plus the declared
+  `extra_fee` covers the invoice amount and the fee is at most the agreed
+  opening fee. Ordinary invoices ignore `extra_fee`.
+- **Recovery is set at acceptance**, so the payment can be claimed the moment
+  it arrives, and the bought channel skips the full rescan an ordinary new
+  funding triggers: its funding cannot already be in a scanned block, and the
+  rescan would outlast the provider's forwarding window.
+- **Aliases.** Winnow sends its own alias in `channel_ready` and keeps the
+  provider's. Before confirmation (and for scid-privacy channels after it),
+  the next invoice's route hint names the provider's alias; its policy is the
+  provider's `channel_update` for any of the channel's identifiers.
+
+Until the funding confirms, Winnow trusts the provider with what the channel
+holds. Megalith answers `client_trusts_lsp: true`: it publishes the funding
+only after Winnow releases the preimage, so a provider that never publishes
+keeps the payment. The channel row says "confirming · trusted provider" until
+then. A bought channel whose funding never appears and which holds nothing of
+ours is forgotten after 2016 blocks; one holding a payment never is.
+
+The invoice is fixed-amount but does not set `basic_mpp`, so payers send one
+part: Winnow does not yet combine multi-part receives. This differs from
+bLIP-52's fixed-amount mode, which allows MPP. The first payment must leave at
+least a 20,000-sat channel after the fee; with Megalith's terms (3,514 sats or
+1.4%) that is 23,514 sats.
+
+CI pays Winnow's instant invoice through stock LDK's `lightning-liquidity`
+LSPS2 service (`scripts/ci-lightning-jit`, in `posix4e/lightning-reference`'s
+`lsps2` role): with the provider broadcasting or the client trusting it, with
+and without scid privacy, and on a zero-reserve anchor channel.
+
+## Buying capacity ahead (LSPS1)
 
 Olympus and Megalith return live capacity limits and a separate setup fee invoice.
 Review the fee, capacity, lease and confirmation count. Approving the fee requires

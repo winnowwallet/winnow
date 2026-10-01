@@ -16,6 +16,8 @@ public actor LightningEngine {
         public let signedCommitment: Data?
         /// Funding remains exposed until a cooperative close has six verified confirmations.
         public let needsMonitoring: Bool
+        /// A bought just-in-time channel working before its funding confirms.
+        public var trustedUnconfirmed = false
     }
     public struct Outbound: Codable, Sendable, Equatable {
         public let sequence: UInt64
@@ -44,6 +46,7 @@ public actor LightningEngine {
         var async = AsyncState()
         var offers: OrdinaryOfferState? = nil
         var recoveryRestore: RecoveryRestore? = nil
+        var jit: [JITPurchase]? = nil
     }
     let journal: any LightningJournal
     let backgroundStore: LightningBackgroundStore?
@@ -80,7 +83,8 @@ public actor LightningEngine {
     public func channels() -> [Channel] {
         state.channels.map { Channel(id: $0.id, peer: $0.peer, capacitySat: $0.capacity, phase: $0.phase, format: $0.local.format,
                                      signedCommitment: $0.dataLossDetected ? nil : $0.signedCommitment,
-                                     needsMonitoring: $0.fundingTxid != nil && $0.phase != .closed) }
+                                     needsMonitoring: $0.fundingTxid != nil && $0.phase != .closed,
+                                     trustedUnconfirmed: $0.zeroConf != nil && !$0.fundingIsConfirmed) }
     }
     public func chainHash() -> Data { state.chain }
     /// The adapter calls this only after its verified header/filter scan has
@@ -90,10 +94,10 @@ public actor LightningEngine {
     public func chainDisconnected() { chainIsCurrent = false }
     public func peerInitialized(_ peer: Data, features: LightningFeatures) throws {
         try healthy(); _ = try ChannelKeys.point(peer)
-        try features.validateRequired(supported: [0, 6, 8, 12, 14, 22, 24, LightningFeatures.shutdownAnySegwit, 38, 44, 728])
+        try features.validateRequired(supported: [0, 6, 8, 12, 14, 22, 24, LightningFeatures.shutdownAnySegwit, 38, 44, 46, 50, 728])
         guard features.supports(12), features.supports(44) else { throw LightningError.invalidMessage }
         if state.recoveryRestore != nil { try prepareRecoveryReestablishment(peer) }
-        else { try prepareReestablishment(peer) }
+        else { try forgetUnsignedInbound(peer: peer); try prepareReestablishment(peer) }
         peers[peer] = features
     }
     public func peerDisconnected(_ peer: Data) { peers.removeValue(forKey: peer) }
@@ -105,7 +109,7 @@ public actor LightningEngine {
             guard let channel = state.channels.first(where: { $0.id == item.channelID }) else { return true }
             // Opening and reestablishment remain possible while funding is
             // unconfirmed. Never publish payment/revocation work after a reorg.
-            return channel.fundingIsConfirmed || [32, 33, 34, 35, 136].contains(item.message.type)
+            return channel.fundingUsable || [32, 33, 34, 35, 136].contains(item.message.type)
         }
     }
     @discardableResult
@@ -225,10 +229,12 @@ public actor LightningEngine {
               state.payments.count <= 4096, state.async.outgoing.count <= 4096, state.async.receives.count <= 128,
               Set(sequences).count == sequences.count,
               sequences.allSatisfy({ $0 < state.nextSequence }) else { throw LightningError.storageFailed }
+        guard (state.jit?.count ?? 0) <= maximumJITPurchases else { throw LightningError.storageFailed }
         for channel in state.channels {
             _ = try ChannelKeys.point(channel.peer)
             try channel.local.validate(capacity: channel.capacity)
-            guard channel.temporaryID.count == 32 else { throw LightningError.storageFailed }
+            guard channel.temporaryID.count == 32, channel.zeroConf == nil || !channel.isFunder,
+                  channel.localAlias != 0, channel.remoteAlias != 0 else { throw LightningError.storageFailed }
             if channel.remote != nil { try channel.validateNegotiation() }
         }
     }

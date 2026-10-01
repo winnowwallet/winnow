@@ -4,18 +4,21 @@ extension LightningEngine {
     /// Low-level channel operation. A payment orchestrator must persist its
     /// stable payment ID and fee authorization in the SAME state transaction.
     /// Kept internal until that payment API is complete.
-    func offerHTLC(channelID: Data, peer: Data, amountMsat: UInt64, paymentHash: Data, expiry: UInt32, onion: Data) throws -> UInt64 {
+    func offerHTLC(channelID: Data, peer: Data, amountMsat: UInt64, paymentHash: Data, expiry: UInt32, onion: Data,
+                   extraFeeMsat: UInt64? = nil) throws -> UInt64 {
         try operational(peer)
         let index = try activeChannelIndex(channelID, peer: peer)
         var channel = state.channels[index]
         var next = state
-        let id = try enqueueHTLC(channel: &channel, in: &next, amountMsat: amountMsat, paymentHash: paymentHash, expiry: expiry, onion: onion)
+        let id = try enqueueHTLC(channel: &channel, in: &next, amountMsat: amountMsat, paymentHash: paymentHash, expiry: expiry,
+                                 onion: onion, extraFeeMsat: extraFeeMsat)
         next.channels[index] = channel
         try persist(next)
         return id
     }
     func enqueueHTLC(channel: inout ChannelState, in next: inout State, amountMsat: UInt64,
-                     paymentHash: Data, expiry: UInt32, onion: Data, hold: Bool = false, blinding: Data? = nil) throws -> UInt64 {
+                     paymentHash: Data, expiry: UInt32, onion: Data, hold: Bool = false, blinding: Data? = nil,
+                     extraFeeMsat: UInt64? = nil) throws -> UInt64 {
         guard channel.phase == .ready else { throw LightningError.invalidState }
         guard paymentHash.count == 32, onion.count == 1366, amountMsat > 0, amountMsat <= channel.capacity * 1000,
               channel.nextLocalHTLC < UInt64.max, channel.updates.count < 4096 else { throw LightningError.invalidMessage }
@@ -27,6 +30,7 @@ extension LightningEngine {
         writer.append(paymentHash); writer.u32(expiry); writer.append(onion)
         var fields: [LightningWire.TLV] = []
         if let blinding { _ = try ChannelKeys.point(blinding); fields.append(.init(type: 0, value: blinding)) }
+        if let extraFeeMsat { var fee = LightningWire.Writer(); fee.u64(extraFeeMsat); fields.append(.init(type: 65537, value: fee.data)) }
         if hold { fields.append(.init(type: 75537, value: Data())) }
         if !fields.isEmpty { try writer.tlvs(fields) }
         try Self.enqueue(.init(type: 128, payload: writer.data), channel: channel, in: &next)
@@ -100,6 +104,7 @@ extension LightningEngine {
         if let point = fields.first(where: { $0.type == 0 })?.value {
             _ = try ChannelKeys.point(point); channel.incomingBlinding[id] = point
         }
+        try Self.recordExtraFee(fields, id: id, in: &channel)
         // This wallet receives payments; it is not an async holding provider.
         guard !fields.contains(where: { $0.type == 75537 }) else { throw LightningError.invalidMessage }
         guard id == channel.nextRemoteHTLC, id < UInt64.max, amount > 0, amount <= channel.capacity * 1000,

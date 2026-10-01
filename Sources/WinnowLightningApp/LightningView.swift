@@ -127,7 +127,7 @@ struct LightningView: View {
                 VStack(alignment: .leading) {
                     Text(channel.signedCommitment == nil && !channel.needsMonitoring
                          ? "\(channel.capacitySat) sats requested · \(channel.phase.rawValue)"
-                         : "\(channel.capacitySat) sats · \(channel.phase.rawValue)")
+                         : "\(channel.capacitySat) sats · \(channel.trustedUnconfirmed ? "confirming · trusted provider" : channel.phase.rawValue)")
                         .accessibilityIdentifier("lightningChannelPhase")
                     if let balance = controller.balances.first(where: { $0.id == channel.id }) {
                         Text("Local balance: \(balance.localMsat / 1000) sats").font(.caption)

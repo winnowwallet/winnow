@@ -401,3 +401,87 @@ extension PeerSessionTests {
         } catch { await session.stop(); await remote.close(); handshake.cancel(); throw error }
     }
 }
+
+/// LSPS0 and LSPS2 over a real Noise session.
+extension PeerSessionTests {
+    private func provider(_ body: @escaping @Sendable (SessionPeer, LightningPeerSession, LightningEngine) async throws -> Void) async throws {
+        let remote = try SessionPeer(), port = try await remote.listen()
+        let peer = try ChannelKeys.publicKey(secret: remote.secret)
+        let engine = try LightningEngine(chain: Data(repeating: 7, count: 32), journal: SessionJournal())
+        try await engine.chainCaughtUp()
+        let session = LightningPeerSession(engine: engine, peer: peer, host: "127.0.0.1", port: port, features: .jitClient,
+                                           onEvents: { _ in })
+        let handshake = Task { try await remote.handshake() }
+        do {
+            try await session.start(); try await handshake.value
+            try await body(remote, session, engine)
+            await session.stop(); await remote.close()
+        } catch { await session.stop(); await remote.close(); handshake.cancel(); throw error }
+    }
+    private func lsps(_ json: String) throws -> LightningWire.Message { try .init(type: 37913, payload: Data(json.utf8)) }
+    private func ping(_ remote: SessionPeer) async throws {
+        var ping = LightningWire.Writer(); ping.u16(2); ping.u16(0)
+        try await remote.send(.init(type: 18, payload: ping.data))
+        let pong = try await remote.receive()
+        XCTAssertEqual(pong.type, 19)
+    }
+
+    func testUnmatchableProviderMessagesKeepTheSession() async throws {
+        try await provider { remote, session, _ in
+            try await remote.send(self.lsps("not json"))
+            try await remote.send(self.lsps(#"{"jsonrpc":"2.0","method":"lsps5.webhook_notification","params":{}}"#))
+            try await remote.send(self.lsps(#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}"#))
+            try await remote.send(self.lsps(#"{"jsonrpc":"2.0","id":"nobody-asked","result":{}}"#))
+            try await self.ping(remote)
+            let status = await session.status
+            XCTAssertEqual(status, .connected)
+        }
+    }
+
+    func testJustInTimeMenuAndPurchaseRoundTrip() async throws {
+        try await provider { remote, session, _ in
+            let now = UInt64(Date().timeIntervalSince1970)
+            let menu = Task { try await session.jitMenu(token: "Winnow", now: now) }
+            let request = try JSONSerialization.jsonObject(with: await remote.receive().payload) as? [String: Any]
+            XCTAssertEqual(request?["method"] as? String, "lsps2.get_info")
+            XCTAssertEqual((request?["params"] as? [String: String])?["token"], "Winnow")
+            let validUntil = ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: TimeInterval(now + 3600)))
+            try await remote.send(self.lsps("""
+            {"jsonrpc":"2.0","id":"\(request?["id"] as? String ?? "")","result":{"opening_fee_params_menu":[{"min_fee_msat":"3514000",
+             "proportional":14000,"valid_until":"\(validUntil)","min_lifetime":13140,"max_client_to_self_delay":512,
+             "min_payment_size_msat":"3515000","max_payment_size_msat":"16000000000","promise":"abc"}]}}
+            """))
+            let offers = try await menu.value.offers
+            let offer = try XCTUnwrap(offers.first)
+            XCTAssertEqual(offer.minFeeMsat, 3_514_000)
+            let buy = Task { try await session.jitBuy(offer, paymentSizeMsat: 1_000_000) }
+            let buyRequest = try JSONSerialization.jsonObject(with: await remote.receive().payload) as? [String: Any]
+            XCTAssertEqual(buyRequest?["method"] as? String, "lsps2.buy")
+            try await remote.send(self.lsps("""
+            {"jsonrpc":"2.0","id":"\(buyRequest?["id"] as? String ?? "")","error":{"code":202,"message":"payment_size_too_small"}}
+            """))
+            do { _ = try await buy.value; XCTFail("too small") }
+            catch { XCTAssertEqual(error as? LightningLiquidityError, .rejected(code: 202, message: "payment_size_too_small")) }
+            let status = await session.status
+            XCTAssertEqual(status, .connected)
+        }
+    }
+
+    func testProviderAbandoningAnInboundOpenKeepsTheSession() async throws {
+        try await provider { remote, session, engine in
+            let terms = try ChannelSecrets().terms(capacity: 100_000)
+            let temporary = Data(repeating: 4, count: 32)
+            try await remote.send(ChannelNegotiation.Open(chain: Data(repeating: 7, count: 32), temporaryID: temporary,
+                capacity: 100_000, pushMsat: 0, feePerKW: 1000, terms: terms).message())
+            let accepted = try await remote.receive()
+            XCTAssertEqual(accepted.type, 33)
+            var error = LightningWire.Writer(); error.append(temporary); error.u16(5); error.append(Data("retry".utf8))
+            try await remote.send(.init(type: 17, payload: error.data))
+            try await self.ping(remote)
+            let status = await session.status, channels = await engine.channels(), warning = await session.lastPeerWarning
+            XCTAssertEqual(status, .connected)
+            XCTAssertEqual(channels.first?.phase, .closed)
+            XCTAssertEqual(warning, "Provider error: retry")
+        }
+    }
+}

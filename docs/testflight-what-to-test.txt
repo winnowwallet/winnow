@@ -1,4 +1,6 @@
-Winnow 0.8.1: Lightning in Winnow
+Winnow 0.8.2: Lightning in Winnow
+
+New in 0.8.2: instant receive. With the new default provider, Megalith Instant, your first Lightning payment is one invoice: the provider opens your channel when the payment arrives and keeps a fee from it (at least 3,514 sats, so the first payment must be at least 23,514 sats). Winnow shows the fee before you approve. Until the channel confirms you trust the provider with that payment; the channel says "confirming" until then.
 
 New in 0.8.1: the Lightning recovery file opens with your wallet's recovery phrase, so there is no second phrase to keep.
 
@@ -6,7 +8,7 @@ Lightning is now part of Winnow, a native Swift engine on Winnow's own wallet, v
 
 Receiving
 
-Simple mode: Receive, then Lightning (Bitcoin still gives an address). Mainnet providers are Olympus and Megalith (in-app setup) or LNServer (website setup). Enter the payment amount, which is separate from minimum channel capacity, and review the setup fee: approving shows an invoice without paying it. Pause an unpaid order and check it survives a restart.
+Simple mode: Receive, then Lightning (Bitcoin still gives an address). The default, Megalith Instant, opens the channel with your first payment: enter an amount, review the fee, approve, and pay the one invoice from another wallet. Olympus and Megalith (setup ahead of time) and LNServer (website setup) remain available. Enter the payment amount, which is separate from minimum channel capacity, and review the setup fee: approving shows an invoice without paying it. Pause an unpaid order and check it survives a restart.
 
 Advanced mode has a Lightning tab. "Create reusable offer" makes an ordinary BOLT12 offer; its recipient must be online. "Create async receive offer" needs an async-capable provider; test with the recipient offline and after restarts. Only Settled confirms a payment.
 

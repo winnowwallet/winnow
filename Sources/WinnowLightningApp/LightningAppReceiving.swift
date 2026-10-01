@@ -22,6 +22,9 @@ extension LightningAppController {
     var maximumReceivableSat: UInt64 { (invoiceCapacities.map(\.maximumMsat).max() ?? 0) / 1000 }
     var receivingSetupNotice: String? {
         guard let channel = channels.first(where: { $0.phase != .closed }) else { return nil }
+        if channel.trustedUnconfirmed {
+            return "Your instant channel is confirming. Until it confirms, you trust the provider with what it holds."
+        }
         switch channel.phase {
         case .opening, .accepted:
             return "There is an unfinished channel request. It does not provide receiving capacity yet."

@@ -12,20 +12,25 @@ public struct ChannelTerms: Sendable, Codable, Equatable {
     public let funding: Data, revocation: Data, payment: Data, delayed: Data, htlc: Data, firstPoint: Data
     public let shutdownScript: Data
     private let negotiatedFormat: ChannelFormat?
+    private let negotiatedOptions: ChannelOptions?
     public var format: ChannelFormat { negotiatedFormat ?? .staticRemoteKey }
+    public var options: ChannelOptions { negotiatedOptions ?? [] }
 
     public init(dustSat: UInt64 = 546, maximumHTLCMsat: UInt64, reserveSat: UInt64,
                 minimumHTLCMsat: UInt64 = 1, delay: UInt16 = 144, maximumHTLCCount: UInt16 = 30,
                 funding: Data, revocation: Data, payment: Data, delayed: Data, htlc: Data, firstPoint: Data,
-                shutdownScript: Data = Data(), format: ChannelFormat = .staticRemoteKey) {
+                shutdownScript: Data = Data(), format: ChannelFormat = .staticRemoteKey, options: ChannelOptions = []) {
         self.dustSat = dustSat; self.maximumHTLCMsat = maximumHTLCMsat; self.reserveSat = reserveSat
         self.minimumHTLCMsat = minimumHTLCMsat; self.delay = delay; self.maximumHTLCCount = maximumHTLCCount
         self.funding = funding; self.revocation = revocation; self.payment = payment
         self.delayed = delayed; self.htlc = htlc; self.firstPoint = firstPoint; self.shutdownScript = shutdownScript
         negotiatedFormat = format == .staticRemoteKey ? nil : format
+        negotiatedOptions = options.isEmpty ? nil : options
     }
     public func validate(capacity: UInt64) throws {
-        guard capacity >= 20_000, capacity < 1 << 24, dustSat > 0, dustSat <= reserveSat,
+        // A zero reserve parses; ChannelState accepts it only from a provider
+        // whose just-in-time channel Winnow bought.
+        guard capacity >= 20_000, capacity < 1 << 24, dustSat > 0, reserveSat == 0 || dustSat <= reserveSat,
               reserveSat <= capacity / 5 else { throw LightningError.invalidAmount }
         guard maximumHTLCMsat > 0, minimumHTLCMsat <= maximumHTLCMsat,
               minimumHTLCMsat <= capacity * 1000, (1...483).contains(maximumHTLCCount),
@@ -86,7 +91,8 @@ public enum ChannelNegotiation {
             self.temporaryID = temporaryID; self.minimumDepth = minimumDepth; self.terms = terms
         }
         public func message() throws -> LightningWire.Message {
-            guard temporaryID.count == 32, (1...144).contains(minimumDepth) else { throw LightningError.invalidMessage }
+            // Zero is a zero-conf acceptance (BOLT 2), sent only for a bought channel.
+            guard temporaryID.count == 32, (0...144).contains(minimumDepth) else { throw LightningError.invalidMessage }
             var writer = LightningWire.Writer(); writer.append(temporaryID)
             limits(terms, to: &writer); writer.u32(minimumDepth); points(terms, to: &writer)
             try tail(terms, to: &writer)
@@ -118,7 +124,8 @@ public enum ChannelNegotiation {
         for point in [terms.funding, terms.revocation, terms.payment, terms.delayed, terms.htlc, terms.firstPoint] { writer.append(point) }
     }
     private static func tail(_ terms: ChannelTerms, to writer: inout LightningWire.Writer) throws {
-        try writer.tlvs([.init(type: 0, value: terms.shutdownScript), .init(type: 1, value: terms.format.features.bytes)])
+        let channelType = try LightningFeatures(bits: terms.format.features.bits.union(terms.options.bits))
+        try writer.tlvs([.init(type: 0, value: terms.shutdownScript), .init(type: 1, value: channelType.bytes)])
     }
     private static func readLimits(_ reader: inout LightningWire.Reader) throws -> [UInt64] {
         try (0..<4).map { _ in try reader.u64() }
@@ -131,10 +138,11 @@ public enum ChannelNegotiation {
     private static func readTail(_ reader: inout LightningWire.Reader, limits: [UInt64], points: Points) throws -> ChannelTerms {
         let tlvs = try reader.tlvs(known: [0, 1])
         guard let type = tlvs.first(where: { $0.type == 1 }) else { throw LightningError.invalidMessage }
-        let format = try ChannelFormat(features: LightningFeatures(bytes: type.value))
+        let channelType = try ChannelFormat.negotiated(LightningFeatures(bytes: type.value))
         return ChannelTerms(dustSat: limits[0], maximumHTLCMsat: limits[1], reserveSat: limits[2], minimumHTLCMsat: limits[3],
             delay: points.delay, maximumHTLCCount: points.count, funding: points.keys[0], revocation: points.keys[1],
             payment: points.keys[2], delayed: points.keys[3], htlc: points.keys[4], firstPoint: points.keys[5],
-            shutdownScript: tlvs.first(where: { $0.type == 0 })?.value ?? Data(), format: format)
+            shutdownScript: tlvs.first(where: { $0.type == 0 })?.value ?? Data(), format: channelType.format,
+            options: channelType.options)
     }
 }

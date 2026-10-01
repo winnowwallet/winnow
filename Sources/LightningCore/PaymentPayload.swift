@@ -30,10 +30,13 @@ public struct PaymentPayload: Sendable, Equatable {
         }
         return writer.data
     }
+    /// `deductedMsat` is a fee the forwarding provider declared it kept
+    /// (bLIP-52 extra_fee); the payer still paid the full amount.
     public func validate(expectedSecret: Data, expectedAmount: UInt64, receivedAmount: UInt64,
-                         receivedExpiry: UInt32, height: UInt32, minimumDelta: UInt32) throws {
+                         receivedExpiry: UInt32, height: UInt32, minimumDelta: UInt32, deductedMsat: UInt64 = 0) throws {
+        let (delivered, overflow) = receivedAmount.addingReportingOverflow(deductedMsat)
         guard secret == expectedSecret, amountMsat == expectedAmount, totalMsat == expectedAmount,
-              receivedAmount >= amountMsat, receivedExpiry >= expiry,
+              !overflow, delivered >= amountMsat, receivedExpiry >= expiry,
               UInt64(receivedExpiry) >= UInt64(height) + UInt64(minimumDelta) else { throw LightningError.invalidMessage }
     }
     static func truncated(_ integer: UInt64) -> Data {

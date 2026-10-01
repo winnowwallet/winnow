@@ -41,40 +41,23 @@ final class LightningAppUITests: XCTestCase {
         app.buttons["advancedModeButton"].tap()
         app.buttons["receiveButton"].tap()
         tap(app, "receiveLightning")
-        XCTAssertEqual(app.staticTexts["lightningReceiveProvider"].value as? String, "Olympus by ZEUS")
+        XCTAssertEqual(app.staticTexts["lightningReceiveProvider"].value as? String, "Megalith Instant")
         XCTAssertTrue(app.staticTexts["lightningReceivable"].label.contains("0 sats"))
         XCTAssertFalse(app.staticTexts["lightningReceiveInvoice"].exists)
-        app.typeInto("lightningReceiveAmount", "500")
+        app.typeInto("lightningReceiveAmount", "30000")
         app.dismissKeyboard()
-        tap(app, "lightningGetCapacity")
-        let options = app.buttons["lightningProviderOptions"]
-        XCTAssertTrue(poll(timeout: 900, interval: 3, "fresh verified mainnet scan enables provider setup") {
-            options.isEnabled
+        // The instant provider's fee terms arrive once the mainnet scan is verified.
+        XCTAssertTrue(poll(timeout: 900, interval: 5, "fresh verified mainnet scan returns instant terms") {
+            if app.staticTexts["lightningJITFee"].exists { return true }
+            if app.buttons["lightningJITTerms"].isEnabled { app.buttons["lightningJITTerms"].tap() }
+            return false
         }, app.debugDescription)
         print("LIVE_MAINNET_SYNC_SECONDS=\(Date().timeIntervalSince(started))")
-        tap(app, "lightningProviderOptions")
-        XCTAssertTrue(poll(timeout: 60, interval: 2, "live provider options") {
-            app.textFields["lightningInboundCapacity"].exists || app.staticTexts["lightningLiquidityError"].exists
-        }, app.debugDescription)
-        XCTAssertFalse(app.staticTexts["lightningLiquidityError"].exists, app.debugDescription)
-        XCTAssertTrue(app.textFields["lightningInboundCapacity"].exists, app.debugDescription)
-        Screenshots.capture(app, "live-mainnet-provider-options", testCase: self)
-        tap(app, "lightningQuoteCapacity")
-        XCTAssertTrue(poll(timeout: 60, interval: 2, "live unpaid provider quote") {
-            app.staticTexts["lightningSetupFee"].exists || app.staticTexts["lightningLiquidityError"].exists
-        }, app.debugDescription)
-        XCTAssertFalse(app.staticTexts["lightningLiquidityError"].exists, app.debugDescription)
-        XCTAssertTrue(app.staticTexts["lightningSetupFee"].exists, app.debugDescription)
-        let setupFee = app.staticTexts["lightningSetupFee"].label
-        // Form review rows below the viewport materialize after scrolling.
-        let approval = app.buttons["lightningApproveSetupFee"]
-        XCTAssertTrue(scroll(app, approval, fullyVisible: true), app.debugDescription)
-        XCTAssertTrue(approval.isEnabled, app.debugDescription)
-        XCTAssertFalse(app.staticTexts["lightningSetupInvoice"].exists, "Unapproved quote must not expose a payable invoice")
-        Screenshots.capture(app, "live-mainnet-unpaid-quote", testCase: self)
-        print("LIVE_MAINNET_QUOTE=\(setupFee)")
+        XCTAssertTrue(app.staticTexts["lightningJITReceived"].exists, app.debugDescription)
+        XCTAssertTrue(app.buttons["lightningJITApprove"].exists, "nothing is bought before approval")
+        Screenshots.capture(app, "live-mainnet-instant-terms", testCase: self)
+        print("LIVE_MAINNET_INSTANT_FEE=\(app.staticTexts["lightningJITFee"].label)")
         print("LIVE_MAINNET_FINANCIAL_ACTIONS=none")
-        app.navigationBars["Set up receiving"].buttons.firstMatch.tap()
         app.buttons["Done"].tap()
         XCTAssertTrue(poll(timeout: 900, interval: 3, "verified public mainnet sync") {
             app.staticTexts["syncSummaryText"].label == "Up to date"
@@ -122,15 +105,15 @@ final class LightningAppUITests: XCTestCase {
         app.buttons["receiveLightning"].tap()
         let providerName = app.staticTexts["lightningReceiveProvider"]
         XCTAssertTrue(providerName.appears(within: 10), app.debugDescription)
-        XCTAssertEqual(providerName.value as? String, "Olympus by ZEUS")
+        XCTAssertEqual(providerName.value as? String, "Megalith Instant")
         XCTAssertTrue(app.staticTexts["lightningReceivable"].exists)
         XCTAssertFalse(app.staticTexts["lightningReceiveInvoice"].exists, "fresh install must not pretend to have receiving capacity")
         Screenshots.capture(app, "lightning-simple-receive-setup", testCase: self)
         tap(app, "lightningReceiveSetup")
-        for provider in ["olympus", "megalith", "lnserver"] {
+        for provider in ["megalith-lsps2", "olympus", "megalith", "lnserver"] {
             XCTAssertTrue(scroll(app, app.buttons["lightningProvider.\(provider)"]))
         }
-        Screenshots.capture(app, "lightning-three-providers", testCase: self)
+        Screenshots.capture(app, "lightning-providers", testCase: self)
         tapToolbar(app, "lightningSetupDone")
         XCTAssertTrue(app.buttons["lightningSetupDone"].disappears(within: 10), app.debugDescription)
         XCTAssertTrue(scroll(app, app.buttons["Receive Bitcoin instead"]))

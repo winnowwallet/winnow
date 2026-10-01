@@ -76,6 +76,8 @@ extension LightningEngine {
         // The routing graph is already outside the journal. Pending offers and
         // payment messages cannot be resumed safely on a replacement device.
         exported.async = AsyncState(); exported.offers = nil; exported.outbox = []
+        // A just-in-time purchase binds only this device's open negotiation.
+        exported.jit = nil
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         let snapshot = try encoder.encode(exported)
         let value = try LightningRecoveryBackup(version: 1, id: UUID(), chain: state.chain,
@@ -103,7 +105,7 @@ extension LightningEngine {
         var restored = source
         restored.revision += 1
         restored.recoveryRestore = .init(backupID: backup.id, savedAt: backup.savedAt, sourceRevision: source.revision)
-        restored.outbox = []; restored.async = AsyncState(); restored.offers = nil
+        restored.outbox = []; restored.async = AsyncState(); restored.offers = nil; restored.jit = nil
         restored.scan = LightningChainState(nextHeight: (source.scan.origin?.height ?? 0) + 1,
                                              origin: source.scan.origin, rescanRequired: true)
         restored.channels = source.channels.filter { $0.fundingTxid != nil && $0.phase != .closed }.map(recoveryChannel)
@@ -118,6 +120,8 @@ extension LightningEngine {
         channel.localShutdown = nil; channel.remoteShutdown = nil
         channel.observedFundingSpend = nil; channel.fundingSpendHeight = nil
         channel.resolutions = []; channel.feeBumps = nil; channel.invoicePolicy = nil
+        // A restored channel waits for its funding like any other.
+        channel.zeroConf = nil; channel.incomingExtraFee = nil
         return channel
     }
     static func validateRecoveryRestore(_ state: State) throws {
@@ -126,9 +130,9 @@ extension LightningEngine {
               recovery.respondingPeers.count <= 64,
               Set(recovery.respondingPeers).count == recovery.respondingPeers.count,
               state.outbox.allSatisfy({ [17, 136].contains($0.message.type) }),
-              state.async.outbox.isEmpty, state.offers == nil else { throw LightningError.storageFailed }
+              state.async.outbox.isEmpty, state.offers == nil, state.jit == nil else { throw LightningError.storageFailed }
         for channel in state.channels {
-            guard channel.dataLossDetected, [.recovering, .closed].contains(channel.phase),
+            guard channel.dataLossDetected, [.recovering, .closed].contains(channel.phase), channel.zeroConf == nil,
                   channel.closingTransaction == nil, (channel.feeBumps ?? []).isEmpty,
                   channel.fundingTxid != nil else { throw LightningError.storageFailed }
         }

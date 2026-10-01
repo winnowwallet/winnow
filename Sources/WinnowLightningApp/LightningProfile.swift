@@ -29,6 +29,10 @@ struct LightningProfile: Codable, Equatable, Sendable {
     let route: Route?
     let receive: Receive?
     var liquidityProvider: String? = nil
+    /// A test-network provider serving LSPS2; built-in providers say so themselves.
+    var jit: Bool? = nil
+
+    var supportsJIT: Bool { jit == true || LightningProviders.provider(self)?.jit == true }
 
     var peerKey: Data { Data(hex: peer)! } // validated on every import and load
     var endpoint: String { "\(host):\(port)" }

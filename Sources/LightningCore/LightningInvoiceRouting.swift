@@ -7,8 +7,8 @@ extension LightningEngine {
         let baseMsat: UInt32, proportionalMillionths: UInt32
         let expiryDelta: UInt16, disabled: Bool
         let minimumMsat: UInt64, maximumMsat: UInt64?
-        var route: Bolt11Invoice.Route {
-            .init(peer: peer, shortChannelID: shortChannelID, baseMsat: baseMsat,
+        func route(through scid: UInt64) -> Bolt11Invoice.Route {
+            .init(peer: peer, shortChannelID: scid, baseMsat: baseMsat,
                   proportionalMillionths: proportionalMillionths, expiryDelta: expiryDelta)
         }
     }
@@ -30,7 +30,7 @@ extension LightningEngine {
         if let previous = invoicePolicies[scid], previous.timestamp > timestamp { return }
         guard invoicePolicies[scid] != nil || invoicePolicies.count < 128 else { return }
         invoicePolicies[scid] = policy
-        if let index = state.channels.firstIndex(where: { $0.peer == peer && (try? shortChannelID($0)) == scid }) {
+        if let index = state.channels.firstIndex(where: { $0.peer == peer && routingIdentifiers($0).contains(scid) }) {
             var next = state; next.channels[index].invoicePolicy = policy; try persist(next)
         }
     }
@@ -59,6 +59,29 @@ extension LightningEngine {
               let index = observed.transactionIndex, observed.height < 1 << 24, index < 1 << 24 else { throw LightningError.invalidState }
         return UInt64(observed.height) << 40 | UInt64(index) << 16 | UInt64(output)
     }
+    /// Every scid a peer's channel_update may name for this channel: the real
+    /// one once mined, and either channel_ready alias before or after.
+    func routingIdentifiers(_ channel: ChannelState) -> Set<UInt64> {
+        var identifiers = Set([channel.localAlias, channel.remoteAlias].compactMap { $0 })
+        if let scid = try? shortChannelID(channel) { identifiers.insert(scid) }
+        return identifiers
+    }
+    /// The scid a payer's route hint names: the peer's alias for a private
+    /// alias channel or before funding confirms (BOLT 2), else the real one.
+    func routeSCID(_ channel: ChannelState) -> UInt64? {
+        if let alias = channel.remoteAlias, channel.local.options.contains(.scidAlias) || !channel.fundingIsConfirmed {
+            return alias
+        }
+        return try? shortChannelID(channel)
+    }
+    /// The newest authenticated policy the peer signed for any of this
+    /// channel's identifiers.
+    func channelPolicy(_ channel: ChannelState) -> InvoicePolicy? {
+        let identifiers = routingIdentifiers(channel)
+        let candidates = invoicePolicies.values.filter { $0.peer == channel.peer && identifiers.contains($0.shortChannelID) }
+            + [channel.invoicePolicy].compactMap { $0 }.filter { identifiers.contains($0.shortChannelID) }
+        return candidates.max { $0.timestamp < $1.timestamp }
+    }
     public struct InvoiceCapacity: Sendable {
         public let channelID: Data, route: Bolt11Invoice.Route
         public let minimumMsat: UInt64, maximumMsat: UInt64
@@ -68,25 +91,26 @@ extension LightningEngine {
         guard chainIsCurrent else { return [] }
         try persistInvoicePolicies()
         return try state.channels.compactMap { channel in
-            guard channel.peer == peer, channel.phase == .ready, channel.fundingIsConfirmed,
-                  channel.recovery != nil, let scid = try? shortChannelID(channel),
-                  let policy = invoicePolicies[scid] ?? channel.invoicePolicy, policy.peer == peer,
-                  policy.shortChannelID == scid, !policy.disabled, policy.expiryDelta > 0 else { return nil }
-            let balance = try channel.view(localOwner: true, number: channel.localNumber)
-            let recoveryReserve = UInt64(balance.feePerKW) * channel.local.format.commitmentWeight
-                + channel.local.format.anchorReserveSat * 1000
-            let reserve = channel.local.reserveSat * 1000 + (channel.isFunder ? 0 : recoveryReserve)
-            let maximum = min(balance.remoteMsat > reserve ? balance.remoteMsat - reserve : 0,
-                              channel.local.maximumHTLCMsat, policy.maximumMsat ?? .max)
-            return InvoiceCapacity(channelID: channel.id, route: policy.route,
-                minimumMsat: max(1, channel.local.minimumHTLCMsat, policy.minimumMsat), maximumMsat: maximum)
+            guard channel.peer == peer else { return nil }
+            return try invoiceCapacity(channel)
         }
+    }
+    private func invoiceCapacity(_ channel: ChannelState) throws -> InvoiceCapacity? {
+        guard channel.phase == .ready, channel.fundingUsable, channel.recovery != nil, let scid = routeSCID(channel),
+              let policy = channelPolicy(channel), !policy.disabled, policy.expiryDelta > 0 else { return nil }
+        let balance = try channel.view(localOwner: true, number: channel.localNumber)
+        let recoveryReserve = UInt64(balance.feePerKW) * channel.local.format.commitmentWeight
+            + channel.local.format.anchorReserveSat * 1000
+        let reserve = channel.local.reserveSat * 1000 + (channel.isFunder ? 0 : recoveryReserve)
+        let maximum = min(balance.remoteMsat > reserve ? balance.remoteMsat - reserve : 0,
+                          channel.local.maximumHTLCMsat, policy.maximumMsat ?? .max)
+        return InvoiceCapacity(channelID: channel.id, route: policy.route(through: scid),
+            minimumMsat: max(1, channel.local.minimumHTLCMsat, policy.minimumMsat), maximumMsat: maximum)
     }
     private func persistInvoicePolicies() throws {
         var next = state, changed = false
         for index in next.channels.indices {
-            guard let scid = try? shortChannelID(next.channels[index]), let policy = invoicePolicies[scid],
-                  policy.peer == next.channels[index].peer,
+            guard let policy = channelPolicy(next.channels[index]),
                   (next.channels[index].invoicePolicy?.timestamp ?? 0) < policy.timestamp else { continue }
             next.channels[index].invoicePolicy = policy; changed = true
         }
@@ -94,8 +118,10 @@ extension LightningEngine {
     }
     public func prepareInvoiceRouting() throws {
         try healthy()
+        // A bought channel's unconfirmed funding has no position to find yet.
         let missingPosition = state.channels.contains { channel in
             channel.fundingTxid != nil && (try? shortChannelID(channel)) == nil && channel.phase != .closed
+                && (channel.zeroConf == nil || channel.fundingIsConfirmed)
         }
         if missingPosition && !state.scan.rescanRequired {
             var next = state; next.scan.rescanRequired = true; try persist(next)

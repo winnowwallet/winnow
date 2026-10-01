@@ -26,14 +26,14 @@ public enum Bolt11Invoice {
     }
     public static func encode(network: BitcoinNetwork, amountMsat: UInt64, hash: Data, secret: Data,
                               nodeSecret: Data, route: Route?, timestamp: UInt64,
-                              expirySeconds: UInt64 = 3600) throws -> String {
+                              expirySeconds: UInt64 = 3600, minimumFinalDelta: UInt64 = 18) throws -> String {
         guard amountMsat > 0, amountMsat <= 16_777_215_000, hash.count == 32, secret.count == 32,
               timestamp < 1 << 35, (60...86_400).contains(expirySeconds) else { throw LightningError.invalidAmount }
         let hrp = prefix(network: network) + String(amountMsat * 10) + "p"
         var words = integer(timestamp, count: 7)
         words += try field(1, bytes: hash) + field(16, bytes: secret)
         words += try field(13, bytes: Data("Winnow Lightning payment".utf8))
-        words += field(6, words: integer(expirySeconds)) + field(24, words: integer(18))
+        words += field(6, words: integer(expirySeconds)) + field(24, words: integer(minimumFinalDelta))
         // Required payment_secret and optional var_onion_optin; no MPP advertised.
         words += field(5, words: integer((1 << 14) | (1 << 9)))
         if let route {

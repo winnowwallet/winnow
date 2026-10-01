@@ -33,25 +33,28 @@ extension LightningEngine {
     }
     /// A declined initial request has released no funding signature. Retain
     /// its history, but stop replaying open_channel on every reconnection.
-    func rejectOpening(_ notice: LightningPeerNotice, peer: Data) throws {
+    /// An abandoned inbound negotiation is closed too, and its purchase freed.
+    /// Returns whether the error concerned only inbound unsigned negotiations,
+    /// which a provider may abandon and retry without ending the connection.
+    @discardableResult
+    func rejectOpening(_ notice: LightningPeerNotice, peer: Data) throws -> Bool {
         try healthy()
-        guard notice.isError else { return }
+        guard notice.isError else { return false }
         let global = notice.channelID == Data(repeating: 0, count: 32)
-        let indices = state.channels.indices.filter { index in
-            let channel = state.channels[index]
-            return channel.peer == peer && (global || channel.id == notice.channelID || channel.temporaryID == notice.channelID)
-                && channel.isFunder && channel.phase == .opening && channel.fundingTxid == nil
-                && channel.fundingTransaction == nil && channel.signedCommitment == nil
+        let unsigned = state.channels.filter { channel in
+            channel.peer == peer && (global || channel.id == notice.channelID || channel.temporaryID == notice.channelID)
+                && Self.unsignedNegotiation(channel)
         }
-        guard !indices.isEmpty else { return }
+        guard !unsigned.isEmpty else { return false }
         var next = state
-        for index in indices {
-            let channel = next.channels[index]
-            next.channels[index].phase = .closed
-            next.outbox.removeAll {
-                $0.peer == peer && ($0.channelID == channel.id || $0.channelID == channel.temporaryID)
-            }
-        }
+        for channel in unsigned { Self.close(unsigned: channel, in: &next) }
+        Self.releasePurchases(boundTo: unsigned, in: &next)
         try persist(next)
+        return !global && unsigned.allSatisfy { !$0.isFunder }
+    }
+    private static func unsignedNegotiation(_ channel: ChannelState) -> Bool {
+        let opening = channel.isFunder && channel.phase == .opening
+        let accepted = !channel.isFunder && channel.phase == .accepted
+        return (opening || accepted) && channel.fundingTxid == nil && channel.fundingTransaction == nil && channel.signedCommitment == nil
     }
 }
