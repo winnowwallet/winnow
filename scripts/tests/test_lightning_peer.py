@@ -45,12 +45,16 @@ class PeerStartupTests(unittest.TestCase):
         with patch('sys.platform', 'linux'), self.assertRaises(TimeoutError):
             receive(peer, self.log)
 
-    def test_only_a_stock_daemons_hsm_socket_failure_retries_a_timed_out_scenario(self):
+    def test_only_a_stock_daemons_socket_failure_retries_a_timed_out_scenario(self):
         check = self.module['check_peer']
         broken = ('2026-09-30T23:39:50.224Z **BROKEN** 031b-closingd-chan#1: STATUS_FAIL_HSM_IO: '
                   'Bad hsm_sign_mutual_close_tx reply \n')
-        for logs, retried in (((broken, ''), True), (('', broken), True),
+        died = ('2026-10-01T01:48:52.259Z INFO    02bf-chan#1: Peer transient failure in CHANNELD_AWAITING_LOCKIN: '
+                'channeld: Owning subdaemon channeld died (0)\n')
+        for logs, retried in (((broken, ''), True), (('', broken), True), ((died, ''), True),
                               ((broken + '**BROKEN** 031b-chan#1: Funding transaction spent\n', ''), False),
+                              ((died + '2026-10-01T01:48:53Z DEBUG   02bf-channeld-chan#1: peer_out WIRE_ERROR\n', ''), False),
+                              ((died.replace('died (0)', 'died (62208)'), ''), False),
                               (('', ''), False), ((broken.replace('STATUS_FAIL_HSM_IO', 'STATUS_FAIL_PEER_IO'), ''), False)):
             with self.subTest(logs=logs):
                 calls = []
@@ -66,7 +70,7 @@ class PeerStartupTests(unittest.TestCase):
                     if retried:
                         check('cooperative', evidence)
                         history = json.loads((evidence / 'attempts.json').read_text())
-                        self.assertEqual([item['result'] for item in history], ['reference-hsm-failure', 'passed'])
+                        self.assertEqual([item['result'] for item in history], ['reference-socket-failure', 'passed'])
                     else:
                         with self.assertRaises(TimeoutError):
                             check('cooperative', evidence)
@@ -74,7 +78,7 @@ class PeerStartupTests(unittest.TestCase):
         with patch('sys.platform', 'linux'), patch.dict(check.__globals__, run_peer=Mock(side_effect=TimeoutError())):
             evidence = self.root / 'linux'
             (self.root / 'linux').mkdir()
-            self.assertFalse(self.module['reference_hsm_failure'](evidence))
+            self.assertFalse(self.module['reference_socket_failure'](evidence))
 
     def test_protocol_rejection_and_success_are_not_reclassified(self):
         peer = Mock()

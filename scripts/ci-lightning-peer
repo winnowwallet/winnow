@@ -314,26 +314,35 @@ class ReferenceStartupFailure(RuntimeError):
     """Stock CLN lost its channel subdaemon before funding_signed."""
 
 
-class ReferenceHSMFailure(ReferenceStartupFailure):
-    """A stock CLN subdaemon lost its HSM connection later in the scenario."""
+class ReferenceSocketFailure(ReferenceStartupFailure):
+    """A stock CLN subdaemon lost a socket later in the scenario."""
 
 
-# Stock v26.06.8 on macOS can hand a subdaemon an unreadable HSM socket
-# (upstream #5808/#9323, fixed by #9564, which only the labeled UI HSM
-# carries). It hit 5 of 12 openings in one hosted run, and has also failed
-# closingd's mutual-close signature. Each attempt is a fresh disposable
-# fixture, and only these exact reference failures are retried.
+# Stock v26.06.8 on macOS can hand a subdaemon an unreadable socket (upstream
+# #5808/#9323, fixed for the HSM by #9564, which only the labeled UI HSM
+# carries). It hit 5 of 12 openings in one hosted run, and has also killed
+# closingd's mutual-close signature and a routed reference channel's channeld.
+# Each attempt is a fresh disposable fixture; only these failures are retried.
 REFERENCE_STARTUP_ATTEMPTS = 5
 HSM_IO = re.compile(r'\*\*BROKEN\*\* \S+-(?:channeld|closingd|onchaind|openingd)-chan#\d+: STATUS_FAIL_HSM_IO: ')
+# A channel daemon that exits at once, cleanly, as a transient failure.
+DAEMON_LOST = re.compile(r'Peer transient failure in \S+: (channeld|openingd|closingd): Owning subdaemon \1 died \(0\)')
 
 
-def reference_hsm_failure(evidence):
-    """Only the upstream macOS HSM socket failure broke a stock daemon."""
+def reference_socket_failure(evidence):
+    """Only the upstream macOS socket failures broke a stock daemon: no
+    protocol error was sent, and nothing else is BROKEN."""
     if sys.platform != 'darwin':
         return False
-    broken = [line.decode(errors='replace') for name in ('cln.log', 'recipient-cln.log') if (evidence / name).exists()
-              for line in bounded_log_lines(evidence / name) if b'**BROKEN**' in line]
-    return bool(broken) and all(HSM_IO.search(line) for line in broken)
+    found = False
+    for name in ('cln.log', 'recipient-cln.log'):
+        if not (evidence / name).exists():
+            continue
+        lines = [line.decode(errors='replace') for line in bounded_log_lines(evidence / name)]
+        if any(('**BROKEN**' in line and not HSM_IO.search(line)) or 'peer_out WIRE_ERROR' in line for line in lines):
+            return False
+        found |= any(HSM_IO.search(line) or DAEMON_LOST.search(line) for line in lines)
+    return found
 
 
 def funding_signature(swift, log):
@@ -729,11 +738,11 @@ def check_peer(close_mode, evidence, channel_format="staticRemoteKey", offers=Fa
             try:
                 run_peer(close_mode, attempt, channel_format, offers)
             except TimeoutError as error:
-                if not reference_hsm_failure(attempt):
+                if not reference_socket_failure(attempt):
                     raise
-                raise ReferenceHSMFailure(f'Stock CLN lost a subdaemon HSM connection; see {attempt}') from error
+                raise ReferenceSocketFailure(f'Stock CLN lost a subdaemon socket; see {attempt}') from error
         except ReferenceStartupFailure as error:
-            result = 'reference-hsm-failure' if isinstance(error, ReferenceHSMFailure) else 'reference-startup-failure'
+            result = 'reference-socket-failure' if isinstance(error, ReferenceSocketFailure) else 'reference-startup-failure'
             attempts.append(dict(attempt=number, result=result, error=str(error)))
             (evidence / 'attempts.json').write_text(json.dumps(attempts, indent=2) + '\n')
             if number == REFERENCE_STARTUP_ATTEMPTS:
