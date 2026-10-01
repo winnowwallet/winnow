@@ -24,7 +24,9 @@ import tempfile
 ROOT = Path(__file__).resolve().parent.parent
 SWIFTLINT_VERSION = '0.65.1'
 FORMULA = 'CC^2 * (1 - executable_line_coverage)^3 + CC'
-DECL = re.compile(r'^\s*\((func_decl|constructor_decl).*?range=\[(.*?):(\d+):(\d+) - line:(\d+):(\d+)\] "([^"]*)"')
+# The parse wraps each defer body in an implicit `$defer()` func_decl. SwiftLint
+# counts its decisions in the enclosing method, so its lines stay there too.
+DECL = re.compile(r'^\s*\((func_decl|constructor_decl)(?:(?! implicit ).)*?range=\[(.*?):(\d+):(\d+) - line:(\d+):(\d+)\] "([^"]*)"')
 DIRECTIVE = re.compile(r'(?m)^\s*#(?:if|elseif|else|endif)\b[^\n]*')
 # A class or actor head, from its modifiers through any generic parameters,
 # then the `: A, B` it inherits, which ends where its body or `where` begins.
