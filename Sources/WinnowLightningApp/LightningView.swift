@@ -26,7 +26,7 @@ struct LightningView: View {
                     Text(controller.networkNotice).font(.headline)
                     Text("Experimental Lightning. Background checks can relay pre-signed channel recovery transactions, but this beta has no external watchtower.")
                         .font(.footnote).foregroundStyle(.secondary)
-                    Text("Each network has its own wallet and channels. Save an encrypted Lightning recovery file and its separate recovery phrase before relying on this device alone.")
+                    Text("Each network has its own wallet and channels. Save an encrypted Lightning recovery file before relying on this device alone. It opens with this wallet's recovery phrase.")
                         .font(.footnote).foregroundStyle(.secondary)
                     LabeledContent("Connection", value: controller.connection)
                         .accessibilityElement(children: .ignore)

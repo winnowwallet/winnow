@@ -39,7 +39,10 @@ There is no Rust, LDK or other Lightning runtime in the app; P256K
   wallet's storage and Keychain service.
 - **Backups.** iCloud backup covers the Bitcoin wallet and never holds channel
   state. Channels move between devices only through the encrypted recovery
-  file (Settings → Lightning recovery file), which has its own 24-word phrase.
+  file (Settings → Lightning recovery file). The file opens with the wallet's
+  own recovery phrase, or with nothing typed when that wallet is already on
+  the device (restored from iCloud, for instance). Files saved by 0.8.0 keep
+  their separate 24-word phrase.
 - **Guards.**
   - A wallet can be deleted unless one of its channels is not yet closed or is
     being recovered.

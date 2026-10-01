@@ -1,4 +1,6 @@
-Winnow 0.8.0: Lightning in Winnow
+Winnow 0.8.1: Lightning in Winnow
+
+New in 0.8.1: the Lightning recovery file opens with your wallet's recovery phrase, so there is no second phrase to keep.
 
 Lightning is now part of Winnow, a native Swift engine on Winnow's own wallet, verified chain scanner and broadcast path. Mainnet uses real bitcoin; start with small amounts.
 
@@ -18,7 +20,7 @@ Fund a channel from your wallet, then close a small channel and check the funds 
 
 Backups
 
-iCloud backup still covers your Bitcoin wallet; it never holds channel state. Settings → Lightning recovery file exports an encrypted file with its own 24-word phrase. Restore it only into an empty device or simulator, never by wiping your only funded wallet. A restored channel stays in recovery mode until it closes.
+iCloud backup still covers your Bitcoin wallet; it never holds channel state. Settings → Lightning recovery file exports an encrypted file that opens with this wallet's recovery phrase. Restore it on an empty device by entering that phrase, or with nothing typed after restoring the same wallet from iCloud. Never wipe your only funded wallet to test it. A file saved by 0.8.0 still opens with its separate phrase. A restored channel stays in recovery mode until it closes.
 
 Background checks
 

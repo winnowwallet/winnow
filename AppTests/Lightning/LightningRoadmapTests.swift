@@ -40,8 +40,8 @@ final class LightningRoadmapTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         return root
     }
-    private func contents() async throws -> (CloudBackupContents, LightningRecoveryBackup) {
-        let wallet = try Wallet.create(network: .regtest, keyStore: InMemoryKeyStore(), entropy: Data(repeating: 7, count: 16))
+    private func contents(entropy: UInt8 = 7) async throws -> (CloudBackupContents, LightningRecoveryBackup) {
+        let wallet = try Wallet.create(network: .regtest, keyStore: InMemoryKeyStore(), entropy: Data(repeating: entropy, count: 16))
         let bundle = try await wallet.recoveryBundle(includeMnemonic: true)
         let engine = try LightningEngine(chain: NetworkParams.regtest.genesisHash,
             nodeSecret: Data(repeating: 21, count: 32), journal: Journal())
@@ -52,13 +52,14 @@ final class LightningRoadmapTests: XCTestCase {
         let state = PortableLightningState(context: context, lightning: backup)
         return try (CloudBackupContents(bundle: bundle, appState: state.encoded()), backup)
     }
-    func testPortableFileUsesSeparatePhraseAndRestoresIntoFreshDeviceNamespace() async throws {
+    func testPortableFileOpensWithTheWalletPhraseAndRestoresIntoFreshDeviceNamespace() async throws {
         let (original, backup) = try await contents()
-        let prepared = try PortableLightningBackup.prepare(original)
-        XCTAssertEqual(prepared.phrase.split(separator: " ").count, 24)
-        XCTAssertNotEqual(prepared.phrase, original.bundle.mnemonic)
-        XCTAssertFalse(String(decoding: prepared.file, as: UTF8.self).contains(prepared.phrase))
-        let restored = try PortableLightningBackup.restore(prepared.file, phrase: prepared.phrase, network: .regtest)
+        let file = try PortableLightningBackup.prepare(original)
+        let words = try XCTUnwrap(original.bundle.mnemonic)
+        XCTAssertFalse(String(decoding: file, as: UTF8.self).contains(words))
+        // Typed words differ in case and spacing from the stored phrase.
+        let typed = "  " + words.uppercased().replacingOccurrences(of: " ", with: "\n ") + "\n"
+        let restored = try PortableLightningBackup.restore(file, words: typed, network: .regtest)
         XCTAssertEqual(try restored.bundle.serialized(), try original.bundle.serialized())
         let state = try PortableLightningState.decode(restored.appState, for: restored.bundle)
         XCTAssertEqual(state.lightning, backup)
@@ -105,21 +106,36 @@ final class LightningRoadmapTests: XCTestCase {
     }
     func testWrongPhraseNetworkAndDamagedFileRejectBeforeCreatingRecoveryState() async throws {
         let (original, _) = try await contents()
-        let prepared = try PortableLightningBackup.prepare(original)
+        let file = try PortableLightningBackup.prepare(original)
+        let words = try XCTUnwrap(original.bundle.mnemonic)
         let otherPhrase = try BIP39.mnemonic(entropy: Data(repeating: 1, count: 32))
-        XCTAssertThrowsError(try PortableLightningBackup.restore(prepared.file, phrase: otherPhrase, network: .regtest))
-        XCTAssertThrowsError(try PortableLightningBackup.restore(prepared.file, phrase: prepared.phrase, network: .mainnet))
-        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: prepared.file) as? [String: Any])
+        XCTAssertThrowsError(try PortableLightningBackup.restore(file, words: otherPhrase, network: .regtest))
+        XCTAssertThrowsError(try PortableLightningBackup.restore(file, words: words, network: .mainnet))
+        XCTAssertThrowsError(try PortableLightningBackup.restore(file, words: "not a recovery phrase", network: .regtest))
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: file) as? [String: Any])
         // Damage authenticated content while retaining valid JSON/container metadata.
         object["sealedWallet"] = Data(repeating: 1, count: 48).base64EncodedString()
         let damaged = try JSONSerialization.data(withJSONObject: object)
-        XCTAssertThrowsError(try PortableLightningBackup.restore(damaged, phrase: prepared.phrase, network: .regtest))
-        XCTAssertThrowsError(try PortableLightningBackup.restore(prepared.file, phrase: original.bundle.mnemonic ?? "", network: .regtest))
+        XCTAssertThrowsError(try PortableLightningBackup.restore(damaged, words: words, network: .regtest))
+        var withoutWords = original
+        withoutWords.bundle.mnemonic = nil
+        XCTAssertThrowsError(try PortableLightningBackup.prepare(withoutWords))
         let model = makeModel(network: .regtest, deviceAuthenticator: Denied())
         do { _ = try await model.restorePortableLightningBackup(original); XCTFail("Canceled authentication restored keys") }
         catch is CancellationError {}
         XCTAssertNil(model.walletID)
         XCTAssertFalse(model.keychainAuthentication.isGranted)
+    }
+    /// Winnow 0.8.0 wrapped each file with its own random 24-word phrase.
+    func testFileSavedByWinnow080OpensWithItsSeparatePhrase() async throws {
+        let (original, backup) = try await contents()
+        let phrase = try BIP39.mnemonic(entropy: Data(repeating: 9, count: 32)), id = UUID()
+        let key = try PortableLightningBackup.legacyKey(phrase, id: id, network: original.bundle.network)
+        let file = try CloudWalletBackup.create(bundle: original.bundle, appState: original.appState, id: id, key: key).encoded()
+        let restored = try PortableLightningBackup.restore(file, words: phrase, network: .regtest)
+        XCTAssertEqual(try restored.bundle.serialized(), try original.bundle.serialized())
+        XCTAssertEqual(try PortableLightningState.decode(restored.appState, for: restored.bundle).lightning, backup)
+        XCTAssertThrowsError(try PortableLightningBackup.restore(file, words: original.bundle.mnemonic ?? "", network: .regtest))
     }
     func testReceiveIntentSurvivesRestartAndProviderMinimumIsSeparateFromPayment() async throws {
         let root = try directory(), keys = InMemoryStoreKeyVault(), model = makeModel(network: .regtest)
@@ -192,6 +208,8 @@ final class LightningRoadmapTests: XCTestCase {
         XCTAssertNil(model.stack)
         do { _ = try await model.portableLightningBackupContents(); XCTFail("exported without a wallet") }
         catch AppModel.AppError.noWallet {}
+        do { _ = try await model.restorePortableLightningFileForThisWallet(Data()); XCTFail("restored without a wallet") }
+        catch AppModel.AppError.noWallet {}
         _ = try await model.restorePortableLightningBackup(original)
         let restoredDescriptor = await model.wallet?.descriptor
         XCTAssertEqual(restoredDescriptor?.serialized(), original.bundle.descriptor)
@@ -211,6 +229,16 @@ final class LightningRoadmapTests: XCTestCase {
         XCTAssertFalse(model.keychainAuthentication.isGranted, "the export's authorization ends with it")
         _ = try await model.restorePortableLightningBackup(original)
         XCTAssertEqual(model.lightning?.recoveryStatus?.backupID, backup.id)
+
+        // A file this wallet saved opens with the wallet's own phrase, so a
+        // wallet restored from iCloud types nothing; another wallet's does not.
+        _ = try await model.restorePortableLightningFileForThisWallet(PortableLightningBackup.prepare(original))
+        XCTAssertEqual(model.lightning?.recoveryStatus?.backupID, backup.id)
+        XCTAssertFalse(model.keychainAuthentication.isGranted)
+        let (other, _) = try await contents(entropy: 8)
+        do { _ = try await model.restorePortableLightningFileForThisWallet(PortableLightningBackup.prepare(other)); XCTFail("another wallet's file opened") }
+        catch WalletError.invalidBundle {}
+        XCTAssertEqual(model.walletDescriptor?.serialized(), original.bundle.descriptor)
         do { try await model.createWallet(); XCTFail("fresh keys replaced a restored wallet") }
         catch AppModel.AppError.storageDamaged {}
     }
