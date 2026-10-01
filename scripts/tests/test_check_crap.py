@@ -60,6 +60,61 @@ class CrapEvidenceTests(unittest.TestCase):
         self.assertIn('  frame 59', printed.getvalue())
         self.assertNotIn('frame 19\n', printed.getvalue(), 'only the end of a long report is printed')
 
+    def assert_blanked(self, source, *clauses):
+        expected = source
+        for clause in clauses:
+            self.assertIn(clause, expected)
+            expected = expected.replace(clause, TOOL['blank'](clause), 1)
+        self.assertEqual(TOOL['parse_copy'](source), expected)
+
+    def test_parse_copy_blanks_class_and_actor_inheritance_in_place(self):
+        source = ('public actor LightningBackgroundMonitor: LightningChainMonitor {\n'
+                  '    public init(store: LightningBackgroundStore, chain: Data) throws {}\n}\n')
+        copy = TOOL['parse_copy'](source)
+        self.assertEqual(copy, source.replace(': LightningChainMonitor', ' ' * 23))
+        position = lambda text: (text[:text.index('init')].count('\n'), text.index('init') - text.rindex('\n', 0, text.index('init')))
+        self.assertEqual(position(copy), position(source), 'the initializer keeps its line and column')
+        self.assert_blanked('@MainActor final class A: B, @unchecked Sendable {}\n', ': B, @unchecked Sendable')
+        self.assert_blanked('open class Base: NSObject {}\n', ': NSObject')
+        self.assert_blanked('    private final class C: P {}\n    fileprivate actor D: P, Q {}\n', ': P', ': P, Q')
+        self.assert_blanked('package final class E: P {}\n@objc(Named) public final class F: NSObject {}\n', ': P', ': NSObject')
+        self.assert_blanked('enum N { final class Inner: Base {} }\n', ': Base')
+        self.assert_blanked('final class Box<Key: Hashable, Value: Collection<Int>>: Base<Key>, P where Value: Sendable {}\n',
+                            ': Base<Key>, P')
+        self.assert_blanked('public final class Long\n    : Base,\n      P, // kept for the API\n      Q\n{\n}\n',
+                            ': Base,\n      P, // kept for the API\n      Q')
+        self.assert_blanked('actor Pool<T>:\n    P,\n    Q\nwhere T: Sendable {\n}\n', ':\n    P,\n    Q')
+        self.assert_blanked('#if os(iOS)\nfinal class A: B {}\n#else\nfinal class A {}\n#endif\n',
+                            '#if os(iOS)', ': B', '#else', '#endif')
+
+    def test_parse_copy_leaves_other_colons_alone(self):
+        self.assert_blanked('final class Plain {\n'
+                            '    class func make() -> Plain { Plain() }\n'
+                            '    class var shared: Plain { Plain() }\n'
+                            '    final class var name: String { "" }\n'
+                            '    class subscript(index: Int) -> Int { index }\n}\n')
+        self.assert_blanked('protocol Owner: AnyObject {}\nprotocol Legacy: class {}\nprotocol Monitor: Actor {}\n'
+                            'protocol Spread:\n    class,\n    Sendable {}\n')
+        self.assert_blanked('func connect(\n    actor peer: PeerConnection,\n    class kind: Kind\n) {}\n')
+        self.assert_blanked('func connect(\n    actor peer: ' + 'Long' * 2000 + '\n) {}\n')
+
+    def test_declarations_dump_the_blanked_copy_and_leave_the_source(self):
+        from unittest.mock import patch
+        source = 'public actor Monitor: ChainMonitor {\n    public init(chain: Data) {}\n}\n'
+        dumped = []
+
+        def dump(input):
+            dumped.append(Path(input).read_text())
+            return f'  (constructor_decl range=[{input}:2:12 - line:2:32] "init(chain:)"\n'
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'Monitor.swift'
+            path.write_text(source)
+            with patch.dict(TOOL['declarations'].__globals__, parse_dump=dump):
+                self.assertEqual(TOOL['declarations'](path),
+                                 (path, [{'start': 2, 'column': 12, 'end': 2, 'name': 'init(chain:)'}]))
+            self.assertEqual(path.read_text(), source)
+        self.assertEqual(dumped, [source.replace(': ChainMonitor', ' ' * 14)])
+
     def test_entry_path_and_exact_twelve_boundary(self):
         uncovered = self.row(2, {3: 0, 4: 0, 7: 0})
         self.assertEqual(uncovered['complexity'], 3)

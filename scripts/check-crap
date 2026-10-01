@@ -25,6 +25,25 @@ ROOT = Path(__file__).resolve().parent.parent
 SWIFTLINT_VERSION = '0.65.1'
 FORMULA = 'CC^2 * (1 - executable_line_coverage)^3 + CC'
 DECL = re.compile(r'^\s*\((func_decl|constructor_decl).*?range=\[(.*?):(\d+):(\d+) - line:(\d+):(\d+)\] "([^"]*)"')
+DIRECTIVE = re.compile(r'(?m)^\s*#(?:if|elseif|else|endif)\b[^\n]*')
+# A class or actor head, from its modifiers through any generic parameters,
+# then the `: A, B` it inherits, which ends where its body or `where` begins.
+# `class func`/`class var` and protocol `: AnyObject`/`: class` never match;
+# neither does a parameter labeled `actor`, whose type ends at `,` or `)`.
+INHERITANCE = re.compile(r'''(?mx)
+    (?P<head>
+        (?:^|[{;]) [ \t]*
+        (?: (?: @\w+ (?:\((?:[^()]|\([^()]*\))*\))?
+              | public | private | fileprivate | internal | package | open | final | distributed
+            ) \s+ )*
+        (?:class|actor) \s+
+        (?!(?:func|var|let|subscript|init|deinit|override|final|static|convenience|required)\b) \w+\b
+        (?: \s* <(?:[^<>]|<(?:[^<>]|<[^<>]*>)*>)*> )?
+        \s*
+    )
+    (?P<inherits> : (?: \s | //[^\n]*$ | /\*(?:[^*]|\*(?!/))*\*/ | (?!where\b)\w+\b | [.,&<>@~?!\[\]:] )+? )
+    (?= \s* (?: \{ | where\b ) )
+''')
 
 
 def source_files(root):
@@ -58,15 +77,26 @@ def parse_dump(input, attempts=5):
             raise subprocess.CalledProcessError(result.returncode, command, result.stdout, result.stderr)
 
 
+def blank(text):
+    return ''.join('\n' if c == '\n' else ' ' for c in text)
+
+
+def parse_copy(source):
+    """The source the parse dump reads, every declaration at its original
+    line and column; complexity still comes from the untouched source tree.
+    dump-parse omits #if blocks entirely before type checking, so only the
+    directive lines are blanked to inventory ALL build variants. Printing an
+    initializer asks its class or actor for a superclass, and that lookup
+    runs over imports a parse never resolved: x86_64 swiftc dies there by
+    SIGSEGV. Blanking every inheritance clause leaves nothing to look up."""
+    source = DIRECTIVE.sub(lambda match: blank(match.group()), source)
+    return INHERITANCE.sub(lambda match: match['head'] + blank(match['inherits']), source)
+
+
 def declarations(path):
-    # dump-parse omits #if blocks entirely before type checking. Blank only
-    # directive lines to inventory ALL build variants at their original lines;
-    # complexity still comes from the untouched SwiftSyntax source tree.
-    source = re.sub(r'(?m)^\s*#(?:if|elseif|else|endif)\b[^\n]*',
-                    lambda match: ''.join('\n' if c == '\n' else ' ' for c in match.group()), path.read_text())
     with tempfile.TemporaryDirectory(prefix='winnow-crap-parse-') as directory:
         input = Path(directory) / path.name
-        input.write_text(source)
+        input.write_text(parse_copy(path.read_text()))
         dump = parse_dump(input)
     found = []
     for line in dump.splitlines():
