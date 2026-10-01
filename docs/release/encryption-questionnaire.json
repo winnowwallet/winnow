@@ -5,5 +5,5 @@
   "app_description": "Winnow is a self-custody Bitcoin wallet with Lightning payments. It uses standard cryptography (secp256k1, SHA-256, HKDF, ChaCha20-Poly1305, AES-GCM) to sign transactions and to encrypt its Lightning peer connections, payment onions and local channel records.",
   "contains_proprietary_cryptography": false,
   "contains_third_party_cryptography": true,
-  "available_on_french_store": true
+  "available_on_french_store": false
 }
