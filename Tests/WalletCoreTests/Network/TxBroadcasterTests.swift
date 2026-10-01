@@ -21,7 +21,7 @@ struct TxBroadcasterTests {
     // fee floor. The store-persistence cases these used to sit beside are in
     // `TxBroadcasterStoreTests`.
 
-    @Test("announces witness-tx inv to all peers and answers getdata")
+    @Test("announces transaction inv to all peers and answers witness getdata")
     func announceAndServe() async throws {
         let params = NetworkParams.signet
         let nodeA = LoopbackNode(params: params)
@@ -46,16 +46,16 @@ struct TxBroadcasterTests {
         let txid = try await broadcaster.broadcast(rawTx)
         #expect(txid == tx.txid)
 
-        // Every node must receive inv(MSG_WITNESS_TX, txid), then get the tx
-        // when it asks via getdata.
+        // Every node must receive inv(MSG_TX, txid): BIP144's witness flag
+        // belongs in the getdata that asks for it, which gets the tx back.
         for node in [nodeA, nodeB, nodeC] {
             let invMessage = await node.nextMessage(command: "inv")
             guard case let .inv(payload) = invMessage else {
                 Issue.record("no inv received")
                 continue
             }
-            #expect(payload.vectors == [InventoryVector(type: .witnessTx, hash: txid)])
-            try await node.send(.getdata(InventoryPayload(payload.vectors)))
+            #expect(payload.vectors == [InventoryVector(type: .tx, hash: txid)])
+            try await node.send(.getdata(InventoryPayload([.init(type: .witnessTx, hash: txid)])))
             let txMessage = await node.nextMessage(command: "tx")
             guard case let .tx(served) = txMessage else {
                 Issue.record("no tx received")

@@ -31,8 +31,12 @@ targets:
       properties:
         LSMinimumSystemVersion: "14.0"
         NSLocalNetworkUsageDescription: "Winnow checks your Tailscale gateways and connects to Bitcoin nodes you configure."
+        # Scanning fills the invoice field; it never approves a payment.
+        NSCameraUsageDescription: Scan a payment invoice.
         # Background chain checks (BackgroundSyncScheduler). iOS decides when
-        # they run; each is one bounded scan with the foreground's routing.
+        # they run; each is one bounded scan with the foreground's routing,
+        # which also watches Lightning channels and relays their pre-signed
+        # recovery transactions.
         UIBackgroundModes: [fetch, processing]
         BGTaskSchedulerPermittedIdentifiers:
           - com.btcswift.winnow.chain-refresh
@@ -49,6 +53,8 @@ targets:
     sources:
       - path: Sources/WinnowApp
         excludes: ["README.md"]
+      # Lightning's controller, views and model logic (docs/engineering/swift-lightning.md).
+      - path: Sources/WinnowLightningApp
       # Design papers, bundled so Settings can render them offline (the
       # esplora opt-in warning links the read-side paper). These are the same
       # files the website serves; site.css rides along so they keep their type.
@@ -67,6 +73,8 @@ targets:
     dependencies:
       - package: Winnow
         product: WalletCore
+      - package: Winnow
+        product: LightningCore
     settings:
       base:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -85,9 +93,11 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         "INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad": "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_CFBundleDisplayName: Winnow
-        # Standard/exempt crypto only (CryptoKit, libsecp256k1) — no export
-        # compliance prompt per build.
-        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+        # Lightning's Noise transport and Sphinx onions include cryptography
+        # implemented outside Apple's OS (docs/release/encryption-inventory.md).
+        # Release builds apply the reviewed declaration instead
+        # (scripts/encryption-declaration-key); none is inferred here.
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: YES
         # Signing, seed export/reveal, and destructive key operations
         # authenticate the device owner; Face ID may satisfy that prompt.
         INFOPLIST_KEY_NSFaceIDUsageDescription: "Face ID confirms it's you before Winnow signs or reveals wallet secrets."
@@ -137,7 +147,9 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - path: UITests
-        excludes: ["README.md"]
+        # The Lightning journey is its own target below, so this journey's
+        # checkpoint inventory is only its own.
+        excludes: ["README.md", "Lightning/**"]
     dependencies:
       - target: WinnowApp
       - package: Winnow
@@ -156,12 +168,39 @@ targets:
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "2858MX5336" # ttt246 llc
 
+  # Lightning UI journeys against real CLN/LDK peers (scripts/ci-lightning-ui
+  # provides the fixture), plus the receive/setup screens that need none. The
+  # shared helpers are the same file WinnowAppUITests compiles.
+  WinnowAppLightningUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: UITests/Lightning/LightningAppUITests.swift
+      - path: UITests/TestHelpers.swift
+    dependencies:
+      - target: WinnowApp
+      - package: Winnow
+        product: TestSupport
+      - package: Winnow
+        product: WalletCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.btcswift.app.lightning-uitests
+        TEST_TARGET_NAME: WinnowApp
+        SWIFT_VERSION: "6.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: "2858MX5336" # ttt246 llc
+
 schemes:
   WinnowApp:
     build:
       targets:
         WinnowApp: all
         WinnowAppUITests: [test]
+        WinnowAppLightningUITests: [test]
     run:
       config: Debug
     test:
@@ -175,3 +214,4 @@ schemes:
       targets:
         - WinnowAppTests
         - WinnowAppUITests
+        - WinnowAppLightningUITests

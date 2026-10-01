@@ -8,6 +8,13 @@ struct WinnowApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
+        #if DEBUG
+        // The regtest Lightning UI fixture uses still UIKit transitions on
+        // phones; the signet journey keeps the normal ones.
+        if E2EMode.current?.forcedNetwork == .regtest, UIDevice.current.userInterfaceIdiom == .phone {
+            UIView.setAnimationsEnabled(false)
+        }
+        #endif
         let model = AppModel()
         _model = State(initialValue: model)
         // BGTask handlers must be registered before launch finishes.
@@ -23,13 +30,8 @@ struct WinnowApp: App {
                 case .onboarding:
                     OnboardingView()
                 case .ready:
-                    // Beginner mode is one screen; Advanced mode is the
-                    // three tabs. The switch lives in each one's toolbar.
-                    if model.advancedMode {
-                        MainTabView()
-                    } else {
-                        BeginnerHomeView()
-                    }
+                    // Either mode, under the channel protection banner.
+                    LightningReadyView()
                 case let .storageDamaged(message):
                     StorageDamagedView(message: message)
                 }
@@ -174,10 +176,12 @@ final class PrivacyShield {
     }
 }
 
-/// Advanced mode: Wallet, Send, and Settings.
+/// Advanced mode: Wallet, Send, and Settings (and Lightning, in Winnow Lightning).
 struct MainTabView: View {
+    @Environment(AppModel.self) private var model
     private enum Tab: String, Hashable {
         case wallet, send, settings
+        case lightning
     }
 
     @State private var selection: Tab
@@ -191,6 +195,12 @@ struct MainTabView: View {
 
     var body: some View {
         TabView(selection: $selection) {
+            if let lightning = model.lightning {
+                LightningView(controller: lightning)
+                    .id(model.network)
+                    .tabItem { Label("Lightning", systemImage: "bolt.circle") }
+                    .tag(Tab.lightning)
+            }
             HomeView(
                 sendFrom: { accountID in
                     sendAccountID = accountID

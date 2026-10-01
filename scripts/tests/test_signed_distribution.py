@@ -86,6 +86,46 @@ class SignedAppTests(unittest.TestCase):
             with self.subTest(architecture=architecture), self.assertRaises(AssertionError):
                 self.verify(architectures=architecture)
 
+    def test_each_reviewed_encryption_answer_is_required_exactly(self):
+        with patch.dict(os.environ, WINNOW_NONEXEMPT_ENCRYPTION='YES', WINNOW_ENCRYPTION_COMPLIANCE_CODE='approved-code'):
+            self.info['ITSAppUsesNonExemptEncryption'] = True
+            self.info['ITSEncryptionExportComplianceCode'] = 'approved-code'
+            self.verify()
+            for code in (None, 'other-code'):
+                with self.subTest(code=code), self.assertRaises(AssertionError):
+                    self.info['ITSEncryptionExportComplianceCode'] = code
+                    if code is None:
+                        self.info.pop('ITSEncryptionExportComplianceCode')
+                    self.verify()
+            self.info['ITSEncryptionExportComplianceCode'] = 'approved-code'
+            self.info['ITSAppUsesNonExemptEncryption'] = False
+            with self.assertRaises(AssertionError):
+                self.verify()
+        with patch.dict(os.environ, WINNOW_NONEXEMPT_ENCRYPTION='YES', WINNOW_ENCRYPTION_COMPLIANCE_CODE=''):
+            self.info.pop('ITSEncryptionExportComplianceCode')
+            self.info['ITSAppUsesNonExemptEncryption'] = True
+            self.verify()
+        with patch.dict(os.environ, WINNOW_NONEXEMPT_ENCRYPTION='NO'):
+            self.info['ITSAppUsesNonExemptEncryption'] = False
+            self.verify()
+            self.info['ITSEncryptionExportComplianceCode'] = 'approved-code'
+            with self.assertRaises(AssertionError):
+                self.verify()
+        with patch.dict(os.environ, WINNOW_NONEXEMPT_ENCRYPTION='MAYBE'), self.assertRaises(AssertionError):
+            self.verify()
+
+    def test_pending_questionnaire_cannot_claim_an_answer_or_approved_code(self):
+        with patch.dict(os.environ, WINNOW_NONEXEMPT_ENCRYPTION='PENDING'):
+            self.verify()
+            for value in (True, False, ''):
+                self.info['ITSAppUsesNonExemptEncryption'] = value
+                with self.subTest(value=value), self.assertRaises(AssertionError):
+                    self.verify()
+            self.info.pop('ITSAppUsesNonExemptEncryption')
+            self.info['ITSEncryptionExportComplianceCode'] = 'unreviewed-code'
+            with self.assertRaises(AssertionError):
+                self.verify()
+
 
 class UploadIntegrityTests(unittest.TestCase):
     def test_upload_only_accepts_the_verified_ipa_bytes(self):
@@ -133,4 +173,4 @@ class UploadIntegrityTests(unittest.TestCase):
         self.assertIn('<string>Production</string>', workflow)
         verifier = (ROOT / 'scripts/verify-exported-ipa').read_text()
         self.assertIn('--distribution', verifier)
-        self.assertIn('scripts/verify-release-e2e-exclusion', verifier)
+        self.assertIn('"$script_dir/verify-release-e2e-exclusion"', verifier)

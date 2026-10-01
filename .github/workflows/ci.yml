@@ -25,6 +25,8 @@ jobs:
   tdx:
     if: vars.TDX_CI_ENABLED == 'true' && inputs.hosted != true && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     uses: ./.github/workflows/ci-tdx.yml
+  lightning:
+    uses: ./.github/workflows/ci-lightning.yml
   website:
     needs: [hosted, tdx]
     # Keep deployment secrets outside every validation workflow and guest.
@@ -39,16 +41,18 @@ jobs:
       CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
   validation:
     if: always()
-    needs: [hosted, tdx, website]
+    needs: [hosted, tdx, lightning, website]
     runs-on: ubuntu-24.04
     steps:
       - env:
           HOSTED: ${{ needs.hosted.result }}
           TDX: ${{ needs.tdx.result }}
+          LIGHTNING: ${{ needs.lightning.result }}
           WEBSITE: ${{ needs.website.result }}
           DEPLOY: ${{ github.workflow == 'CI' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.ref == 'refs/heads/main' && github.event_name != 'schedule') || github.event_name == 'workflow_dispatch') }}
         run: |
           [[ "$HOSTED:$TDX" == success:skipped || "$HOSTED:$TDX" == skipped:success ]] || exit 1
+          [[ "$LIGHTNING" == success ]] || exit 1
           if [[ "$DEPLOY" == true ]]; then
             [[ "$WEBSITE" == success ]] || exit 1
           else

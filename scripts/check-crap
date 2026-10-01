@@ -39,6 +39,20 @@ def manifest(root):
     return {str(path.relative_to(root)): digest(path) for path in source_files(root)}
 
 
+def parse_dump(input, attempts=3):
+    """The frontend's parse dump. A compiler that dies by a signal says nothing
+    about the source, so that alone is rerun; an ordinary failure is final."""
+    command = ['xcrun', 'swiftc', '-frontend', '-dump-parse', str(input)]
+    for attempt in range(1, attempts + 1):
+        result = subprocess.run(command, text=True, capture_output=True)
+        if result.returncode == 0:
+            return result.stdout
+        if result.returncode > 0 or attempt == attempts:
+            raise subprocess.CalledProcessError(result.returncode, command, result.stdout, result.stderr)
+        print(f'swiftc parse of {Path(input).name} died by signal {-result.returncode}; retrying ({attempt + 1} of {attempts})',
+              file=sys.stderr)
+
+
 def declarations(path):
     # dump-parse omits #if blocks entirely before type checking. Blank only
     # directive lines to inventory ALL build variants at their original lines;
@@ -48,10 +62,9 @@ def declarations(path):
     with tempfile.TemporaryDirectory(prefix='winnow-crap-parse-') as directory:
         input = Path(directory) / path.name
         input.write_text(source)
-        result = subprocess.run(['xcrun', 'swiftc', '-frontend', '-dump-parse', str(input)],
-                                text=True, capture_output=True, check=True)
+        dump = parse_dump(input)
     found = []
-    for line in result.stdout.splitlines():
+    for line in dump.splitlines():
         if match := DECL.match(line):
             _, _, start, column, end, _, name = match.groups()
             found.append({'start': int(start), 'column': int(column), 'end': int(end), 'name': name})
@@ -126,6 +139,13 @@ def records(root, inventory, parsed, coverage):
     return sorted(output, key=lambda item: (-item['conservative_crap'], item['file'], item['line']))
 
 
+def in_scope(file, scope, without):
+    """Reports partition Sources: the ordinary app's report leaves out what
+    only the Lightning app compiles, and the Lightning job's report covers it."""
+    inside = lambda prefix: file == prefix or file.startswith(prefix.rstrip('/') + '/')
+    return (not scope or any(map(inside, scope))) and not any(map(inside, without))
+
+
 def report(args):
     root = args.source_root.resolve()
     expected = json.loads(args.manifest.read_text())['files']
@@ -140,10 +160,12 @@ def report(args):
         item['file'] = str(root.joinpath(*parts[parts.index('Sources'):]))
     with ThreadPoolExecutor(max_workers=4) as pool:
         parsed = dict(pool.map(declarations, source_files(root)))
-    rows = records(root, inventory, parsed, line_coverage(args.coverage, root))
+    rows = [row for row in records(root, inventory, parsed, line_coverage(args.coverage, root))
+            if in_scope(row['file'], args.scope, args.without)]
     high = [row for row in rows if row['conservative_crap'] > args.threshold]
     result = {'schema': 1, 'formula': FORMULA, 'threshold': args.threshold,
               'scope': 'All Sources Swift function and initializer bodies, including switch cases; CC entry path is 1',
+              'partition': {'scope': args.scope, 'without': args.without},
               'limitations': 'Accessors and standalone closures are not declarations covered by the SwiftLint function/initializer rule',
               'decision_tool': f'SwiftLint {SWIFTLINT_VERSION}',
               'coverage': 'Compiler executable-line records (LLVM LCOV and/or xccov archive lines), union across supplied test runs',
@@ -178,6 +200,10 @@ def main():
     check.add_argument('--output', type=Path, required=True)
     check.add_argument('--threshold', type=float, default=12)
     check.add_argument('--report-only', action='store_true')
+    check.add_argument('--scope', action='append', default=[], metavar='SOURCES_PREFIX',
+                       help='Report only methods under these Sources prefixes')
+    check.add_argument('--without', action='append', default=[], metavar='SOURCES_PREFIX',
+                       help='Leave out methods under these prefixes; another report must cover them')
     args = parser.parse_args()
     try:
         if args.command == 'snapshot':

@@ -45,12 +45,14 @@ class AggregateGateTests(unittest.TestCase):
         import textwrap
         script = textwrap.dedent(jobs((ROOT/'ci.yml').read_text())['validation'].split('run: |\n', 1)[1])
         statuses = ('success', 'skipped', 'failure', 'cancelled')
-        for hosted, tdx, website, deploy in itertools.product(statuses, statuses, statuses, ('true', 'false')):
+        for hosted, tdx, lightning, website, deploy in itertools.product(statuses, statuses, statuses, statuses,
+                                                                         ('true', 'false')):
             expected = ((hosted, tdx) in [('success', 'skipped'), ('skipped', 'success')]
+                        and lightning == 'success'
                         and website == ('success' if deploy == 'true' else 'skipped'))
-            with self.subTest(hosted=hosted, tdx=tdx, website=website, deploy=deploy):
+            with self.subTest(hosted=hosted, tdx=tdx, lightning=lightning, website=website, deploy=deploy):
                 result = subprocess.run(['bash', '-e', '-c', script],
-                                        env={**os.environ, 'HOSTED': hosted, 'TDX': tdx,
+                                        env={**os.environ, 'HOSTED': hosted, 'TDX': tdx, 'LIGHTNING': lightning,
                                              'WEBSITE': website, 'DEPLOY': deploy},
                                         capture_output=True)
                 self.assertEqual(result.returncode == 0, expected)

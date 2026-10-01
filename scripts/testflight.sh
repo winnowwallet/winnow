@@ -73,9 +73,14 @@ step_upload() {
     -f build/WinnowApp.ipa -t ios --apiKey "$KEY_ID" --apiIssuer "$ISSUER"
 }
 
-app_id() { asc GET "/apps?filter[bundleId]=$BUNDLE_ID" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"][0]["id"])'; }
+app_id() { asc GET "/apps?filter[bundleId]=$BUNDLE_ID" | python3 -c 'import json,sys; rows=json.load(sys.stdin)["data"]; assert len(rows)==1, "expected exactly one app"; print(rows[0]["id"])'; }
 build_id() {
   if [ -n "${TESTFLIGHT_BUILD_ID:-}" ]; then
+    # An explicit build must be the expected version and build of this app.
+    if [ -n "$EXPECTED_BUILD_NUMBER" ] && [ -n "$EXPECTED_MARKETING_VERSION" ]; then
+      asc GET "/builds?filter[app]=$(app_id)&filter[version]=$EXPECTED_BUILD_NUMBER&filter[preReleaseVersion.version]=$EXPECTED_MARKETING_VERSION&limit=2" \
+        | python3 -c 'import json,sys; rows=json.load(sys.stdin)["data"]; assert len(rows)==1 and rows[0]["id"]==sys.argv[1], "explicit build does not match the app, version and build"' "$TESTFLIGHT_BUILD_ID"
+    fi
     printf '%s\n' "$TESTFLIGHT_BUILD_ID"
     return
   fi

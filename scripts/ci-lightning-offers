@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+"""Bidirectional codec/signature checks with the pinned, unmodified LDK library.
+
+This is a protocol data check, not the offline-payment journey. Live hold/release
+must pass its own gate; parser acceptance must never be reported as settlement.
+"""
+import json
+import os
+from pathlib import Path
+import subprocess
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def main():
+    reference = Path(os.environ['WINNOW_LDK_HARNESS'])
+    subprocess.run(['swift', 'build', '--product', 'winnow-lightning-fixture'], cwd=ROOT, check=True)
+    products = subprocess.check_output(['swift', 'build', '--show-bin-path'], cwd=ROOT, text=True).strip()
+    fixture = Path(products) / 'winnow-lightning-fixture'
+
+    def ldk(command, **fields):
+        result = json.loads(subprocess.check_output([reference], input=json.dumps(dict(command=command, **fields)) + '\n', text=True))
+        assert result['ok'], result
+        return result['result']
+
+    vectors = ldk('vectors')
+    fields = json.loads(subprocess.check_output([fixture, 'bolt12'], input=json.dumps(vectors), text=True))
+    assert fields['reference_roundtrip'] == vectors['static_invoice']
+    offer = ldk('offer', string=fields['swift_offer'])
+    assert offer['roundtrip'] == fields['swift_offer']
+    request = ldk('invoice_request', hex=fields['invoice_request'])
+    assert request['hex'] == fields['invoice_request'] and request['payer_key'] == fields['payer_key']
+    assert request['amount_msat'] == 5000
+    invoice = ldk('static_invoice', hex=fields['swift_static_invoice'])
+    assert invoice['hex'] == fields['swift_static_invoice'] and invoice['signing_key'] == fields['swift_signing_key']
+    assert invoice['payment_path_count'] == 1 and invoice['notification_path_count'] == 1
+    peeled = ldk('peel_request', hex=fields['onion_request'])
+    assert peeled['hex'] == fields['invoice_request'] and peeled['context'] and peeled['reply']
+    assert ldk('peel_request', hex=fields['forwarded_request']) == peeled
+    reply = ldk('reply_invoice', path=fields['reply_path'], invoice=vectors['static_invoice'])
+    received = json.loads(subprocess.check_output([fixture, 'onion-reply'], input=json.dumps(reply), text=True))
+    assert received['static_invoice'] == vectors['static_invoice'] and received['context'] == 'invoice reply'
+    # Unknown required fields and signature mutations must fail in the peer.
+    corrupted = fields['invoice_request'][:-2] + ('01' if fields['invoice_request'][-2:] == '00' else '00')
+    rejected = json.loads(subprocess.check_output([reference], input=json.dumps(dict(command='invoice_request', hex=corrupted)) + '\n', text=True))
+    assert not rejected['ok']
+    evidence = Path(os.environ['WINNOW_LIGHTNING_RESULTS']) / 'offers'
+    evidence.mkdir(parents=True, exist_ok=True)
+    receipt = dict(result='passed', scope='BOLT12 codecs, signatures and encrypted onion request/reply interoperability; no payment settlement claim',
+        ldk_commit='0a2b003e7e1602df8933b15b7563ba8b6e198391',
+        source=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+        source_dirty=bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip()),
+        reference=vectors, swift=fields)
+    (evidence / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+    print(json.dumps({k: receipt[k] for k in ('result', 'scope', 'ldk_commit', 'source', 'source_dirty')}))
+
+
+if __name__ == '__main__':
+    main()

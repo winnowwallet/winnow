@@ -49,11 +49,16 @@ struct SettingsView: View {
                         )) {
                             Text("Mainnet").tag(BitcoinNetwork.mainnet)
                             Text("Signet").tag(BitcoinNetwork.signet)
+                            if model.offersRegtest {
+                                Text("Regtest").tag(BitcoinNetwork.regtest)
+                            }
                         }
-                        .disabled(model.e2e?.forcedNetwork != nil)
+                        // One switch at a time: the old network's work must stop first.
+                        .disabled(model.e2e?.forcedNetwork != nil || model.changingNetwork)
+                        .accessibilityIdentifier("networkPicker")
                     } footer: {
                         if model.e2e?.forcedNetwork != nil {
-                            Text("This debug session is locked to \(model.network == .mainnet ? "mainnet" : "public signet").")
+                            Text("This debug session is locked to \(model.network.rawValue).")
                         } else {
                             Text("Each network has a separate wallet. Signet uses test coins with no value.")
                         }

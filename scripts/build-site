@@ -18,6 +18,7 @@ ACTS = [
         ("01-onboarding", "Create a wallet"),
         ("03-receive", "Show a receive address"),
         ("56-home-beginner", "The coins arrive"),
+        ("05-high-fee-review", "Review a high fee and cancel"),
         ("06-send-review", "Check address, fee, total"),
         ("08-send-confirmed", "Confirmed on Bitcoin"),
         ("09-home-after-send", "History keeps the receipt"),

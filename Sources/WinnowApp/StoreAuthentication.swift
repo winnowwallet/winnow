@@ -48,6 +48,10 @@ struct KeychainStoreKeyVault: StoreKeyVault {
     static let keyBytes = 32
 
     let service: String
+    /// Lightning's full channel journal key is readable only while the device
+    /// is unlocked; its background recovery store keeps the default class.
+    enum Protection: Sendable { case afterFirstUnlock, whenUnlocked }
+    var protection: Protection = .afterFirstUnlock
 
     func key(for account: String) throws -> SymmetricKey? {
         var query = baseQuery(account)
@@ -65,7 +69,8 @@ struct KeychainStoreKeyVault: StoreKeyVault {
         let key = SymmetricKey(size: .bits256)
         var query = baseQuery(account)
         query[kSecValueData] = key.withUnsafeBytes { Data($0) }
-        query[kSecAttrAccessible] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        query[kSecAttrAccessible] = protection == .whenUnlocked
+            ? kSecAttrAccessibleWhenUnlockedThisDeviceOnly : kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let status = SecItemAdd(query as CFDictionary, nil)
         if status == errSecDuplicateItem { throw StoreKeyVaultError.alreadyEstablished(account) }
         guard status == errSecSuccess else { throw StoreKeyVaultError.keychain(status) }

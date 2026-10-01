@@ -1,23 +1,35 @@
-Winnow 0.7.13: every verified Tor and I2P peer, plus background chain checks
+Winnow 0.8.0: Lightning in Winnow
 
-The daily peer list is no longer cut to 2,000 Tor and 2,000 I2P peers; Winnow now keeps every one the census verified (3,212 Tor and 2,451 I2P on 2026-09-29). Once the census publishes the full list, Tor-only and I2P-only routing should connect as before, just with more peers to choose from. Advanced → Settings → Refresh peer list should succeed.
+Lightning is now part of Winnow, a native Swift engine on Winnow's own wallet, verified chain scanner and broadcast path. Mainnet uses real bitcoin; start with small amounts.
 
-Winnow now asks iOS to let it check the chain while closed. iOS decides when these run, usually no more than every 15 minutes and often less, and never after you force-quit Winnow or with Background App Refresh off (Settings → General → Background App Refresh).
+Receiving
+
+Simple mode: Receive, then Lightning (Bitcoin still gives an address). Mainnet providers are Olympus and Megalith (in-app setup) or LNServer (website setup). Enter the payment amount, which is separate from minimum channel capacity, and review the setup fee: approving shows an invoice without paying it. Pause an unpaid order and check it survives a restart.
+
+Advanced mode has a Lightning tab. "Create reusable offer" makes an ordinary BOLT12 offer; its recipient must be online. "Create async receive offer" needs an async-capable provider; test with the recipient offline and after restarts. Only Settled confirms a payment.
+
+Sending
+
+Send → Pay Lightning invoice takes a BOLT11 invoice, an offer or a ₿name. Review the amount and maximum fee; cancelling the review must send nothing. Check settlement and history after a restart.
+
+Channels
+
+Fund a channel from your wallet, then close a small channel and check the funds return to your Bitcoin balance. On an anchor channel, review a recovery fee bump and its total cap: cancelling must leave your coins available. Deleting a wallet is refused while one of its channels is not yet closed.
+
+Backups
+
+iCloud backup still covers your Bitcoin wallet; it never holds channel state. Settings → Lightning recovery file exports an encrypted file with its own 24-word phrase. Restore it only into an empty device or simulator, never by wiping your only funded wallet. A restored channel stays in recovery mode until it closes.
 
 Background checks
 
-In Advanced → Sync, note "Chain last checked … ago". Leave Winnow in the background (do not force-quit it) for an hour or more, ideally on Wi-Fi and charging. Reopen Advanced → Sync before the foreground sync finishes: the time should be recent, from while Winnow was closed. A payment sent to you while it was closed should appear quickly on open.
+Leave Background App Refresh on. Background checks also watch your channels and can relay their pre-signed recovery transactions; iOS decides when they run, never after force-quit. Check the channel-protection banner after a missed or failed check. There is no external watchtower.
 
-Private routing in the background
+Please check on a real device
 
-With Tailscale connected and your Tor and I2P gateways running, open Winnow once so the green Private banner shows, then background it. Turn Tailscale off and wait: background checks should skip rather than connect directly, so "Chain last checked" should not advance until you reopen Winnow. Turn Tailscale back on and it should advance again.
+Face ID and passcode approval (and cancelling it) for funding, paying and closing; the exact Share and Copy contents; and behaviour when locking and unlocking during a payment.
 
-Simple mode errors
+Upgrading
 
-In simple mode, a peer dropping mid-sync (previously a red "The peer disconnected (closed).") should no longer show. If the connection keeps failing for several passes, a plain message should say Winnow keeps losing its connection. Advanced → Sync still shows every error.
+Your accounts, history, iCloud backup, routing and settings should be unchanged after the update.
 
-Upgrading from an older version
-
-Check that your accounts, transaction history, backups, routing and saved settings remain available after the update.
-
-Report bugs publicly at https://github.com/winnowwallet/winnow/issues. Include the app version, device, network, routing mode and steps to reproduce. Never include recovery words, private keys, or wallet backup files.
+Report bugs publicly at https://github.com/winnowwallet/winnow/issues. Include the app version, device, network, routing mode and steps to reproduce. Never include recovery words, private keys, wallet backup files or Lightning recovery files.

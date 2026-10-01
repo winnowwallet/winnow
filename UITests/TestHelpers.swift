@@ -108,7 +108,7 @@ extension XCTestCase {
     }
 
     @MainActor
-    private func navigationBarBottom(_ snapshot: XCUIElementSnapshot) -> CGFloat? {
+    func navigationBarBottom(_ snapshot: XCUIElementSnapshot) -> CGFloat? {
         let childBottoms = snapshot.children.compactMap { navigationBarBottom($0) }
         let ownBottom = snapshot.elementType == .navigationBar ? [snapshot.frame.maxY] : []
         return (childBottoms + ownBottom).max()
@@ -147,7 +147,7 @@ extension XCTestCase {
     }
 
     @MainActor
-    private func usableFrame(_ element: XCUIElement, within timeout: TimeInterval = 0) -> CGRect? {
+    func usableFrame(_ element: XCUIElement, within timeout: TimeInterval = 0) -> CGRect? {
         let deadline = Date().addingTimeInterval(timeout)
         while true {
             if element.exists {
@@ -174,8 +174,8 @@ extension XCTestCase {
         return true
     }
 
-    private func revealShift(_ frame: CGRect, in band: ClosedRange<CGFloat>,
-                             margin: CGFloat, reach: CGFloat) -> CGFloat {
+    func revealShift(_ frame: CGRect, in band: ClosedRange<CGFloat>,
+                     margin: CGFloat, reach: CGFloat) -> CGFloat {
         var shift: CGFloat = 0
         if frame.minY < band.lowerBound + margin {
             shift = band.lowerBound + margin - frame.minY

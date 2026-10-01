@@ -10,9 +10,11 @@ is swift-secp256k1. Xcode resolution must match that root lockfile.
 | Workflow | When | Responsibility |
 | --- | --- | --- |
 | CI | PR, main push, nightly, manual, release caller | One validation lane (tdx guests or one hosted build job) owns lint/test gates, package and debugging tests, app/Keychain tests and signet UI journey, release warning and E2E exclusion gates, inspection smoke, provenance, fixed fuzz corpus, and website preparation |
+| Swift Lightning | Every CI run (a job in CI) | Winnow's Lightning against Core Lightning and LDK built from pinned sources, and the recorded Lightning journey in the app; skipped when an identical tree already passed ([details](../../docs/engineering/swift-lightning.md)) |
 | Fuzz sanitizers | Weekly or manual seed replay | Sustained address/thread sanitizer coverage; does not repeat normal suites |
-| Release | New stable version tag or manual validation | Calls CI, then signs/uploads and publishes only for tag pushes |
+| Release | New stable version tag or manual validation | Calls CI, then signs/uploads and publishes only for tag pushes; the build carries the reviewed `WINNOW_NONEXEMPT_ENCRYPTION` answer, and until one is set testers wait for App Store Connect's export questions ([Lightning release](../../docs/engineering/lightning-release.md)) |
 | TestFlight recovery | Manual, exact version and build number | Finish notes/group assignment for an existing upload |
+| TestFlight encryption | Manual, exact version and build number | Read App Store Connect state, or submit the approved `docs/release/encryption-questionnaire.json` answers for one build; never adds testers |
 | App Store submission | Manual | Attach a processed build and optionally submit for review |
 | TestFlight feedback | Manual, with an age recipient | Pull tester comments, screenshots and crash logs encrypted to that recipient; the log shows counts only |
 | Website | Reusable job after CI build, for trusted PRs, main and manual previews | Download and deploy the ready website artifact from the same run; no checkout, build or test steps |

@@ -52,6 +52,9 @@ markers=(
   story-events.jsonl
   BTCSwiftE2E
   org.btc-swift.wallet.e2e
+  # The Lightning UI fixture's pinned node identity.
+  winnow-lightning-ui
+  fixtureNodeSecret
 )
 
 found=0

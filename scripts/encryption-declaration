@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""Submit Winnow's reviewed export compliance answers for one processed build.
+
+The answers are docs/release/encryption-questionnaire.json, which the account
+holder completes and approves ("approved": true) after reading
+docs/release/encryption-inventory.md. Nothing is inferred: an unapproved file,
+or one missing an answer (the French-store one included), is refused before
+any request. Apple decides whether a declaration document is needed; the
+build is then marked with that determination and linked to the declaration.
+It never adds testers; run scripts/testflight.sh internal/external after.
+Needs ASC_KEY_ID, ASC_ISSUER_ID and ASC_KEY_PATH.
+"""
+import argparse
+import json
+import os
+from pathlib import Path
+import runpy
+import subprocess
+import urllib.error
+import urllib.request
+
+ROOT = Path(__file__).resolve().parent.parent
+API = 'https://api.appstoreconnect.apple.com/v1'
+QUESTIONNAIRE = ROOT / 'docs/release/encryption-questionnaire.json'
+PREFLIGHT = runpy.run_path(str(ROOT / 'scripts/asc-preflight'))
+ANSWERS = {'contains_proprietary_cryptography': 'containsProprietaryCryptography',
+           'contains_third_party_cryptography': 'containsThirdPartyCryptography',
+           'available_on_french_store': 'availableOnFrenchStore'}
+# Apple's documented refusal when no declaration document is required.
+NO_DOCUMENT = ('Cannot create appEncryptionDeclarations unless either containsProprietaryCryptography is True '
+               'or containsThirdPartyCryptography and availableOnFrenchStore are both True')
+
+
+class AppleError(RuntimeError):
+    def __init__(self, method, path, status, details):
+        self.status, self.details = status, details
+        super().__init__(f'App Store Connect {method} {path.split("?")[0]}: HTTP {status}')
+
+
+def http(method, path, data=None, bearer=None):
+    request = urllib.request.Request(API + path, method=method,
+        data=json.dumps(data).encode() if data is not None else None,
+        headers={'Authorization': 'Bearer ' + bearer, 'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            raw = response.read()
+            return json.loads(raw) if raw else None
+    except urllib.error.HTTPError as error:
+        raise AppleError(method, path, error.code, json.loads(error.read() or b'{}')) from None
+
+
+def load_answers(path):
+    answers = json.loads(Path(path).read_text())
+    if answers.get('approved') is not True:
+        raise SystemExit(f'{path} is not approved; review it against docs/release/encryption-inventory.md first')
+    attributes = {}
+    for key, name in ANSWERS.items():
+        if not isinstance(answers.get(key), bool):
+            raise SystemExit(f'{path}: answer {key} with true or false')
+        attributes[name] = answers[key]
+    description = answers.get('app_description')
+    if not isinstance(description, str) or not description.strip() or len(description) > 300:
+        raise SystemExit(f'{path}: app_description must be 1-300 characters')
+    attributes['appDescription'] = description
+    return attributes
+
+
+def declare(asc, app, build, attributes):
+    """Reuse or create the matching declaration, then mark and link the build."""
+    get = lambda path, optional=False: asc('GET', path)
+    existing = PREFLIGHT['collection'](get, f'/appEncryptionDeclarations?filter[app]={app}&limit=200')
+    matching = [row for row in existing if all(row['attributes'].get(k) == v for k, v in attributes.items())]
+    if len(matching) > 1:
+        raise RuntimeError('More than one matching encryption declaration')
+    declaration = matching[0] if matching else None
+    if declaration is None:
+        try:
+            declaration = asc('POST', '/appEncryptionDeclarations', {'data': {
+                'type': 'appEncryptionDeclarations', 'attributes': attributes,
+                'relationships': {'app': {'data': {'type': 'apps', 'id': app}}}}})['data']
+        except AppleError as error:
+            errors = error.details.get('errors', [])
+            if not (error.status == 409 and len(errors) == 1 and errors[0].get('code') == 'ENTITY_ERROR.ATTRIBUTE.INVALID'
+                    and errors[0].get('detail') == NO_DOCUMENT):
+                raise
+    state = declaration['attributes']['appEncryptionDeclarationState'] if declaration else 'DOCUMENTATION_NOT_REQUIRED'
+    if declaration and state != 'APPROVED':
+        return {'declaration': declaration['id'], 'state': state, 'build_updated': False}
+    exempt = declaration['attributes']['exempt'] if declaration else True
+    if not isinstance(exempt, bool):
+        raise RuntimeError('Apple returned no exemption determination')
+    current = asc('GET', f'/builds/{build}')['data']['attributes'].get('usesNonExemptEncryption')
+    if current is None:
+        asc('PATCH', f'/builds/{build}', {'data': {'type': 'builds', 'id': build,
+                                                   'attributes': {'usesNonExemptEncryption': not exempt}}})
+    elif current is exempt:
+        raise RuntimeError('The build already declares the opposite of Apple\'s determination')
+    if not exempt:
+        asc('PATCH', f'/builds/{build}/relationships/appEncryptionDeclaration',
+            {'data': {'type': 'appEncryptionDeclarations', 'id': declaration['id']}})
+        if asc('GET', f'/builds/{build}/appEncryptionDeclaration')['data']['id'] != declaration['id']:
+            raise RuntimeError('The build is not linked to the declaration')
+    return {'declaration': declaration['id'] if declaration else None, 'state': state,
+            'exempt_from_documentation': exempt, 'build_updated': True}
+
+
+def main(argv=None, asc=None):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument('--version', required=True)
+    parser.add_argument('--build', required=True)
+    parser.add_argument('--questionnaire', type=Path, default=QUESTIONNAIRE)
+    args = parser.parse_args(argv)
+    attributes = load_answers(args.questionnaire)
+    if asc is None:
+        bearer = PREFLIGHT['token']()
+        asc = lambda method, path, data=None: http(method, path, data, bearer)
+    get = lambda path, optional=False: asc('GET', path)
+    app, _ = PREFLIGHT['app_id'](get)
+    build = PREFLIGHT['read_build'](get, app, args.version, args.build, 'PENDING')['id']
+    result = declare(asc, app, build, attributes)
+    print(json.dumps({'version': args.version, 'build': args.build, **result}))
+    return result
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+"""Build once, record the real Lightning UI journey, retain independent evidence."""
+import argparse
+from datetime import datetime, timedelta
+import hashlib
+import json
+import os
+from pathlib import Path
+import plistlib
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+ROOT = Path(__file__).resolve().parent.parent
+# The UI's Core Lightning carries the reviewed HSM fd-lifetime fix (#9564),
+# but its channel daemons can still receive an unreadable peer socket on
+# macOS. A journey that fails with exactly that reference failure reruns once
+# from a fresh fixture; the failed attempt is retained beside it.
+JOURNEY_ATTEMPTS = 2
+ATTEMPT_FILES = ('fixture', 'fixture.log', 'journey.mp4', 'video.log', 'ui-tests.log', 'LightningUI.xcresult', 'screenshots')
+LOST = re.compile(r'^(\S+) INFO\s+([0-9a-f]{66})-(openingd|channeld|closingd)-chan#(\d+): Peer connection lost$')
+DISCONNECTED = re.compile(r'^(\S+) DEBUG\s+([0-9a-f]{66})-lightningd: peer_disconnected$')
+HSM_IO = 'STATUS_FAIL_HSM_IO: '
+
+
+def reference_socket_failure(evidence):
+    """A stock CLN channel daemon lost its peer socket and died while the
+    app's connection stayed up (or lost its HSM), and nothing else broke."""
+    if sys.platform != 'darwin':
+        return False
+    found = False
+    for log in sorted(evidence.glob('*cln*.log')):
+        lines = log.read_text(errors='replace').splitlines()
+        if any('**BROKEN**' in line and HSM_IO not in line for line in lines):
+            return False
+        found |= any('**BROKEN**' in line for line in lines)
+        for index, line in enumerate(lines):
+            if not (lost := LOST.match(line)):
+                continue
+            when, peer, daemon, channel = lost.groups()
+            if not any(f'{peer}-chan#{channel}: Owning subdaemon {daemon} died' in later for later in lines[index + 1:index + 4]):
+                continue
+            if app_disconnected(lines[index:], peer, datetime.fromisoformat(when)):
+                return False
+            found = True
+    return found
+
+
+def app_disconnected(lines, peer, moment):
+    """lightningd saw the app's connection drop within five seconds."""
+    for line in lines:
+        if (closed := DISCONNECTED.match(line)) and closed.group(2) == peer:
+            if timedelta(0) <= datetime.fromisoformat(closed.group(1)) - moment <= timedelta(seconds=5):
+                return True
+    return False
+
+
+def retain_attempt(results, attempt):
+    kept = results / f'attempt-{attempt}'
+    kept.mkdir()
+    retried = [path for pattern in ('boot-*.log', 'shutdown-*.log', 'ui-tests-no-destination-*.log', 'devices-*.log',
+                                    'reboot-status-*.log') for path in sorted(results.glob(pattern))]
+    for path in [results / name for name in ATTEMPT_FILES] + retried:
+        if path.exists():
+            path.rename(kept / path.name)
+    return kept
+
+
+def with_reference_retry(results, journey, attempts=JOURNEY_ATTEMPTS):
+    for attempt in range(1, attempts + 1):
+        try:
+            return journey()
+        except subprocess.CalledProcessError:
+            if attempt == attempts or not reference_socket_failure(results / 'fixture/evidence'):
+                raise
+            kept = retain_attempt(results, attempt)
+            print(f'Stock CLN lost a channel daemon socket; rerunning the journey with a fresh fixture '
+                  f'({attempt + 1} of {attempts}); failed attempt retained in {kept}', flush=True)
+
+
+def run(args, log, env=None, timeout=None):
+    try:
+        with log.open('w') as out:
+            subprocess.run(args, cwd=ROOT, stdout=out, stderr=subprocess.STDOUT, env=env, check=True, timeout=timeout)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        # Close and flush the redirected log before exposing a bounded tail.
+        # Diagnostics must not replace the original subprocess failure.
+        try:
+            with log.open('rb') as failure_log:
+                failure_log.seek(0, os.SEEK_END)
+                failure_log.seek(max(0, failure_log.tell() - 16384))
+                tail = failure_log.read(16384).decode('utf-8', errors='replace')
+            print(f'Failure log tail: {log.name} (last 60 lines, at most 16384 bytes)', file=sys.stderr, flush=True)
+            print('\n'.join(tail.splitlines()[-60:]), file=sys.stderr, flush=True)
+        except Exception:
+            pass
+        raise
+
+
+def start_recording(simulator, results, attempts=3):
+    """Record from the first frame, as ci-ui-journey does. Fixture setup can
+    leave the simulator idle for minutes; a hosted simulator in that state may
+    never hand the recorder a frame, so it is rebooted and asked again."""
+    for attempt in range(1, attempts + 1):
+        run(['xcrun', 'simctl', 'bootstatus', simulator, '-b'], results / f'boot-{attempt}.log', timeout=300)
+        log = results / 'video.log'
+        with log.open('w') as out:
+            video = subprocess.Popen(['xcrun', 'simctl', 'io', simulator, 'recordVideo', '--codec=h264',
+                                      str(results / 'journey.mp4')], stdout=out, stderr=subprocess.STDOUT)
+        def recording():
+            assert video.poll() is None, 'recorder exited'
+            return 'Recording started' in log.read_text()
+        try:
+            wait(recording, 60)
+            print(f'Lightning UI recording acknowledged (attempt {attempt})', flush=True)
+            return video
+        except (AssertionError, TimeoutError) as error:
+            print(f'Recorder had no frame on attempt {attempt}: {error}; rebooting the simulator', flush=True)
+            stop(video, signal.SIGINT)
+            (results / 'journey.mp4').unlink(missing_ok=True)
+            if attempt < attempts:
+                run(['xcrun', 'simctl', 'shutdown', simulator], results / f'shutdown-{attempt}.log', timeout=120)
+    raise TimeoutError(f'simulator produced no recordable frame after {attempts} boots')
+
+
+def wait(check, seconds=90):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if check():
+            return
+        time.sleep(0.2)
+    raise TimeoutError('Lightning UI prerequisite did not become ready')
+
+
+def stop(process, sig=signal.SIGTERM):
+    if process and process.poll() is None:
+        process.send_signal(sig)
+        try:
+            process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=10)
+            raise
+
+
+NO_DESTINATION = 'Unable to find a device matching the provided destination specifier'
+
+
+def run_tests(command, results, simulator, attempts=3):
+    """xcodebuild on a hosted runner can briefly list no simulators at all, even
+    with this one booted and recording. Nothing ran, so only that refusal is
+    retried, after asking CoreSimulator for its devices again."""
+    log = results / 'ui-tests.log'
+    for attempt in range(1, attempts + 1):
+        try:
+            return run(command, log)
+        except subprocess.CalledProcessError:
+            text = log.read_text(errors='replace')
+            if attempt == attempts or NO_DESTINATION not in text or 'Test Case' in text:
+                raise
+            log.rename(results / f'ui-tests-no-destination-{attempt}.log')
+            shutil.rmtree(results / 'LightningUI.xcresult', ignore_errors=True)
+            print(f'xcodebuild saw no simulator destination (attempt {attempt}); re-listing devices and retrying', flush=True)
+            run(['xcrun', 'simctl', 'list', 'devices', simulator], results / f'devices-{attempt}.log', timeout=120)
+            run(['xcrun', 'simctl', 'bootstatus', simulator, '-b'], results / f'reboot-status-{attempt}.log', timeout=300)
+            time.sleep(10)
+
+
+def record_journey(results, spec, simulator, info, derived):
+    """One attempt: a fresh fixture, a recording, every journey test and the receipts."""
+    fixture = video = None
+    try:
+        with (results / 'fixture.log').open('w') as log:
+            fixture = subprocess.Popen([str(ROOT / 'scripts/lightning-ui-fixture'), str(results / 'fixture'), '--simulator', simulator,
+                                        '--bundle', info['CFBundleIdentifier']],
+                                       cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)
+        def fixture_ready():
+            assert fixture.poll() is None, 'fixture exited'
+            return (results / 'fixture/connection.json').is_file()
+        wait(fixture_ready, 180)
+        # Fixture setup can take minutes; recording starts only after it, so
+        # onboarding and every financial action are captured.
+        video = start_recording(simulator, results)
+        print('Lightning UI recording acknowledged; starting XCTest', flush=True)
+        # This journey intentionally SIGKILLs the app. Xcode's verbose whole-
+        # simulator diagnostics can stall even after XCTest finishes; retain
+        # the result bundle, screenshots, video and peer logs without sysdiagnose.
+        run_tests(['xcodebuild', 'test-without-building', '-xctestrun', str(spec),
+                   '-derivedDataPath', str(derived),
+                   '-destination', f'platform=iOS Simulator,id={simulator}', '-only-testing:WinnowAppLightningUITests/LightningAppUITests',
+                   '-enableCodeCoverage', 'YES',
+                   '-collect-test-diagnostics', 'never',
+                   '-test-timeouts-enabled', 'YES', '-maximum-test-execution-time-allowance', '900',
+                   '-resultBundlePath', str(results / 'LightningUI.xcresult')], results, simulator)
+        receipt = json.loads((results / 'fixture/evidence/receipt.json').read_text())
+        assert receipt['result'] == 'passed'
+        invoice_receipt = json.loads((results / 'fixture/evidence/bolt11-receipt.json').read_text())
+        assert invoice_receipt['result'] == 'passed'
+        ui_reference = invoice_receipt.get('reference')
+        if os.environ.get('WINNOW_CLN_UI_MANIFEST'):
+            assert ui_reference and ui_reference['kind'] == 'released_cln_with_ui_hsmd_override'
+            assert ui_reference['manifest'] == 'ui-cln-reference.json'
+            assert ui_reference['manifest_sha256'] == hashlib.sha256((results / 'fixture/evidence/ui-cln-reference.json').read_bytes()).hexdigest()
+        else:
+            assert ui_reference is None, 'stock UI must not silently use the HSM override'
+    finally:
+        try:
+            if video:
+                stop(video, signal.SIGINT)
+                assert video.returncode == 0 and (results / 'journey.mp4').stat().st_size > 0
+        finally:
+            stop(fixture)
+    return ui_reference
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('results', type=Path)
+    parser.add_argument('--skip-build', action='store_true')
+    args = parser.parse_args()
+    results = args.results.resolve()
+    results.mkdir(parents=True, exist_ok=False)
+    simulator = os.environ.get('SIMULATOR_ID') or subprocess.check_output([str(ROOT / 'scripts/ios-simulator'), 'iPhone'], text=True).strip()
+    derived = Path(os.environ.get('DERIVED_DATA', results / 'derived-data')).resolve()
+    run(['swift', 'build', '--product', 'winnow-lightning-peer-fixture'], results / 'host-build.log')
+    if not args.skip_build:
+        run(['xcodegen', 'generate'], results / 'project.log')
+        run(['xcodebuild', 'build-for-testing', '-project', 'WinnowApp.xcodeproj', '-scheme', 'WinnowApp', '-configuration', 'Debug',
+             '-destination', f'platform=iOS Simulator,id={simulator}', '-derivedDataPath', str(derived),
+             '-enableCodeCoverage', 'YES', '-skipPackagePluginValidation', '-skipMacroValidation'], results / 'app-build.log')
+    specifications = list((derived / 'Build/Products').glob('WinnowApp_*.xctestrun'))
+    assert len(specifications) == 1, specifications
+    with specifications[0].open('rb') as file:
+        specification = plistlib.load(file)
+    products = derived / 'Build/Products'
+    app = products / 'Debug-iphonesimulator/WinnowApp.app'
+    info = plistlib.loads((app / 'Info.plist').read_bytes())
+    assert info['CFBundleIdentifier'] == 'com.btcswift.app'
+    binary = app / info['CFBundleExecutable']
+    run(['xcrun', 'simctl', 'bootstatus', simulator, '-b'], results / 'simulator.log')
+    devices = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devices', '--json'], text=True))['devices']
+    identity = next(dict(name=device['name'], device_type=device['deviceTypeIdentifier'], runtime=runtime)
+                    for runtime, entries in devices.items() for device in entries if device['udid'] == simulator)
+    manifest = dict(source=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                    dirty=bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip()),
+                    simulator=simulator, bundle=info['CFBundleIdentifier'],
+                    executable_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
+                    xcode=subprocess.check_output(['xcodebuild', '-version'], text=True).strip(),
+                    device=identity,
+                    content_size=subprocess.check_output(['xcrun', 'simctl', 'ui', simulator, 'content_size'], text=True).strip(),
+                    scope='WinnowApp Debug regtest fixture; physical authentication is a separate release gate')
+    (results / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    def absolute(value):
+        if isinstance(value, str):
+            return value.replace('__TESTROOT__', str(products))
+        if isinstance(value, list):
+            return [absolute(item) for item in value]
+        if isinstance(value, dict):
+            return {key: absolute(item) for key, item in value.items()}
+        return value
+    specification = absolute(specification)
+    if 'TestConfigurations' in specification:
+        targets = [target for configuration in specification['TestConfigurations'] for target in configuration['TestTargets']]
+    else:
+        targets = [value for key, value in specification.items() if not key.startswith('__')]
+    for target in targets:
+        target.setdefault('EnvironmentVariables', {}).update(
+            WINNOW_LIGHTNING_UI_FIXTURE=str(results / 'fixture/connection.json'),
+            WINNOW_SCREENSHOT_DIR=str(results / 'screenshots'))
+    spec = results / 'Lightning.xctestrun'
+    with spec.open('wb') as file:
+        plistlib.dump(specification, file)
+    ui_reference = with_reference_retry(results, lambda: record_journey(results, spec, simulator, info, derived))
+    # Only a successful XCTest result AND a finalized recording produce this
+    # receipt. Provider receipts alone do not prove that the app checks passed.
+    completed = dict(result='passed', manifest=manifest,
+        video_sha256=hashlib.sha256((results / 'journey.mp4').read_bytes()).hexdigest(),
+        independent_receipt_sha256=hashlib.sha256((results / 'fixture/evidence/receipt.json').read_bytes()).hexdigest())
+    completed['bolt11_receipt_sha256'] = hashlib.sha256((results / 'fixture/evidence/bolt11-receipt.json').read_bytes()).hexdigest()
+    if ui_reference:
+        completed['ui_cln_reference_sha256'] = ui_reference['manifest_sha256']
+    (results / 'journey.json').write_text(json.dumps(completed, indent=2) + '\n')
+    print('PASS: recorded Swift app async payment, process crashes and returned channel funds', flush=True)
+
+
+if __name__ == '__main__':
+    main()

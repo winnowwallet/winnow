@@ -40,6 +40,11 @@ other two and runs `ci-crap report`. Its lane record carries the result, and
 least 1,000 measured methods. The hosted fallback does the same in one job,
 except on fork PRs that skip the journey; main's tdx run measures those.
 
+One report covers all of `Sources`, including LightningCore and the Lightning
+app code (`Sources/WinnowLightningApp`), whose tests run in the units lane.
+`ci-validation` requires the report to leave out no directory.
+`check-crap report --scope`/`--without` remain for local audits of one area.
+
 For a local audit:
 
 ```sh

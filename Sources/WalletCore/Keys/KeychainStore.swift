@@ -69,18 +69,22 @@ public struct KeychainStore: KeyStore {
     }
 
     public func store(_ secret: WalletSecret, for walletID: String) throws {
-        var query = baseQuery(walletID: walletID)
+        var query = try protectedQuery(walletID: walletID)
         query[kSecValueData] = secret.serialized
+        let status = SecItemAdd(query as CFDictionary, nil)
+        try requireAdded(status, walletID: walletID)
+    }
+    private func protectedQuery(walletID: String) throws -> [CFString: Any] {
+        var query = baseQuery(walletID: walletID)
         switch protection {
         case .userPresence:
-            // The access control carries the protection class; the two
-            // attributes are mutually exclusive in the query.
             query[kSecAttrAccessControl] = try Self.userPresenceAccessControl()
             query[kSecAttrGeneric] = Self.protectionMarker
-        case .deviceOnly:
-            query[kSecAttrAccessible] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        case .deviceOnly: query[kSecAttrAccessible] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         }
-        let status = SecItemAdd(query as CFDictionary, nil)
+        return query
+    }
+    private func requireAdded(_ status: OSStatus, walletID: String) throws {
         if status == errSecDuplicateItem { throw KeyStoreError.alreadyExists(walletID: walletID) }
         guard status == errSecSuccess else { throw KeyStoreError.keychain(status) }
     }
@@ -96,12 +100,8 @@ public struct KeychainStore: KeyStore {
             query[kSecUseAuthenticationContext] = context
         }
         defer { context?.invalidate() }
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecItemNotFound { throw KeyStoreError.notFound(walletID: walletID) }
-        guard status == errSecSuccess, let data = item as? Data else {
-            throw KeyStoreError.keychain(status)
-        }
+        let item = try matchingItem(query, walletID: walletID)
+        guard let data = item as? Data else { throw KeyStoreError.keychain(errSecSuccess) }
         return try WalletSecret(serialized: data)
     }
 
@@ -122,23 +122,33 @@ public struct KeychainStore: KeyStore {
     @discardableResult
     public func upgradeProtection(walletID: String) throws -> Bool {
         guard protection == .userPresence else { return false }
-        var query = baseQuery(walletID: walletID)
-        query[kSecReturnAttributes] = true
-        query[kSecMatchLimit] = kSecMatchLimitOne
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        if status == errSecItemNotFound { throw KeyStoreError.notFound(walletID: walletID) }
-        guard status == errSecSuccess, let attributes = item as? [CFString: Any] else {
-            throw KeyStoreError.keychain(status)
-        }
+        let attributes = try attributes(walletID: walletID)
         guard attributes[kSecAttrGeneric] as? Data != Self.protectionMarker else { return false }
         let update: [CFString: Any] = [
             kSecAttrAccessControl: try Self.userPresenceAccessControl(),
             kSecAttrGeneric: Self.protectionMarker,
         ]
         let updated = SecItemUpdate(baseQuery(walletID: walletID) as CFDictionary, update as CFDictionary)
-        guard updated == errSecSuccess else { throw KeyStoreError.keychain(updated) }
+        try requireUpdated(updated)
         return true
+    }
+
+    private func attributes(walletID: String) throws -> [CFString: Any] {
+        var query = baseQuery(walletID: walletID)
+        query[kSecReturnAttributes] = true; query[kSecMatchLimit] = kSecMatchLimitOne
+        let item = try matchingItem(query, walletID: walletID)
+        guard let attributes = item as? [CFString: Any] else { throw KeyStoreError.keychain(errSecSuccess) }
+        return attributes
+    }
+    private func matchingItem(_ query: [CFString: Any], walletID: String) throws -> CFTypeRef? {
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { throw KeyStoreError.notFound(walletID: walletID) }
+        guard status == errSecSuccess else { throw KeyStoreError.keychain(status) }
+        return item
+    }
+    private func requireUpdated(_ status: OSStatus) throws {
+        guard status == errSecSuccess else { throw KeyStoreError.keychain(status) }
     }
 
     /// `.userPresence` over `WhenUnlockedThisDeviceOnly`: any enrolled

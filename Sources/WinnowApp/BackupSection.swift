@@ -12,6 +12,7 @@ struct BackupSection: View {
 
     @State private var showExport = false
     @State private var showCloudBackup = false
+    @State private var showLightningBackup = false
     @State private var revealedMnemonic: String?
     @State private var revealing = SensitiveAction()
 
@@ -25,6 +26,11 @@ struct BackupSection: View {
                 .disabled(model.walletID == nil)
                 .sheet(isPresented: $showCloudBackup) { CloudBackupView() }
             }
+            // iCloud never holds channel state: the encrypted recovery file
+            // carries the wallet and the channels' recovery keys.
+            Button("Lightning recovery file") { showLightningBackup = true }
+                .accessibilityIdentifier("lightningBackup")
+                .sheet(isPresented: $showLightningBackup) { LightningBackupView() }
             Button("Back up wallet") { showExport = true }
                 .disabled(model.walletID == nil)
                 .accessibilityIdentifier("exportBundleButton")

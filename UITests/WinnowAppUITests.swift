@@ -15,7 +15,7 @@ final class WinnowAppUITests: XCTestCase {
 
     func test01CreateReceiveSendConfirm() async throws {
         continueAfterFailure = false
-        executionTimeAllowance = 600 // the host prepares the fixture before this UI journey
+        executionTimeAllowance = 900 // includes all on-chain and shared-wallet journeys on hosted simulators
         let setupStarted = Date()
         try SignetFixture.requirePreparedBank()
         print("SIGNET_SETUP_SECONDS=\(Date().timeIntervalSince(setupStarted))")
@@ -53,6 +53,9 @@ final class WinnowAppUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["balanceText"].appears(within: 60))
 
         app.buttons["receiveButton"].tap()
+        // Receive offers Lightning or Bitcoin; this journey is paid on-chain.
+        XCTAssertTrue(app.buttons["receiveBitcoin"].appears(within: 20))
+        app.buttons["receiveBitcoin"].tap()
         XCTAssertTrue(app.buttons["skipReceiveAddressLabelButton"].appears(within: 20))
         app.buttons["skipReceiveAddressLabelButton"].tap()
         let addressElement = app.staticTexts["receiveAddress"]
@@ -73,6 +76,7 @@ final class WinnowAppUITests: XCTestCase {
             app.staticTexts["syncSummaryText"].label == "Up to date"
         })
         Screenshots.capture(app, "56-home-beginner", testCase: self)
+        try cancelHighFeeReview(in: app, destination: destination)
 
         app.buttons["openSendButton"].tap()
         XCTAssertTrue(app.buttons["pasteDestinationButton"].appears(within: 20))
@@ -120,6 +124,37 @@ final class WinnowAppUITests: XCTestCase {
         Screenshots.capture(app, "09-home-after-send", testCase: self)
         print("SIGNET_ORDINARY_SECONDS=\(Date().timeIntervalSince(journeyStarted))")
         try await multisigJourney(in: app, control: control)
+    }
+
+    /// Review is not spending authorization: even a valid payment with a
+    /// disproportionate fee must remain unbroadcast when its sheet is canceled.
+    private func cancelHighFeeReview(in app: XCUIApplication, destination: String) throws {
+        let before = Set(try BitcoinCLI.mempoolTxids())
+        app.buttons["openSendButton"].tap()
+        XCTAssertTrue(app.buttons["pasteDestinationButton"].appears(within: 20))
+        app.buttons["pasteDestinationButton"].tap()
+        // This fresh wallet has no observed send rates. At the medium preset,
+        // a normal Taproot spend's fee exceeds a 500-sat, above-dust payment.
+        app.typeInto("amountField", "500")
+        app.buttons["reviewButton"].tap()
+        XCTAssertTrue(app.buttons["sendButton"].appears(within: 30))
+        XCTAssertEqual(app.staticTexts["reviewDestination"].label, destination)
+        let amountText = try XCTUnwrap(app.staticTexts["reviewAmount"].value as? String)
+        XCTAssertEqual(Int64(amountText.filter(\.isNumber)), 500)
+        let feeText = try XCTUnwrap(app.staticTexts["reviewFee"].value as? String)
+        let fee = try XCTUnwrap(Int64(feeText.filter(\.isNumber)))
+        XCTAssertGreaterThan(fee, 500)
+        let warning = app.staticTexts["feeProportionWarning"]
+        XCTAssertTrue(scrollUntilExists(app, warning, fullyVisible: true))
+        XCTAssertTrue(warning.label.contains("This costs more to send than it delivers"))
+        XCTAssertTrue(warning.label.contains("sending \(amountText)"))
+        XCTAssertTrue(warning.label.contains("\(feeText) in fees"))
+        Screenshots.capture(app, "05-high-fee-review", testCase: self)
+        XCTAssertEqual(Set(try BitcoinCLI.mempoolTxids()), before, "review must not broadcast")
+        app.buttons["closeSendButton"].tap()
+        XCTAssertTrue(app.buttons["closeSendButton"].disappears(within: 10))
+        XCTAssertEqual(Set(try BitcoinCLI.mempoolTxids()), before, "canceling must not broadcast")
+        XCTAssertEqual(Int64(balanceText(app).filter(\.isNumber)), Self.fundingAmount)
     }
 
     nonisolated static func fundAndConfirm(_ address: String) async throws -> String {

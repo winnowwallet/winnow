@@ -275,27 +275,34 @@ struct AddPersonView: View {
         saving = true
         Task {
             defer { saving = false }
-            do {
-                if let person {
-                    if person.payTo == nil, let payTo = parsed?.payTo {
-                        try await model.attachDestination(id: person.id, payTo: payTo,
-                                                          provenance: destinationProvenance ?? .supplied,
-                                                          source: destinationSource)
-                    }
-                    try await model.updateRecipient(id: person.id, name: effectiveName, saved: true)
-                } else if labelingSender {
-                    let record = try await model.addPerson(name: effectiveName, payTo: parsed?.payTo,
-                                                           signerKey: nil,
-                                                           provenance: destinationProvenance,
-                                                           source: destinationSource)
-                    try await model.labelReceivedSender(txid: txid!, personID: record.id)
-                } else if let parsed {
-                    try await model.addPerson(name: effectiveName, payTo: parsed.payTo, signerKey: parsed.signerKey)
-                }
-                dismiss()
-            } catch { self.error = error.localizedDescription }
+            do { try await persistPerson(); dismiss() }
+            catch { self.error = error.localizedDescription }
         }
     }
+
+    private func persistPerson() async throws {
+        if let person { try await updateSavedPerson(person); return }
+        try await createSavedPerson()
+    }
+
+    private func updateSavedPerson(_ person: PersonRecord) async throws {
+        if person.payTo == nil, let payTo = parsed?.payTo {
+            try await model.attachDestination(id: person.id, payTo: payTo,
+                                              provenance: destinationProvenance ?? .supplied, source: destinationSource)
+        }
+        try await model.updateRecipient(id: person.id, name: effectiveName, saved: true)
+    }
+
+    private func createSavedPerson() async throws {
+        if labelingSender {
+            let record = try await model.addPerson(name: effectiveName, payTo: parsed?.payTo, signerKey: nil,
+                                                   provenance: destinationProvenance, source: destinationSource)
+            try await model.labelReceivedSender(txid: txid!, personID: record.id)
+        } else if let parsed {
+            try await model.addPerson(name: effectiveName, payTo: parsed.payTo, signerKey: parsed.signerKey)
+        }
+    }
+
 }
 
 /// This wallet's card: public keys only, plus the name others will see.

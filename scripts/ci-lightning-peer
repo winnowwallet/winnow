@@ -1,0 +1,775 @@
+#!/usr/bin/env python3
+"""Independent stock Core Lightning opening and enforceability check.
+
+The reference daemon is unmodified v26.06.8. The Swift executable talks real
+BOLT 8 TCP and persists its own state. Bitcoin Core signs only wallet funding;
+Core Lightning supplies the other channel party's signatures.
+"""
+import json
+import hashlib
+import argparse
+import os
+from pathlib import Path
+import selectors
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+from concurrent.futures import ThreadPoolExecutor
+from collections import deque
+
+ROOT = Path(__file__).resolve().parent.parent
+CLN_COMMIT = '6f741afc395c66d200429ea477d29df4d974748d'
+
+
+def port():
+    with socket.socket() as sock:
+        sock.bind(('127.0.0.1', 0))
+        return sock.getsockname()[1]
+
+
+def bigsize(number):
+    if number < 253:
+        return bytes([number])
+    if number <= 65535:
+        return b'\xfd' + number.to_bytes(2, 'big')
+    raise ValueError('Fixture payload too large')
+
+
+def check_onions(ln, swift, evidence):
+    payloads = [bytes.fromhex('0100'), bytes.fromhex('03022a2b'), b'\x05' + bigsize(256) + b'\x2d' * 256]
+    hops = [{'pubkey': swift.initialization['node_id'], 'payload': (bigsize(len(payload)) + payload).hex()} for payload in payloads]
+    payment_hash = '63' * 32
+    reference = ln('createonion', json.dumps(hops), payment_hash, '41' * 32)
+    onion = reference['onion']
+    for index, payload in enumerate(payloads):
+        peeled = swift.call('peel', onion=onion, hash=payment_hash)
+        assert peeled['payload'] == payload.hex()
+        assert peeled['shared_secret'] == reference['shared_secrets'][index]
+        onion = peeled['next']
+    assert onion == ''
+    (evidence / 'cln-onion-vector.json').write_text(json.dumps({
+        'source': 'Core Lightning v26.06.8 createonion RPC', 'commit': CLN_COMMIT,
+        'private_key': '01' * 32, 'associated_data': payment_hash,
+        'payloads': [payload.hex() for payload in payloads], **reference}, indent=2) + '\n')
+
+
+def settle(swift, payment_id):
+    for _ in range(30):
+        status = swift.call('payment', id=payment_id)
+        if status['phase'] == 'settled':
+            assert hashlib.sha256(bytes.fromhex(status['preimage'])).hexdigest() == status['hash']
+            return status
+        assert status['phase'] != 'failed', status
+        message = swift.call('receive')
+        if message.get('type') in ('1', '17'):
+            raise AssertionError(f'Peer rejected payment: {message}')
+    raise AssertionError('Payment did not irrevocably settle')
+
+
+def check_payments(ln, swift, channel, height):
+    invoice = ln('invoice', '5000000msat', 'swift-outbound', 'Swift independent interop')
+    decoded = ln('decode', invoice['bolt11'])
+    request = dict(id='51' * 32, channel=channel['channel_id'], invoice=invoice['bolt11'], height=str(height))
+    first = swift.call('pay_invoice', **request)
+    assert swift.call('pay_invoice', **request) == first
+    outgoing = settle(swift, request['id'])
+    paid = ln('listinvoices', 'swift-outbound')['invoices'][0]
+    assert paid['status'] == 'paid' and paid['amount_received_msat'] == 5_000_000
+    assert paid['payment_hash'] == outgoing['hash']
+    incoming = swift.call('invoice', id='52' * 32, amount='2000000', expiry=str(height + 288), scid=channel['short_channel_id'])
+    decoded = ln('decode', incoming['bolt11'])
+    assert decoded['payment_hash'] == incoming['hash'] and decoded['payment_secret'] == incoming['secret']
+    assert decoded['amount_msat'] == 2_000_000 and decoded['payee'] == swift.initialization['node_id']
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        payment = pool.submit(ln, '-k', 'pay', 'bolt11=' + incoming['bolt11'], 'retry_for=30', 'label=winnow-bolt11')
+        received = settle(swift, incoming['id'])
+        completed = payment.result(timeout=30)
+    assert completed['status'] == 'complete' and completed['amount_msat'] == 2_000_000
+    assert completed['amount_sent_msat'] == 2_000_000 and completed['payment_preimage'] == received['preimage']
+    return {'swift_to_cln': outgoing, 'cln_to_swift': received}
+
+
+def check_routed_invoice(ln, recipient, swift, channel, height, executable, peer_port, peer_id, evidence):
+    invoice = recipient('-k', 'invoice', 'amount_msat=2000000msat', 'label=swift-routed',
+                        'description=Swift public gossip route', 'exposeprivatechannels=false')
+    decoded = recipient('decode', invoice['bolt11'])
+    assert not decoded.get('routes'), decoded
+    probe = subprocess.run([executable, 'probe-invoice-route', '127.0.0.1', str(peer_port), peer_id,
+                            'regtest', str(height), invoice['bolt11']], text=True, capture_output=True, timeout=180)
+    (evidence / 'invoice-route-probe.log').write_text(probe.stdout + probe.stderr)
+    probe.check_returncode()
+    route = json.loads(probe.stdout)
+    assert len(json.loads(route['route'])) == 1 and int(route['fee_msat']) > 0, route
+    request = dict(id='53' * 32, channel=channel['channel_id'], invoice=invoice['bolt11'], height=str(height), route=route['route'])
+    swift.call('pay_invoice', **request)
+    outgoing = settle(swift, request['id'])
+    paid = recipient('listinvoices', 'swift-routed')['invoices'][0]
+    assert paid['status'] == 'paid' and paid['amount_received_msat'] == 2_000_000, paid
+    assert paid['payment_hash'] == outgoing['hash'] and outgoing['fee'] == route['fee_msat']
+    forwards = ln('listforwards')['forwards']
+    assert any(item['status'] == 'settled' and item['out_msat'] == 2_000_000 for item in forwards), forwards
+    return dict(payment=outgoing, quote=route, independent_invoice=paid)
+
+
+def check_ordinary_offers(ln, swift, rpc, channel_id, peer_id, evidence):
+    height = rpc('getblockcount')
+    first = int(swift.call('scan_begin', genesis=bytes.fromhex(rpc('getblockhash', 0))[::-1].hex())['next'])
+    for number in range(first, height + 1):
+        swift.call('scan_block', height=str(number), hex=rpc('getblock', rpc('getblockhash', number), 0))
+    swift.call('height', height=str(height))
+    receipts = []
+    delta = 0
+    for index, blinded in enumerate((False, True)):
+        label = 'swift-ordinary-' + str(index)
+        options = ['amount=2000sat', 'description=Winnow ordinary BOLT12 interop', 'label=' + label, 'fronting_nodes=[]']
+        if blinded:
+            options += ['dev_paths=' + json.dumps([[peer_id]])]
+        issued = ln('-k', 'offer', *options)
+        decoded = ln('decode', issued['bolt12'])
+        assert bool(decoded.get('offer_paths')) == blinded, decoded
+        assert decoded['offer_issuer_id'] == peer_id, decoded
+        payment_id = ('81' if not blinded else '82') * 32
+        swift.call('ordinary_request', id=payment_id, offer=issued['bolt12'], amount='2000000')
+        for _ in range(30):
+            review = swift.call('ordinary_invoice', id=payment_id)
+            if review['phase'] == 'review':
+                break
+            swift.call('receive')
+        assert review['phase'] == 'review', review
+        invoice = ln('decode', review['invoice'])
+        (evidence / ('ordinary-invoice-' + str(index) + '.json')).write_text(json.dumps(dict(offer=issued, decoded_offer=decoded, review=review, decoded=invoice), indent=2) + '\n')
+        assert invoice['invoice_amount_msat'] == 2_000_000, invoice
+        assert swift.call('payment', id=payment_id)['phase'] == 'missing'
+        swift.call('ordinary_pay', id=payment_id, channel=channel_id)
+        settled = settle(swift, payment_id)
+        assert settled['hash'] == review['hash']
+        independent = ln('listinvoices')['invoices']
+        paid = next(item for item in independent if item['payment_hash'] == review['hash'])
+        assert paid['status'] == 'paid', paid
+        receipts.append(dict(direction='swift-to-cln', blinded=blinded, lookup_id=payment_id, offer=issued['bolt12'], decoded_offer=decoded,
+                             invoice=review['invoice'], payment=settled, independent_invoice=paid))
+        delta += 2_000_000 + int(settled['fee'])
+    for index, blinded in enumerate((False, True)):
+        offer = swift.call('ordinary_register', id=('83' if not blinded else '84') * 32, blinded=str(blinded).lower())['offer']
+        decoded = ln('decode', offer)
+        assert bool(decoded.get('offer_paths')) == blinded, decoded
+        assert decoded['offer_issuer_id'] == swift.initialization['node_id'], decoded
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            fetching = pool.submit(ln, '-k', 'fetchinvoice', 'offer=' + offer, 'amount_msat=2000000msat', 'timeout=30')
+            swift.receive(513)
+            fetched = fetching.result(timeout=30)
+        invoice = ln('decode', fetched['invoice'])
+        payment_hash = invoice['invoice_payment_hash']
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            paying = pool.submit(ln, '-k', 'pay', 'bolt11=' + fetched['invoice'], 'retry_for=30')
+            received = settle(swift, payment_hash)
+            paid = paying.result(timeout=30)
+        assert paid['status'] == 'complete' and paid['amount_msat'] == 2_000_000, paid
+        assert received['preimage'] == paid['payment_preimage']
+        receipts.append(dict(direction='cln-to-swift', blinded=blinded, lookup_id=payment_hash, offer=offer, decoded_offer=decoded,
+                             invoice=fetched['invoice'], payment=received, independent_payment=paid))
+        delta -= int(paid['amount_sent_msat'])
+    result = dict(result='passed', scope='Stock CLN ordinary offers: direct and blinded invoice requests, signed invoices and settled payments in both directions',
+                  cases=receipts, peer_balance_delta_msat=delta)
+    (evidence / 'ordinary-bolt12-receipt.json').write_text(json.dumps(result, indent=2) + '\n')
+    return result
+
+
+def wait_for(check, timeout=45):
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            value = check()
+            if value:
+                return value
+        except (subprocess.CalledProcessError, FileNotFoundError, ConnectionRefusedError):
+            pass
+        if time.monotonic() > deadline:
+            raise TimeoutError('Independent peer did not reach the expected state')
+        time.sleep(0.2)
+
+
+def stop(process):
+    if process and process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+
+
+class SwiftPeer:
+    def __init__(self, arguments, log):
+        self.trace = open(Path(log.name).with_name('swift-protocol.jsonl'), 'a', buffering=1)
+        self.process = subprocess.Popen(arguments, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log)
+        self.selector = selectors.DefaultSelector()
+        self.selector.register(self.process.stdout, selectors.EVENT_READ)
+        self.initialization = self.read()
+        self.record('initialization', response=self.initialization)
+
+    def record(self, kind, **fields):
+        record = dict(time_ns=time.time_ns(), kind=kind, **fields)
+        encoded = json.dumps(record, sort_keys=True)
+        if len(encoded.encode()) > 65_536:
+            encoded = json.dumps(dict(time_ns=record['time_ns'], kind=kind, truncated=True,
+                bytes=len(encoded.encode()), sha256=hashlib.sha256(encoded.encode()).hexdigest(), preview=encoded[:4096]))
+        self.trace.write(encoded + '\n')
+
+    def read(self):
+        if not self.selector.select(timeout=60):
+            raise TimeoutError('Swift peer did not complete a protocol operation')
+        line = self.process.stdout.readline()
+        if not line:
+            raise RuntimeError('Swift peer exited; inspect swift-peer.log')
+        return json.loads(line)
+
+    def call(self, command, **kwargs):
+        self.record('request', command=command, arguments=kwargs)
+        try:
+            self.process.stdin.write(json.dumps(dict(command=command, **kwargs)).encode() + b'\n')
+            self.process.stdin.flush()
+            response = self.read()
+        except Exception as error:
+            try:
+                self.record('failure', command=command, error=repr(error))
+            except Exception as diagnostic_error:
+                print(f'Swift command failure trace unavailable: {diagnostic_error!r}', file=sys.stderr)
+            raise
+        self.record('response', command=command, response=response)
+        return response
+
+    def receive(self, expected):
+        for _ in range(30):
+            message = self.call('receive')
+            if message.get('type') in ('1', '17'):
+                raise AssertionError(f'Core Lightning rejected the protocol: {message}')
+            if message.get('type') == str(expected):
+                return message
+        raise AssertionError(f'No message {expected} from independent peer')
+
+    def close(self):
+        stop(self.process)
+        self.selector.close()
+        self.trace.close()
+
+
+def diagnostic_call(callback):
+    try:
+        return callback()
+    except Exception as error:
+        return dict(diagnostic_error=repr(error))
+
+
+def bounded_log_tail(path, maximum=32_768):
+    with path.open('rb') as stream:
+        stream.seek(0, os.SEEK_END)
+        stream.seek(max(0, stream.tell() - maximum))
+        data = stream.read(maximum)
+    return '\n'.join(data.decode(errors='replace').splitlines()[-160:])
+
+
+def bounded_log_lines(path):
+    with path.open('rb') as stream:
+        while chunk := stream.readline(4096):
+            first = chunk.rstrip(b'\r\n')
+            clipped = len(chunk) == 4096 and not chunk.endswith(b'\n')
+            while chunk and not chunk.endswith(b'\n'):
+                chunk = stream.readline(4096)
+            yield first + (b' [line clipped]' if clipped else b'')
+
+
+def bounded_close_tail(path, maximum=32_768):
+    if maximum <= 0:
+        raise ValueError('Diagnostic tail bound must be positive')
+    markers = (b'WIRE_SHUTDOWN', b'WIRE_CLOSING_', b'WIRE_CHANNEL_REESTABLISH',
+               b'WIRE_REVOKE_AND_ACK', b'WIRE_COMMITMENT_SIGNED', b'-closingd-',
+               b'CLOSINGD_', b'CHANNELD_SHUTTING_DOWN', b'shutdown_complete',
+               b'revocations_received', b'next_idx_', b'next_revocation_number', b'Got reestablish')
+    events = deque(maxlen=160)
+    for line in bounded_log_lines(path):
+        if any(marker in line for marker in markers):
+            events.append(line)
+    encoded = b'\n'.join(events).decode(errors='replace').encode()
+    return encoded[-maximum:].decode(errors='ignore')
+
+
+def failure_diagnostics(error, ln, evidence):
+    state = dict(failure=repr(error), reference_channels=diagnostic_call(lambda: ln('listpeerchannels')))
+    (evidence / 'failure-state.json').write_text(json.dumps(state, indent=2) + '\n')
+    print('Stock-peer failure state: ' + json.dumps(state, sort_keys=True)[:32_768], file=sys.stderr)
+    for name in ('cln.log', 'recipient-cln.log'):
+        events = diagnostic_call(lambda: bounded_close_tail(evidence / name))
+        print(f'Stock-peer closing/reestablishment/revocation events {name}:\n{events}', file=sys.stderr)
+    for name in ('swift-protocol.jsonl', 'swift-peer.log', 'cln.log', 'recipient-cln.log', 'bitcoin.log'):
+        tail = diagnostic_call(lambda: bounded_log_tail(evidence / name))
+        print(f'Stock-peer diagnostic tail {name}:\n{tail}', file=sys.stderr)
+
+
+class ReferenceStartupFailure(RuntimeError):
+    """Stock CLN lost its channel subdaemon before funding_signed."""
+
+
+class ReferenceSocketFailure(ReferenceStartupFailure):
+    """A stock CLN subdaemon lost a socket later in the scenario."""
+
+
+# Stock v26.06.8 on macOS can hand a subdaemon an unreadable socket (upstream
+# #5808/#9323, fixed for the HSM by #9564, which only the labeled UI HSM
+# carries). It hit 5 of 12 openings in one hosted run, and has also killed
+# closingd's mutual-close signature and a routed reference channel's channeld.
+# Each attempt is a fresh disposable fixture; only these failures are retried.
+REFERENCE_STARTUP_ATTEMPTS = 5
+HSM_IO = re.compile(r'\*\*BROKEN\*\* \S+-(?:channeld|closingd|onchaind|openingd)-chan#\d+: STATUS_FAIL_HSM_IO: ')
+# A channel daemon that exits at once, cleanly, as a transient failure.
+DAEMON_LOST = re.compile(r'Peer transient failure in \S+: (channeld|openingd|closingd): Owning subdaemon \1 died \(0\)')
+
+
+def reference_socket_failure(evidence):
+    """Only the upstream macOS socket failures broke a stock daemon: no
+    protocol error was sent, and nothing else is BROKEN."""
+    if sys.platform != 'darwin':
+        return False
+    found = False
+    for name in ('cln.log', 'recipient-cln.log'):
+        if not (evidence / name).exists():
+            continue
+        lines = [line.decode(errors='replace') for line in bounded_log_lines(evidence / name)]
+        if any(('**BROKEN**' in line and not HSM_IO.search(line)) or 'peer_out WIRE_ERROR' in line for line in lines):
+            return False
+        found |= any(HSM_IO.search(line) or DAEMON_LOST.search(line) for line in lines)
+    return found
+
+
+def funding_signature(swift, log):
+    try:
+        return swift.receive(35)
+    except TimeoutError as error:
+        transcript = log.read_text()
+        # CLN has already checked our commitment and handed opening to channeld.
+        # Matches the macOS startup failures reported upstream (#5808/#9323).
+        # Classify only this exact pre-broadcast reference-process failure.
+        if (sys.platform == 'darwin'
+                and 'Got opening_fundee_finish_response' in transcript
+                and 'Peer transient failure in CHANNELD_AWAITING_LOCKIN: channeld: Owning subdaemon channeld died (0)' in transcript
+                and 'peer_out WIRE_FUNDING_SIGNED' not in transcript
+                and 'peer_out WIRE_ERROR' not in transcript
+                and '**BROKEN**' not in transcript):
+            raise ReferenceStartupFailure(f'Stock CLN exited before funding_signed; see {log}') from error
+        raise
+
+
+
+def pending_routed_channel(channels, recipient_peer):
+    pending = [channel for channel in channels.get('channels', []) if channel.get('peer_id') == recipient_peer]
+    if len(pending) != 1:
+        return False
+    channel = pending[0]
+    expected = dict(state='OPENINGD', owner='lightning_openingd', opener='local')
+    if any(channel.get(key) != value for key, value in expected.items()) or any(key in channel for key in ('funding_txid', 'channel_id')):
+        return False
+    return 'Funding channel: create first tx, now waiting for their signature' in channel.get('status', [])
+
+
+def unfunded_routed_startup(funder_log, recipient_log, channels, source_peer, recipient_peer):
+    if not pending_routed_channel(channels, recipient_peer):
+        return None
+    funder = '\n'.join(line for line in funder_log.splitlines() if f' {recipient_peer}-' in line)
+    recipient = '\n'.join(line for line in recipient_log.splitlines() if f' {source_peer}-' in line)
+    required = ('peer_in WIRE_FUNDING_CREATED', 'Got opening_fundee_finish_response',
+                'init REMOTE:', 'Peer transient failure in CHANNELD_AWAITING_LOCKIN: channeld: Owning subdaemon channeld died (0)')
+    if not all(marker in recipient for marker in required) or 'peer_out WIRE_FUNDING_CREATED' not in funder:
+        return None
+    if 'WIRE_FUNDING_SIGNED' in funder + recipient:
+        return None
+    if any(marker in funder_log + recipient_log for marker in ('WIRE_ERROR', '**BROKEN**', 'STATUS_FAIL_', 'sendrawtransaction:', 'sendpsbt.')):
+        return None
+    offered = set(re.findall(r'continuing with funding_txid ([0-9a-f]{64})(?:\s|$)', funder))
+    watched = set(re.findall(r'Watching funding tx ([0-9a-f]{64})(?:\s|$)', recipient))
+    return next(iter(offered)) if len(offered) == 1 and offered == watched else None
+
+
+def open_routed_reference_channel(ln, source_peer, recipient_peer, evidence):
+    try:
+        return ln('-k', 'fundchannel', 'id=' + recipient_peer, 'amount=500000sat', 'announce=true')
+    except subprocess.TimeoutExpired as error:
+        funding_id = None
+        if sys.platform == 'darwin' and error.timeout == 20:
+            try:
+                channels = diagnostic_call(lambda: ln('listpeerchannels'))
+                funding_id = unfunded_routed_startup((evidence / 'cln.log').read_text(),
+                    (evidence / 'recipient-cln.log').read_text(), channels, source_peer, recipient_peer)
+                context = dict(original_failure=repr(error), source_peer=source_peer, recipient_peer=recipient_peer,
+                               funding_txid=funding_id, reference_channels=channels, classified=funding_id is not None,
+                               scope='Disposable routed stock channel before funding_signed/broadcast; prior Swift channel remains in this retained attempt',
+                               cause='Underlying HSM I/O or process-exit cause is unproven')
+                (evidence / 'routed-funding-failure.json').write_text(json.dumps(context, indent=2) + '\n')
+            except Exception as diagnostic_error:
+                funding_id = None
+                print(f'Routed-channel startup classification unavailable: {diagnostic_error!r}', file=sys.stderr)
+        if funding_id is not None:
+            raise ReferenceStartupFailure(f'Stock routed recipient exited before funding_signed for {funding_id}; '
+                                          f'original 20s timeout and state retained in {evidence / "routed-funding-failure.json"}') from error
+        raise
+
+
+def run_peer(close_mode, evidence, channel_format="staticRemoteKey", offers=False):
+    cln = Path(os.environ['WINNOW_CLN_DIR']).resolve()
+    bitcoin = Path(os.environ['WINNOW_BITCOIN_DIR']).resolve()
+    commit = subprocess.check_output(['git', '-C', str(cln), 'rev-parse', 'HEAD'], text=True).strip()
+    if commit != CLN_COMMIT:
+        raise AssertionError(f'Expected Core Lightning {CLN_COMMIT}, got {commit}')
+    subprocess.run(['git', '-C', str(cln), 'diff', '--exit-code', 'HEAD', '--'], check=True)
+    version = subprocess.check_output([str(cln / 'lightningd/lightningd'), '--version'], text=True).strip()
+    if version != 'v26.06.8':
+        raise AssertionError(f'Unexpected reference peer version: {version}')
+    subprocess.run(['swift', 'build', '--product', 'winnow-lightning-peer-fixture'], cwd=ROOT, check=True)
+    products = subprocess.check_output(['swift', 'build', '--show-bin-path'], cwd=ROOT, text=True).strip()
+    executable = str(Path(products) / 'winnow-lightning-peer-fixture')
+    evidence.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='winnow-peer-') as temporary:
+        root = Path(temporary)
+        core_dir, cln_dir = root / 'bitcoin', root / 'cln'
+        core_dir.mkdir(); cln_dir.mkdir()
+        rpc_port, peer_port, bitcoin_peer_port = port(), port(), port()
+        base = ['-regtest', f'-datadir={core_dir}', f'-rpcport={rpc_port}']
+
+        def rpc(method, *args):
+            value = subprocess.check_output([str(bitcoin / 'bitcoin-cli'), *base, method, *map(str, args)], text=True, stderr=subprocess.PIPE, timeout=20).strip()
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return value
+
+        def ln(method, *args):
+            value = subprocess.check_output([str(cln / 'cli/lightning-cli'), '-J', '--notifications=none', f'--lightning-dir={cln_dir}', '--network=regtest',
+                                             method, *map(str, args)], text=True, stderr=subprocess.PIPE, timeout=20)
+            return json.loads(value)
+
+        node = daemon = recipient_daemon = swift = None
+        with open(evidence / 'bitcoin.log', 'w') as core_log, open(evidence / 'cln.log', 'w') as cln_log, open(evidence / 'swift-peer.log', 'w') as swift_log:
+            try:
+                node = subprocess.Popen([str(bitcoin / 'bitcoind'), *base, '-server=1', '-listen=1', f'-bind=127.0.0.1:{bitcoin_peer_port}', '-connect=0',
+                    '-dnsseed=0', '-discover=0', '-fallbackfee=0.00002', '-rpcbind=127.0.0.1', '-rpcallowip=127.0.0.1'], stdout=core_log, stderr=core_log)
+                wait_for(lambda: rpc('getblockchaininfo'))
+                rpc('createwallet', 'fixture')
+                address = rpc('getnewaddress')
+                rpc('generatetoaddress', 101, address)
+                # --addr already binds and advertises; allow its loopback address
+                # so the stock offers plugin can issue a true direct-issuer offer.
+                advertised = ['--developer', '--dev-allow-localhost'] if offers else []
+                daemon = subprocess.Popen([str(cln / 'lightningd/lightningd'), f'--lightning-dir={cln_dir}', '--network=regtest',
+                    f'--addr=127.0.0.1:{peer_port}', '--autolisten=false', '--announce-addr-discovered=false',
+                    f'--bitcoin-cli={bitcoin / "bitcoin-cli"}', f'--bitcoin-datadir={core_dir}', f'--bitcoin-rpcport={rpc_port}',
+                    '--log-level=debug', *advertised], stdout=cln_log, stderr=cln_log)
+                info = wait_for(lambda: (value if value.get('blockheight') == rpc('getblockcount') else None) if (value := ln('getinfo')) else None)
+                chain = bytes.fromhex(rpc('getblockhash', 0))[::-1].hex()
+                swift = SwiftPeer([executable, '127.0.0.1', str(peer_port), info['id'], chain, str(root / 'swift-journal')], swift_log)
+                check_onions(ln, swift, evidence)
+                opened = swift.call('open', format=channel_format)
+                accepted = swift.receive(33)
+                assert accepted['id'] == opened['temporary_id']
+                destination = rpc('decodescript', accepted['script'])['address']
+                unsigned = rpc('createrawtransaction', '[]', json.dumps({destination: 0.001}))
+                funded = rpc('fundrawtransaction', unsigned, json.dumps({'fee_rate': 2}))['hex']
+                signed = rpc('signrawtransactionwithwallet', funded)
+                assert signed['complete']
+                raw = signed['hex']
+                decoded = rpc('decoderawtransaction', raw)
+                output = next(out['n'] for out in decoded['vout'] if out['scriptPubKey']['hex'] == accepted['script'])
+                swift.call('fund', id=accepted['id'], transaction=raw, output=str(output))
+                authorized = funding_signature(swift, evidence / 'cln.log')
+                assert authorized['event'] == 'broadcast_funding' and authorized['transaction'] == raw
+                rpc('sendrawtransaction', raw)
+                rpc('generatetoaddress', 6, address)
+                swift.call('confirm', id=authorized['id'], transaction=raw)
+                swift.receive(36)
+                snapshot = swift.call('snapshot')
+                assert snapshot['phase'] == 'ready'
+                recovery_destination = rpc('getaddressinfo', address)['scriptPubKey']
+                swift.call('recovery', id=snapshot['id'], destination=recovery_destination)
+                channels = wait_for(lambda: [channel for channel in ln('listpeerchannels')['channels'] if channel['state'] == 'CHANNELD_NORMAL'])
+                assert len(channels) == 1
+                remote = channels[0]
+                assert remote['peer_id'] == swift.initialization['node_id']
+                assert remote['total_msat'] == 100_000_000 and remote['to_us_msat'] == 0
+                assert remote['channel_type']['bits'] == ([12, 22] if channel_format == 'anchors' else [12])
+                assert snapshot['format'] == channel_format
+                recovery_backup = swift.call('recovery_export') if close_mode == 'recovery' else None
+                payments = check_payments(ln, swift, remote, rpc('getblockcount'))
+                if close_mode == 'cooperative':
+                    recipient_dir = root / 'recipient'; recipient_dir.mkdir()
+                    recipient_port = port()
+                    def recipient(method, *args):
+                        value = subprocess.check_output([str(cln / 'cli/lightning-cli'), '-J', '--notifications=none',
+                            f'--lightning-dir={recipient_dir}', '--network=regtest', method, *map(str, args)], text=True, stderr=subprocess.PIPE, timeout=30)
+                        return json.loads(value)
+                    recipient_daemon = subprocess.Popen([str(cln / 'lightningd/lightningd'), f'--lightning-dir={recipient_dir}', '--network=regtest',
+                        f'--addr=127.0.0.1:{recipient_port}', '--autolisten=false', '--announce-addr-discovered=false',
+                        f'--bitcoin-cli={bitcoin / "bitcoin-cli"}', f'--bitcoin-datadir={core_dir}', f'--bitcoin-rpcport={rpc_port}',
+                        f'--log-file={evidence / "recipient-cln.log"}', '--log-level=debug'], stdout=cln_log, stderr=cln_log)
+                    recipient_info = wait_for(lambda: recipient('getinfo'))
+                    deposit = ln('newaddr', 'bech32')['bech32']; rpc('sendtoaddress', deposit, 0.01); rpc('generatetoaddress', 1, address)
+                    wait_for(lambda: ln('listfunds')['outputs'])
+                    ln('connect', recipient_info['id'], '127.0.0.1', recipient_port)
+                    open_routed_reference_channel(ln, info['id'], recipient_info['id'], evidence)
+                    rpc('generatetoaddress', 6, address)
+                    wait_for(lambda: any(c['state'] == 'CHANNELD_NORMAL' for c in recipient('listpeerchannels')['channels']))
+                    wait_for(lambda: ln('listchannels')['channels'])
+                    payments['swift_to_routed_cln'] = check_routed_invoice(ln, recipient, swift, remote, rpc('getblockcount'),
+                        executable, peer_port, info['id'], evidence)
+                    if offers:
+                        payments['ordinary_bolt12'] = check_ordinary_offers(ln, swift, rpc, snapshot['id'], info['id'], evidence)
+
+                remote = next(c for c in ln('listpeerchannels')['channels'] if c['channel_id'] == snapshot['id'])
+                expected_peer_balance = 3_000_000 + (2_000_000 + int(payments['swift_to_routed_cln']['payment']['fee']) if close_mode == 'cooperative' else 0)
+                if offers:
+                    expected_peer_balance += payments['ordinary_bolt12']['peer_balance_delta_msat']
+                assert remote['to_us_msat'] == expected_peer_balance
+                snapshot = swift.call('snapshot')
+                previous_commitment = snapshot['commitment']
+                swift.close()
+                wait_for(lambda: not next(p for p in ln('listpeers')['peers'] if p['id'] == swift.initialization['node_id'])['connected'])
+                swift = SwiftPeer([executable, '127.0.0.1', str(peer_port), info['id'], chain, str(root / 'swift-journal')], swift_log)
+                swift.call('snapshot')  # Flush only channel_reestablish first.
+                swift.receive(136)
+                snapshot = swift.call('snapshot')
+                assert snapshot['commitment'] == previous_commitment
+                assert swift.call('payment', id='51' * 32) == payments['swift_to_cln']
+                assert swift.call('payment', id='52' * 32) == payments['cln_to_swift']
+                if offers:
+                    for case in payments['ordinary_bolt12']['cases']:
+                        assert swift.call('payment', id=case['lookup_id']) == case['payment']
+                closing = None
+                fee_bump = None
+                if close_mode == 'force':
+                    if channel_format == 'anchors':
+                        context = dict(bitcoin=bitcoin, root=root, primary_port=bitcoin_peer_port, evidence=evidence, executable=executable)
+                        closing, fee_bump = check_anchor_fee_bump(rpc, swift, snapshot['id'], address, context)
+                    else:
+                        closing = swift.call('force_close', id=snapshot['id'])['transaction']
+                recovery = None
+                if close_mode == 'recovery':
+                    swift.close()
+                    wait_for(lambda: not next(p for p in ln('listpeers')['peers'] if p['id'] == swift.initialization['node_id'])['connected'])
+                    closed = ln('-k', 'close', 'id=' + snapshot['id'], 'unilateraltimeout=1')
+                    assert closed['type'] == 'unilateral', closed
+                    closing = closed['txs'][0]
+                    wait_for(lambda: closed['txids'][0] in rpc('getrawmempool'))
+                    rpc('generatetoaddress', 1, address)
+                    swift = SwiftPeer([executable, '127.0.0.1', str(peer_port), info['id'], chain, str(root / 'swift-journal')], swift_log)
+                    blocks = [dict(height=h, raw=rpc('getblock', rpc('getblockhash', h), 0)) for h in range(1, rpc('getblockcount') + 1)]
+                    result = swift.call('recovery_claim', backup=recovery_backup['backup'],
+                                        directory=str(root / 'restored-recovery'), blocks=json.dumps(blocks))
+                    assert result['status'] == 'recovery-only' and result['node_id'] == recovery_backup['node_id']
+                    claims = json.loads(result['claims'])
+                    assert claims, result
+                    recovered = []
+                    for claim in claims:
+                        checked = rpc('testmempoolaccept', json.dumps([claim]))[0]
+                        assert checked['allowed'], checked
+                        recovered.append(rpc('sendrawtransaction', claim))
+                    recovery = dict(status=result['status'], node_id=result['node_id'],
+                                    backup_revision=int(recovery_backup['revision']), returned_claim_txids=recovered,
+                                    close_txid=closed['txids'][0], result='Core accepted restored stale-backup claims against stock peer latest close')
+                if close_mode == 'cooperative':
+                    destination = rpc('getaddressinfo', address)['scriptPubKey']
+                    swift.call('close', id=snapshot['id'], destination=destination)
+                    swift.receive(38)
+                    closing = swift.receive(39)['transaction']
+                    outputs = rpc('decoderawtransaction', closing)['vout']
+                    returned = next(output for output in outputs if output['scriptPubKey']['hex'] == destination)
+                    assert 0.00094274 <= returned['value'] <= 0.00094999
+                # An independent signer and an independent consensus engine must
+                # both accept our locally enforceable commitment.
+                if close_mode == 'recovery':
+                    commitment_id = closed['txids'][0]
+                else:
+                    checked = rpc('testmempoolaccept', json.dumps([closing]))[0]
+                    if not checked['allowed']:
+                        assert (close_mode == 'cooperative' or fee_bump) and checked.get('reject-reason') == 'txn-already-in-mempool', checked
+                    commitment_id = rpc('sendrawtransaction', closing)
+                rpc('generatetoaddress', 1, address)
+                receipt = {'result': 'passed', 'scope': 'Swift-funded negotiated commitment opening, bidirectional BOLT11 payments, production gossip routing and forwarded invoice settlement (cooperative run), process restart/reestablishment and close',
+                    'close_mode': close_mode, 'channel_format': channel_format,
+                    'core_lightning_version': version, 'core_lightning_commit': commit,
+                    'bitcoin_core_version': rpc('getnetworkinfo')['version'],
+                    'swift_source': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                    'source_dirty': bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip()),
+                    'channel_id': snapshot['id'], 'funding_txid': decoded['txid'], 'commitment_txid': commitment_id,
+                    'capacity_sat': 100_000, 'peer_to_us_msat': remote['to_us_msat'], 'payments': payments, 'fee_bump': fee_bump, 'recovery': recovery}
+                (evidence / 'opening-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+                print(json.dumps(receipt, sort_keys=True))
+            except Exception as error:
+                try:
+                    for log in (core_log, cln_log, swift_log):
+                        log.flush()
+                    failure_diagnostics(error, ln, evidence)
+                except Exception as diagnostic_error:
+                    print(f'Stock-peer diagnostics unavailable: {diagnostic_error!r}', file=sys.stderr)
+                raise
+            finally:
+                if swift:
+                    swift.close()
+                stop(recipient_daemon); stop(daemon); stop(node)
+
+
+def check_anchor_fee_bump(rpc, swift, channel_id, miner_address, context):
+    destination_address = rpc('getnewaddress', '', 'bech32m')
+    destination = rpc('getaddressinfo', destination_address)['scriptPubKey']
+    deposit = rpc('sendtoaddress', destination_address, 0.002)
+    rpc('generatetoaddress', 1, miner_address)
+    output = next(coin for coin in rpc('listunspent') if coin['txid'] == deposit and coin['address'] == destination_address)
+    coins = [dict(txid=deposit, vout=output['vout'], amount=200_000, scriptPubKey=destination,
+                  chain=0, index=0, height=rpc('getblockcount'))]
+    quote = swift.call('anchor_quote', id='71' * 32, channel=channel_id, coins=json.dumps(coins),
+                       destination=destination, rate='10', limit='20000')
+    parent = rpc('decoderawtransaction', quote['parent'])
+    child = rpc('decoderawtransaction', quote['transaction'])
+    anchor = parent['vout'][child['vin'][0]['vout']]
+    previous = [dict(txid=parent['txid'], vout=anchor['n'], scriptPubKey=anchor['scriptPubKey']['hex'], amount=anchor['value'])]
+    wallet_signed = rpc('signrawtransactionwithwallet', quote['transaction'], json.dumps(previous))
+    committed = swift.call('anchor_commit', quote=quote['quote'], transaction=wallet_signed['hex'])
+    child_id = rpc('decoderawtransaction', committed['child'])['txid']
+    replacement = swift.call('anchor_quote', id='72' * 32, channel=channel_id, coins=json.dumps(coins),
+                             destination=destination, rate='20', limit='20000', replacing=bytes.fromhex(child_id)[::-1].hex())
+    wallet_signed = rpc('signrawtransactionwithwallet', replacement['transaction'], json.dumps(previous))
+    bumped = swift.call('anchor_commit', quote=replacement['quote'], transaction=wallet_signed['hex'])
+    congestion = check_congested_package_relay(rpc, committed, bumped['child'], context)
+    rescue = check_congested_package_relay(rpc, committed, bumped['child'], context, floor_sat_per_vbyte=15)
+    checked = rpc('testmempoolaccept', json.dumps([committed['parent']]))[0]
+    assert checked['allowed'], checked
+    parent_id = rpc('sendrawtransaction', committed['parent'])
+    checked = rpc('testmempoolaccept', json.dumps([committed['child']]))[0]
+    assert checked['allowed'], checked
+    child_id = rpc('sendrawtransaction', committed['child'])
+    first_fee = int(quote['fee_sat'])
+    checked = rpc('testmempoolaccept', json.dumps([bumped['child']]))[0]
+    assert checked['allowed'], checked
+    replacement_id = rpc('sendrawtransaction', bumped['child'])
+    pool = rpc('getrawmempool')
+    assert parent_id in pool and child_id not in pool and replacement_id in pool
+    assert int(replacement['fee_sat']) > first_fee
+    assert int(replacement['package_fee_sat']) <= 20000
+    return committed['parent'], dict(parent_txid=parent_id, original_child_txid=child_id,
+                                    replacement_txid=replacement_id, original_child_fee_sat=first_fee,
+                                    replacement_child_fee_sat=int(replacement['fee_sat']),
+                                    package_fee_sat=int(replacement['package_fee_sat']), total_fee_limit_sat=20000,
+                                    congestion=congestion, replacement_rescue=rescue,
+                                    result='Core accepted signed CPFP and mempool replacement')
+
+
+def check_congested_package_relay(primary_rpc, committed, replacement, context, floor_sat_per_vbyte=5):
+    directory = context['root'] / f'congestion-core-{floor_sat_per_vbyte}'
+    directory.mkdir()
+    rpc_port, peer_port = port(), port()
+    base = ['-regtest', f'-datadir={directory}', f'-rpcport={rpc_port}']
+    def rpc(method, *args):
+        value = subprocess.check_output([str(context['bitcoin'] / 'bitcoin-cli'), *base, method, *map(str, args)],
+                                        text=True, stderr=subprocess.PIPE, timeout=20).strip()
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    node = probe = None
+    log_path = context['evidence'] / f'congestion-core-{floor_sat_per_vbyte}.log'
+    with log_path.open('w') as core_log, (context['evidence'] / f'package-relay-{floor_sat_per_vbyte}.log').open('w') as probe_log:
+        try:
+            node = subprocess.Popen([str(context['bitcoin'] / 'bitcoind'), *base, '-server=1', '-listen=1',
+                f'-bind=127.0.0.1:{peer_port}', '-connect=0', '-dnsseed=0', '-discover=0',
+                f'-minrelaytxfee={floor_sat_per_vbyte / 100_000:.8f}', '-blockfilterindex=1', '-peerblockfilters=1', '-debug=net', '-debug=txpackages'],
+                stdout=core_log, stderr=core_log)
+            wait_for(lambda: rpc('getblockchaininfo'))
+            chain_peer = f'127.0.0.1:{context["primary_port"]}'
+            rpc('addnode', chain_peer, 'onetry')
+            wait_for(lambda: rpc('getblockcount') == primary_rpc('getblockcount') and
+                     rpc('getindexinfo').get('basic block filter index', {}).get('synced'), timeout=90)
+            # Isolate the production P2P probe after importing the actual
+            # channel's blocks. A successful package must not propagate back
+            # and invalidate the separate primary-node RPC acceptance checks.
+            rpc('disconnectnode', chain_peer)
+            wait_for(lambda: not rpc('getpeerinfo'))
+            rejected = rpc('testmempoolaccept', json.dumps([committed['parent']]))[0]
+            assert not rejected['allowed'] and 'fee' in rejected.get('reject-reason', ''), rejected
+            floor = rpc('getmempoolinfo')['mempoolminfee']
+            assert floor >= floor_sat_per_vbyte / 100_000
+            parent_id = rpc('decoderawtransaction', committed['parent'])['txid']
+            child_id = rpc('decoderawtransaction', committed['child'])['txid']
+            replacement_id = rpc('decoderawtransaction', replacement)['txid']
+            probe = SwiftPeer([context['executable'], 'relay-package', '127.0.0.1', str(peer_port),
+                               committed['parent'], committed['child'], str(context['root'] / f'package-relay-{floor_sat_per_vbyte}.json')], probe_log)
+            assert probe.initialization['stage'] == 'parent-served'
+            assert parent_id not in rpc('getrawmempool'), 'low-fee parent unexpectedly entered mempool alone'
+            assert probe.call('continue')['stage'] == 'package-served'
+            if floor_sat_per_vbyte == 5:
+                wait_for(lambda: parent_id in rpc('getrawmempool') and child_id in rpc('getrawmempool'))
+            else:
+                wait_for(lambda: any(f'parent {parent_id}' in line and f'child {child_id}' in line and 'package rejected' in line
+                                     for line in log_path.read_text().splitlines()))
+                assert parent_id not in rpc('getrawmempool') and child_id not in rpc('getrawmempool')
+            assert probe.call('replace', transaction=replacement)['stage'] == 'replacement-served'
+            wait_for(lambda: replacement_id in rpc('getrawmempool') and child_id not in rpc('getrawmempool'))
+            assert parent_id in rpc('getrawmempool')
+            assert probe.call('finish')['stage'] == 'finished'
+            result = dict(result='passed', mempool_floor_btc_per_kvb=floor, rejected_parent=rejected,
+                          parent_txid=parent_id, child_txid=child_id, replacement_txid=replacement_id,
+                          first_package_rejected=floor_sat_per_vbyte != 5,
+                          scope='Production WalletCore P2P pool/broadcaster: rejected parent, initial child, then higher-fee child; no RPC transaction submission')
+            (context['evidence'] / f'congestion-receipt-{floor_sat_per_vbyte}.json').write_text(json.dumps(result, indent=2) + '\n')
+            return result
+        finally:
+            if probe:
+                probe.close()
+            stop(node)
+
+
+def check_peer(close_mode, evidence, channel_format="staticRemoteKey", offers=False):
+    evidence.mkdir(parents=True, exist_ok=False)
+    attempts = []
+    for number in range(1, REFERENCE_STARTUP_ATTEMPTS + 1):
+        attempt = evidence / f'attempt-{number}'
+        # Retain every failed fixture; never retry inside an existing channel.
+        attempt.mkdir(exist_ok=False)
+        try:
+            try:
+                run_peer(close_mode, attempt, channel_format, offers)
+            except TimeoutError as error:
+                if not reference_socket_failure(attempt):
+                    raise
+                raise ReferenceSocketFailure(f'Stock CLN lost a subdaemon socket; see {attempt}') from error
+        except ReferenceStartupFailure as error:
+            result = 'reference-socket-failure' if isinstance(error, ReferenceSocketFailure) else 'reference-startup-failure'
+            attempts.append(dict(attempt=number, result=result, error=str(error)))
+            (evidence / 'attempts.json').write_text(json.dumps(attempts, indent=2) + '\n')
+            if number == REFERENCE_STARTUP_ATTEMPTS:
+                raise
+            print(f'{error}. Retrying with a fresh disposable fixture ({number + 1} of {REFERENCE_STARTUP_ATTEMPTS}); '
+                  'failed attempt retained.', flush=True)
+        else:
+            attempts.append(dict(attempt=number, result='passed'))
+            (evidence / 'attempts.json').write_text(json.dumps(attempts, indent=2) + '\n')
+            receipt = json.loads((attempt / 'opening-receipt.json').read_text())
+            receipt['attempts'] = attempts
+            (evidence / 'opening-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+            return
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--close', choices=('force', 'cooperative', 'recovery'), default='force')
+    parser.add_argument('--format', choices=('staticRemoteKey', 'anchors'), default='staticRemoteKey')
+    parser.add_argument('--offers', action='store_true')
+    arguments = parser.parse_args()
+    if arguments.offers and arguments.close != 'cooperative':
+        parser.error('--offers requires --close cooperative for a public stock-node route')
+    close_mode = arguments.close
+    evidence = Path(os.environ.get('WINNOW_LIGHTNING_RESULTS', str(ROOT / '.build/lightning-peer-results'))).resolve() / close_mode
+    check_peer(close_mode, evidence, arguments.format, arguments.offers)
+
+
+if __name__ == '__main__':
+    main()

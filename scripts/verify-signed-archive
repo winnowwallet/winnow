@@ -7,6 +7,20 @@ import plistlib
 import subprocess
 
 
+def verify_encryption(info):
+    """The build carries exactly the reviewed export compliance answer
+    (scripts/encryption-declaration-key); PENDING leaves it to App Store Connect."""
+    reviewed = os.environ.get('WINNOW_NONEXEMPT_ENCRYPTION') or 'PENDING'
+    code = os.environ.get('WINNOW_ENCRYPTION_COMPLIANCE_CODE') or None
+    assert reviewed in {'YES', 'NO', 'PENDING'}, 'unknown encryption determination'
+    if reviewed == 'PENDING':
+        assert 'ITSAppUsesNonExemptEncryption' not in info, 'pending encryption must use the App Store Connect questions'
+    else:
+        assert info.get('ITSAppUsesNonExemptEncryption') is (reviewed == 'YES'), 'encryption key differs from the reviewed answer'
+    expected = code if reviewed == 'YES' else None
+    assert info.get('ITSEncryptionExportComplianceCode') == expected, 'export compliance code differs from the approved declaration'
+
+
 def verify(app, distribution=False):
     info = plistlib.loads((app / 'Info.plist').read_bytes())
     assert info['CFBundleShortVersionString'] == os.environ['TESTFLIGHT_MARKETING_VERSION'], 'app version mismatch'
@@ -26,10 +40,11 @@ def verify(app, distribution=False):
     else:
         # Xcode adds the selected environment when exporting this development archive.
         assert environment in {None, 'Development', 'Production'}, 'unexpected archive iCloud environment'
+    verify_encryption(info)
     architectures = subprocess.check_output(['lipo', '-archs', str(app / info['CFBundleExecutable'])], text=True).split()
     assert architectures == ['arm64'], 'app must contain only the iPhone ARM64 executable'
-    print('Distribution identity, signature, ARM64 and production iCloud verified.' if distribution
-          else 'Archive identity, signature, ARM64 and iCloud container verified; distribution export is checked separately.')
+    print('Distribution identity, signature, ARM64, production iCloud and encryption declaration verified.' if distribution
+          else 'Archive identity, signature, ARM64, iCloud container and encryption declaration verified; distribution export is checked separately.')
 
 
 if __name__ == '__main__':

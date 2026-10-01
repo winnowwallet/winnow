@@ -125,6 +125,19 @@ final class BackgroundSyncTests: XCTestCase {
         XCTAssertEqual(AppModel.simpleSyncError(lastError: mismatch, transientError: nil, failures: 0), mismatch)
     }
 
+    /// A "no peers" failure no longer describes the state once peers are
+    /// back or the scan is moving; any other failure still counts.
+    func testANoPeersFailureIsStaleOncePeersReturn() {
+        let noPeers = FilterSyncError.noPeers.errorDescription
+        XCTAssertFalse(AppModel.peersReturned(after: noPeers, phase: .peerDiscoveryFailed))
+        XCTAssertFalse(AppModel.peersReturned(after: noPeers, phase: .connecting(connected: 0, target: 3)))
+        XCTAssertTrue(AppModel.peersReturned(after: noPeers, phase: .connecting(connected: 3, target: 3)))
+        XCTAssertTrue(AppModel.peersReturned(after: noPeers, phase: .filters(scanned: 100, tip: 200)))
+        let mismatch = FilterSyncError.filterHeaderMismatch(height: 7).localizedDescription
+        XCTAssertFalse(AppModel.peersReturned(after: mismatch, phase: .connecting(connected: 3, target: 3)),
+                       "reconnecting must not conceal a verification failure")
+    }
+
     func testOnlyLinkFailuresCountAsTransient() {
         XCTAssertTrue(AppModel.isTransientSyncError(PeerError.disconnected("closed")))
         XCTAssertTrue(AppModel.isTransientSyncError(PeerError.timeout))

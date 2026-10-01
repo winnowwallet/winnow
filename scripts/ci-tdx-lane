@@ -41,7 +41,7 @@ source=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
 report=root/'crap/report/report.json'
 crap=None
 if lane=='journey' and report.is_file():
-    data=json.loads(report.read_text()); crap={'functions':data['function_count'],'above_threshold':data['above_threshold_count'],'unmeasured':data['unmeasured_count'],'threshold':data['threshold']}
+    data=json.loads(report.read_text()); crap={'functions':data['function_count'],'above_threshold':data['above_threshold_count'],'unmeasured':data['unmeasured_count'],'threshold':data['threshold'],'without':data['partition']['without']}
 (root/'lanes'/f'{lane}.json').write_text(json.dumps({'source_sha':source,'debug_sha256':build_hash,'result':'success' if code=='0' else 'failure','tests':count,'elapsed_seconds':int(elapsed),'phases':[json.loads(line) for line in (root/f'{lane}-timings.log').read_text().splitlines()],'inventory':inventory,'runtime':'iOS 26.5 (23F77)','architecture':'x86_64','image':pathlib.Path('/etc/winnow-ci-image').read_text().strip(),**({'crap':crap} if lane=='journey' else {})}))
 PY
   exit "$result"
@@ -103,11 +103,14 @@ case "$lane" in
   phase package-tests-finished
   scripts/ci-crap export-package --package-build .build --manifest "$CI_RESULTS/crap/source-manifest.json" --output "$CI_RESULTS/crap/package"
   scripts/ci-debug
+  # Lightning's channel, HTLC, penalty and anchor transactions against Bitcoin
+  # Core's own acceptance rules on regtest.
+  scripts/ci-lightning 2>&1 | tee "$CI_RESULTS/lightning-regtest.log"
   scripts/ci-production-warnings "$CI_RESULTS/production-build" "$CI_RESULTS/production-build.log"
   for command in inspect generate soak; do "$CI_RESULTS/production-build/release/winnow-debug" "$command" --help; done
   swift run --scratch-path "$CI_RESULTS/production-build" -c release WinnowFuzz --iterations 1000 --seed 0x57494e4e4f575055 --max-input 16384 --artifact-dir "$CI_RESULTS/fuzz" 2>&1 | tee "$CI_RESULTS/fuzz.log"
   for dir in supply-chain supply-chain-replay; do
-    scripts/generate-supply-chain-metadata --output-dir "$CI_RESULTS/$dir" --subject "$CI_RESULTS/production-build/release/winnow-debug" --subject-name winnow-debug --builder-id "https://github.com/$GITHUB_REPOSITORY/.github/workflows/ci-tdx.yml@$GITHUB_SHA"
+    scripts/generate-supply-chain-metadata --output-dir "$CI_RESULTS/$dir" --source-repository "https://github.com/$GITHUB_REPOSITORY" --subject "$CI_RESULTS/production-build/release/winnow-debug" --subject-name winnow-debug --builder-id "https://github.com/$GITHUB_REPOSITORY/.github/workflows/ci-tdx.yml@$GITHUB_SHA"
   done
   diff -ru "$CI_RESULTS/supply-chain" "$CI_RESULTS/supply-chain-replay"
  ;;

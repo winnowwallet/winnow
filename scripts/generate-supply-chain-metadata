@@ -16,6 +16,7 @@ import os
 import pathlib
 import re
 import subprocess
+import urllib.parse
 
 from typing import Any
 
@@ -64,11 +65,26 @@ def commit_timestamp(root: pathlib.Path) -> str:
     return parsed.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def source_repository(value: str) -> str:
+    parsed = urllib.parse.urlsplit(value)
+    path = parsed.path.rstrip("/").removesuffix(".git")
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.username is not None
+            or parsed.query or parsed.fragment or not path.strip("/")
+            or re.search(r"\s", value)):
+        raise argparse.ArgumentTypeError("source repository must be a credential-free HTTPS repository URL")
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", required=True, type=pathlib.Path)
     parser.add_argument("--subject", type=pathlib.Path)
     parser.add_argument("--subject-name", default="winnow-source-tree")
+    parser.add_argument(
+        "--source-repository", type=source_repository,
+        default="https://github.com/winnowwallet/winnow",
+        help="Repository URL for the checkout in the current directory (defaults to upstream Winnow)",
+    )
     parser.add_argument(
         "--builder-id",
         default="https://github.com/winnowwallet/winnow/.github/workflows/ci.yml",
@@ -90,7 +106,7 @@ def main() -> None:
             "SPDXID": root_id,
             "name": "winnow",
             "versionInfo": commit,
-            "downloadLocation": "https://github.com/winnowwallet/winnow",
+            "downloadLocation": args.source_repository,
             "filesAnalyzed": False,
             "licenseConcluded": "NOASSERTION",
             "licenseDeclared": "NOASSERTION",
@@ -145,7 +161,7 @@ def main() -> None:
         "dataLicense": "CC0-1.0",
         "SPDXID": "SPDXRef-DOCUMENT",
         "name": f"winnow-{commit[:12]}",
-        "documentNamespace": f"https://github.com/winnowwallet/winnow/sbom/{commit}",
+        "documentNamespace": f"{args.source_repository}/sbom/{commit}",
         "creationInfo": {
             "created": commit_timestamp(root),
             "creators": ["Tool: winnow-generate-supply-chain-metadata-1"],
@@ -164,7 +180,7 @@ def main() -> None:
         subject = [{"name": args.subject_name, "digest": {"sha1": tree}}]
 
     materials = [
-        {"uri": "git+https://github.com/winnowwallet/winnow.git", "digest": {"sha1": commit}},
+        {"uri": f"git+{args.source_repository}.git", "digest": {"sha1": commit}},
         *[{"uri": f"file:{path.relative_to(root).as_posix()}", "digest": {"sha256": sha256_file(path)}}
           for path in (package_path, resolved_path, project_path) if path.exists()],
         *dependencies,

@@ -37,7 +37,7 @@ class SiteArtifactTests(unittest.TestCase):
         calls = "\n".join(f'        Screenshots.capture(app, "{Path(name).stem}", testCase: self)'
                           for name in self.names)
         (self.root / "UITests/WinnowAppUITests.swift").write_text(
-            f"    func {site.TEST}() {{\n{calls}\n    }}\n")
+            f"final class WinnowAppUITests: XCTestCase {{\n    func {site.TEST}() {{\n{calls}\n    }}\n}}\n")
         (self.docs / "journeys.json").write_text(json.dumps([
             {"id": "setup", "section": "everyday", "title": "Start", "description": "Create a wallet.",
              "tests": [site.TEST], "journey": ["Create a wallet."]}]))
@@ -96,6 +96,46 @@ class SiteArtifactTests(unittest.TestCase):
         source.write_text(source.read_text().replace(CHECKPOINTS[0], "changed-capture"))
         with self.assertRaisesRegex(SystemExit, "does not describe this focused journey"):
             self.validate_cli()
+
+    def test_repository_journey_and_gallery_have_the_same_checkpoints(self):
+        expected = sorted(f"{name}.png" for name in CHECKPOINTS)
+        self.assertEqual(site.captures(site.ROOT), expected)
+        ordinary = [name for name, _ in builder.ACTS[0][1]]
+        self.assertLess(ordinary.index("56-home-beginner"), ordinary.index("05-high-fee-review"))
+        self.assertLess(ordinary.index("05-high-fee-review"), ordinary.index("06-send-review"))
+
+    def test_duplicate_capture_cannot_satisfy_the_checkpoint_count(self):
+        source = self.root / "UITests/WinnowAppUITests.swift"
+        source.write_text(source.read_text().replace(CHECKPOINTS[0], CHECKPOINTS[1]))
+        with self.assertRaisesRegex(ValueError, "17 unique checkpoint captures"):
+            site.captures(self.root)
+
+    def test_older_cached_media_without_high_fee_capture_is_rejected(self):
+        del self.evidence["screenshots"]["05-high-fee-review.png"]
+        (self.media / site.MANIFEST).write_text(json.dumps(self.evidence))
+        with self.assertRaisesRegex(SystemExit, "does not describe this focused journey"):
+            self.validate_cli()
+
+    def test_missing_high_fee_checkpoint_fails_before_encoding(self):
+        journey = self.base / "journey"
+        journey.mkdir()
+        (journey / "node-ui.log").write_text(
+            f"Test Case '-[WinnowAppUITests.WinnowAppUITests {site.TEST}]' passed (200.5 seconds).\n"
+            "** TEST EXECUTE SUCCEEDED **")
+        (journey / "NodeUI.xcresult").mkdir()
+        import shutil
+        shutil.copytree(self.media / "screenshots", journey / "node-screenshots")
+        (journey / "node-screenshots/05-high-fee-review.png").unlink()
+        with patch.object(site, "normalize_video", side_effect=AssertionError("must not encode")):
+            with self.assertRaisesRegex(ValueError, "missing or invalid checkpoint: 05-high-fee-review.png"):
+                site.fresh_media(journey, self.base / "new-media", self.names, "b" * 40, self.evidence["run_url"])
+
+    def test_separate_lightning_journey_does_not_change_website_checkpoints(self):
+        (self.root / "UITests/LightningAppUITests.swift").write_text(
+            'final class LightningAppUITests: XCTestCase {\n'
+            '    Screenshots.capture(app, "lightning-01-reusable-offer", testCase: self)\n}\n')
+        self.assertEqual(site.captures(self.root), self.names)
+        self.assertIn("Validated cached journey media", self.validate_cli())
 
     def test_validate_media_cli_rejects_missing_page_fields(self):
         fields = [("source_sha",), ("run_url",), ("test_seconds",), ("video",), ("screenshots",),
@@ -160,7 +200,7 @@ class SiteArtifactTests(unittest.TestCase):
         self.assertEqual((self.docs / site.VIDEO).read_bytes(), b"reviewed reference video")
         self.assertFalse((output / "UITests").exists())
         self.assertFalse((output / "advanced.html").exists())
-        self.assertEqual(len(list((cache / "screenshots").glob("*.png"))), 16)
+        self.assertEqual(len(list((cache / "screenshots").glob("*.png"))), len(self.names))
 
     def test_reference_package_does_not_claim_a_new_pass(self):
         output = self.base / "site"
@@ -267,5 +307,5 @@ class NormalizeOnlyTests(unittest.TestCase):
             site.main(['--normalize-journey',str(journey),'--media-output',str(output),
                        '--source-sha','a'*40,'--run-url',self.evidence['run_url']])
             encoder.assert_called_once()
-            self.assertEqual(len(list((output/'screenshots').glob('*.png'))),16)
+            self.assertEqual(len(list((output/'screenshots').glob('*.png'))),len(self.names))
             self.assertEqual(site.validate_media(output,self.names)['source_sha'],'a'*40)

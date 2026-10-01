@@ -12,6 +12,7 @@ struct OnboardingView: View {
     @State private var error: String?
     @State private var showImport = false
     @State private var showCloudRestore = false
+    @State private var showLightningRestore = false
     @State private var operation: Task<Void, Never>?
 
     var body: some View {
@@ -38,9 +39,11 @@ struct OnboardingView: View {
                             .accessibilityIdentifier("createWalletButton")
                         Button("Restore from a file", systemImage: "square.and.arrow.down") { showImport = true }
                             .accessibilityIdentifier("importWalletButton")
+                        Button("Restore encrypted Lightning recovery") { showLightningRestore = true }
+                            .accessibilityIdentifier("onboardingLightningRestore")
                     }
                 } footer: {
-                    Text("No iCloud? Your wallet still works. You can save a manual backup instead. Recovery words and backup controls are in Advanced.")
+                    Text("No iCloud? Your wallet still works. You can save a manual backup instead. Recovery words and backup controls are in Advanced. Lightning channels come back only from their encrypted recovery file, and restored channels stay in recovery mode until they close.")
                 }
                 if model.cloudBackups.busy { ProgressView("Checking iCloud…") }
                 if let message = model.cloudBackups.message {
@@ -54,6 +57,9 @@ struct OnboardingView: View {
                         )) {
                             Text("Mainnet").tag(BitcoinNetwork.mainnet)
                             Text("Signet").tag(BitcoinNetwork.signet)
+                            if model.offersRegtest {
+                                Text("Regtest").tag(BitcoinNetwork.regtest)
+                            }
                         }
                         .disabled(model.e2e?.forcedNetwork != nil || busy)
                         .accessibilityIdentifier("onboardingNetworkPicker")
@@ -68,6 +74,9 @@ struct OnboardingView: View {
             .navigationTitle("Winnow")
             .sheet(isPresented: $showCloudRestore) { CloudRestoreView() }
             .sheet(isPresented: $showImport) { ImportBundleView() }
+            // On the list, not the button: a restore installs the wallet,
+            // which removes the button while the restore is still finishing.
+            .sheet(isPresented: $showLightningRestore) { LightningBackupView() }
             .task(id: model.network) { await model.discoverCloudBackups() }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .background { cancel() }

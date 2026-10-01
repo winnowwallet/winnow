@@ -516,35 +516,54 @@ public actor PeerPool {
     /// deliver into `outcome`. Peers that fail are cooled off or condemned
     /// exactly as the primary sync would treat them.
     private func catchUp(_ chain: HeaderChain, after outcome: HeaderChain.SyncOutcome,
-                         except primary: PeerEndpoint,
-                         timeoutPerPeer: Duration) async -> HeaderChain.SyncOutcome {
+                         except primary: PeerEndpoint, timeoutPerPeer: Duration) async -> HeaderChain.SyncOutcome {
         var merged = outcome
-        let others = peers.filter { $0.endpoint != primary }
-        for other in others {
+        for other in peers where other.endpoint != primary {
             let claimed = Int64(await other.peerStartHeight)
             guard claimed - Int64(await chain.height) > Self.staleTipTolerance else { continue }
-            do {
-                let more = try await chain.sync(using: other, timeout: timeoutPerPeer)
-                transportSucceeded(other.endpoint)
-                merged.connected += more.connected
-                merged.disconnectedHeaders += more.disconnectedHeaders
-                if let fork = more.minForkHeight {
-                    merged.minForkHeight = min(merged.minForkHeight ?? fork, fork)
-                }
-            } catch let error as HeaderChainError {
-                switch error {
-                case .storageCorrupt, .storageUnavailable: return merged
-                default: await misbehaving(other, reason: error.localizedDescription)
-                }
-            } catch is CancellationError {
-                return merged
-            } catch let error as PeerError where error.isTransport {
-                await transportFailure(other, reason: error.localizedDescription)
-            } catch {
-                await misbehaving(other, reason: error.localizedDescription)
-            }
+            let attempt = await catchUpPeer(other, chain: chain, timeout: timeoutPerPeer)
+            if attempt.stop { return merged }
+            if let more = attempt.outcome { Self.merge(more, into: &merged) }
         }
         return merged
+    }
+    private struct CatchUpAttempt {
+        let outcome: HeaderChain.SyncOutcome?
+        let stop: Bool
+    }
+    private func catchUpPeer(_ other: PeerConnection, chain: HeaderChain, timeout: Duration) async -> CatchUpAttempt {
+        do {
+            let more = try await chain.sync(using: other, timeout: timeout)
+            transportSucceeded(other.endpoint)
+            return .init(outcome: more, stop: false)
+        } catch { return await catchUpFailure(error, peer: other) }
+    }
+    private func catchUpFailure(_ error: any Error, peer: PeerConnection) async -> CatchUpAttempt {
+        if let header = error as? HeaderChainError { return await catchUpHeaderFailure(header, peer: peer) }
+        if error is CancellationError { return .init(outcome: nil, stop: true) }
+        await catchUpPeerFault(error, peer: peer)
+        return .init(outcome: nil, stop: false)
+    }
+    /// Local cancellation/storage faults stop catch-up; this path handles only
+    /// peer faults, preserving transport cooldown versus protocol condemnation.
+    private func catchUpPeerFault(_ error: any Error, peer: PeerConnection) async {
+        if let transport = error as? PeerError, transport.isTransport {
+            await transportFailure(peer, reason: error.localizedDescription)
+        } else { await misbehaving(peer, reason: error.localizedDescription) }
+    }
+    private func catchUpHeaderFailure(_ error: HeaderChainError, peer: PeerConnection) async -> CatchUpAttempt {
+        if Self.storageFault(error) { return .init(outcome: nil, stop: true) }
+        await misbehaving(peer, reason: error.localizedDescription)
+        return .init(outcome: nil, stop: false)
+    }
+    private static func storageFault(_ error: HeaderChainError) -> Bool {
+        if case .storageCorrupt = error { return true }
+        if case .storageUnavailable = error { return true }
+        return false
+    }
+    private static func merge(_ more: HeaderChain.SyncOutcome, into outcome: inout HeaderChain.SyncOutcome) {
+        outcome.connected += more.connected; outcome.disconnectedHeaders += more.disconnectedHeaders
+        if let fork = more.minForkHeight { outcome.minForkHeight = min(outcome.minForkHeight ?? fork, fork) }
     }
 
     // MARK: - Internals
