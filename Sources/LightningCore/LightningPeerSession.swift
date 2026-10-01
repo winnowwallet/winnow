@@ -26,9 +26,11 @@ public actor LightningPeerSession {
     public private(set) var status: Status = .stopped
     public private(set) var lastPeerWarning: String?
 
-    public init(engine: LightningEngine, peer: Data, host: String, port: UInt16,
+    private let features: LightningFeatures
+
+    public init(engine: LightningEngine, peer: Data, host: String, port: UInt16, features: LightningFeatures = .asyncClient,
                 onEvents: @escaping @Sendable ([LightningEngine.Event]) async throws -> Void) {
-        self.engine = engine; self.peer = peer; self.host = host; self.port = port; self.onEvents = onEvents
+        self.engine = engine; self.peer = peer; self.host = host; self.port = port; self.features = features; self.onEvents = onEvents
     }
     @discardableResult
     public func start() async throws -> LightningFeatures {
@@ -41,7 +43,7 @@ public actor LightningPeerSession {
         connection = transport; status = .connecting; sent.removeAll(); lastPeerWarning = nil
         do {
             try await transport.start()
-            try await transport.send(LightningFeatures.asyncClient.initialization())
+            try await transport.send(self.features.initialization())
             let features = try LightningFeatures.readInitialization(await transport.receive())
             guard epoch == generation else { throw CancellationError() }
             try await engine.peerInitialized(peer, features: features)
@@ -180,7 +182,7 @@ public actor LightningPeerSession {
                 try await transport.send(.init(type: 19, payload: pong.data))
             }
         case LightningLiquidity.messageType:
-            let response = try LightningLiquidity.response(message)
+            guard let response = LightningLiquidity.response(message) else { return }
             liquidityRequests.removeValue(forKey: response.id)?.resume(with: response.result.mapError { $0 as any Error })
         case 256, 257, 261, 262, 263, 264: try await handleGossip(message)
         case 258:
@@ -195,7 +197,9 @@ public actor LightningPeerSession {
         let notice = try LightningPeerNotice(message)
         guard await engine.recognizesNotice(notice, peer: peer) else { return }
         if notice.isError {
-            try await engine.rejectOpening(notice, peer: peer)
+            // bLIP-52: a provider may abandon a channel negotiation and
+            // retry; that error does not end the connection.
+            if try await engine.rejectOpening(notice, peer: peer) { lastPeerWarning = notice.description; return }
             throw notice
         }
         lastPeerWarning = notice.description

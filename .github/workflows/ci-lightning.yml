@@ -105,6 +105,15 @@ jobs:
       - name: Recipient never returns; Swift recovers without either provider
         if: steps.evidence.outputs.cache-hit != 'true'
         run: scripts/ci-lightning-timeout
+      - name: Instant receive through stock LDK's LSPS2 provider
+        if: steps.evidence.outputs.cache-hit != 'true'
+        run: scripts/ci-lightning-jit
+      - name: Instant receive when the client trusts the provider, with scid privacy
+        if: steps.evidence.outputs.cache-hit != 'true'
+        run: scripts/ci-lightning-jit --client-trusts-lsp --scid-privacy
+      - name: Instant receive on a zero-reserve anchor channel
+        if: steps.evidence.outputs.cache-hit != 'true'
+        run: scripts/ci-lightning-jit --client-trusts-lsp --scid-privacy --anchors --zero-reserve
       - name: Stock-peer payments, process restart and force close
         if: steps.evidence.outputs.cache-hit != 'true'
         run: scripts/ci-lightning-peer --close force

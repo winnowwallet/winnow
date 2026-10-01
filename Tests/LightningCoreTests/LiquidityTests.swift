@@ -27,19 +27,36 @@ final class LiquidityTests: XCTestCase {
         let params = try XCTUnwrap(object["params"] as? [String: Any])
         XCTAssertEqual(params["lsp_balance_sat"] as? String, "150000")
     }
+    private func response(_ json: String) -> (id: String, result: Result<Data, LightningLiquidityError>)? {
+        LightningLiquidity.response(try! .init(type: 37913, payload: Data(json.utf8)))
+    }
     func testResponseMatchesIdAndHandlesNullErrorAndExplicitRefusal() throws {
-        let success = try LightningLiquidity.response(.init(type: 37913, payload: Data("""
-        {"jsonrpc":"2.0","id":"a","error":null,"result":{"minimum":1}}
-        """.utf8)))
+        let success = try XCTUnwrap(response(#"{"jsonrpc":"2.0","id":"a","error":null,"result":{"minimum":1}}"#))
         XCTAssertEqual(success.id, "a")
         XCTAssertEqual(try JSONDecoder().decode([String: Int].self, from: success.result.get()), ["minimum": 1])
-        let refused = try LightningLiquidity.response(.init(type: 37913, payload: Data("""
-        {"jsonrpc":"2.0","id":"b","result":null,"error":{"code":1,"message":"Unavailable"}}
-        """.utf8)))
-        XCTAssertThrowsError(try refused.result.get())
-        XCTAssertThrowsError(try LightningLiquidity.response(.init(type: 37913, payload: Data("""
-        {"jsonrpc":"2.0","id":"b","result":{},"error":{"message":"Refused"}}
-        """.utf8))))
+        let refused = try XCTUnwrap(response(#"{"jsonrpc":"2.0","id":"b","result":null,"error":{"code":202,"message":"too small"}}"#))
+        XCTAssertThrowsError(try refused.result.get()) { error in
+            XCTAssertEqual(error as? LightningLiquidityError, .rejected(code: 202, message: "too small"))
+            XCTAssertEqual((error as? LightningLiquidityError)?.errorDescription, "This amount is below the provider's minimum.")
+        }
+        let uncoded = try XCTUnwrap(response(#"{"jsonrpc":"2.0","id":"c","error":{"message":"Refused"}}"#))
+        XCTAssertThrowsError(try uncoded.result.get()) { XCTAssertEqual($0 as? LightningLiquidityError, .provider("Refused")) }
+    }
+    /// bLIP-50: anything that cannot be matched to a request is ignored.
+    func testUnmatchableMessagesAreIgnoredNotFatal() {
+        for json in [#"{"jsonrpc":"2.0","id":"b","result":{},"error":{"message":"Refused"}}"#,
+                     #"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}"#,
+                     #"{"jsonrpc":"2.0","method":"lsps5.webhook_notification","params":{}}"#,
+                     #"{"jsonrpc":"2.0","id":7,"result":{}}"#, #"{"jsonrpc":"1.0","id":"a","result":{}}"#, "not json"] {
+            XCTAssertNil(response(json), json)
+        }
+        XCTAssertNil(LightningLiquidity.response(try! .init(type: 37913, payload: Data(repeating: 32, count: 32_769))))
+    }
+    func testRejectionCodesReadAsActions() {
+        let words = [1, 200, 201, 202, 203, 999].map { LightningLiquidityError.rejected(code: $0, message: "raw").errorDescription }
+        XCTAssertEqual(words, ["The provider refused this request.", "The provider did not accept Winnow's access token.",
+            "The provider's fee terms changed. Get a new quote.", "This amount is below the provider's minimum.",
+            "This amount is above the provider's maximum.", "Provider: raw"])
     }
     func testQuoteRejectsMismatchedAmountNetworkTermsAndExpiry() throws {
         let request = try info().request(capacitySat: 150_000)

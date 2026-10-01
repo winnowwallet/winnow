@@ -14,12 +14,14 @@ final class LightningReceivingTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         return directory
     }
-    func testFreshMainnetHasDefaultAndThreeValidChoicesWithoutOpeningChannels() async throws {
+    func testFreshMainnetDefaultsToInstantReceivingWithoutOpeningChannels() async throws {
         let controller = LightningAppController(network: .mainnet, keys: InMemoryStoreKeyVault())
         try await controller.prepare(directory: directory(), headers: HeaderChain(params: .mainnet))
-        XCTAssertEqual(LightningProviders.available(network: .mainnet).count, 3)
+        XCTAssertEqual(LightningProviders.available(network: .mainnet).map(\.id), ["megalith-lsps2", "olympus", "megalith", "lnserver"])
         XCTAssertEqual(controller.profile, LightningProviders.mainnet[0].profile)
-        XCTAssertEqual(controller.profile?.liquidityProvider, "olympus")
+        XCTAssertEqual(controller.profile?.liquidityProvider, "megalith-lsps2")
+        XCTAssertTrue(controller.supportsJIT)
+        XCTAssertEqual(LightningProviders.mainnet.filter(\.jit).count, 1, "only the LSPS2 node is instant")
         for provider in LightningProviders.mainnet { try provider.profile.validate(network: .mainnet) }
         XCTAssertTrue(controller.channels.isEmpty)
         XCTAssertTrue(controller.payments.isEmpty)
@@ -46,7 +48,49 @@ final class LightningReceivingTests: XCTestCase {
         let bytes = try JSONEncoder().encode(recommended)
         let text = String(decoding: bytes, as: UTF8.self)
         XCTAssertThrowsError(try LightningProfile.parse(text, network: .signet))
-        XCTAssertThrowsError(try LightningProfile.parse(text.replacingOccurrences(of: "45.79.192.236", with: "127.0.0.1"), network: .mainnet))
+        XCTAssertThrowsError(try LightningProfile.parse(text.replacingOccurrences(of: recommended.host, with: "127.0.0.1"), network: .mainnet))
+    }
+    /// A wallet that already used a provider is never moved by a new default.
+    func testStoredSetupOrderKeepsItsProviderWhenTheDefaultChanges() async throws {
+        let root = directory(), keys = InMemoryStoreKeyVault()
+        let olympus = try XCTUnwrap(LightningProviders.mainnet.first { $0.id == "olympus" }).profile
+        var controller: LightningAppController! = LightningAppController(network: .mainnet, keys: keys)
+        try await controller.prepare(directory: root, headers: HeaderChain(params: .mainnet))
+        try controller.storeLiquidityQuote(quote(profile: olympus))
+        await controller.stop(); controller = nil
+        let reopened = LightningAppController(network: .mainnet, keys: keys)
+        try await reopened.prepare(directory: root, headers: HeaderChain(params: .mainnet))
+        XCTAssertEqual(reopened.profile, olympus)
+        XCTAssertEqual(reopened.liquidityQuote?.profile, olympus)
+        XCTAssertFalse(reopened.supportsJIT)
+    }
+    private func megalithMenu(validFor seconds: UInt64 = 3600) throws -> LightningJIT.Menu {
+        let validUntil = ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: TimeInterval(LightningAppController.now + seconds)))
+        return try LightningJIT.Menu.decode(Data("""
+        {"opening_fee_params_menu":[{"min_fee_msat":"3514000","proportional":14000,"valid_until":"\(validUntil)",
+         "min_lifetime":13140,"max_client_to_self_delay":512,"min_payment_size_msat":"3515000",
+         "max_payment_size_msat":"16000000000","promise":"p"}]}
+        """.utf8), now: LightningAppController.now)
+    }
+    func testInstantReceiveShowsTheFeeBeforeAnythingIsBought() async throws {
+        let controller = LightningAppController(network: .mainnet, keys: InMemoryStoreKeyVault())
+        try await controller.prepare(directory: directory(), headers: HeaderChain(params: .mainnet))
+        XCTAssertThrowsError(try controller.quoteJIT(amountSat: 30_000), "no terms fetched yet")
+        do {
+            try await controller.prepareJIT(model: makeModel(network: .mainnet))
+            XCTFail("terms were requested before the first verified chain scan")
+        } catch let LightningLiquidityError.provider(reason) { XCTAssertTrue(reason.contains("Bitcoin is still syncing"), reason) }
+        XCTAssertNil(controller.jitMenu)
+        controller.jitMenu = try megalithMenu()
+        XCTAssertEqual(controller.smallestJITPaymentSat, 23_514)
+        let quote = try controller.quoteJIT(amountSat: 30_000)
+        XCTAssertEqual(quote.feeSat, 3_514)
+        XCTAssertEqual(quote.receivedSat, 26_486)
+        XCTAssertEqual(quote.lifetimeDays, 91)
+        XCTAssertThrowsError(try controller.quoteJIT(amountSat: 23_513), "would leave less than a channel")
+        XCTAssertThrowsError(try controller.quoteJIT(amountSat: .max), "overflow")
+        do { _ = try await controller.approveJIT(quote, model: makeModel(network: .mainnet, deviceAuthenticator: Denied())); XCTFail() }
+        catch LightningError.invalidState {} // not connected: nothing is bought and nothing is asked
     }
     private func quote(profile: LightningProfile) throws -> LightningAppController.LiquidityQuote {
         let info = try LightningLiquidity.decode(LightningLiquidity.Info.self, from: Data("""

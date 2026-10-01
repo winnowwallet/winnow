@@ -13,8 +13,10 @@ There is no Rust, LDK or other Lightning runtime in the app; P256K
     transactions (static-remotekey and anchors, with CPFP).
   - Safety: the durable journal, chain monitoring and on-chain resolution.
   - Payments: Sphinx onions, BOLT 11 invoices, routing, BOLT 12 offers and
-    invoices, async payments, LSPS1 liquidity, and BIP 353 names with local
-    DNSSEC validation.
+    invoices, async payments, LSPS1 liquidity, LSPS2 just-in-time channels
+    (zero-conf only for a channel Winnow bought; see
+    [receiving](lightning-receiving.md)), and BIP 353 names with local DNSSEC
+    validation.
   - Recovery: background protection and the portable recovery file.
   - [README](../../Sources/LightningCore/README.md).
 - WalletCore hooks it needs:

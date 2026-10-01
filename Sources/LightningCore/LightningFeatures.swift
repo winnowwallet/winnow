@@ -39,6 +39,15 @@ public struct LightningFeatures: Sendable, Equatable, Codable {
         return LightningFeatures(bytes: bytes)
     }
 
+    /// A just-in-time (LSPS2) client also offers option_scid_alias (47) and
+    /// option_zeroconf (51). It never sets the provider bit 729 (bLIP-50).
+    public static var jitClient: LightningFeatures { asyncClient.adding([47, 51]) }
+
+    func adding(_ extra: Set<Int>) -> LightningFeatures {
+        // Every bit here is below the protocol limit, so this cannot throw.
+        try! LightningFeatures(bits: bits.union(extra))
+    }
+
     public func initialization() throws -> LightningWire.Message {
         var writer = LightningWire.Writer()
         writer.u16(0); writer.u16(UInt16(bytes.count)); writer.append(bytes)

@@ -22,4 +22,26 @@ public enum ChannelFormat: String, Sendable, Codable {
         default: throw LightningError.invalidMessage
         }
     }
+    /// A channel_type is a commitment format plus options that do not change
+    /// the commitment transactions.
+    static func negotiated(_ features: LightningFeatures) throws -> (format: ChannelFormat, options: ChannelOptions) {
+        let options = ChannelOptions(bits: features.bits)
+        let format = try ChannelFormat(features: LightningFeatures(bits: features.bits.subtracting(ChannelOptions.all.bits)))
+        return (format, options)
+    }
+}
+
+/// channel_type options: option_scid_alias (46) keeps the real short channel
+/// id private; option_zeroconf (50) lets the channel work before its funding
+/// confirms. Winnow grants zero-conf only for a channel it bought.
+public struct ChannelOptions: OptionSet, Sendable, Codable, Hashable {
+    public let rawValue: UInt8
+    public init(rawValue: UInt8) { self.rawValue = rawValue }
+    public static let scidAlias = ChannelOptions(rawValue: 1)
+    public static let zeroConf = ChannelOptions(rawValue: 2)
+    static let all: ChannelOptions = [.scidAlias, .zeroConf]
+    init(bits: Set<Int>) {
+        self = ChannelOptions(rawValue: (bits.contains(46) ? 1 : 0) | (bits.contains(50) ? 2 : 0))
+    }
+    var bits: Set<Int> { Set([contains(.scidAlias) ? 46 : nil, contains(.zeroConf) ? 50 : nil].compactMap { $0 }) }
 }

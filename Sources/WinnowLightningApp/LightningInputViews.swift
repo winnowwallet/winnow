@@ -15,12 +15,13 @@ struct LightningSetupView: View {
                 if !LightningProviders.available(network: controller.network).isEmpty {
                     Section("Choose a provider") {
                         ForEach(LightningProviders.available(network: controller.network)) { provider in
-                            Button(provider.name + (provider.id == "olympus" ? " · Recommended" : "")) {
+                            Button(provider.name + (provider.id == LightningProviders.mainnet.first?.id ? " · Recommended" : "")) {
                                 review = .profile(provider.profile)
                             }
                             .disabled(controller.channels.contains(where: { $0.phase != .closed }) || controller.liquidityQuote?.accepted == true)
                             .accessibilityIdentifier("lightningProvider.\(provider.id)")
                             if provider.manualSetup { Text("Setup on provider website").font(.caption).foregroundStyle(.secondary) }
+                            if provider.jit { Text("Instant: the first payment opens the channel").font(.caption).foregroundStyle(.secondary) }
                             Link("\(provider.name) terms and fees", destination: provider.website).font(.caption)
                         }
                         Text("Connect to one provider. Changing providers can require another channel and setup fee. Existing channels or an approved setup order must finish before changing provider.")

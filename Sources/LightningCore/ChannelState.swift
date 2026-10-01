@@ -15,11 +15,11 @@ struct ChannelSecrets: Codable {
     func point(_ number: UInt64) throws -> Data {
         try ChannelKeys.publicKey(secret: ChannelKeys.commitmentSecret(seed: seed, number: number))
     }
-    func terms(capacity: UInt64, format: ChannelFormat = .staticRemoteKey) throws -> ChannelTerms {
+    func terms(capacity: UInt64, format: ChannelFormat = .staticRemoteKey, options: ChannelOptions = []) throws -> ChannelTerms {
         try ChannelTerms(maximumHTLCMsat: capacity * 1000, reserveSat: max(546, capacity / 100),
             funding: ChannelKeys.publicKey(secret: funding), revocation: ChannelKeys.publicKey(secret: revocation),
             payment: ChannelKeys.publicKey(secret: payment), delayed: ChannelKeys.publicKey(secret: delayed),
-            htlc: ChannelKeys.publicKey(secret: htlc), firstPoint: point(0), format: format)
+            htlc: ChannelKeys.publicKey(secret: htlc), firstPoint: point(0), format: format, options: options)
     }
 }
 
@@ -59,6 +59,19 @@ struct ChannelState: Codable {
     var resolutions: [ChannelResolution.Spend] = []
     var invoicePolicy: LightningEngine.InvoicePolicy?
     var feeBumps: [AnchorFeeBump]?
+    /// channel_ready aliases (BOLT 2): ours, which the peer may use to route to
+    /// us, and the peer's, which our invoices name in their route hints.
+    var localAlias: UInt64?, remoteAlias: UInt64?
+    /// Set only when this inbound channel is the just-in-time channel Winnow
+    /// bought from this exact provider. It is trust, not funding evidence:
+    /// fundingIsConfirmed keeps its meaning.
+    var zeroConf: LightningEngine.ZeroConfGrant?
+    /// bLIP-52 extra_fee per incoming HTLC: what the provider kept.
+    var incomingExtraFee: [UInt64: UInt64]?
+
+    /// Payments and closes need a confirmed funding output, or the explicit
+    /// zero-conf grant for a bought channel.
+    var fundingUsable: Bool { fundingIsConfirmed || zeroConf != nil }
 
     var id: Data {
         guard let fundingTxid, let fundingOutput else { return temporaryID }
@@ -101,12 +114,14 @@ struct ChannelState: Codable {
     func validateNegotiation() throws {
         guard let remote else { throw LightningError.invalidState }
         try local.validate(capacity: capacity); try remote.validate(capacity: capacity)
-        guard local.format == remote.format else { throw LightningError.invalidMessage }
-        guard local.dustSat <= remote.reserveSat, remote.dustSat <= local.reserveSat else { throw LightningError.invalidAmount }
+        guard local.format == remote.format, local.options == remote.options else { throw LightningError.invalidMessage }
+        guard local.dustSat <= remote.reserveSat || waivedReserve, remote.dustSat <= local.reserveSat else { throw LightningError.invalidAmount }
         let fee = UInt64(feePerKW) * local.format.commitmentWeight / 1000 + local.format.anchorReserveSat
         let funderReserve = isFunder ? remote.reserveSat : local.reserveSat
         guard (capacity * 1000 - pushMsat) / 1000 >= fee + funderReserve else { throw LightningError.invalidAmount }
     }
+    /// A provider may open a bought channel without requiring a reserve from us.
+    private var waivedReserve: Bool { remote?.reserveSat == 0 && zeroConf != nil && !isFunder }
     mutating func acceptSignature(_ compact: Data) throws {
         let commitment = try commitment(localOwner: true)
         let ours = try ChannelKeys.sign(digest: ChannelTransactions.fundingDigest(commitment), secret: secrets.funding)

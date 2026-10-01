@@ -16,6 +16,7 @@ struct PeerFixture {
         if args.first == "relay-package" { try await probePackageRelay(args); return }
         if args.first == "probe-bip353" { try await probeBIP353(args); return }
         if ["probe-lsp", "probe-lsp-quote", "probe-lsp-stability", "probe-lsp-opening"].contains(args.first) { try await probeLSP(args); return }
+        if args.first == "probe-lsps2" { try await probeLSPS2(args); return }
         if args.first == "probe-invoice-route" { try await probeInvoiceRoute(args); return }
         if args.first == "inspect-held" { try inspectHeld(args); return }
         guard [5, 7].contains(args.count), let port = UInt16(args[1]), let peer = Data(hex: args[2]), let chain = Data(hex: args[3])
@@ -77,7 +78,8 @@ struct PeerFixture {
             return encode(events)
         case "snapshot":
             guard let channel = await engine.channels().first else { throw LightningError.invalidState }
-            return ["id": channel.id.hex, "phase": channel.phase.rawValue, "format": channel.format.rawValue, "commitment": channel.signedCommitment?.hex ?? ""]
+            return ["id": channel.id.hex, "phase": channel.phase.rawValue, "format": channel.format.rawValue, "commitment": channel.signedCommitment?.hex ?? "",
+                    "trusted_unconfirmed": String(channel.trustedUnconfirmed)]
         case "peel":
             guard let onion = Data(hex: input["onion"] ?? ""), let hash = Data(hex: input["hash"] ?? "") else { throw LightningError.invalidMessage }
             let peeled = try OnionPacket.peel(onion, secret: Data(repeating: 1, count: 32), associatedData: hash)

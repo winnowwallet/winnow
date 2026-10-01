@@ -12,6 +12,17 @@ extension LightningPeerSession {
         let params = try JSONEncoder().encode(["order_id": id])
         return try LightningLiquidity.decode(LightningLiquidity.Order.self, from: await liquidityRPC("lsps1.get_order", params: params))
     }
+    /// lsps2.get_info: the provider's current just-in-time fee menu.
+    public func jitMenu(token: String, now: UInt64) async throws -> LightningJIT.Menu {
+        let params = try JSONSerialization.data(withJSONObject: ["token": token])
+        return try LightningJIT.Menu.decode(await liquidityRPC("lsps2.get_info", params: params), now: now)
+    }
+    /// lsps2.buy: reserves an intercept scid for one payment of this size.
+    /// Nothing is paid until a payer pays the invoice that names it.
+    public func jitBuy(_ offer: LightningJIT.Offer, paymentSizeMsat: UInt64) async throws -> LightningJIT.Purchase {
+        let params = try LightningJIT.buyParams(offer, paymentSizeMsat: paymentSizeMsat)
+        return try LightningLiquidity.decode(LightningJIT.Purchase.self, from: await liquidityRPC("lsps2.buy", params: params))
+    }
     private func liquidityRPC(_ method: String, params: Data) async throws -> Data {
         // Some LND providers serve LSPS custom messages without extending init
         // features. A bounded request is the capability check for those peers.

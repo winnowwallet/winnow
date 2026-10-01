@@ -179,3 +179,14 @@ physical-device checks in the [release procedure](../../docs/engineering/lightni
 The newer `zero_fee_commitments` format, splicing and post-quantum protocol
 extensions are not implemented or advertised. Single-part BOLT11 invoice payments use private hints and
 bounded signed public routing policies; see the [sending guide](../../docs/engineering/lightning-sending.md).
+
+## Instant receive (LSPS2)
+
+`LightningJIT` holds the bLIP-52 client terms: the fee menu (each entry kept
+verbatim for `lsps2.buy`), the opening-fee formula with overflow checks, and
+the purchase's intercept scid. `LightningJITReceiving` turns a purchase into
+an invoice, grants zero-conf only to the provider's open that matches a live
+purchase, and accepts that payment minus the declared `extra_fee`. The grant is
+separate from `fundingIsConfirmed`, which still means a verified confirmation.
+`scripts/ci-lightning-jit` pays such an invoice through stock LDK's LSPS2
+service.

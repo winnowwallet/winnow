@@ -91,26 +91,46 @@ public enum LightningLiquidity {
         let bytes = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": id, "method": method, "params": object], options: .sortedKeys)
         return try .init(type: messageType, payload: bytes)
     }
-    static func response(_ message: LightningWire.Message) throws -> (id: String, result: Result<Data, LightningLiquidityError>) {
+    /// bLIP-50: a response we cannot match (no string id, a notification, a
+    /// malformed payload) is ignored, never fatal to the connection.
+    static func response(_ message: LightningWire.Message) -> (id: String, result: Result<Data, LightningLiquidityError>)? {
         guard message.type == messageType, message.payload.count <= 32_768,
-              let object = try JSONSerialization.jsonObject(with: message.payload) as? [String: Any],
-              object["jsonrpc"] as? String == "2.0", let id = object["id"] as? String,
-              (object["error"] as? [String: Any] != nil) != (object["result"] as? [String: Any] != nil) else { throw LightningError.invalidMessage }
-        if let error = object["error"] as? [String: Any] {
-            return (id, .failure(.provider(String((error["message"] as? String ?? "Request refused").prefix(200)))))
+              let object = (try? JSONSerialization.jsonObject(with: message.payload)) as? [String: Any],
+              object["jsonrpc"] as? String == "2.0", let id = object["id"] as? String else { return nil }
+        switch (object["error"] as? [String: Any], object["result"] as? [String: Any]) {
+        case (let error?, nil): return (id, .failure(rejection(error)))
+        case (nil, let result?):
+            guard let bytes = try? JSONSerialization.data(withJSONObject: result) else { return nil }
+            return (id, .success(bytes))
+        default: return nil
         }
-        guard let result = object["result"] as? [String: Any] else { throw LightningError.invalidMessage }
-        return (id, .success(try JSONSerialization.data(withJSONObject: result)))
+    }
+    private static func rejection(_ error: [String: Any]) -> LightningLiquidityError {
+        let reason = String((error["message"] as? String ?? "Request refused").prefix(200))
+        guard let code = error["code"] as? Int else { return .provider(reason) }
+        return .rejected(code: code, message: reason)
     }
 }
 
-public enum LightningLiquidityError: Error, LocalizedError, Sendable {
-    case unavailable, timedOut, provider(String)
+public enum LightningLiquidityError: Error, LocalizedError, Sendable, Equatable {
+    case unavailable, timedOut, provider(String), rejected(code: Int, message: String)
     public var errorDescription: String? {
         switch self {
         case .unavailable: "This provider does not support channel purchases over this connection."
         case .timedOut: "The provider did not respond. Reconnect and try again; no setup fee was paid by Winnow."
         case .provider(let reason): "Provider: \(reason)"
+        case .rejected(let code, let message): Self.explain(code) ?? "Provider: \(message)"
+        }
+    }
+    /// bLIP-52 error codes, in words a person can act on.
+    private static func explain(_ code: Int) -> String? {
+        switch code {
+        case 1: "The provider refused this request."
+        case 200: "The provider did not accept Winnow's access token."
+        case 201: "The provider's fee terms changed. Get a new quote."
+        case 202: "This amount is below the provider's minimum."
+        case 203: "This amount is above the provider's maximum."
+        default: nil
         }
     }
 }

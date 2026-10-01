@@ -82,7 +82,12 @@ struct LightningReceiveView: View {
         }
     }
     @ViewBuilder private var receivingSection: some View {
-        if !canReceiveAmount {
+        if !canReceiveAmount && controller.supportsJIT {
+            LightningJITReceiveSection(controller: controller, amountSat: requestedAmount, created: show) {
+                error = $0.localizedDescription
+            }
+            Section { Button("Choose provider") { setup = true }.accessibilityIdentifier("lightningReceiveSetup") }
+        } else if !canReceiveAmount {
             Section("Set up Lightning receiving") {
                 Text("Enter the payment amount first. Winnow checks the provider's minimum capacity and shows its actual setup fee before you approve anything.")
                 if let notice = controller.receivingSetupNotice { Text(notice) }
@@ -99,20 +104,30 @@ struct LightningReceiveView: View {
     private func createInvoice() async throws {
         guard let requestedAmount else { throw LightningError.invalidAmount }
         try controller.setReceiveAmount(requestedAmount, model: model)
-        let created = try await controller.createReceiveInvoice(amountSat: requestedAmount, model: model)
-        let decoded = try Bolt11Invoice.decode(created, network: controller.network)
-        invoice = created; invoiceHash = decoded.paymentHash
+        show(try await controller.createReceiveInvoice(amountSat: requestedAmount, model: model))
+    }
+    private func show(_ created: String) {
+        guard let decoded = try? Bolt11Invoice.decode(created, network: controller.network) else { return }
+        invoice = created; invoiceHash = decoded.paymentHash; error = nil
         invoiceExpiry = Date(timeIntervalSince1970: TimeInterval(decoded.expiresAt))
     }
     private func invoiceSection(_ invoice: String, expires: Date) -> some View {
         Section("Lightning invoice · \(controller.network.rawValue)") {
             TimelineView(.periodic(from: .now, by: 1)) { context in
-                let received = controller.payments.contains { $0.hash == invoiceHash && $0.phase == .settled }
-                if received { Text("Payment received").accessibilityIdentifier("lightningInvoicePaid") }
+                let received = controller.payments.first { $0.hash == invoiceHash && $0.phase == .settled }
+                if let received { receivedNotice(received) }
                 else if context.date >= expires { Text("Invoice expired. Create a new invoice.") }
                 else { payableInvoice(invoice, expires: expires) }
             }
             Button("New Lightning invoice") { self.invoice = nil; invoiceExpiry = nil; invoiceHash = nil }
+        }
+    }
+    /// An instant receive also says what the provider kept.
+    @ViewBuilder private func receivedNotice(_ payment: LightningEngine.Payment) -> some View {
+        Text("Payment received").accessibilityIdentifier("lightningInvoicePaid")
+        if let fee = payment.feeMsat {
+            Text("Received \(payment.amountMsat / 1000) sats · provider kept \((fee + 999) / 1000) sats")
+                .font(.footnote).accessibilityIdentifier("lightningInvoiceFeeKept")
         }
     }
     private func payableInvoice(_ invoice: String, expires: Date) -> some View {

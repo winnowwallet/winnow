@@ -19,7 +19,7 @@ struct LightningChainState: Codable {
 
 extension LightningEngine {
     func pendingChainEvents() throws -> [Event] {
-        let ready = state.channels.filter { $0.phase == .ready && $0.fundingIsConfirmed }.map { Event.channelReady($0.id) }
+        let ready = state.channels.filter { $0.phase == .ready && $0.fundingUsable }.map { Event.channelReady($0.id) }
         let payments = state.payments.filter { $0.payment.phase == .recovering || $0.chainResolution != nil }.map { Event.paymentChanged($0.payment) }
         return try ready + payments + pendingFundingBroadcasts() + pendingRecoveryBroadcasts()
     }
@@ -87,6 +87,7 @@ extension LightningEngine {
         next.scan.positions = Array(next.scan.positions.suffix(2048))
         next.scan.nextHeight = block.height + 1
         var events = try updateChainChannels(height: block.height, in: &next)
+        try Self.forgetUnfundedZeroConf(height: block.height, in: &next)
         events += try updateRecovery(height: block.height, in: &next)
         events += try reconcileChainPayments(height: block.height, in: &next)
         try persist(next)
@@ -139,8 +140,7 @@ extension LightningEngine {
         channel.localReady = true
         channel.fundingIsConfirmed = true
         if channel.remoteReady { channel.phase = .ready }
-        var writer = LightningWire.Writer(); writer.append(channel.id); writer.append(try channel.secrets.point(1))
-        try Self.enqueue(.init(type: 36, payload: writer.data), channel: channel, in: &next)
+        try Self.enqueue(Self.readyMessage(channel), channel: channel, in: &next)
     }
     public func blocksDisconnected(to height: UInt32, hash: Data) throws {
         try healthy(); chainIsCurrent = false

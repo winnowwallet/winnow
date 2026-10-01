@@ -11,12 +11,18 @@ enum LightningProviders {
         var api: URL? = nil
         var token = ""
         var manualSetup = false
+        /// LSPS2: a just-in-time channel opens with the first payment.
+        var jit = false
         var profile: LightningProfile {
             LightningProfile(network: "mainnet", name: name, peer: peer, host: host, port: port,
                 route: nil, receive: nil, liquidityProvider: id)
         }
     }
     static let mainnet: [Provider] = [
+        .init(id: "megalith-lsps2", name: "Megalith Instant", peer: "034066e29e402d9cf55af1ae1026cc5adf92eed1e0e421785442f53717ad1453b0",
+            host: "64.23.159.177", port: 9735,
+            website: URL(string: "https://docs.megalithic.me/lightning-services/lsps2-get-a-just-in-time-channel-for-mobile-clients/")!,
+            token: "Winnow", jit: true),
         .init(id: "olympus", name: "Olympus by ZEUS", peer: "031b301307574bbe9b9ac7b79cbe1700e31e544513eae0b5d7497483083f99e581",
             host: "45.79.192.236", port: 9735, website: URL(string: "https://docs.zeusln.app/lsp/")!),
         .init(id: "megalith", name: "Megalith", peer: "038a9e56512ec98da2b5789761f7af8f280baf98a09282360cd6ff1381b5e889bf",

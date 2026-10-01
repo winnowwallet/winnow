@@ -54,9 +54,8 @@ extension LightningEngine {
             next.outbox.removeAll { $0.peer == peer && $0.channelID == id && $0.sequence <= through && [128, 130, 131, 132, 134, 135].contains($0.message.type) }
         }
         if channel.localReady, channel.localNumber == 0, nextCommitment == 1 {
-            var writer = LightningWire.Writer(); writer.append(id); writer.append(try channel.secrets.point(1))
             Self.acknowledge([36], channel: channel, in: &next)
-            try Self.enqueue(.init(type: 36, payload: writer.data), channel: channel, in: &next)
+            try Self.enqueue(Self.readyMessage(channel), channel: channel, in: &next)
         }
         try persist(next)
         reestablishing.remove(id)
@@ -83,7 +82,10 @@ extension LightningEngine {
     }
     private func discardUncommittedIncoming(_ channel: inout ChannelState) {
         for update in channel.updates where !update.fromLocal && update.localNumber == nil {
-            if case .add(let htlc, _) = update.change { channel.nextRemoteHTLC = min(channel.nextRemoteHTLC, htlc.id); channel.incomingBlinding.removeValue(forKey: htlc.id) }
+            if case .add(let htlc, _) = update.change {
+                channel.nextRemoteHTLC = min(channel.nextRemoteHTLC, htlc.id); channel.incomingBlinding.removeValue(forKey: htlc.id)
+                channel.incomingExtraFee?.removeValue(forKey: htlc.id)
+            }
         }
         channel.updates.removeAll { !$0.fromLocal && $0.localNumber == nil }
     }

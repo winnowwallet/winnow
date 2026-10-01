@@ -22,6 +22,7 @@ final class LightningAppController {
     var liquidityInfo: LightningLiquidity.Info?
     var liquidityRequestInFlight = false
     var receiveIntent: LightningReceiveIntent?
+    var jitMenu: LightningJIT.Menu?
     var liquiditySession: LightningPeerSession? { session }
     private(set) var connection = "Waiting for verified chain"
     private(set) var peerWarning: String?
@@ -192,7 +193,8 @@ final class LightningAppController {
                 return
             }
             connecting = true; defer { connecting = false }
-            let next = LightningPeerSession(engine: engine, peer: profile.peerKey, host: profile.host, port: profile.port) { [weak self, weak model] events in
+            let next = LightningPeerSession(engine: engine, peer: profile.peerKey, host: profile.host, port: profile.port,
+                                            features: profile.supportsJIT ? .jitClient : .asyncClient) { [weak self, weak model] events in
                 guard let self, let model else { throw CancellationError() }
                 try await self.requireNetwork(model, generation: epoch)
                 try await self.handle(events, model: model)
@@ -289,19 +291,25 @@ final class LightningAppController {
         guard profile != nil, let engine, let wallet = model.wallet else { return }
         let needingRecovery = Set(try await engine.channelsNeedingRecoveryConfiguration())
         for channel in await engine.channels() where needingRecovery.contains(channel.id) {
-            let address = try await wallet.freshReceiveAddress()
+            let destination = try await recoveryDestination(wallet: wallet)
             try requireNetwork(model, generation: epoch)
-            let destination = try AddressDecoder.scriptPubKey(for: address, network: network)
             try await engine.configureRecovery(channelID: channel.id, peer: channel.peer, destination: destination, feeSat: Self.recoveryFeeSat)
         }
     }
+    /// Unilateral recovery pays to a fresh address of this wallet.
+    func recoveryDestination(wallet: Wallet) async throws -> Data {
+        try AddressDecoder.scriptPubKey(for: await wallet.freshReceiveAddress(), network: network)
+    }
     func loadLiquidityQuote() throws -> LiquidityQuote? {
+        guard let quote = try storedLiquidityQuote() else { return nil }
+        guard quote.profile == profile else { throw LightningError.storageFailed }
+        return quote
+    }
+    private func storedLiquidityQuote() throws -> LiquidityQuote? {
         guard let file = directory?.appending(path: "liquidity.json"), FileManager.default.fileExists(atPath: file.path) else { return nil }
         let sealed = try StoreSeal(store: "lightning-liquidity", keys: keys).read(Data(contentsOf: file), network: network)
         guard !sealed.predatesSealing else { throw LightningError.storageFailed }
-        let quote = try JSONDecoder().decode(LiquidityQuote.self, from: sealed.payload)
-        guard quote.profile == profile else { throw LightningError.storageFailed }
-        return quote
+        return try JSONDecoder().decode(LiquidityQuote.self, from: sealed.payload)
     }
     func storeLiquidityQuote(_ quote: LiquidityQuote?) throws {
         guard let file = directory?.appending(path: "liquidity.json") else { throw LightningError.storageFailed }
@@ -370,10 +378,17 @@ final class LightningAppController {
     private func recoveryStorage(root: URL, id: UUID) -> URL {
         root.appending(path: "lightning-recovery", directoryHint: .isDirectory).appending(path: id.uuidString, directoryHint: .isDirectory)
     }
+    /// Without a saved choice, a wallet keeps the provider it already uses: a
+    /// channel's peer, then a stored setup order's provider. Only a wallet with
+    /// neither gets the current default, so a new default never moves anyone.
     private func recommendedProfile(for engine: LightningEngine) async -> LightningProfile? {
-        guard recoveryID != nil else { return LightningProviders.recommended(network: network) }
-        let peers = await engine.channels().map(\.peer)
-        return LightningProviders.available(network: network).first { peers.contains($0.profile.peerKey) }?.profile
+        let channels = await engine.channels()
+        let peers = (recoveryID == nil ? channels.filter { $0.phase != .closed } : channels).map(\.peer)
+        if let match = LightningProviders.available(network: network).first(where: { peers.contains($0.profile.peerKey) }) {
+            return match.profile
+        }
+        guard recoveryID == nil else { return nil }
+        return (try? storedLiquidityQuote())?.profile ?? LightningProviders.recommended(network: network)
     }
 
     func loadFeeBumpAuthorizations() throws -> [FeeBumpReview] {

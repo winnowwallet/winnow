@@ -15,7 +15,9 @@ actor AutomaticPeer {
 extension PeerFixture {
     static func runAutomatic(engine: LightningEngine, peer: Data, host: String, port: UInt16) async throws {
         let buffer = AutomaticPeer()
-        let session = LightningPeerSession(engine: engine, peer: peer, host: host, port: port) { await buffer.record($0) }
+        // An LSPS2 provider sees the just-in-time client features (bLIP-52).
+        let offered: LightningFeatures = ProcessInfo.processInfo.environment["WINNOW_JIT_CLIENT"] == "1" ? .jitClient : .asyncClient
+        let session = LightningPeerSession(engine: engine, peer: peer, host: host, port: port, features: offered) { await buffer.record($0) }
         let features = try await session.start()
         try emit(["status": "initialized", "node_id": try await engine.nodeID().hex, "peer_features": features.bytes.hex])
         while let line = readLine() {
@@ -26,11 +28,24 @@ extension PeerFixture {
             }
             let output: [String: String]
             if input["command"] == "events" { output = ["events": try await buffer.drain()] }
+            else if input["command"] == "jit_invoice" { output = try await jitInvoice(input, engine: engine, session: session, peer: peer) }
             else { output = try await execute(input, engine: engine, connection: nil, peer: peer) }
             try await session.flush()
             try emit(output)
         }
         await session.stop()
+    }
+    /// LSPS2 over the live session: menu, purchase, then Winnow's invoice.
+    static func jitInvoice(_ input: [String: String], engine: LightningEngine, session: LightningPeerSession,
+                           peer: Data) async throws -> [String: String] {
+        guard let id = Data(hex: input["id"] ?? ""), let amount = UInt64(input["amount_msat"] ?? ""),
+              let destination = Data(hex: input["destination"] ?? "") else { throw LightningError.invalidMessage }
+        let now = UInt64(Date().timeIntervalSince1970)
+        let quote = try await session.jitMenu(token: "Winnow", now: now).cheapest(paymentMsat: amount, now: now)
+        let purchase = try await session.jitBuy(quote.offer, paymentSizeMsat: amount)
+        let invoice = try await engine.createJITInvoice(id: id, terms: .init(provider: peer, offer: quote.offer, purchase: purchase,
+            paymentSizeMsat: amount), recoveryDestination: destination, recoveryFeeSat: 500, network: .regtest, now: now)
+        return ["invoice": invoice, "fee_msat": String(quote.feeMsat), "client_trusts_lsp": String(purchase.clientTrustsLsp ?? false)]
     }
     static func asyncCommand(_ input: [String: String], engine: LightningEngine, peer: Data) async throws -> [String: String] {
         let now = UInt64(Date().timeIntervalSince1970)
@@ -67,6 +82,13 @@ extension PeerFixture {
             try await engine.registerReceiveOffer(.init(id: id, provider: peer, serverPath: server, inboundShortChannelID: scid,
                 baseMsat: 1000, proportionalMillionths: 0, expiryDelta: 48, maximumMsat: 50_000_000), now: now)
             return ["phase": "registering"]
+        case "receivable":
+            // Never throws: a driver polls this until a policy has arrived.
+            let capacities = (try? await engine.invoiceCapacities(peer: peer)) ?? []
+            return ["maximum_msat": String(capacities.map(\.maximumMsat).max() ?? 0)]
+        case "bolt11_invoice":
+            guard let id = Data(hex: input["id"] ?? ""), let amount = UInt64(input["amount_sat"] ?? "") else { throw LightningError.invalidMessage }
+            return ["invoice": try await engine.createInvoice(id: id, peer: peer, amountSat: amount, network: .regtest, now: now)]
         case "async_offer":
             guard let receive = try await engine.receiveOffers(now: now).first else { return ["phase": "registering"] }
             return ["phase": "ready", "offer": receive.offer.string, "id": receive.id.hex]
