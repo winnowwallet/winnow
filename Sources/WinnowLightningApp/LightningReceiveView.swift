@@ -115,17 +115,19 @@ struct LightningReceiveView: View {
         Section("Lightning invoice · \(controller.network.rawValue)") {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 let received = controller.payments.first { $0.hash == invoiceHash && $0.phase == .settled }
-                if let received {
-                    Text("Payment received").accessibilityIdentifier("lightningInvoicePaid")
-                    if let fee = received.feeMsat {
-                        Text("Received \(received.amountMsat / 1000) sats · provider kept \((fee + 999) / 1000) sats")
-                            .font(.footnote).accessibilityIdentifier("lightningInvoiceFeeKept")
-                    }
-                }
+                if let received { receivedNotice(received) }
                 else if context.date >= expires { Text("Invoice expired. Create a new invoice.") }
                 else { payableInvoice(invoice, expires: expires) }
             }
             Button("New Lightning invoice") { self.invoice = nil; invoiceExpiry = nil; invoiceHash = nil }
+        }
+    }
+    /// An instant receive also says what the provider kept.
+    @ViewBuilder private func receivedNotice(_ payment: LightningEngine.Payment) -> some View {
+        Text("Payment received").accessibilityIdentifier("lightningInvoicePaid")
+        if let fee = payment.feeMsat {
+            Text("Received \(payment.amountMsat / 1000) sats · provider kept \((fee + 999) / 1000) sats")
+                .font(.footnote).accessibilityIdentifier("lightningInvoiceFeeKept")
         }
     }
     private func payableInvoice(_ invoice: String, expires: Date) -> some View {
