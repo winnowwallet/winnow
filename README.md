@@ -4,7 +4,7 @@ A Bitcoin wallet for iOS with on-device compact-filter matching, written in Swif
 
 **[Download on the App Store](https://apps.apple.com/app/id6801502501)** — pre-release builds ship through [TestFlight](https://testflight.apple.com/join/83djpNE7). Mainnet by default; signet is one Advanced-mode toggle away. See the [roadmap](https://winnowwallet.com/roadmap) for the status of earlier proposals.
 
-- **Pure P2P by default.** The read side is BIP157/158 compact block filters served by full-node peers — the wallet does not send its watch list to a wallet-history server. Peers still observe requests, relay traffic and connection metadata. Bounded **mempool windows** (short full-relay subscriptions while the Receive or Send screen is open) give 0-conf payment detection and propagation tracking without any server. Read [how it works](docs/architecture.html).
+- **Pure P2P by default.** The read side is BIP157/158 compact block filters served by full-node peers — the wallet does not send its watch list to a wallet-history server. Peers still observe requests, relay traffic and connection metadata. Bounded **mempool windows** (short full-relay subscriptions while the Receive or Send screen is open) give 0-conf payment detection and propagation tracking without any server. Read [how it works](https://winnowwallet.com/architecture).
 - **Taproot today.** Ordinary receiving uses P2TR (BIP86); shared accounts use MuSig2 key-path or threshold script-path signing. There is no ECDSA signing path or P2WSH Safe.
 - **Pay people and share control.** Save a public payment card or Bitcoin address. From Wallet, create shared savings with a threshold such as 2-of-3: any two keys can spend while one is unavailable. A 1-of-n policy permits one key to spend. Cards carry public keys only.
 - **Require another signing device.** Advanced mode offers MuSig2 accounts where every key must participate. The single integration journey receives and sends with a phone-plus-Core account, followed by a script-path 2-of-3 account. Focused tests check wallet and account rules. Hardware-wallet compatibility needs its own test. Read about [shared signing and its limits](docs/vaults.html).
@@ -40,9 +40,7 @@ iPad UI coverage. The homepage gives an overview, illustrates
 the signing choices, shows the run's sixteen checkpoint screenshots in order,
 and links to the full recording. Detailed guidance and test evidence live on
 separate pages.
-`scripts/build-site` generates home and the recording page.
-Run it after changing docs/journeys.json or the app test
-source. CI rejects missing or undocumented app scenarios.
+The public site and its generator live in [winnowwallet/website](https://github.com/winnowwallet/website). Wallet CI retains the original recording evidence without building or deploying the site.
 
 ## Directory guides
 
@@ -76,7 +74,7 @@ asset catalogs are documented by their owner, outside the bundle.
 
 ### Website and repository operations
 
-- Website: [pages and generation](docs/README.md), [journey recording](docs/videos/README.md), [selected screenshots](docs/screenshots/README.md).
+- Website and blog: [winnowwallet/website](https://github.com/winnowwallet/website). Offline guides and engineering records remain in [docs](docs/README.md).
 - Security: [reports and claims](docs/security/README.md), [retained soak evidence](docs/security/evidence/README.md).
 - Operations: [public contributor runbooks](.github/internal/README.md), [workflows](.github/workflows/README.md), [scripts](scripts/README.md), [tooling regressions](scripts/tests/README.md).
 
@@ -142,20 +140,8 @@ records one continuous video; checkpoint screenshots remain secondary artifacts.
 Lower-level tests cover detailed feature behavior. The recording’s provenance
 identifies exactly which version and payments it shows.
 
-Screenshot PNGs in `docs/screenshots/` are stored in Git LFS. After cloning,
-install Git LFS and download the image objects before viewing or publishing them:
-
-```sh
-git lfs install --local
-git lfs pull
-```
-
-The build job fetches LFS objects and prepares a fresh website artifact with
-either its new journey or cached normalized video and all 16 screenshots.
-Cached media keeps the original recording's provenance. The website job deploys
-that same-run artifact without rebuilding: trusted PRs get previews and `main`
-gets production. Local test runs use fresh temporary directories; committed
-historical images remain in LFS.
+Website screenshots and the reference recording live in the website repository, with Git LFS. Wallet CI normalizes new journey recordings into media artifacts and retains their original source and run provenance. Local test runs use fresh temporary directories; committed
+historical images remain in the website repository.
 
 ## License
 

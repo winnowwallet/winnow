@@ -1,55 +1,10 @@
-[Back to main README](../README.md)
+# Wallet documentation
 
-# Website and product explanations
+The live website, public docs and blog are maintained in
+[winnowwallet/website](https://github.com/winnowwallet/website).
 
-This directory is the static website and the public explanation of Winnow's
-features, architecture, testing, and limitations. The app also bundles five
-technical guides and site.css so those explanations are available offline.
-
-[The journey inventory](journeys.json) and
-[app test source](../UITests/README.md) feed [build-site](../scripts/build-site),
-which generates home and recording pages. The homepage pairs three signing
-choices with real wallet screens: one key, both keys, or any two of three.
-An expandable gallery keeps all sixteen checkpoint screenshots in journey order,
-each linking to the full-size image. Generation refuses any checkpoint the
-journey does not capture, so the page cannot show a screen no test produced.
-
-[home.css](home.css) styles only the homepage; app-bundled [site.css](site.css)
-is unaffected. Native radio controls and the gallery work without JavaScript.
-[home.js](home.js) enhances recording links with a dialog containing the full
-video. It does not autoplay or preload the recording. Without JavaScript, those
-links open the [recording page](https://winnowwallet.com/recording), which retains
-playback controls and source provenance. The [signing guide](vaults.html)
-explains the policies. Other pages are authored directly. Shared wallets combines the former custody overview with setup and backup instructions. Technical guides begin with summaries and contents links; deeper reference material uses native disclosures. The archive keeps old talk notes and public-signet evidence separate from the current recording. Older illustrations retain their dated provenance.
-[The roadmap](roadmap.html) separates current behavior from earlier proposals
-that are not scheduled.
-[Architecture](architecture.html) links directly to the focused technical guides.
-Those HTML files are the maintained explanations; no separate paper or paper
-index is needed. [_redirects](_redirects) sends old paper URLs to the architecture page.
-
-Run `scripts/build-site --check` and, with real LFS images downloaded,
-`scripts/check-site` from the root. Both accept `--root` for a staged repository.
-[prepare-site-artifact](../scripts/prepare-site-artifact) builds the deployable
-directory; [Website CI](../.github/workflows/site.yml) consumes that artifact.
-The checks cover generation, local links and section targets, media objects, and the 25 MiB per-file
-hosting limit, not rendered-browser layout or the truth of every prose claim.
-
-For a successful CI journey, run `scripts/prepare-site-artifact OUTPUT --journey
-JOURNEY --media-output MEDIA`. It copies all 16 current checkpoints, normalizes
-the full recording with `+igndts` and no cuts, and records source SHA, run URL,
-duration, and checksums in `journey-provenance.json`. The output includes a local
-`/recording` page explaining that evidence. Replaying an older artifact requires
-its `--source-sha` and `--run-url`; CI defaults to the current checkout and run.
-
-Website-only builds use `--media MEDIA` to reuse the small normalized artifact
-without video tools or raw result bundles. Its original recording provenance
-stays intact while pages are regenerated from the current source. The optional
-`--media-output` contains only the video, 16 PNGs, and provenance JSON for caching.
-With neither media option, packaging retains the reviewed repository reference
-assets and explicitly makes no new integration-result claim. Output directories
-must be new. Packaging never changes repository media.
-[Testing policy](testing.md), [the recording](videos/README.md),
-[current and historical screenshots](screenshots/README.md), and
-[security evidence](security/README.md) explain the supporting records.
-Operator guides cover [Tor and I2P gateways](peer-gateways.md), the
-[signed census](census-signing.md) and the [tdx CI lane](engineering/tdx-ci.md).
+This repository retains the HTML/CSS guides bundled for offline use by the app,
+plus wallet engineering, release and security records. Public website changes
+belong in the website repository. Copy reviewed offline guide updates here when
+releasing the app. CI normalizes and retains journey evidence without building
+or deploying a website.

@@ -220,7 +220,7 @@ class ArtifactTests(unittest.TestCase):
         self.invoke(evidence=self.lookup())
         self.assertIn("Wallet and test inputs are unchanged", self.last_summary)
         self.assertIn("https://github.example/owner/repo/actions/runs/42", self.last_summary)
-        self.assertIn("website is rebuilt", self.last_summary)
+        self.assertIn("original recording provenance", self.last_summary)
         self.invoke()
         self.assertIn("Running fresh wallet tests and the recorded journey", self.last_summary)
         self.assertNotIn("/actions/runs/", self.last_summary)

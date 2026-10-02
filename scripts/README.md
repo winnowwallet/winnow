@@ -49,15 +49,13 @@ each script still builds what it needs for standalone local use. The recorded
 journey requires the signet fixture configuration described in
 [the UI test guide](../UITests/README.md).
 
-[prepare-site-artifact](prepare-site-artifact) prepares a fresh static website
-from the current docs and either `--journey <results>` or `--media <bundle>`.
-`--media-output <directory>` saves the normalized movie, 16 checkpoint images,
-and original recording provenance as a dedicated reusable bundle. The website
-job deploys the ready same-run artifact without checking out source or rebuilding.
-`--validate-media <bundle>` checks cached media before CI decides to skip wallet
-tests. Invalid media falls back to fresh tests and a new recording.
+[prepare-site-artifact](prepare-site-artifact) normalizes a successful journey
+with `--normalize-journey <results> --media-output <directory>`. The bundle
+contains the normalized movie, 16 checkpoint images, and original recording
+provenance. `--validate-media <bundle>` validates retained evidence. Website
+sources, builds, and deployment are owned by winnowwallet/website.
 
-[Python regressions](tests/README.md) cover media reuse, site generation,
+[Python regressions](tests/README.md) cover media reuse, evidence normalization,
 artifact preparation, App Store status parsing, and release policy.
 Signing/submission commands have external effects;
 their workflow runbooks identify when they are used.
@@ -92,10 +90,8 @@ and [native fixture](../Tools/Fixture/README.md) are the three Swift executables
 
 | Entry point | Inputs and purpose | Effects / caller |
 | --- | --- | --- |
-| [build-site](build-site) | `--check` verifies generated pages; optional `--root DIR`. | Without `--check`, rewrites the homepage and recording HTML from the journey inventory. |
-| [check-site](check-site) | Optional `--root DIR`; check generation, local links, media, and hosting size limits. | Reads website assets; requires real LFS objects. |
 | [ci-journey-cache](ci-journey-cache) | CI environment identifies the event, revision and repository. | Queries GitHub for matching successful media; writes CI outputs. See the reuse policy above. |
-| [prepare-site-artifact](prepare-site-artifact) | `OUTPUT` with `--journey DIR` or `--media DIR`; optional `--media-output DIR`. | Writes a new site/media artifact; does not deploy it. No media option uses repository reference assets. |
+| [prepare-site-artifact](prepare-site-artifact) | `--normalize-journey DIR --media-output DIR` or `--validate-media DIR`. | Normalizes or validates wallet recording evidence; no website build. |
 | [winnow-debug](winnow-debug) | `inspect`, `doctor`, `diagnostics`, `generate checkpoint`, `soak`; see its [runbook](../Tools/Debug/README.md). | Inspection is offline; diagnostics writes captures; soak contacts peers. |
 | [refresh-checkpoint](refresh-checkpoint) | `HEADERS_FILE [HEIGHT]`; derive and validate a boundary checkpoint. | Writes a test vector and prints a source literal for review; does not automatically edit app constants. See the [runbook](../Tools/Generate/README.md). |
 | [signet-fixture](signet-fixture) | `up`, `down`, `status`, `snapshot DIR`, `destroy`. | Manages the configured local node; `destroy` deletes its data. No argument defaults to `up`. See the [UI setup](../UITests/README.md#run-locally). |
