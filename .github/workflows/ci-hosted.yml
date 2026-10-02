@@ -1,11 +1,6 @@
 name: Hosted CI fallback
 on:
   workflow_call:
-    outputs:
-      website-artifact:
-        value: ${{ jobs.build.outputs.website-artifact }}
-      deployment-branch:
-        value: ${{ jobs.build.outputs.deployment-branch }}
 
 permissions:
   contents: read
@@ -13,14 +8,11 @@ permissions:
 
 jobs:
   build:
-    # One Mac job owns package checks, the app, the node, and website output.
+    # One Mac job owns package checks, the app, the node, and journey evidence.
     # Every run gets a fresh hosted Apple silicon Mac. Forks skip the node fixture
     # and deployment credentials, but still run the package and app unit tests.
     runs-on: macos-26
     timeout-minutes: 60
-    outputs:
-      website-artifact: ${{ steps.site.outputs.artifact }}
-      deployment-branch: ${{ steps.site.outputs.branch }}
     defaults:
       run:
         shell: bash --noprofile --norc -e -o pipefail {0}
@@ -77,10 +69,9 @@ jobs:
             exit 1
           fi
 
-      - name: Check website, artifact reuse and release tooling
+      - name: Check artifact reuse and release tooling
         run: |
           python3 -m unittest discover -s scripts/tests -p test_ci_journey_cache.py
-          python3 -m unittest discover -s scripts/tests -p test_build_site.py
           python3 -m unittest discover -s scripts/tests -p test_prepare_site_artifact.py
           python3 -m unittest discover -s scripts/tests -p test_appstore_status.py
           python3 -m unittest discover -s scripts/tests -p test_release_policy.py
@@ -279,27 +270,9 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Prepare the website artifact
-        id: site
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          git lfs pull
-          media=()
-          if [[ '${{ steps.validate_media.outcome }}' == success ]]; then
-            media=(--media "$CI_RESULTS/reused-media" --media-output "$CI_RESULTS/journey-media")
-          elif [[ "$RUN_UI_JOURNEY" == true ]]; then
-            media=(--journey "$APP_RESULTS/journey" --media-output "$CI_RESULTS/journey-media")
-          fi
-          scripts/prepare-site-artifact "$CI_RESULTS/site" "${media[@]}"
-          echo "artifact=website-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
-          if [[ "$GITHUB_REF" == refs/heads/main ]]; then
-            echo 'branch=main' >> "$GITHUB_OUTPUT"
-          elif [[ -n "$PR_NUMBER" ]]; then
-            echo "branch=pr-$PR_NUMBER" >> "$GITHUB_OUTPUT"
-          else
-            echo "branch=preview-$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
-          fi
+      - name: Normalize fresh journey evidence
+        if: steps.validate_media.outcome != 'success' && env.RUN_UI_JOURNEY == 'true'
+        run: scripts/prepare-site-artifact --normalize-journey "$APP_RESULTS/journey" --media-output "$CI_RESULTS/journey-media"
 
       - name: Save reusable journey media
         if: steps.validate_media.outcome != 'success' && env.RUN_UI_JOURNEY == 'true'
@@ -310,11 +283,3 @@ jobs:
           path: ${{ env.CI_RESULTS }}/journey-media/
           if-no-files-found: error
           retention-days: 30
-
-      - name: Upload the tested website
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ${{ steps.site.outputs.artifact }}
-          path: ${{ env.CI_RESULTS }}/site/
-          if-no-files-found: error
-          retention-days: 14

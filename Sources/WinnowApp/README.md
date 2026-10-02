@@ -25,7 +25,7 @@ Removing a shortcut preserves
 past labels, signer identities, and fresh-address counters in the existing
 people.json store. Receive shares the wallet’s payment card.
 
-[Documented journeys](../../docs/journeys.json) identify the supported experiences.
+[Documented journeys](https://github.com/winnowwallet/website/blob/main/docs/journeys.json) identify the supported experiences.
 [App tests](../../AppTests/README.md) check state and protected actions;
 [UI tests](../../UITests/README.md) drive the simulator against a disposable node.
 Simulator tests do not establish physical-device lock behavior or battery life.

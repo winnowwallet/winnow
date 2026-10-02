@@ -139,9 +139,9 @@ def main():
             server = os.environ.get("GITHUB_SERVER_URL", "https://github.com").rstrip("/")
             source = f"{server}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{evidence['run-id']}"
             message = ("Wallet and test inputs are unchanged. Tests and journey media are reused from "
-                       f"[successful CI run {evidence['run-id']}]({source}); the website is rebuilt for this checkout.")
+                       f"[successful CI run {evidence['run-id']}]({source}); the retained media keeps its original recording provenance.")
         else:
-            message = "Running fresh wallet tests and the recorded journey; the website is rebuilt for this checkout."
+            message = "Running fresh wallet tests and the recorded journey; the retained media keeps its original recording provenance."
         with Path(summary).open("a") as destination:
             destination.write(f"### Journey evidence\n\n{message}\n")
 

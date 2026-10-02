@@ -2,7 +2,7 @@
 
 # Repository checks and delivery
 
-GitHub Actions runs the package, app, fuzz, and website checks
+GitHub Actions runs the package, app, fuzz, and evidence checks
 and the explicit release/submission operations. Keeping these definitions with
 the code makes the checks and release inputs reviewable at the same revision.
 
@@ -15,8 +15,7 @@ variable `TDX_CI_ENABLED`, same-repository runs use [ci-tdx.yml](ci-tdx.yml):
 four disposable self-hosted macOS guests on the tdx host
 ([runbook](../../docs/engineering/tdx-ci.md)). Fork PRs, the manual `hosted`
 input and repositories without the variable use [ci-hosted.yml](ci-hosted.yml):
-one GitHub-hosted Apple silicon (`macos-26`) `build` job. A reusable `website`
-job follows either lane. Each job gets its own runner, per-run build directory,
+one GitHub-hosted Apple silicon (`macos-26`) `build` job. Each job gets its own runner, per-run build directory,
 and disposable signet fixture.
 
 The hosted build job owns lint and test gates, package and debugging tests, fixed fuzz
@@ -38,8 +37,7 @@ their tools and prepare a new bank; they do not reuse a local machine's Xcode
 build products, simulator, or prepared fixture. For
 website-only edits, [ci-journey-cache](../../scripts/ci-journey-cache) matches
 test and build inputs to a successful same-repository run's normalized media
-artifact. After validating its manifest and file checksums, the build job skips compilation and wallet tests while preparing
-and checking a fresh website. Changes to HTML/CSS bundled in the app still
+artifact. After validating its manifest and file checksums, the build job skips compilation and wallet tests while retaining the media and its original provenance. Changes to HTML/CSS bundled in the app still
 require fresh app CI. Missing or invalid artifacts, download failures, or API errors run the full checks;
 manual, nightly and release runs always run fresh. iPad is deferred until the
 iPhone baseline is manageable. The build job owns only the disposable test node through
@@ -50,9 +48,7 @@ The `app-tests-<run-id>-<attempt>` artifact contains `debug-build.log`, `units/`
 `journey/` and `release-build.log`; the journey directory includes `journey.mp4`.
 Inspect the exact run and test-step conclusions; reused media is not fresh test evidence.
 
-[prepare-site-artifact](../../scripts/prepare-site-artifact) assembles the
-current website with a new journey or cached video and all 16 checkpoints,
-preserving the recording's source provenance. It also writes a dedicated
-reusable media bundle. [site.yml](site.yml) downloads the ready website artifact
-from the same run and deploys it without checkout, rebuilding, or testing.
-Trusted PRs use `pr-<number>` previews; `main` is production.
+[prepare-site-artifact](../../scripts/prepare-site-artifact) normalizes a fresh
+journey and validates retained evidence without website dependencies. Public
+site sources and deployment live in
+[winnowwallet/website](https://github.com/winnowwallet/website).

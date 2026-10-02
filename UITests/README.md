@@ -75,13 +75,13 @@ The source contains 16 captures, attached to the result bundle and copied to
 - Script-path 2-of-3: `26-savings-share`, `27-savings-funded`,
   `14-approval-waiting`, `15-approval-sent`, `28-savings-confirmed`.
 
-They are taken at screens the journey already visits. CI prepares the website
-after successful tests, normalizing the continuous video and retaining all
-16 checkpoints. Website-only edits may reuse that media when test/build inputs
-match; its original source and run remain in `journey-provenance.json` and the
-deployed `/recording` page. [Repository video provenance](../docs/videos/README.md)
-and [screenshot provenance](../docs/screenshots/README.md) retain dated facts
-about the checked-in recordings and images.
+They are taken at screens the journey already visits. CI normalizes the
+continuous video after successful tests and retains all 16 checkpoints in
+wallet evidence. The public website is maintained in winnowwallet/website,
+where [video provenance](https://github.com/winnowwallet/website/blob/main/docs/videos/README.md)
+and [screenshot provenance](https://github.com/winnowwallet/website/blob/main/docs/screenshots/README.md)
+retain dated facts about the checked-in assets. Reused media keeps its original
+source and run in journey-provenance.json.
 
 `SIGNET_BANK_PREPARATION_SECONDS` measures host bank preparation, logged in
 `bank-setup.log` in CI or `fixture-prepare.log` in standalone runs.

@@ -9,15 +9,14 @@ is swift-secp256k1. Xcode resolution must match that root lockfile.
 
 | Workflow | When | Responsibility |
 | --- | --- | --- |
-| CI | PR, main push, nightly, manual, release caller | One validation lane (tdx guests or one hosted build job) owns lint/test gates, package and debugging tests, app/Keychain tests and signet UI journey, release warning and E2E exclusion gates, inspection smoke, provenance, fixed fuzz corpus, and website preparation |
+| CI | PR, main push, nightly, manual, release caller | One validation lane (tdx guests or one hosted build job) owns lint/test gates, package and debugging tests, app/Keychain tests and signet UI journey, release warning and E2E exclusion gates, inspection smoke, provenance, fixed fuzz corpus, and journey evidence normalization |
 | Fuzz sanitizers | Weekly or manual seed replay | Sustained address/thread sanitizer coverage; does not repeat normal suites |
 | Release | New stable version tag or manual validation | Calls CI, then signs/uploads and publishes only for tag pushes |
 | TestFlight recovery | Manual, exact version and build number | Finish notes/group assignment for an existing upload |
 | App Store submission | Manual | Attach a processed build and optionally submit for review |
 | TestFlight feedback | Manual, with an age recipient | Pull tester comments, screenshots and crash logs encrypted to that recipient; the log shows counts only |
-| Website | Reusable job after CI build, for trusted PRs, main and manual previews | Download and deploy the ready website artifact from the same run; no checkout, build or test steps |
 
-CI runs one validation lane and a `website` job; there are no separate selector,
+CI runs one validation lane; there are no separate selector,
 complexity, architecture or size-report jobs. With `TDX_CI_ENABLED`, same-repository
 runs use four self-hosted tdx guests ([tdx runbook](../../docs/engineering/tdx-ci.md));
 the rest of this section describes the hosted `build` job, which fork PRs and
@@ -101,36 +100,9 @@ and tools change together and need no internal version bumps.
 
 ## Website
 
-`docs/` is static HTML. `scripts/build-site` validates the journey inventory
-against app-test selectors and generates the homepage and recording page;
-the other pages are authored directly. The retired Advanced and Testing URLs redirect home.
-The app bundles the five technical guides and `site.css` directly from that directory. Edit them once.
-Run `scripts/build-site` after changing journey inputs, then `scripts/check-site`
-after `git lfs pull` to check local page/asset links and reject unresolved image pointers.
-
-The CI build job runs the website regressions and calls
-`scripts/prepare-site-artifact <output> --journey <results>` after a fresh
-journey, or `--media <bundle>` when test inputs match retained evidence.
-`--media-output <directory>` writes the dedicated reusable bundle: normalized
-video, all 16 checkpoints, and `journey-provenance.json`. Reuse copies those
-files unchanged into a freshly generated site. The generated `/recording` page
-identifies the original source, run and media processing. `journey-media-<hash>`
-artifacts last 30 days; the ready `website-<run-id>-<attempt>` artifact lasts
-14 days. Expired media requires a fresh test run.
-
-The reusable website job downloads only that run's exact named website artifact
-and deploys it. It has no source checkout, generation or tests and does not run
-code from the downloaded content.
-
-Website deploys to the existing Cloudflare Pages project `winnow`, using
-`CF_API_TOKEN` and `CF_ACCOUNT_ID`. Only `main` deploys production at
-<https://winnowwallet.com>. Trusted PRs use `pr-<number>` previews; manually
-selected non-main branches use `preview-<run-id>`;
-the deployment URL appears in the Actions summary and environment. Fork PRs
-validate without deployment credentials. There is no second GitHub Pages site.
-
-Before releasing iCloud recovery, complete the [Apple container, schema and
-physical-device checks](../../CloudKit/README.md#apple-setup-required-before-release).
-Hosted CI does not establish Apple account setup or real Keychain synchronization.
-Status on 2026-09-29: TestFlight build 79 (0.7.11) saved to production iCloud
-("Backed up, last saved 3:32 PM"); restoring on a second device is still unverified.
+Public site sources, generation, blog and deployment live in
+[winnowwallet/website](https://github.com/winnowwallet/website). Wallet CI
+normalizes and validates journey media, preserving its original source SHA,
+run URL and result. It uploads wallet evidence without publishing the site.
+The app separately bundles five offline technical guides and site.css from
+docs/. Copy reviewed guide updates from the website when releasing the app.

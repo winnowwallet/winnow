@@ -6,11 +6,12 @@ and inspect their artifacts.
 
 The product is the wallet app for iPhone, iPad, and Apple silicon Mac, plus
 explicit debugging tools. Automated UI coverage is limited to iPhone.
-Everyday and advanced features are documented in docs/journeys.json.
-scripts/build-site generates the homepage and recording page, referencing
-captures named by the UI journey. XCTest takes the checkpoint screenshots;
-scripts/prepare-site-artifact copies them and normalizes the host recording.
-Generation refuses a checkpoint the UI journey does not capture. Recording evidence identifies the steps
+Everyday and advanced features are documented in the public website's
+[journey inventory](https://github.com/winnowwallet/website/blob/main/docs/journeys.json).
+Its generator references captures named by the pinned UI journey. XCTest takes
+the checkpoints; scripts/prepare-site-artifact normalizes the host recording
+and validates evidence independently of the website.
+Recording evidence identifies the steps
 exercised by the current focused UI journey. The
 public roadmap owns future work; it is not evidence that a feature ships.
 
@@ -127,15 +128,13 @@ The xcresult bundle and logs are authoritative for success, failure, and the
 tested revision. The host records the simulator while the journey runs; the
 recording and checkpoint screenshots do not replace test assertions. Keep the
 revision, device, date, and result bundle together in the deployment's
-`/recording` provenance. [Repository video notes](videos/README.md) preserve
+`/recording` provenance. [Repository video notes](https://github.com/winnowwallet/website/blob/main/docs/videos/README.md) preserve
 the dated history of checked-in recordings.
-`scripts/prepare-site-artifact` assembles a fresh website with either a new
-journey or cached normalized video and all 16 checkpoints. Its `--media-output`
-bundle preserves source provenance for reuse. The deployment's `/recording`
-page identifies that source and run. The website job downloads the ready site
-artifact from the same CI run and deploys it without rebuilding or running its
-content. Trusted PRs get previews; main gets production. Historical images,
-timing files, audit notes, and findings retain their historical status.
+`scripts/prepare-site-artifact --normalize-journey` writes a reusable media
+bundle preserving source and run provenance. `--validate-media` checks retained
+evidence. Website sources and deployment live in winnowwallet/website; wallet
+CI no longer prepares or publishes site artifacts. Historical assets and audit
+notes retain their historical status.
 
 Simulator tests do not establish locked-device Keychain enforcement, battery
 life, real-world peer independence, or independent review. Keep those limitations

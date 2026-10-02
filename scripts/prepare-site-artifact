@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a deployable site with fresh, cached, or reviewed reference journey media."""
+"""Normalize and validate wallet journey evidence independently of the website."""
 import argparse
 from datetime import datetime, timezone
 import hashlib
@@ -130,7 +130,7 @@ def validate_media(media, names):
     video = evidence.get("video")
     if not isinstance(video, dict):
         raise ValueError("cached media has no video metadata")
-    # These fields are formatted by build-site's recording page. Reject bad
+    # These fields accompany the retained wallet recording. Reject bad
     # types, bools, NaN and infinity before choosing the cached build path.
     for label, value in [("test_seconds", evidence.get("test_seconds")),
                          ("video.duration_seconds", video.get("duration_seconds"))]:
@@ -156,69 +156,20 @@ def validate_media(media, names):
     return evidence
 
 
-def copy_media(media, destination, names):
-    destination.mkdir(parents=True, exist_ok=True)
-    for name in [VIDEO, MANIFEST, *(f"screenshots/{name}" for name in names)]:
-        target = destination / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(media / name, target)
-
-
-def prepare(output, journey=None, media=None, media_output=None, source_sha=None, run_url=None, root=ROOT):
-    if output.exists() or (media_output and media_output.exists()):
-        raise ValueError("output directories must not already exist")
-    if journey and media:
-        raise ValueError("choose fresh journey or cached media")
-    if media_output and not (journey or media):
-        raise ValueError("media output requires fresh or cached journey media")
-    names = captures(root)
-    with tempfile.TemporaryDirectory(prefix="winnow-site-") as directory:
-        stage = Path(directory)
-        shutil.copytree(root / "docs", stage / "docs")
-        shutil.copytree(root / "UITests", stage / "UITests")
-        if journey:
-            source_sha, run_url = run_identity(source_sha, run_url, root)
-            media = stage / "media"
-            fresh_media(journey, media, names, source_sha, run_url)
-        if media:
-            evidence = validate_media(media, names)
-            copy_media(media, stage / "docs", names)
-            for kind in ["videos", "screenshots"]:
-                (stage / "docs" / kind / "README.md").write_text(
-                    f"# Published journey {kind}\n\n"
-                    f"Source: `{evidence['source_sha']}`. [Successful run]({evidence['run_url']}).\n\n"
-                    "See [recording provenance](/recording) and [media checksums](/journey-provenance.json). "
-                    "A website-only build may reuse this media without changing its original provenance. "
-                    "Other guide illustrations retain their historical repository provenance.\n")
-        subprocess.run([str(ROOT / "scripts/build-site"), "--root", str(stage)], check=True)
-        subprocess.run([str(ROOT / "scripts/check-site"), "--root", str(stage)], check=True)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(stage / "docs", output)
-        if media_output:
-            copy_media(media, media_output, names)
-    print(f"Deployable website: {output}")
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("output", type=Path, nargs="?")
-    choice = parser.add_mutually_exclusive_group()
+    choice = parser.add_mutually_exclusive_group(required=True)
     choice.add_argument("--normalize-journey", type=Path, help="normalize verified journey media without building a website")
-    choice.add_argument("--journey", type=Path, help="successful raw CI journey directory")
-    choice.add_argument("--media", type=Path, help="cached normalized journey-media artifact")
     choice.add_argument("--validate-media", type=Path, help="only validate cached media; do not build or copy")
-    parser.add_argument("--media-output", type=Path, help="also write a reusable normalized media artifact")
+    parser.add_argument("--media-output", type=Path, help="write normalized journey evidence")
     parser.add_argument("--source-sha", help="tested source when replaying a retained journey; defaults to HEAD")
     parser.add_argument("--run-url", help="evidence run when replaying a retained journey; defaults to current CI run")
     args = parser.parse_args(argv)
     if args.validate_media is not None:
-        if any(value is not None for value in [args.output, args.media_output, args.source_sha, args.run_url]):
-            parser.error("--validate-media cannot be combined with output or packaging options")
-    elif args.normalize_journey is not None:
-        if args.output is not None or args.media_output is None:
-            parser.error("--normalize-journey requires --media-output and no website output")
-    elif args.output is None:
-        parser.error("output is required unless --validate-media is used")
+        if any(value is not None for value in [args.media_output, args.source_sha, args.run_url]):
+            parser.error("--validate-media cannot be combined with normalization options")
+    elif args.media_output is None:
+        parser.error("--normalize-journey requires --media-output")
     try:
         if args.normalize_journey is not None:
             names = captures(ROOT)
@@ -231,7 +182,6 @@ def main(argv=None):
             validate_media(args.validate_media, captures(ROOT))
             print(f"Validated cached journey media: {args.validate_media}")
             return
-        prepare(args.output, args.journey, args.media, args.media_output, args.source_sha, args.run_url)
     except (ValueError, OSError, KeyError, subprocess.CalledProcessError) as error:
         raise SystemExit(str(error)) from error
 

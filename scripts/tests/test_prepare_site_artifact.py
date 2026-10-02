@@ -16,13 +16,8 @@ spec = importlib.util.spec_from_loader(loader.name, loader)
 site = importlib.util.module_from_spec(spec)
 loader.exec_module(site)
 
-# the generator owns the checkpoint list the packaged site must carry
-builder_loader = importlib.machinery.SourceFileLoader(
-    "build_site", str(Path(__file__).parents[1] / "build-site"))
-builder = importlib.util.module_from_spec(importlib.util.spec_from_loader(builder_loader.name, builder_loader))
-builder_loader.exec_module(builder)
-CHECKPOINTS = [name for _, shots in builder.ACTS for name, _ in shots]
-
+# Historical checkpoint fixture, validated against capture names independently.
+CHECKPOINTS = ['01-onboarding', '03-receive', '56-home-beginner', '06-send-review', '08-send-confirmed', '09-home-after-send', '35-extra-device-policy', '36-extra-device-review', '37-extra-device-waiting', '39-extra-device-sent', '40-extra-device-confirmed', '26-savings-share', '27-savings-funded', '14-approval-waiting', '15-approval-sent', '28-savings-confirmed']
 
 class SiteArtifactTests(unittest.TestCase):
     def setUp(self):
@@ -70,7 +65,7 @@ class SiteArtifactTests(unittest.TestCase):
     def validate_cli(self, *extra):
         with ExitStack() as stack:
             stack.enter_context(patch.object(site, "ROOT", self.root))
-            for name in ["prepare", "copy_media", "normalize_video", "probe"]:
+            for name in ["normalize_video", "probe"]:
                 stack.enter_context(patch.object(site, name, side_effect=AssertionError(f"must not call {name}")))
             for name in ["run", "check_output"]:
                 stack.enter_context(patch.object(site.subprocess, name, side_effect=AssertionError("no external tools")))
@@ -138,57 +133,6 @@ class SiteArtifactTests(unittest.TestCase):
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
             site.main([])
         self.assertEqual(raised.exception.code, 2)
-
-    def test_cached_package_preserves_media_origin_without_video_tools(self):
-        output, cache = self.base / "site", self.base / "cache"
-        with patch.object(site, "normalize_video", side_effect=AssertionError("must not encode")), \
-             patch.object(site, "probe", side_effect=AssertionError("must not probe")), \
-             patch.dict("os.environ", {"GITHUB_RUN_ID": "999"}):
-            site.prepare(output, media=self.media, media_output=cache, root=self.root)
-        self.assertEqual((output / site.MANIFEST).read_bytes(), (self.media / site.MANIFEST).read_bytes())
-        self.assertEqual((cache / site.MANIFEST).read_bytes(), (self.media / site.MANIFEST).read_bytes())
-        page = (output / "recording.html").read_text()
-        self.assertIn("/actions/runs/123", page)
-        self.assertNotIn("/actions/runs/999", page)
-        self.assertIn("a" * 40, page)
-        self.assertIn('preload="none"', (output / "index.html").read_text())
-        self.assertEqual(page.count("<video "), 1)
-        self.assertIn('<video controls playsinline preload="metadata"', page)
-        self.assertIn(f'<source src="/{site.VIDEO}" type="video/mp4">', page)
-        self.assertNotIn("autoplay", page)
-        self.assertEqual((output / "screenshots/historical.png").read_bytes(), b"historical illustration")
-        self.assertEqual((self.docs / site.VIDEO).read_bytes(), b"reviewed reference video")
-        self.assertFalse((output / "UITests").exists())
-        self.assertFalse((output / "advanced.html").exists())
-        self.assertEqual(len(list((cache / "screenshots").glob("*.png"))), 16)
-
-    def test_reference_package_does_not_claim_a_new_pass(self):
-        output = self.base / "site"
-        site.prepare(output, root=self.root)
-        self.assertEqual((output / site.VIDEO).read_bytes(), b"reviewed reference video")
-        page = (output / "recording.html").read_text()
-        self.assertIn("does not claim a new integration run", page)
-        self.assertEqual(page.count("<video "), 1)
-        self.assertIn('preload="none"', (output / "index.html").read_text())
-        self.assertFalse((output / site.MANIFEST).exists())
-
-    def test_missing_section_link_prevents_publication(self):
-        (self.docs / "privacy.html").write_text('<a href="/#retired-section">Old guide</a>')
-        with self.assertRaises(subprocess.CalledProcessError):
-            site.prepare(self.base / "site", root=self.root)
-
-    def test_local_and_cross_page_section_links_are_supported(self):
-        (self.docs / "privacy.html").write_text(
-            '<h1 id="privacy">Privacy</h1><a href="#privacy">Here</a>'
-            '<a href="vaults#two%20keys">Shared</a>')
-        (self.docs / "vaults.html").write_text('<h1 id="two keys">Two keys</h1>')
-        site.prepare(self.base / "site", root=self.root)
-
-    def test_existing_output_is_not_overwritten(self):
-        output = self.base / "site"
-        output.mkdir()
-        with self.assertRaisesRegex(ValueError, "must not already exist"):
-            site.prepare(output, root=self.root)
 
     def test_tampered_cached_image_is_rejected(self):
         (self.media / "screenshots" / self.names[0]).write_bytes(b"changed")
@@ -262,8 +206,7 @@ class NormalizeOnlyTests(unittest.TestCase):
         def encode(source,destination):
             destination.write_bytes((self.media/site.VIDEO).read_bytes())
             return self.evidence['video'],self.evidence['video']
-        with patch.object(site,'ROOT',self.root), patch.object(site,'normalize_video',side_effect=encode) as encoder, \
-             patch.object(site,'prepare',side_effect=AssertionError('must not build website')):
+        with patch.object(site,'ROOT',self.root), patch.object(site,'normalize_video',side_effect=encode) as encoder:
             site.main(['--normalize-journey',str(journey),'--media-output',str(output),
                        '--source-sha','a'*40,'--run-url',self.evidence['run_url']])
             encoder.assert_called_once()

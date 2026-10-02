@@ -26,31 +26,24 @@ class SecretBoundaryTests(unittest.TestCase):
                     with self.subTest(workflow=name, job=job):
                         self.assertNotRegex(body, r'\bsecrets\s*[:.]')
 
-    def test_only_deployment_receives_named_cloudflare_secrets(self):
+    def test_wallet_ci_has_no_deployment_secrets(self):
         caller = (ROOT/'ci.yml').read_text()
-        self.assertNotRegex(caller, r'secrets:\s*inherit')
-        receivers = {name for name, body in jobs(caller).items() if re.search(r'\bsecrets\s*[:.]', body)}
-        self.assertEqual(receivers, {'website'})
-        self.assertEqual(set(re.findall(r'secrets\.([A-Z_]+)', caller)), {'CF_API_TOKEN', 'CF_ACCOUNT_ID'})
-        deployment = jobs(caller)['website']
-        self.assertIn('uses: ./.github/workflows/site.yml', deployment)
-        self.assertNotIn('runs-on:', deployment)
+        self.assertNotRegex(caller, r'\bsecrets\s*[:.]')
+        self.assertNotIn('website', jobs(caller))
+        self.assertFalse((ROOT/'site.yml').exists())
 
 
 class AggregateGateTests(unittest.TestCase):
-    def test_failed_cancelled_or_unexpectedly_skipped_deployment_blocks_gate(self):
+    def test_wallet_gate_requires_exactly_one_successful_lane(self):
         import itertools
         import os
         import subprocess
         import textwrap
         script = textwrap.dedent(jobs((ROOT/'ci.yml').read_text())['validation'].split('run: |\n', 1)[1])
         statuses = ('success', 'skipped', 'failure', 'cancelled')
-        for hosted, tdx, website, deploy in itertools.product(statuses, statuses, statuses, ('true', 'false')):
-            expected = ((hosted, tdx) in [('success', 'skipped'), ('skipped', 'success')]
-                        and website == ('success' if deploy == 'true' else 'skipped'))
-            with self.subTest(hosted=hosted, tdx=tdx, website=website, deploy=deploy):
+        for hosted, tdx in itertools.product(statuses, statuses):
+            expected = (hosted, tdx) in [('success', 'skipped'), ('skipped', 'success')]
+            with self.subTest(hosted=hosted, tdx=tdx):
                 result = subprocess.run(['bash', '-e', '-c', script],
-                                        env={**os.environ, 'HOSTED': hosted, 'TDX': tdx,
-                                             'WEBSITE': website, 'DEPLOY': deploy},
-                                        capture_output=True)
+                                        env={**os.environ, 'HOSTED': hosted, 'TDX': tdx}, capture_output=True)
                 self.assertEqual(result.returncode == 0, expected)

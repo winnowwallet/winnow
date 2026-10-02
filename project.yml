@@ -51,7 +51,7 @@ targets:
         excludes: ["README.md"]
       # Design papers, bundled so Settings can render them offline (the
       # esplora opt-in warning links the read-side paper). These are the same
-      # files the website serves; site.css rides along so they keep their type.
+      # offline snapshots of the public guides; site.css preserves their type.
       - path: docs/site.css
         buildPhase: resources
       - path: docs/mobile.html
