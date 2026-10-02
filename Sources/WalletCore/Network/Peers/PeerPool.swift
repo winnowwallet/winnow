@@ -638,11 +638,8 @@ public actor PeerPool {
         await replenish()
     }
 
-    /// Races up to `maxParallelDials` candidates at a time (each with the
-    /// short `dialTimeout`) until the pool is full or the round's candidates
-    /// — capped at `maxDialAttempts` — are used up. Once full, close surplus
-    /// connections before draining the race: their timeouts must not delay
-    /// callers that are waiting to begin sync.
+    /// One discovery round: race candidates until the pool is full or they
+    /// run out, then evict peers on a stale tip and refill their slots.
     private func replenish() async {
         guard started, !replenishing, peers.count < peerCount else { return }
         replenishing = true
@@ -657,9 +654,28 @@ public actor PeerPool {
         // Cooling endpoints are skipped, not rejected: they come back into the
         // queue on a later round once their timer expires (#82).
         let excluded = Set(peers.map(\.endpoint)).union(rejectedForSession).union(coolingEndpoints)
-        var queue = localCandidates(excluding: excluded)
+        let local = localCandidates(excluding: excluded)
+        await raceDials(local, seen: excluded.union(local.map(\.endpoint)))
+        // Judged after the round against the last validated tip, so a stale
+        // peer that raced in ahead of honest ones does not keep its seat.
+        let evicted = await evictStaleTips()
+        exhausted = peers.count < peerCount
+        if !evicted.isEmpty, started {
+            // Refill the slots just freed. `replenishing` is still set here,
+            // so the follow-up runs after this round has fully returned.
+            Task { await self.pruneAndReplenish() }
+        }
+    }
+
+    /// Races up to `maxParallelDials` candidates at a time (each with the
+    /// short `dialTimeout`) until the pool is full or the round's candidates
+    /// — capped at `maxDialAttempts` — are used up. Once full, close surplus
+    /// connections before draining the race: their timeouts must not delay
+    /// callers that are waiting to begin sync.
+    private func raceDials(_ local: [PeerCandidate], seen: Set<PeerEndpoint>) async {
+        var queue = local
         var resolvedSeeds = false
-        var seen = excluded.union(queue.map(\.endpoint))
+        var seen = seen
         var next = 0
         await withTaskGroup(of: DiscoveryResult.self) { group in
             var running = 0
@@ -672,22 +688,14 @@ public actor PeerPool {
                 // results. Local peers still get the first dial slots.
                 if next >= queue.count && !resolvedSeeds && (running == 0 || manualPeers.isEmpty) {
                     resolvedSeeds = true
-                    for seed in (gateways.isValid && gateways.networks.contains(.clearnet) ? params.dnsSeeds.shuffled() : []) {
-                        seedLookups += 1
-                        group.addTask { [seedResolver, params] in
-                            .seeds(await seedResolver.resolve(host: seed,
-                                port: params.defaultPort,
-                                allowPrivate: params.allowsPrivateSeedAddresses))
-                        }
-                    }
+                    launchSeedLookups(counting: &seedLookups, into: &group)
                 }
                 guard running > 0 || seedLookups > 0,
                       let result = await group.next() else { break }
                 switch result {
                 case let .seeds(endpoints):
                     seedLookups -= 1
-                    queue += endpoints.filter { gateways.permits($0) && seen.insert($0).inserted }
-                        .map { PeerCandidate(endpoint: $0, source: .dnsSeed) }
+                    queue += seedCandidates(endpoints, seen: &seen)
                 case let .dial(endpoint, dialed):
                     running -= 1
                     inFlight.removeValue(forKey: endpoint)
@@ -698,15 +706,27 @@ public actor PeerPool {
             }
             await cancelSurplusDiscovery(in: &group)
         }
-        // Judged after the round against the last validated tip, so a stale
-        // peer that raced in ahead of honest ones does not keep its seat.
-        let evicted = await evictStaleTips()
-        exhausted = peers.count < peerCount
-        if !evicted.isEmpty, started {
-            // Refill the slots just freed. `replenishing` is still set here,
-            // so the follow-up runs after this round has fully returned.
-            Task { await self.pruneAndReplenish() }
+    }
+
+    /// Starts one lookup per DNS seed, in random order, when clearnet is
+    /// allowed. Each answer arrives in the race as a `.seeds` result.
+    private func launchSeedLookups(counting lookups: inout Int,
+                                   into group: inout TaskGroup<DiscoveryResult>) {
+        for seed in (gateways.isValid && gateways.networks.contains(.clearnet) ? params.dnsSeeds.shuffled() : []) {
+            lookups += 1
+            group.addTask { [seedResolver, params] in
+                .seeds(await seedResolver.resolve(host: seed,
+                    port: params.defaultPort,
+                    allowPrivate: params.allowsPrivateSeedAddresses))
+            }
         }
+    }
+
+    /// A seed's answers that this round may dial: permitted by the gateways
+    /// and not already queued, connected or excluded.
+    private func seedCandidates(_ endpoints: [PeerEndpoint], seen: inout Set<PeerEndpoint>) -> [PeerCandidate] {
+        endpoints.filter { gateways.permits($0) && seen.insert($0).inserted }
+            .map { PeerCandidate(endpoint: $0, source: .dnsSeed) }
     }
 
     /// Disconnect resumes pending handshake continuations immediately;

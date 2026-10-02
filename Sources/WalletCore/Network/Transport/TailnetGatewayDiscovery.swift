@@ -128,30 +128,12 @@ struct GatewayDNSQuery {
         guard bytes.count >= 12, word(0) == Int(id), word(2) & 0xfa0f == 0x8000,
               word(4) == 1, word(6) <= 16 else { return [] }
         var cursor = 12
-        func name(_ cursor: inout Int) -> String? {
-            var at = cursor, end: Int?, labels: [String] = [], visited = Set<Int>()
-            while at < bytes.count, visited.insert(at).inserted, visited.count <= 16 {
-                let count = Int(bytes[at])
-                if count == 0 { cursor = end ?? (at + 1); return labels.joined(separator: ".").lowercased() }
-                if count & 0xc0 == 0xc0 {
-                    guard at + 1 < bytes.count else { return nil }
-                    let target = (count & 0x3f) << 8 | Int(bytes[at + 1])
-                    guard target >= 12, target < at else { return nil }
-                    end = end ?? (at + 2); at = target
-                } else {
-                    guard count <= 63, at + 1 + count < bytes.count else { return nil }
-                    labels.append(String(decoding: bytes[(at + 1)..<(at + 1 + count)], as: UTF8.self))
-                    at += count + 1
-                }
-            }
-            return nil
-        }
-        guard name(&cursor) == host, cursor + 4 <= bytes.count,
+        guard Self.name(in: bytes, at: &cursor) == host, cursor + 4 <= bytes.count,
               word(cursor) == 1, word(cursor + 2) == 1 else { return [] }
         cursor += 4
         var result: [String] = []
         for _ in 0..<word(6) {
-            guard let owner = name(&cursor), cursor + 10 <= bytes.count else { return [] }
+            guard let owner = Self.name(in: bytes, at: &cursor), cursor + 10 <= bytes.count else { return [] }
             let type = word(cursor), klass = word(cursor + 2), length = word(cursor + 8)
             cursor += 10
             guard cursor + length <= bytes.count else { return [] }
@@ -161,5 +143,27 @@ struct GatewayDNSQuery {
             cursor += length
         }
         return result.filter(TailnetGatewayDiscovery.isTailnetIPv4)
+    }
+
+    /// The lowercased name at `cursor`, moving `cursor` past it. Compression
+    /// pointers may only point back into the message body, and at most 16
+    /// labels and pointers are followed, so a pointer loop is refused.
+    private static func name(in bytes: [UInt8], at cursor: inout Int) -> String? {
+        var at = cursor, end: Int?, labels: [String] = [], visited = Set<Int>()
+        while at < bytes.count, visited.insert(at).inserted, visited.count <= 16 {
+            let count = Int(bytes[at])
+            if count == 0 { cursor = end ?? (at + 1); return labels.joined(separator: ".").lowercased() }
+            if count & 0xc0 == 0xc0 {
+                guard at + 1 < bytes.count else { return nil }
+                let target = (count & 0x3f) << 8 | Int(bytes[at + 1])
+                guard target >= 12, target < at else { return nil }
+                end = end ?? (at + 2); at = target
+            } else {
+                guard count <= 63, at + 1 + count < bytes.count else { return nil }
+                labels.append(String(decoding: bytes[(at + 1)..<(at + 1 + count)], as: UTF8.self))
+                at += count + 1
+            }
+        }
+        return nil
     }
 }

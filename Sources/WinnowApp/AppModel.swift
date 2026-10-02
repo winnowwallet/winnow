@@ -912,6 +912,12 @@ final class AppModel {
         }
     }
 
+    /// A stack build begun in `epoch` is still wanted: no suspend, network
+    /// switch or rebuild since, and the app is active or running a background check.
+    private func stackStillWanted(since epoch: UInt64) -> Bool {
+        epoch == networkGeneration && (isActive || backgroundRunning)
+    }
+
     private func buildStackIfNeeded() async {
         guard stack == nil, let dir = storageDirectory() else { return }
         if buildingStack {
@@ -924,7 +930,7 @@ final class AppModel {
         // Wallet creation/import can request the stack before activation has
         // finished. Every entry point must wait for the same routing decision.
         await preparePeerGateways()
-        guard epoch == networkGeneration, isActive || backgroundRunning, !Task.isCancelled else { return }
+        guard stackStillWanted(since: epoch), !Task.isCancelled else { return }
         do {
             let params = networkParamsOverride ?? e2e?.networkParams ?? NetworkParams.params(for: network)
             // relayPreference: peers inv us relayed transactions so bounded
@@ -941,7 +947,7 @@ final class AppModel {
             let chain = try await Task.detached(priority: .userInitiated) {
                 try Self.openOrRebuildChain(params: params, storageURL: headersURL, start: start)
             }.value
-            guard epoch == networkGeneration, isActive || backgroundRunning else { await pool.stop(); return }
+            guard stackStillWanted(since: epoch) else { await pool.stop(); return }
             let broadcaster = try makeBroadcaster(
                 pool: pool, storageURL: dir.appending(path: "broadcast.json"))
             var newStack = SyncStack(pool: pool, chain: chain, filters: nil, broadcaster: broadcaster)
@@ -949,7 +955,7 @@ final class AppModel {
                 newStack.filters = try await makeFilterSync(pool: pool, chain: chain,
                                                             startHeight: wallet.nextScanHeight)
             }
-            guard epoch == networkGeneration, isActive || backgroundRunning else {
+            guard stackStillWanted(since: epoch) else {
                 await pool.stop(); await broadcaster.shutdown(); return
             }
             stack = newStack
