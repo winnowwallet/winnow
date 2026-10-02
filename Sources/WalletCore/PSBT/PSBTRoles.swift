@@ -400,16 +400,7 @@ extension PSBT {
                 witnesses.append(try validatedKeyPathWitness(
                     input: index, signature: signature, tx: tx, spentOutputs: spentOutputs))
             } else if !inputs[index].tapLeafScripts.isEmpty {
-                var witness: [Data]?
-                for leaf in inputs[index].tapLeafScripts {
-                    witness = try finalizedScriptPathWitness(input: index, leaf: leaf,
-                                                             tx: tx, spentOutputs: spentOutputs)
-                    if witness != nil { break }
-                }
-                guard let witness else {
-                    throw PSBTError.missingField("input \(index) tap script sigs below threshold")
-                }
-                witnesses.append(witness)
+                witnesses.append(try scriptPathWitness(input: index, tx: tx, spentOutputs: spentOutputs))
             } else {
                 throw PSBTError.missingField("input \(index) tap key sig")
             }
@@ -461,6 +452,22 @@ extension PSBT {
             throw PSBTError.malformed("input \(index) invalid tap key signature")
         }
         return [signature]
+    }
+
+    /// The witness from the first of the input's tap leaves that finalizes.
+    /// When none does, its script signatures are reported below threshold.
+    private func scriptPathWitness(input index: Int, tx: Transaction,
+                                   spentOutputs: [SighashBIP341.SpentOutput]) throws -> [Data] {
+        var witness: [Data]?
+        for leaf in inputs[index].tapLeafScripts {
+            witness = try finalizedScriptPathWitness(input: index, leaf: leaf,
+                                                     tx: tx, spentOutputs: spentOutputs)
+            if witness != nil { break }
+        }
+        guard let witness else {
+            throw PSBTError.missingField("input \(index) tap script sigs below threshold")
+        }
+        return witness
     }
 
     /// The BIP387 witness for one multi_a leaf, or nil when fewer valid

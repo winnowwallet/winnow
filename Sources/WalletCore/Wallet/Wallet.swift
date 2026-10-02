@@ -471,45 +471,50 @@ public struct WalletState: Codable, Equatable, Sendable {
         recoveryReservations = try container.decodeIfPresent([RecoverySpendReservation].self,
                                                              forKey: .recoveryReservations) ?? []
         try validateReservations()
-
-        func validateCoins(_ coins: [WalletUTXO], key: CodingKeys, countingTotal: Bool = true) throws {
-            var seen = Set<Transaction.Outpoint>()
-            var total: Int64 = 0
-            for coin in coins {
-                guard coin.txid.count == 32,
-                      !coin.scriptPubKey.isEmpty,
-                      coin.amount > 0,
-                      coin.amount <= BitcoinAmount.maximum,
-                      coin.spent.map({ $0.spentBy.count == 32 }) ?? true,
-                      seen.insert(coin.outpoint).inserted
-                else {
-                    throw DecodingError.dataCorruptedError(
-                        forKey: key, in: container,
-                        debugDescription: "invalid or duplicate wallet coin")
-                }
-                guard countingTotal else { continue }
-                let (next, overflow) = total.addingReportingOverflow(coin.amount)
-                guard !overflow, next <= BitcoinAmount.maximum else {
-                    throw DecodingError.dataCorruptedError(
-                        forKey: key, in: container,
-                        debugDescription: "wallet coin total exceeds Bitcoin's monetary range")
-                }
-                total = next
-            }
-        }
         // Every row, tombstones included: `rollBack` turns a spent row back
         // into a live coin, so a tampered marker must not load at all. The
         // monetary total is a property of the live coins only.
-        try validateCoins(allUtxos, key: .utxos, countingTotal: false)
-        try validateCoins(utxos, key: .utxos)
+        try Self.validateCoins(allUtxos, key: .utxos, countingTotal: false, in: container)
+        try Self.validateCoins(utxos, key: .utxos, in: container)
         for pending in pendingSends {
-            try validateCoins(pending.selected, key: .pendingSends)
+            try Self.validateCoins(pending.selected, key: .pendingSends, in: container)
             guard pending.fee >= 0, pending.fee <= BitcoinAmount.maximum else {
                 throw DecodingError.dataCorruptedError(
                     forKey: .pendingSends, in: container,
                     debugDescription: "pending transaction has an invalid fee")
             }
         }
+        try validateHistory(in: container)
+    }
+
+    private static func validateCoins(_ coins: [WalletUTXO], key: CodingKeys, countingTotal: Bool = true,
+                                      in container: KeyedDecodingContainer<CodingKeys>) throws {
+        var seen = Set<Transaction.Outpoint>()
+        var total: Int64 = 0
+        for coin in coins {
+            guard coin.txid.count == 32,
+                  !coin.scriptPubKey.isEmpty,
+                  coin.amount > 0,
+                  coin.amount <= BitcoinAmount.maximum,
+                  coin.spent.map({ $0.spentBy.count == 32 }) ?? true,
+                  seen.insert(coin.outpoint).inserted
+            else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: key, in: container,
+                    debugDescription: "invalid or duplicate wallet coin")
+            }
+            guard countingTotal else { continue }
+            let (next, overflow) = total.addingReportingOverflow(coin.amount)
+            guard !overflow, next <= BitcoinAmount.maximum else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: key, in: container,
+                    debugDescription: "wallet coin total exceeds Bitcoin's monetary range")
+            }
+            total = next
+        }
+    }
+
+    private func validateHistory(in container: KeyedDecodingContainer<CodingKeys>) throws {
         guard history.allSatisfy({ entry in
             entry.txid.count == 32
                 && (0 ... BitcoinAmount.maximum).contains(entry.received)
@@ -942,10 +947,7 @@ public actor Wallet {
             if let conflictingTxid = conflictingPending?.txid {
                 effect.discardedReplacements.append(conflictingTxid)
             }
-            let isCoinbase = tx.inputs.first.map {
-                $0.previousOutput.txid == Data(repeating: 0, count: 32)
-                    && $0.previousOutput.vout == 0xFFFF_FFFF
-            } ?? false
+            let isCoinbase = Self.isCoinbase(tx)
             var spentAmount: Int64 = 0
             var allInputsOurs = !isCoinbase && !tx.inputs.isEmpty
             if !isCoinbase {
@@ -979,6 +981,14 @@ public actor Wallet {
         try persist()
         committed = true
         return effect
+    }
+
+    /// A coinbase spends the null outpoint: an all-zero txid and index 0xFFFFFFFF.
+    private static func isCoinbase(_ tx: Transaction) -> Bool {
+        tx.inputs.first.map {
+            $0.previousOutput.txid == Data(repeating: 0, count: 32)
+                && $0.previousOutput.vout == 0xFFFF_FFFF
+        } ?? false
     }
 
     /// Confirms the transaction into history — updating a known pending send

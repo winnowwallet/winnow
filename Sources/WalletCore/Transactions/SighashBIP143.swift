@@ -19,35 +19,57 @@ public enum SighashBIP143 {
         guard tx.inputs.allSatisfy({ $0.previousOutput.txid.count == 32 }) else { throw Error.invalidOutpoint }
         let mode = hashType.rawValue & 0x1f
         let anyone = hashType.rawValue & 0x80 != 0
-        let zero = Data(repeating: 0, count: 32)
-        var prevouts = Data(), sequences = Data(), outputs = Data()
-        for input in tx.inputs {
-            prevouts.append(input.previousOutput.txid)
-            prevouts.appendUInt32(input.previousOutput.vout)
-            sequences.appendUInt32(input.sequence)
-        }
-        if mode == 1 {
-            for output in tx.outputs { append(output, to: &outputs) }
-        } else if mode == 3, tx.outputs.indices.contains(inputIndex) {
-            append(tx.outputs[inputIndex], to: &outputs)
-        }
         let input = tx.inputs[inputIndex]
         var message = Data()
         message.appendInt32(tx.version)
-        message.append(anyone ? zero : SHA256d.hash(prevouts))
-        message.append(anyone || mode == 2 || mode == 3 ? zero : SHA256d.hash(sequences))
+        message.append(hashPrevouts(tx, anyoneCanPay: anyone))
+        message.append(hashSequence(tx, anyoneCanPay: anyone, mode: mode))
         message.append(input.previousOutput.txid)
         message.appendUInt32(input.previousOutput.vout)
         message.appendVarData(scriptCode)
         message.appendInt64(value)
         message.appendUInt32(input.sequence)
-        // Unlike legacy sighash, SINGLE without a matching output uses zero
-        // hashOutputs, not the historical uint256::ONE result.
-        message.append(mode == 1 || (mode == 3 && tx.outputs.indices.contains(inputIndex))
-                       ? SHA256d.hash(outputs) : zero)
+        message.append(hashOutputs(tx, inputIndex: inputIndex, mode: mode))
         message.appendUInt32(tx.locktime)
         message.appendUInt32(hashType.rawValue)
         return SHA256d.hash(message)
+    }
+
+    private static let zero = Data(repeating: 0, count: 32)
+
+    /// hashPrevouts: every input's outpoint, or zero with ANYONECANPAY.
+    private static func hashPrevouts(_ tx: Transaction, anyoneCanPay: Bool) -> Data {
+        if anyoneCanPay { return zero }
+        var prevouts = Data()
+        for input in tx.inputs {
+            prevouts.append(input.previousOutput.txid)
+            prevouts.appendUInt32(input.previousOutput.vout)
+        }
+        return SHA256d.hash(prevouts)
+    }
+
+    /// hashSequence: every input's nSequence, or zero with ANYONECANPAY,
+    /// SINGLE or NONE.
+    private static func hashSequence(_ tx: Transaction, anyoneCanPay: Bool, mode: UInt32) -> Data {
+        if anyoneCanPay || mode == 2 || mode == 3 { return zero }
+        var sequences = Data()
+        for input in tx.inputs { sequences.appendUInt32(input.sequence) }
+        return SHA256d.hash(sequences)
+    }
+
+    /// hashOutputs: every output with ALL, only the output at the input's
+    /// index with SINGLE, and zero otherwise. Unlike legacy sighash, SINGLE
+    /// without a matching output uses zero, not the historical uint256::ONE.
+    private static func hashOutputs(_ tx: Transaction, inputIndex: Int, mode: UInt32) -> Data {
+        var outputs = Data()
+        if mode == 1 {
+            for output in tx.outputs { append(output, to: &outputs) }
+        } else if mode == 3, tx.outputs.indices.contains(inputIndex) {
+            append(tx.outputs[inputIndex], to: &outputs)
+        } else {
+            return zero
+        }
+        return SHA256d.hash(outputs)
     }
 
     private static func append(_ output: Transaction.Output, to data: inout Data) {

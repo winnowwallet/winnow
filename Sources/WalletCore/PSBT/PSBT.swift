@@ -686,54 +686,14 @@ public struct PSBT: Equatable, Sendable {
         let magic = try reader.readBytes(5)
         guard magic == Data([0x70, 0x73, 0x62, 0x74, 0xFF]) else { throw PSBTError.invalidMagic }
 
-        func readMap() throws -> [KeyValue] {
-            var pairs: [KeyValue] = []
-            var seenKeys = Set<Data>()
-            while true {
-                let keyLength = try reader.readVarInt()
-                guard keyLength > 0 else {
-                    // PSBT maps are unordered on the wire. Normalize once at
-                    // the boundary so equality, review snapshots, and later
-                    // mutation do not depend on an attacker's field order.
-                    return pairs.sorted { $0.key.lexicographicallyPrecedes($1.key) }
-                }
-                guard pairs.count < Self.maxMapPairs else {
-                    throw PSBTError.malformed("map exceeds \(Self.maxMapPairs) fields")
-                }
-                guard keyLength <= UInt64(Self.maxMapKeySize),
-                      keyLength <= UInt64(reader.remaining)
-                else { throw PSBTError.malformed("map key length \(keyLength) is out of bounds") }
-                let key = try reader.readBytes(Int(keyLength))
-                let valueLength = try reader.readVarInt()
-                guard valueLength <= UInt64(reader.remaining) else {
-                    throw PSBTError.malformed("map value length \(valueLength) is out of bounds")
-                }
-                let value = try reader.readBytes(Int(valueLength))
-                guard seenKeys.insert(key).inserted else { throw PSBTError.duplicateKey(key) }
-                pairs.append(KeyValue(key: key, value: value))
-            }
-        }
-
-        let globals = try readMap()
-        func global(_ type: UInt8) -> KeyValue? { globals.first { $0.type == type } }
+        let globals = try Self.readMap(&reader)
         let unsigned = try Self.unsignedV0Transaction(globals: globals)
-
-        func count(_ type: UInt8) throws -> Int {
-            guard let pair = global(type) else { throw PSBTError.missingField("global \(type)") }
-            var valueReader = ByteReader(pair.value)
-            let count = try valueReader.readVarInt()
-            try valueReader.requireEnd()
-            guard count <= UInt64(Self.maxInputOutputCount) else {
-                throw PSBTError.malformed("input/output count \(count) exceeds \(Self.maxInputOutputCount)")
-            }
-            return Int(count)
-        }
-        let inputCount = try unsigned?.inputs.count ?? count(GlobalType.inputCount)
-        let outputCount = try unsigned?.outputs.count ?? count(GlobalType.outputCount)
+        let inputCount = try unsigned?.inputs.count ?? Self.count(GlobalType.inputCount, in: globals)
+        let outputCount = try unsigned?.outputs.count ?? Self.count(GlobalType.outputCount, in: globals)
         var inputs: [Input] = []
         var outputs: [Output] = []
-        for _ in 0 ..< inputCount { inputs.append(Input(pairs: try readMap())) }
-        for _ in 0 ..< outputCount { outputs.append(Output(pairs: try readMap())) }
+        for _ in 0 ..< inputCount { inputs.append(Input(pairs: try Self.readMap(&reader))) }
+        for _ in 0 ..< outputCount { outputs.append(Output(pairs: try Self.readMap(&reader))) }
         try reader.requireEnd()
         try Self.validateKnownFields(globals: globals, inputs: inputs, outputs: outputs)
         if let unsigned {
@@ -741,6 +701,49 @@ public struct PSBT: Equatable, Sendable {
         } else {
             self.init(globals: globals, inputs: inputs, outputs: outputs)
         }
+    }
+
+    /// One key-value map: pairs up to the zero-length key that ends it.
+    private static func readMap(_ reader: inout ByteReader) throws -> [KeyValue] {
+        var pairs: [KeyValue] = []
+        var seenKeys = Set<Data>()
+        while true {
+            let keyLength = try reader.readVarInt()
+            guard keyLength > 0 else {
+                // PSBT maps are unordered on the wire. Normalize once at
+                // the boundary so equality, review snapshots, and later
+                // mutation do not depend on an attacker's field order.
+                return pairs.sorted { $0.key.lexicographicallyPrecedes($1.key) }
+            }
+            guard pairs.count < Self.maxMapPairs else {
+                throw PSBTError.malformed("map exceeds \(Self.maxMapPairs) fields")
+            }
+            guard keyLength <= UInt64(Self.maxMapKeySize),
+                  keyLength <= UInt64(reader.remaining)
+            else { throw PSBTError.malformed("map key length \(keyLength) is out of bounds") }
+            let key = try reader.readBytes(Int(keyLength))
+            let valueLength = try reader.readVarInt()
+            guard valueLength <= UInt64(reader.remaining) else {
+                throw PSBTError.malformed("map value length \(valueLength) is out of bounds")
+            }
+            let value = try reader.readBytes(Int(valueLength))
+            guard seenKeys.insert(key).inserted else { throw PSBTError.duplicateKey(key) }
+            pairs.append(KeyValue(key: key, value: value))
+        }
+    }
+
+    /// PSBT_GLOBAL_INPUT_COUNT or PSBT_GLOBAL_OUTPUT_COUNT (BIP370).
+    private static func count(_ type: UInt8, in globals: [KeyValue]) throws -> Int {
+        guard let pair = globals.first(where: { $0.type == type }) else {
+            throw PSBTError.missingField("global \(type)")
+        }
+        var valueReader = ByteReader(pair.value)
+        let count = try valueReader.readVarInt()
+        try valueReader.requireEnd()
+        guard count <= UInt64(Self.maxInputOutputCount) else {
+            throw PSBTError.malformed("input/output count \(count) exceeds \(Self.maxInputOutputCount)")
+        }
+        return Int(count)
     }
 
     private static func unsignedV0Transaction(globals: [KeyValue]) throws -> Transaction? {
