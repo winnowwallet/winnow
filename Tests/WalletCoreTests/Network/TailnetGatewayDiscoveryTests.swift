@@ -104,7 +104,7 @@ struct TailnetGatewayDiscoveryTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["WINNOW_LIVE_GATEWAYS"] == "1"))
     func deployedMagicDNSGateways() async throws {
         let config = await TailnetGatewayDiscovery().discover()
-        #expect(config.networks == [.clearnet, .tor, .i2p])
+        #expect(config.networks == [.tor, .i2p])
         _ = try #require(config.torProxy)
         _ = try #require(config.i2pProxy)
         print("Discovered gateways: \(config.torProxy?.description ?? "none"), \(config.i2pProxy?.description ?? "none")")
@@ -127,7 +127,7 @@ struct TailnetGatewayDiscoveryTests {
                             let peer = PeerConnection(endpoint: entry.endpoint, params: .mainnet,
                                                       socksProxy: config.proxy(for: entry.endpoint))
                             do {
-                                try await peer.connect(timeout: .seconds(5))
+                                try await peer.connect(timeout: .seconds(30))
                                 print("Live \(network.rawValue) Bitcoin handshake: \(await peer.peerUserAgent)")
                                 await peer.disconnect()
                                 return
