@@ -13,4 +13,4 @@ if [ $# -gt 1 ]; then
 fi
 export WINNOW_LIVE_GATEWAYS=1
 if [ $# -eq 1 ]; then export WINNOW_LIVE_CENSUS="$1"; fi
-exec swift test --filter TailnetGatewayDiscoveryTests.deployedMagicDNSGateways
+exec swift test --filter LiveOverlayTests.deployedMagicDNSGateways
