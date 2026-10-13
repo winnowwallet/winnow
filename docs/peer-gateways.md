@@ -83,5 +83,11 @@ handshakes through both gateways. The check sends no wallet addresses or
 transactions. CI has no tailnet, so this check is manual; the
 [2026-09-29 run](security/evidence/live-gateways-2026-09-29.md) is recorded.
 
+Every night the [live-overlays workflow](../.github/workflows/live-overlays.yml)
+starts Tor and i2pd on a GitHub runner and runs the same mirror check, then
+handshakes with a Tor peer and an I2P peer from the census it downloaded. That
+shows the wallet's Tor and I2P routing works on the live networks and that the
+mirror is current and signed. It says nothing about the deployed gateways.
+
 A successful greeting is not proof of Tor/I2P reachability. A physical iPhone
 with the Tailscale VPN enabled remains part of device acceptance testing.

@@ -54,3 +54,8 @@ Inspect the exact run and test-step conclusions; reused media is not fresh test 
 journey and validates retained evidence without website dependencies. Public
 site sources and deployment live in
 [winnowwallet/website](https://github.com/winnowwallet/website).
+
+[live-overlays.yml](live-overlays.yml) runs nightly on `macos-26` with no secrets.
+It starts Tor and i2pd on the runner, fetches the census from its I2P mirror,
+checks the signature and completes a Bitcoin handshake over each network. The
+deployed tailnet gateways remain a manual check, `scripts/check-live-gateways`.

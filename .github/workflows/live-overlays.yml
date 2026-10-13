@@ -1,0 +1,101 @@
+name: Live Tor and I2P
+
+# Nightly, read-only, and with no tailnet: Tor and i2pd run on the runner, the
+# census comes from its I2P mirror and must carry the publisher's signature,
+# and a Tor peer and an I2P peer from it must complete a Bitcoin handshake.
+# Sends no wallet addresses or transactions. The deployed tailnet gateways are
+# checked by hand with scripts/check-live-gateways.
+
+on:
+  schedule:
+    - cron: "41 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-overlays
+  cancel-in-progress: false
+
+jobs:
+  routers:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Start Tor and an I2P router
+        # Started before the build so they bootstrap while it compiles, in
+        # throwaway data directories under the runner's temp.
+        run: |
+          brew install tor i2pd > /dev/null 2>&1 || brew install tor i2pd
+          mkdir -p "$RUNNER_TEMP/tor" "$RUNNER_TEMP/i2pd"
+          chmod 700 "$RUNNER_TEMP/tor"
+          nohup tor --SocksPort 9050 --DataDirectory "$RUNNER_TEMP/tor" --ClientOnly 1 \
+            --Log "notice file $RUNNER_TEMP/tor.log" > /dev/null 2>&1 &
+          nohup i2pd --datadir="$RUNNER_TEMP/i2pd" --socksproxy.enabled=true --socksproxy.port=4447 \
+            --httpproxy.enabled=false --sam.enabled=false --i2pcontrol.enabled=false \
+            --http.enabled=true --http.port=7071 --log=file --logfile="$RUNNER_TEMP/i2pd.log" \
+            --loglevel=warn > /dev/null 2>&1 &
+
+      - name: Build the tests
+        run: swift build --build-tests
+
+      - name: Wait for both routers
+        # The census job's readiness marks: a listening SOCKS port is not
+        # readiness, only Tor's bootstrap line and i2pd's router count and
+        # tunnel success rate are. On these runners Tor has taken one to ten
+        # minutes and i2pd about ten. An i2pd a little short of its marks can
+        # still reach the mirror, so the test decides.
+        run: |
+          tor_ok=0; i2p_ok=0; rate=""; routers=""
+          for i in $(seq 1 180); do
+            if [ "$tor_ok" = 0 ] && grep -q 'Bootstrapped 100%' "$RUNNER_TEMP/tor.log" 2>/dev/null; then
+              tor_ok=1; echo "tor: bootstrapped"
+            fi
+            if [ "$i2p_ok" = 0 ]; then
+              page=$(curl -s --max-time 5 http://127.0.0.1:7071/ | sed 's/<[^>]*>/ /g' | tr -s ' \n' || true)
+              rate=$(echo "$page" | grep -oE 'Tunnel creation success rate: *[0-9]+' | grep -oE '[0-9]+$' || true)
+              routers=$(echo "$page" | grep -oE 'Routers: *[0-9]+' | grep -oE '[0-9]+$' || true)
+              if [ "${rate:-0}" -ge 40 ] && [ "${routers:-0}" -ge 300 ]; then
+                i2p_ok=1; echo "i2pd: ready (success rate ${rate}%, ${routers} routers)"
+              elif [ $((i % 6)) = 0 ]; then
+                echo "i2pd: not ready after $((i / 6)) min (success rate ${rate:-?}%, ${routers:-?} routers)"
+              fi
+            fi
+            [ "$tor_ok" = 1 ] && [ "$i2p_ok" = 1 ] && break
+            sleep 10
+          done
+          if [ "$tor_ok" = 0 ]; then
+            echo "::error::Tor did not bootstrap in thirty minutes"
+            tail -n 20 "$RUNNER_TEMP/tor.log" 2>/dev/null || true
+            exit 1
+          fi
+          if [ "$i2p_ok" = 0 ]; then
+            echo "::warning::i2pd is short of its readiness marks after thirty minutes (success rate ${rate:-?}%, ${routers:-?} routers)"
+          fi
+
+      - name: Reach the census mirror and peers through them
+        # A disabled test passes silently, so the run must print both handshakes.
+        env:
+          WINNOW_LIVE_ROUTERS: "1"
+        run: |
+          set -o pipefail
+          swift test --skip-build --filter LiveOverlayTests.localTorAndI2PRouters 2>&1 | tee "$RUNNER_TEMP/live.log"
+          grep -q 'Live tor Bitcoin handshake' "$RUNNER_TEMP/live.log"
+          grep -q 'Live i2p Bitcoin handshake' "$RUNNER_TEMP/live.log"
+
+      - name: Keep the router and test logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: live-overlays-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/tor.log
+            ${{ runner.temp }}/i2pd.log
+            ${{ runner.temp }}/live.log
+          if-no-files-found: warn
+          retention-days: 14
