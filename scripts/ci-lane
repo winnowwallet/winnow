@@ -4,9 +4,12 @@ set -euo pipefail
 lane=${1:?package|build|units|journey}
 [[ $(uname -m) == arm64 && -n ${RUNNER_TEMP:-} ]]
 xcodebuild -version | grep -q 'Build version 17F113'
+# The image also carries newer runtimes; every simulator here is chosen on this
+# one, so the runtime the evidence records is the one the tests ran on.
+export IOS_SIMULATOR_RUNTIME=26.5
 runtime_build=$(xcrun simctl list runtimes | sed -nE 's/^iOS 26\.5 \(26\.5 - ([A-Z0-9]+)\).*/\1/p' | head -1)
 [[ -n $runtime_build ]]
-export WINNOW_RUNTIME="iOS 26.5 ($runtime_build)"
+export WINNOW_RUNTIME="iOS $IOS_SIMULATOR_RUNTIME ($runtime_build)"
 export WINNOW_IMAGE="${ImageOS:-macos}-${ImageVersion:-$(sw_vers -productVersion)}"
 ROOT=$PWD
 WINNOW_CI=$RUNNER_TEMP/winnow-ci
