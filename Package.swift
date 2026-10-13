@@ -34,7 +34,9 @@ let package = Package(
                 "PSBT/README.md",
                 "Transactions/README.md",
                 "Wallet/README.md",
-            ]
+                "Network/Peers/Resources/peers-source.txt",
+            ],
+            resources: [.copy("Network/Peers/Resources/peers.json")]
         ),
         .executableTarget(
             name: "WinnowDebug",
