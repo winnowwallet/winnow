@@ -7,9 +7,10 @@ filters. Receiving, recovery, and private chain scanning need the same byte-leve
 rules in the app and debugging tools.
 
 Consumers include [key derivation](../Keys/README.md),
-[Taproot scripts](../Script/README.md), and
+[Taproot scripts](../../WinnowPrimitives/Script/README.md), and
 [filter scanning](../../WalletCore/Network/Filters/README.md).
-This is a source grouping inside WalletCore, not a separate service.
+GCSFilter and SipHash are here; the other encodings and hashes are in
+[WinnowPrimitives](../../WinnowPrimitives/Crypto/README.md).
 
 [Crypto tests](../../../Tests/BitcoinCoreTests/CryptoTests.swift),
 [Bech32 tests](../../../Tests/BitcoinCoreTests/Bech32Tests.swift), and

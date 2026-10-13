@@ -8,6 +8,9 @@ and the Advanced PSBT workflow without requiring a coordination server.
 Imports accept v0 and v2; v0 is normalized to the same v2 representation.
 The app exports v0 for Core. MuSig2 participant lists identify the root key,
 while nonces and partial signatures identify the derived output key.
+PSBTs and their single-signer roles are in
+[WinnowPrimitives](../../WinnowPrimitives/PSBT/README.md); the MuSig2 roles are in
+[PSBTRoles+MuSig2](PSBTRoles+MuSig2.swift).
 
 [Transaction construction](../Transactions/README.md),
 [vault policy](../Wallet/README.md), and

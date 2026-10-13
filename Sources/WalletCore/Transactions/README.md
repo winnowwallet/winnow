@@ -4,7 +4,8 @@
 
 Address decoding, transaction construction, Taproot signature hashes, and signing
 turn a reviewed payment into Bitcoin transaction bytes. These rules are shared
-by ordinary sends, fee replacement, and vault spending.
+by ordinary sends, fee replacement, and vault spending. They are in
+[WinnowPrimitives](../../WinnowPrimitives/Transactions/README.md).
 [Funding sources](FundingSources.swift) reconstruct the addresses that funded a
 transaction's inputs from the data those inputs reveal, for the app's
 received-payment labeling.

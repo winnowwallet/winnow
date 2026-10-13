@@ -5,6 +5,8 @@
 Balances, coin selection, fees, recovery imports, people, and vault policies live
 here. They supply the state and decisions behind receiving, sending, recovery,
 and shared savings; the GUI should not carry a second wallet implementation.
+Coin selection, fees and the coin and error values are in
+[WinnowPrimitives](../../WinnowPrimitives/Wallet/README.md).
 
 [AppModel](../../WinnowApp/AppModel.swift) coordinates these rules with
 WalletCore networking, [key storage](../Keys/README.md), and

@@ -12,7 +12,7 @@ public enum MuSigError: Error, Equatable {
 /// dependency also provides MuSig APIs through its enabled-by-default trait.
 public enum MuSig {
     /// secp256k1 curve order n.
-    static let groupOrder = Data([
+    package static let groupOrder = Data([
         0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE,
         0xBA, 0xAE, 0xDC, 0xE6, 0xAF, 0x48, 0xA0, 0x3B, 0xBF, 0xD2, 0x5E, 0x8C, 0xD0, 0x36, 0x41, 0x41,
     ])
@@ -83,7 +83,7 @@ public enum MuSig {
 
     /// Reduces a 32-byte hash modulo the group order. Since the input is below
     /// 2^256 < 2n, a single conditional subtraction suffices.
-    static func reduceModGroupOrder(_ hash: Data) -> [UInt8] {
+    package static func reduceModGroupOrder(_ hash: Data) -> [UInt8] {
         var value = [UInt8](hash)
         let order = [UInt8](groupOrder)
         if !value.lexicographicallyPrecedes(order) { // lexicographic compare of equal-length big-endian bytes

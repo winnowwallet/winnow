@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import TestSupport
 @testable import WalletCore
+@testable import WinnowPrimitives
 
 /// BIP380 checksum and key expression vectors parsed from bip-0380.mediawiki.
 @Suite("BIP380 descriptors")

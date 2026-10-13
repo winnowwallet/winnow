@@ -14,6 +14,9 @@ sentence separated by U+3000 IDEOGRAPHIC SPACE, or a passphrase carrying a
 ligature or a fullwidth character, derives a different seed under NFD, one no
 other wallet agrees with, and nothing about the phrase itself would look wrong.
 
+BIP39, BIP32, BIP86 and the `KeyStore` protocol are in
+[WinnowPrimitives](../../WinnowPrimitives/Keys/README.md); the Keychain store is here.
+
 The [wallet](../Wallet/README.md), [signer](../Transactions/README.md), and
 [app](../../WinnowApp/README.md) use this code. The in-memory keystore stays in
 [TestSupport](../../../Tests/Support/README.md), outside production sources.

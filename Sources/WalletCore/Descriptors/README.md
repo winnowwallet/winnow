@@ -4,7 +4,9 @@
 
 Descriptors turn public key expressions into the addresses and spending policies
 used by wallet imports and shared savings. MuSig key aggregation and MuSig2
-sessions support the advanced jointly signed vault flow.
+sessions support the advanced jointly signed vault flow. Descriptors and MuSig
+key aggregation are in [WinnowPrimitives](../../WinnowPrimitives/Descriptors/README.md);
+MuSig2 sessions are here.
 
 The [wallet and vault code](../Wallet/README.md) and
 [offline inspector](../../../Tools/Debug/README.md) consume this WalletCore code.

@@ -9,7 +9,8 @@ than through a complete app journey.
 
 The [vectors](Vectors/README.md) provide independent
 expected values; [TestSupport](../Support/README.md) supplies shared loaders.
-The test target keeps its primitive-focused name; production has one WalletCore target.
+The test target keeps its primitive-focused name. Production splits these primitives
+into WinnowPrimitives, which WalletCore re-exports, so the tests reach them through WalletCore.
 
 Run `swift test --filter BitcoinCoreTests` from the repository root.
 [CI](../../.github/workflows/ci.yml) runs the package suite on hosted Apple silicon.

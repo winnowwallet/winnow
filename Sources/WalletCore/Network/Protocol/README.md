@@ -4,11 +4,13 @@
 
 Messages, framing, blocks, transactions, peer addresses, and network constants
 provide the byte formats shared by wallet networking, signing, and debugging.
-Keeping these in WalletCore avoids a separate P2P package boundary.
+Transactions, the integer encodings, SHA256d and the network identifier are in
+[WinnowPrimitives](../../../WinnowPrimitives/Protocol/README.md); keeping the P2P
+messages in WalletCore avoids a separate P2P package boundary.
 
 [Transport](../Transport/README.md),
 [scanning](../Filters/README.md), and
-[transaction construction](../../Transactions/README.md) use them.
+[transaction construction](../../../WinnowPrimitives/Transactions/README.md) use them.
 [Wire tests](../../../../Tests/WalletCoreTests/Network/WireTests.swift),
 [transaction tests](../../../../Tests/WalletCoreTests/Network/TransactionTests.swift), and
 [network-parameter tests](../../../../Tests/WalletCoreTests/Network/NetworkParamsTests.swift)

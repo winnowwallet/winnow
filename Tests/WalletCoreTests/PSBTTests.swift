@@ -3,6 +3,7 @@ import P256K
 import Testing
 import TestSupport
 @testable import WalletCore
+@testable import WinnowPrimitives
 
 /// PSBTv2 (BIP370) + BIP371 Taproot fields: creator → signer → finalizer →
 /// extractor, wire round-trips, and generic-map preservation of unknown pairs.
