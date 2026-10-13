@@ -19,3 +19,6 @@ They are historical evidence, not a live health check or an automated test fixtu
 [Live gateways, 2026-09-29](live-gateways-2026-09-29.md) records a manual run of
 `scripts/check-live-gateways` and independent SOCKS, mirror and handshake
 checks through the project's Tor and I2P gateways.
+
+[Live gateways, 2026-10-13](live-gateways-2026-10-13.md) repeats them after the
+gateways and the mirror moved from the VMs to an Umbrel.

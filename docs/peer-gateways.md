@@ -59,8 +59,10 @@ signed files from the public census every 30 minutes, and serves them at
 `CensusCatalog.i2pMirror`.
 Corrupt saved routing settings keep networking offline until replaced.
 
-The project's gateway VMs, including the I2P census mirror, are reproducible
-from [winnowwallet/census `gateways/`](https://github.com/winnowwallet/census/tree/main/gateways).
+The project's gateways, including the I2P census mirror, have run on an Umbrel
+home server since 2026-10-13;
+[winnowwallet/census `gateways/`](https://github.com/winnowwallet/census/tree/main/gateways)
+describes that deployment and reproduces the VMs that ran them before.
 
 ## Validation
 
@@ -80,8 +82,10 @@ It discovers both gateways, then fetches the census from its I2P mirror through
 the I2P gateway and verifies the publisher signature. Given a current local
 `peers.json` with its `peers.json.sig` beside it, it also performs Bitcoin
 handshakes through both gateways. The check sends no wallet addresses or
-transactions. CI has no tailnet, so this check is manual; the
-[2026-09-29 run](security/evidence/live-gateways-2026-09-29.md) is recorded.
+transactions. CI has no tailnet, so this check is manual; the runs of
+[2026-09-29](security/evidence/live-gateways-2026-09-29.md), against the VMs,
+and [2026-10-13](security/evidence/live-gateways-2026-10-13.md), against the
+Umbrel, are recorded.
 
 Every night the [live-overlays workflow](../.github/workflows/live-overlays.yml)
 starts Tor and i2pd on a GitHub runner and runs the same mirror check, then
