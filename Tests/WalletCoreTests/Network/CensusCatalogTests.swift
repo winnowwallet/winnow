@@ -54,14 +54,6 @@ struct CensusCatalogTests {
         c.networks["tor"] = entries(CensusCatalog.maximumEntries + 1, ".onion", length: 56)
         #expect(throws: CensusCatalog.Invalid.size) { try c.validated() }
     }
-    /// The list this build ships passes the floor the wallet applies and
-    /// still carries the overlays Tor- and I2P-only routing draw from.
-    @Test func theShippedListIsAUsableCensus() throws {
-        let shipped = try #require(CensusCatalog.bundled)
-        #expect((shipped.networks["clearnet"]?.count ?? 0) >= CensusCatalog.minimumClearnetEntries)
-        #expect(!(shipped.networks["tor"] ?? []).isEmpty)
-        #expect(!(shipped.networks["i2p"] ?? []).isEmpty)
-    }
     @Test func extremeHeightsAndAliases() throws {
         #expect(!CensusCatalog.nearTip(.min, tip: .max))
         #expect(!CensusCatalog.nearTip(.max, tip: .min))

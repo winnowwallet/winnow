@@ -68,9 +68,8 @@ tags in Winnow and the archived library remain fixed; the former library's
 
 Run Release manually first to validate the checkout without signing, uploading,
 assigning TestFlight groups or publishing. Release validates the stable version.
-Before tagging, refresh the census list the release ships: run
-`scripts/import-census`, check the counts it prints, and merge the result with
-its `peers-source.txt`.
+The release fetches the census's current list with `scripts/import-census`
+before building, and its log names the census commit the app ships.
 Refreshing the header checkpoint uses `scripts/refresh-checkpoint` and needs a
 genesis-validated header file. This is manual maintenance, not an automatic
 requirement for every release. Its validation and vector update are described in the

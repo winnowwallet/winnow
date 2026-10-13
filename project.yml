@@ -57,6 +57,10 @@ targets:
         buildPhase: resources
       - path: docs/import.html
         buildPhase: resources
+      # The census list this build ships (CensusCatalog.bundled), fetched by
+      # scripts/import-census before XcodeGen runs.
+      - path: build/census/peers.json
+        buildPhase: resources
     dependencies:
       - package: Winnow
         product: WalletCore

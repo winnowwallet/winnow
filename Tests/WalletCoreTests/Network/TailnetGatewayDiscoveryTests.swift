@@ -114,10 +114,14 @@ struct LiveOverlayTests {
         _ = try #require(config.torProxy)
         _ = try #require(config.i2pProxy)
         print("Discovered gateways: \(config.torProxy?.description ?? "none"), \(config.i2pProxy?.description ?? "none")")
-        await handshake(try #require(CensusCatalog.bundled), through: config)
+        // The census list a build would ship, which the script fetches first.
+        let path = try #require(ProcessInfo.processInfo.environment["WINNOW_LIVE_CENSUS"])
+        let catalog = try CensusCatalog.decode(Data(contentsOf: URL(filePath: path)),
+                                               minimumEntries: CensusCatalog.minimumClearnetEntries)
+        await handshake(catalog, through: config)
     }
 
-    /// Up to five shipped peers per overlay, in a fresh order each run, so a
+    /// Up to five listed peers per overlay, in a fresh order each run, so a
     /// few dead entries at the top of the list cannot fail every check.
     private func handshake(_ catalog: CensusCatalog, through config: PeerGatewayConfiguration) async {
         await withTaskGroup(of: Void.self) { group in

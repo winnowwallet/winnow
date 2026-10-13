@@ -42,7 +42,7 @@ expired, not only on request. Egress added since the frozen table below:
 | Census I2P mirror | `RoutedHTTPClient` through the I2P gateway to `CensusCatalog.i2pMirror` | The same census GETs | I2P-only routing; public hosts and explorer lookups are refused |
 
 Scope note (2026-10-13): the app no longer downloads the census. Each release
-ships the census list of its day (`Network/Peers/Resources/peers.json`), so the
+bundles the census list current when it was built (`scripts/import-census`), so the
 census refresh egress in the frozen table below and the census I2P mirror row
 above are gone, routed HTTP carries explorer requests only, and I2P-only
 routing makes no HTTP request at all.

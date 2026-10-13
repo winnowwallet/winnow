@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Copy the census's peers.json into WalletCore as the list a release ships.
+"""Fetch the census's peers.json into build/census/ for the app to ship.
 
 The census repository commits census/peers.json after every accepted daily
 run. This takes it at one census commit (default: the census's main), checks
-that it is a schema-1 list, and writes it beside the commit it came from. The
-Swift tests hold the shipped file to CensusCatalog's rules.
+that it is a schema-1 list, and writes it beside the commit it came from.
+project.yml bundles build/census/peers.json into the app, so run this before
+XcodeGen; CI and release do. The app tests hold the bundled list to
+CensusCatalog's rules.
 
 Usage: scripts/import-census [census commit]
 """
@@ -17,7 +19,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parent.parent
 CENSUS = 'https://github.com/winnowwallet/census'
-DESTINATION = ROOT / 'Sources/WalletCore/Network/Peers/Resources'
+DESTINATION = ROOT / 'build/census'
 LIMIT = 4 * 1_024 * 1_024
 
 

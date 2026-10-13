@@ -9,10 +9,10 @@ here so discovery and admission follow one policy.
 [FilterSync](../Filters/README.md) and
 [AppModel](../../../WinnowApp/AppModel.swift) consume the pool.
 The pool tries manual peers, previously connected peers, the census list the
-release ships, and DNS seeds. Each release carries the census of its day in
-`Resources/peers.json` (`CensusCatalog.bundled`), copied from the census
-repository by `scripts/import-census`, which records the census commit in
-`Resources/peers-source.txt`; the app downloads no list. Tor- and I2P-only
+app was built with, and DNS seeds. `scripts/import-census` fetches the census
+repository's `peers.json` into `build/census/` (with the census commit in
+`peers-source.txt`) before XcodeGen runs, and project.yml bundles it into the
+app (`CensusCatalog.bundled`); the app downloads no list. Tor- and I2P-only
 routing draw their onion and I2P peers from the same list, so they need no
 HTTP. A list that fails validation is not used, and DNS bootstrap starts
 regardless. DNS uses DoH first, with system DNS when DoH yields no usable

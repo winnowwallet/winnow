@@ -25,8 +25,8 @@ decision of 2026-09-14 above the August record it revises.
 
 As of September 18, current checks use hosted Apple silicon, one iPhone
 journey and focused lower-level suites; Intel, broad UI and differential jobs
-are retired. The embedded Tor client is removed; since #181 peer connections can instead go through the user's own Tor and I2P SOCKS gateways ([peer gateways](../peer-gateways.md)). Since October 13 each release
-ships the census list of its day and the app downloads none. See the
+are retired. The embedded Tor client is removed; since #181 peer connections can instead go through the user's own Tor and I2P SOCKS gateways ([peer gateways](../peer-gateways.md)). Since October 13 each build
+bundles the census list current when it was built and the app downloads none. See the
 [CI runbook](../../.github/internal/ci-release.md), [peer guide](../../Sources/WalletCore/Network/Peers/README.md)
 and [suite map](test-suite-map.md).
 [Issue #164](https://github.com/winnowwallet/winnow/issues/164) is closed: its

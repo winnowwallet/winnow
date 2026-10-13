@@ -1,2 +1,0 @@
-https://github.com/winnowwallet/census/blob/33039a584ce07f2f84000f2e8af380675b2f36e9/census/peers.json
-2026-10-13, tip 971246

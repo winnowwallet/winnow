@@ -104,7 +104,7 @@ publishing. The helper names below are not additional release pipelines.
 
 | Entry point | Inputs and purpose | Effects / caller |
 | --- | --- | --- |
-| [import-census](import-census) | Optional census commit (default: the census's `main`); copy its `census/peers.json` into WalletCore's `Resources/` with the commit beside it. | Network fetch; writes `Sources/WalletCore/Network/Peers/Resources/`. Run before each release. |
+| [import-census](import-census) | Optional census commit (default: the census's `main`); fetch its `census/peers.json` with the commit beside it. | Network fetch; writes `build/census/`, which project.yml bundles. Run before XcodeGen; CI and release do. |
 | [check-release-policy](check-release-policy) | `RELEASE_TAG=vMAJOR.MINOR.PATCH`; validate stable tag syntax. An unset value supports manual validation. | No network or source generation; release workflow. |
 | [generate-supply-chain-metadata](generate-supply-chain-metadata) | `--output-dir DIR`, optional `--subject PATH`, `--subject-name NAME`, `--builder-id ID`. | Writes SPDX/provenance JSON for a Git tree or built artifact; no upload or signing. CI and release retain it as artifacts. |
 | [ci-sign.sh](ci-sign.sh) | `ASC_PRIVATE_KEY`; write the API key file under runner/temp storage. | Writes sensitive signing material; release/recovery workflows provide and clean it up. Certificate import is a separate release step. |

@@ -50,11 +50,11 @@ public struct CensusCatalog: Codable, Equatable, Sendable {
         return Int(floor(date.timeIntervalSince1970 / 86_400))
     }
 
-    /// The census this release ships: `Resources/peers.json`, taken from the
-    /// census repository by `scripts/import-census`, which records the census
-    /// commit in `Resources/peers-source.txt`. Peer churn, not a clock, ages
-    /// it; the next release brings a newer one.
-    public static let bundled: Self? = Bundle.module.url(forResource: "peers", withExtension: "json")
+    /// The census the app was built with: `scripts/import-census` fetches the
+    /// census repository's `peers.json` into `build/census/` before XcodeGen
+    /// runs, and project.yml bundles it into the app. Nil outside the app.
+    /// Peer churn, not a clock, ages it; the next build brings a newer one.
+    public static let bundled: Self? = Bundle.main.url(forResource: "peers", withExtension: "json")
         .flatMap { try? Data(contentsOf: $0) }
         .flatMap { try? decode($0, minimumEntries: minimumClearnetEntries) }
 
