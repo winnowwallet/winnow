@@ -911,30 +911,22 @@ struct RangeScanTests {
         try await fixture.pool.syncHeaders(fixture.chain)
         let watch = [fixture.synthetic.watchScript]
 
-        let gate = RangeGate()
+        let gate = ParkGate()
         let collector = MatchCollector()
-        // Bound out of the fixture for the same reason `stop()` binds its own:
-        // the task's closure is `sending`, and these are the only parts of the
-        // fixture it needs.
+        // Bound out of the fixture so the task's closure captures only what
+        // it needs.
         let sync = fixture.sync
         let rangeFile = fixture.rangeFile
-        let scan = Task { () -> Result<RangeScanOutcome, any Error> in
-            let outcome: Result<RangeScanOutcome, any Error>
-            do {
-                outcome = .success(try await sync.scanRange(
-                    from: 1, to: 6, watchScripts: watch,
-                    storageURL: rangeFile) { match in
-                        collector.add(match)
-                        await gate.reach()
-                        await gate.waitForRelease()
-                    })
-            } catch {
-                outcome = .failure(error)
-            }
-            // A run that never matched opens the gate too, so a broken scan
-            // fails this case on an assertion rather than parking it forever.
-            await gate.reach()
-            return outcome
+        // A run that never matched opens the gate too, so a broken scan fails
+        // this case on an assertion rather than parking it forever.
+        let scan = gate.settling {
+            try await sync.scanRange(
+                from: 1, to: 6, watchScripts: watch,
+                storageURL: rangeFile) { match in
+                    collector.add(match)
+                    await gate.reach()
+                    await gate.waitForRelease()
+                }
         }
         await gate.waitForReach()
 
@@ -959,38 +951,5 @@ struct RangeScanTests {
         await #expect(throws: FilterSyncError.relayOnly) {
             try await fixture.sync.sync(watchScripts: watch) { _ in }
         }
-    }
-}
-
-/// Parks a range scan inside its `onMatch` — one of the suspension points a
-/// second run would otherwise interleave with — and holds it there until the
-/// case releases it. The same trick `FilterSyncTests` plays on the forward
-/// path, kept private to each file so neither can change the other's timing.
-private actor RangeGate {
-    private var reached = false
-    private var reachWaiter: CheckedContinuation<Void, Never>?
-    private var released = false
-    private var releaseWaiter: CheckedContinuation<Void, Never>?
-
-    func reach() {
-        reached = true
-        reachWaiter?.resume()
-        reachWaiter = nil
-    }
-
-    func waitForReach() async {
-        guard !reached else { return }
-        await withCheckedContinuation { reachWaiter = $0 }
-    }
-
-    func release() {
-        released = true
-        releaseWaiter?.resume()
-        releaseWaiter = nil
-    }
-
-    func waitForRelease() async {
-        guard !released else { return }
-        await withCheckedContinuation { releaseWaiter = $0 }
     }
 }

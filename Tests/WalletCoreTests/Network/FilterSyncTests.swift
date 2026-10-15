@@ -707,28 +707,20 @@ struct FilterSyncTests {
                                   storageURL: progressFile, requiredCheckpointPeers: 1,
                                   filtersPerChunk: 2)
 
-        let gate = SyncGate()
+        let gate = ParkGate()
         let collector = MatchCollector()
         let watchScript = synthetic.watchScript
-        let first = Task { () -> Result<Void, any Error> in
-            let outcome: Result<Void, any Error>
-            do {
-                try await sync.sync(watchScripts: [watchScript]) { match in
-                    collector.add(match)
-                    await gate.reachMatch()
-                    await gate.waitForRelease()
-                }
-                outcome = .success(())
-            } catch {
-                outcome = .failure(error)
+        // A run that ended without ever matching opens the gate too, so a
+        // broken first pass fails this test on an assertion instead of
+        // parking it on a wait that will never be resumed.
+        let first = gate.settling {
+            try await sync.sync(watchScripts: [watchScript]) { match in
+                collector.add(match)
+                await gate.reach()
+                await gate.waitForRelease()
             }
-            // A run that ended without ever matching opens the gate too, so a
-            // broken first pass fails this test on an assertion instead of
-            // parking it on a wait that will never be resumed.
-            await gate.reachMatch()
-            return outcome
         }
-        await gate.waitForMatch()
+        await gate.waitForReach()
 
         var thrown: (any Error)?
         do {
@@ -1498,38 +1490,5 @@ struct FilterSyncTests {
         let message = CFilterMessage(blockHash: vector.blockHash, filter: vector.filter)
         let decoded = try PeerMessage.decode(command: "cfilter", payload: message.serialized)
         #expect(decoded == .cfilter(message))
-    }
-}
-
-/// Parks a sync inside its `onMatch` until the test lets it go, so a second
-/// call can be made while the first is genuinely suspended mid-run. Polling
-/// for that window would make the test a race; this makes it an ordering.
-private actor SyncGate {
-    private var matched = false
-    private var matchWaiter: CheckedContinuation<Void, Never>?
-    private var released = false
-    private var releaseWaiter: CheckedContinuation<Void, Never>?
-
-    /// Called from `onMatch`: the run has reached the parking spot.
-    func reachMatch() {
-        matched = true
-        matchWaiter?.resume()
-        matchWaiter = nil
-    }
-
-    func waitForMatch() async {
-        guard !matched else { return }
-        await withCheckedContinuation { matchWaiter = $0 }
-    }
-
-    func release() {
-        released = true
-        releaseWaiter?.resume()
-        releaseWaiter = nil
-    }
-
-    func waitForRelease() async {
-        guard !released else { return }
-        await withCheckedContinuation { releaseWaiter = $0 }
     }
 }

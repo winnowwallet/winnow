@@ -114,26 +114,17 @@ struct TxBroadcasterTests {
 
     @Test("a served peer that goes away stays served, and served survives a reload")
     func servedIsSticky() async throws {
-        let params = NetworkParams.signet
-        let node = LoopbackNode(params: params, autoRequestDelay: .milliseconds(50))
-        try await node.start()
-        defer { Task { await node.stop() } }
         let store = FileManager.default.temporaryDirectory
             .appending(path: "broadcaster-served-\(UUID().uuidString)/broadcast.json")
         try FileManager.default.createDirectory(at: store.deletingLastPathComponent(), withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: store.deletingLastPathComponent()) }
-
-        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint])
-        await pool.start()
-        let broadcaster = try TxBroadcaster(pool: pool, storageURL: store, rebroadcastBaseInterval: .seconds(3_600))
-        let seen = EventCollector<TxBroadcaster.Event>()
-        let events = await broadcaster.events()
-        let consumer = Task { for await event in events { seen.add(event) } }
-        defer { consumer.cancel() }
+        let fixture = try await BroadcasterFixture.make(autoRequestDelay: .milliseconds(50), storageURL: store)
+        defer { fixture.stop() }
+        let (node, pool, broadcaster, seen) = (fixture.node, fixture.pool, fixture.broadcaster, fixture.seen)
 
         let tx = makeFakeSegwitTx()
         let txid = try await broadcaster.broadcast(tx.serialized(includeWitness: true))
-        let endpoint = await node.endpoint
+        let endpoint = fixture.endpoint
         #expect(await pollUntil { seen.events.contains { $0 == .served(txid: txid, peer: endpoint) } })
         #expect(await broadcaster.wasServed(txid))
 
@@ -174,23 +165,13 @@ struct TxBroadcasterTests {
 
     @Test("serves a delayed getdata and tracks per-peer state")
     func delayedGetdata() async throws {
-        let params = NetworkParams.signet
-        let node = LoopbackNode(params: params, autoRequestDelay: .milliseconds(100))
-        try await node.start()
-        defer { Task { await node.stop() } }
-
-        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint])
-        await pool.start()
-
-        let broadcaster = try TxBroadcaster(pool: pool, rebroadcastBaseInterval: .seconds(3_600))
-        let seen = EventCollector<TxBroadcaster.Event>()
-        let events = await broadcaster.events()
-        let consumer = Task { for await event in events { seen.add(event) } }
-        defer { consumer.cancel() }
+        let fixture = try await BroadcasterFixture.make(autoRequestDelay: .milliseconds(100))
+        defer { fixture.stop() }
+        let (node, broadcaster, seen) = (fixture.node, fixture.broadcaster, fixture.seen)
 
         let tx = makeFakeSegwitTx()
         let txid = try await broadcaster.broadcast(tx.serialized(includeWitness: true))
-        let endpoint = await node.endpoint
+        let endpoint = fixture.endpoint
 
         // The node requests after its delay and is then served the tx.
         let served = await pollUntil {
@@ -205,8 +186,6 @@ struct TxBroadcasterTests {
             return
         }
         #expect(servedTx == tx)
-
-        await pool.stop()
     }
 
     @Test("deprioritizes a peer that never answers invs with getdata")
@@ -259,19 +238,13 @@ struct TxBroadcasterTests {
 
     @Test("rebroadcast backs off exponentially, capped, with injected intervals")
     func exponentialBackoff() async throws {
-        let params = NetworkParams.signet
-        let node = LoopbackNode(params: params, autoRequestDelay: .milliseconds(20))
-        try await node.start()
-        defer { Task { await node.stop() } }
-
-        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint])
-        await pool.start()
-
         // 100ms base, doubling, capped at 250ms → gaps 100, 200, 250, 250.
-        let broadcaster = try TxBroadcaster(pool: pool,
-                                        rebroadcastBaseInterval: .milliseconds(100),
-                                        maxRebroadcastInterval: .milliseconds(250),
-                                        announcementTimeout: .seconds(30))
+        let fixture = try await BroadcasterFixture.make(
+            autoRequestDelay: .milliseconds(20),
+            rebroadcastBase: .milliseconds(100), maxRebroadcast: .milliseconds(250),
+            announcementTimeout: .seconds(30))
+        defer { fixture.stop() }
+        let broadcaster = fixture.broadcaster
         let txid = try await broadcaster.broadcast(makeFakeSegwitTx().serialized(includeWitness: true))
 
         var schedule: [Date] = []
@@ -307,28 +280,15 @@ struct TxBroadcasterTests {
         #expect(gaps.allSatisfy { $0 >= 0 }, "the schedule must never move backwards")
         #expect(schedule.last! > schedule.first!, "three attempts must push the schedule forward")
         #expect(await broadcaster.attemptCount(txid) ?? 0 >= 3, "three attempts must have fired")
-
-        await pool.stop()
     }
 
     @Test("stops rebroadcasting on confirmation and on explicit cancel")
     func stopOnConfirmationAndCancel() async throws {
-        let params = NetworkParams.signet
-        let node = LoopbackNode(params: params)
-        try await node.start()
-        defer { Task { await node.stop() } }
-
-        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint])
-        await pool.start()
-
-        let broadcaster = try TxBroadcaster(pool: pool,
-                                        rebroadcastBaseInterval: .milliseconds(150),
-                                        maxRebroadcastInterval: .milliseconds(600),
-                                        announcementTimeout: .seconds(30))
-        let seen = EventCollector<TxBroadcaster.Event>()
-        let events = await broadcaster.events()
-        let consumer = Task { for await event in events { seen.add(event) } }
-        defer { consumer.cancel() }
+        let fixture = try await BroadcasterFixture.make(
+            rebroadcastBase: .milliseconds(150), maxRebroadcast: .milliseconds(600),
+            announcementTimeout: .seconds(30))
+        defer { fixture.stop() }
+        let (node, broadcaster, seen) = (fixture.node, fixture.broadcaster, fixture.seen)
 
         // Confirmed tx: no further invs.
         let txid1 = try await broadcaster.broadcast(makeFakeSegwitTx().serialized(includeWitness: true))
@@ -360,8 +320,6 @@ struct TxBroadcasterTests {
         try await stragglersFlushed(node)
         #expect(await node.nextMessage(command: "inv", timeout: .milliseconds(700)) == nil)
         #expect(seen.events.contains { $0 == .cancelled(txid: txid2) })
-
-        await pool.stop()
     }
 
     @Test("emits feeFloorExceeded when every peer's feefilter exceeds the tx feerate")
@@ -576,13 +534,11 @@ struct TxBroadcasterTests {
 
     @Test("a peer whose fee filter refuses the transaction is not announced to until the filter drops")
     func feeFilterSkipsPeer() async throws {
-        let params = NetworkParams.signet
-        let node = LoopbackNode(params: params)
-        try await node.start()
-        defer { Task { await node.stop() } }
-        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint])
-        await pool.start()
-        defer { Task { await pool.stop() } }
+        let fixture = try await BroadcasterFixture.make(
+            rebroadcastBase: .milliseconds(300), maxRebroadcast: .milliseconds(600),
+            announcementTimeout: .seconds(30))
+        defer { fixture.stop() }
+        let (node, pool, broadcaster) = (fixture.node, fixture.pool, fixture.broadcaster)
         _ = await node.nextMessage(command: "verack", timeout: .seconds(10))
 
         // 100 sat/vB: nothing this test sends clears it.
@@ -593,11 +549,6 @@ struct TxBroadcasterTests {
         }
         #expect(await peer.feeFilter == 100_000)
 
-        let broadcaster = try TxBroadcaster(pool: pool,
-                                            rebroadcastBaseInterval: .milliseconds(300),
-                                            maxRebroadcastInterval: .milliseconds(600),
-                                            announcementTimeout: .seconds(30))
-        defer { Task { await broadcaster.shutdown() } }
         let txid = try await broadcaster.broadcast(
             makeFakeSegwitTx().serialized(includeWitness: true), feeRateSatPerVByte: 2)
         #expect(await node.nextMessage(command: "inv", timeout: .seconds(1)) == nil,
@@ -682,16 +633,9 @@ struct TxBroadcasterTests {
 
     @Test("the pool stops itself once the relay-only session has nothing pending")
     func relayOnlyStopsWhenDrained() async throws {
-        let params = NetworkParams.signet
-        let node = LoopbackNode(params: params)
-        try await node.start()
-        defer { Task { await node.stop() } }
-
-        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint])
-        await pool.start()
-        let broadcaster = try TxBroadcaster(pool: pool,
-                                            rebroadcastBaseInterval: .seconds(3_600))
-        defer { Task { await broadcaster.shutdown() } }
+        let fixture = try await BroadcasterFixture.make()
+        defer { fixture.stop() }
+        let (pool, broadcaster) = (fixture.pool, fixture.broadcaster)
 
         let confirmed = try await broadcaster.broadcast(
             makeFakeSegwitTx().serialized(includeWitness: true))
@@ -722,16 +666,9 @@ struct TxBroadcasterTests {
 
     @Test("a session whose pool went back to full service does not stop it on the drain")
     func relayOnlyYieldsToAResumedPool() async throws {
-        let params = NetworkParams.signet
-        let node = LoopbackNode(params: params)
-        try await node.start()
-        defer { Task { await node.stop() } }
-
-        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint])
-        await pool.start()
-        let broadcaster = try TxBroadcaster(pool: pool,
-                                            rebroadcastBaseInterval: .seconds(3_600))
-        defer { Task { await broadcaster.shutdown() } }
+        let fixture = try await BroadcasterFixture.make()
+        defer { fixture.stop() }
+        let (pool, broadcaster) = (fixture.pool, fixture.broadcaster)
         let txid = try await broadcaster.broadcast(
             makeFakeSegwitTx().serialized(includeWitness: true))
         _ = try await broadcaster.enterRelayOnly()
@@ -745,19 +682,13 @@ struct TxBroadcasterTests {
         try await Task.sleep(for: .milliseconds(200))
         #expect(await pool.isRunning, "a resumed pool belongs to its caller again")
         #expect(await pool.connectedPeers().count == 1)
-        await pool.stop()
     }
 
     @Test("a relay-only session with nothing pending stops the pool instead of holding it")
     func relayOnlyWithNothingPending() async throws {
-        let params = NetworkParams.signet
-        let node = LoopbackNode(params: params)
-        try await node.start()
-        defer { Task { await node.stop() } }
-
-        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint])
-        await pool.start()
-        let broadcaster = try TxBroadcaster(pool: pool)
+        let fixture = try await BroadcasterFixture.make()
+        defer { fixture.stop() }
+        let (pool, broadcaster) = (fixture.pool, fixture.broadcaster)
 
         // Nothing is in flight, so there is nothing to stay up for: the caller
         // asked to go quiet and quiet is available immediately.
@@ -786,17 +717,11 @@ struct TxBroadcasterTests {
     /// the mode refuses.
     @Test("a session that could keep no seat reports none and stops the pool")
     func relayOnlyWithNoSeats() async throws {
-        let params = NetworkParams.signet
-        let node = LoopbackNode(params: params)
-        try await node.start()
-        defer { Task { await node.stop() } }
-
         // A pool with a peer, so the transaction can be broadcast, and then no
         // pool at all: the peer is gone by the time the session is asked for.
-        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint])
-        await pool.start()
-        let broadcaster = try TxBroadcaster(pool: pool, rebroadcastBaseInterval: .seconds(3_600))
-        defer { Task { await broadcaster.shutdown() } }
+        let fixture = try await BroadcasterFixture.make()
+        defer { fixture.stop() }
+        let (pool, broadcaster) = (fixture.pool, fixture.broadcaster)
         _ = try await broadcaster.broadcast(makeFakeSegwitTx().serialized(includeWitness: true))
         #expect(await broadcaster.pendingTxids.count == 1, "there is something to relay")
         await pool.stop()
@@ -827,16 +752,9 @@ struct TxBroadcasterTests {
     /// resume, the pool is running and seated, whatever the interleaving.
     @Test("a drain that races the caller resuming the pool never leaves it stopped")
     func relayOnlyDrainDoesNotUndoAResume() async throws {
-        let params = NetworkParams.signet
-        let node = LoopbackNode(params: params)
-        try await node.start()
-        defer { Task { await node.stop() } }
-
-        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint])
-        await pool.start()
-        let broadcaster = try TxBroadcaster(pool: pool,
-                                            rebroadcastBaseInterval: .seconds(3_600))
-        defer { Task { await broadcaster.shutdown() } }
+        let fixture = try await BroadcasterFixture.make()
+        defer { fixture.stop() }
+        let (pool, broadcaster) = (fixture.pool, fixture.broadcaster)
 
         for round in 0 ..< 30 {
             // A distinct txid per round, so each is a real pending payment
@@ -863,7 +781,6 @@ struct TxBroadcasterTests {
             #expect(await pool.connectedPeers().count == 1, "round \(round)")
             try await broadcaster.cancel(txid)
         }
-        await pool.stop()
     }
 
     /// `enterRelayOnly` checks that something is pending, narrows the pool,
@@ -880,34 +797,18 @@ struct TxBroadcasterTests {
     /// sometime near it.
     @Test("a drain that lands while the pool is being narrowed opens no session")
     func relayOnlyDrainDuringNarrowingOpensNoSession() async throws {
-        let params = NetworkParams.signet
-        let node = LoopbackNode(params: params)
-        try await node.start()
-        defer { Task { await node.stop() } }
-
-        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint])
-        await pool.start()
-        let broadcaster = try TxBroadcaster(pool: pool,
-                                            rebroadcastBaseInterval: .seconds(3_600))
-        defer { Task { await broadcaster.shutdown() } }
+        let fixture = try await BroadcasterFixture.make()
+        defer { fixture.stop() }
+        let (pool, broadcaster) = (fixture.pool, fixture.broadcaster)
         let txid = try await broadcaster.broadcast(
             makeFakeSegwitTx().serialized(includeWitness: true))
 
-        let gate = NarrowingGate()
+        let gate = ParkGate()
         await pool.holdNarrowing { await gate.reach(); await gate.waitForRelease() }
-        let opening = Task { () -> Result<Bool, any Error> in
-            let outcome: Result<Bool, any Error>
-            do {
-                outcome = .success(try await broadcaster.enterRelayOnly(seats: 1))
-            } catch {
-                outcome = .failure(error)
-            }
-            // A call that returned without ever narrowing the pool opens the
-            // gate too, so a broken path fails this test on an assertion
-            // instead of parking it on a wait that will never be resumed.
-            await gate.reach()
-            return outcome
-        }
+        // A call that returns without ever narrowing the pool opens the gate
+        // too, so a broken path fails on an assertion instead of parking the
+        // test on a wait that will never be resumed.
+        let opening = gate.settling { try await broadcaster.enterRelayOnly(seats: 1) }
         await gate.waitForReach()
         #expect(await pool.mode == .relayOnly, "the pool is mid-narrowing")
         #expect(await broadcaster.isRelayOnly == false, "and no session is recorded yet")
@@ -923,7 +824,6 @@ struct TxBroadcasterTests {
                 "a session recorded over a drained set has no drain left to end it")
         #expect(await poolIsStopped(pool),
                 "the pool must go quiet, which is what the caller asked for")
-        await pool.stop()
     }
 
     /// The other thing that can land inside the narrowing is `shutdown()`.
@@ -933,29 +833,17 @@ struct TxBroadcasterTests {
     /// can never drain.
     @Test("a shutdown that lands while the pool is being narrowed opens no session")
     func relayOnlyShutdownDuringNarrowingOpensNoSession() async throws {
-        let params = NetworkParams.signet
-        let node = LoopbackNode(params: params)
-        try await node.start()
-        defer { Task { await node.stop() } }
-
-        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint])
-        await pool.start()
-        let broadcaster = try TxBroadcaster(pool: pool,
-                                            rebroadcastBaseInterval: .seconds(3_600))
+        let fixture = try await BroadcasterFixture.make()
+        defer { fixture.stop() }
+        let (pool, broadcaster) = (fixture.pool, fixture.broadcaster)
         _ = try await broadcaster.broadcast(makeFakeSegwitTx().serialized(includeWitness: true))
 
-        let gate = NarrowingGate()
+        let gate = ParkGate()
         await pool.holdNarrowing { await gate.reach(); await gate.waitForRelease() }
-        let opening = Task { () -> Result<Bool, any Error> in
-            let outcome: Result<Bool, any Error>
-            do {
-                outcome = .success(try await broadcaster.enterRelayOnly(seats: 1))
-            } catch {
-                outcome = .failure(error)
-            }
-            await gate.reach()
-            return outcome
-        }
+        // A call that returns without ever narrowing the pool opens the gate
+        // too, so a broken path fails on an assertion instead of parking the
+        // test on a wait that will never be resumed.
+        let opening = gate.settling { try await broadcaster.enterRelayOnly(seats: 1) }
         await gate.waitForReach()
         #expect(await pool.mode == .relayOnly, "the pool is mid-narrowing")
 
@@ -968,7 +856,6 @@ struct TxBroadcasterTests {
         #expect(await poolIsStopped(pool),
                 "a pool narrowed for a broadcaster that is gone would be held open forever")
         #expect(await pool.mode == .full, "no session was left open on it")
-        await pool.stop()
     }
 
     /// The zero-seat branch sits on the far side of the same suspension, and
@@ -986,33 +873,19 @@ struct TxBroadcasterTests {
     /// while the broadcaster is suspended on that call rather than near it.
     @Test("a resume that lands while the pool is being narrowed is not undone by a zero seat count")
     func relayOnlyZeroSeatsDoesNotUndoAResume() async throws {
-        let params = NetworkParams.signet
-        let node = LoopbackNode(params: params)
-        try await node.start()
-        defer { Task { await node.stop() } }
-
-        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint],
-                            dialTimeout: .milliseconds(500),
-                            seedResolver: SeedResolver { _, _, _ in [] })
-        await pool.start()
-        let broadcaster = try TxBroadcaster(pool: pool,
-                                            rebroadcastBaseInterval: .seconds(3_600))
-        defer { Task { await broadcaster.shutdown() } }
+        let fixture = try await BroadcasterFixture.make(
+            dialTimeout: .milliseconds(500), seedResolver: SeedResolver { _, _, _ in [] })
+        defer { fixture.stop() }
+        let (pool, broadcaster) = (fixture.pool, fixture.broadcaster)
         _ = try await broadcaster.broadcast(makeFakeSegwitTx().serialized(includeWitness: true))
         let kept = try #require(await pool.connectedPeers().first)
 
-        let gate = NarrowingGate()
+        let gate = ParkGate()
         await pool.holdNarrowing { await gate.reach(); await gate.waitForRelease() }
-        let opening = Task { () -> Result<Bool, any Error> in
-            let outcome: Result<Bool, any Error>
-            do {
-                outcome = .success(try await broadcaster.enterRelayOnly(seats: 1))
-            } catch {
-                outcome = .failure(error)
-            }
-            await gate.reach()
-            return outcome
-        }
+        // A call that returns without ever narrowing the pool opens the gate
+        // too, so a broken path fails on an assertion instead of parking the
+        // test on a wait that will never be resumed.
+        let opening = gate.settling { try await broadcaster.enterRelayOnly(seats: 1) }
         await gate.waitForReach()
         #expect(await pool.mode == .relayOnly, "the pool is mid-narrowing")
 
@@ -1031,7 +904,6 @@ struct TxBroadcasterTests {
         #expect(await pool.isRunning,
                 "a pool the caller resumed must be left as they put it, not stopped for the seat it lost")
         #expect(await pool.mode == .full)
-        await pool.stop()
     }
 
     /// A session ends when its seats are gone, and says so.
@@ -1048,24 +920,13 @@ struct TxBroadcasterTests {
     /// the payment stays saved for the next start.
     @Test("a relay-only session whose seat is gone ends, and stops the pool")
     func relayOnlyEndsWhenItsSeatIsGone() async throws {
-        let params = NetworkParams.signet
-        let node = LoopbackNode(params: params)
-        try await node.start()
-        defer { Task { await node.stop() } }
-
         // The prune and the backoff attempt are what notice, in that order, so
         // both run on the test's timescale instead of the wallet's.
-        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint],
-                            monitorInterval: .milliseconds(50))
-        await pool.start()
-        let broadcaster = try TxBroadcaster(pool: pool,
-                                            rebroadcastBaseInterval: .milliseconds(200),
-                                            maxRebroadcastInterval: .milliseconds(200))
-        defer { Task { await broadcaster.shutdown() } }
-        let seen = EventCollector<TxBroadcaster.Event>()
-        let events = await broadcaster.events()
-        let consumer = Task { for await event in events { seen.add(event) } }
-        defer { consumer.cancel() }
+        let fixture = try await BroadcasterFixture.make(
+            monitorInterval: .milliseconds(50),
+            rebroadcastBase: .milliseconds(200), maxRebroadcast: .milliseconds(200))
+        defer { fixture.stop() }
+        let (node, pool, broadcaster, seen) = (fixture.node, fixture.pool, fixture.broadcaster, fixture.seen)
 
         let txid = try await broadcaster.broadcast(
             makeFakeSegwitTx().serialized(includeWitness: true))
@@ -1091,21 +952,10 @@ struct TxBroadcasterTests {
     /// idle, which is exactly when this session is opened.
     @Test("a fault that takes the last seat ends the session on the next attempt")
     func relayOnlyEndsWhenAFaultTakesTheLastSeat() async throws {
-        let params = NetworkParams.signet
-        let node = LoopbackNode(params: params)
-        try await node.start()
-        defer { Task { await node.stop() } }
-
-        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint])
-        await pool.start()
-        let broadcaster = try TxBroadcaster(pool: pool,
-                                            rebroadcastBaseInterval: .milliseconds(200),
-                                            maxRebroadcastInterval: .milliseconds(200))
-        defer { Task { await broadcaster.shutdown() } }
-        let seen = EventCollector<TxBroadcaster.Event>()
-        let events = await broadcaster.events()
-        let consumer = Task { for await event in events { seen.add(event) } }
-        defer { consumer.cancel() }
+        let fixture = try await BroadcasterFixture.make(
+            rebroadcastBase: .milliseconds(200), maxRebroadcast: .milliseconds(200))
+        defer { fixture.stop() }
+        let (pool, broadcaster, seen) = (fixture.pool, fixture.broadcaster, fixture.seen)
 
         _ = try await broadcaster.broadcast(makeFakeSegwitTx().serialized(includeWitness: true))
         #expect(try await broadcaster.enterRelayOnly(seats: 1))
@@ -1129,27 +979,15 @@ struct TxBroadcasterTests {
     /// mode as one job on the pool, finds full service, and declines.
     @Test("seats gone on a pool the caller resumed ends the session and keeps the pool")
     func relayOnlySeatsGoneLeavesAResumedPoolAlone() async throws {
-        let params = NetworkParams.signet
-        let node = LoopbackNode(params: params)
-        try await node.start()
-        defer { Task { await node.stop() } }
-
         // The seeds resolve to nothing and the one manual peer is refused for
         // the rest of the run by the fault below, so the resume finds nothing
         // to dial and the attempt lands on a pool that is empty and in full
         // service, which is the case being pinned.
-        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint],
-                            dialTimeout: .milliseconds(500),
-                            seedResolver: SeedResolver { _, _, _ in [] })
-        await pool.start()
-        let broadcaster = try TxBroadcaster(pool: pool,
-                                            rebroadcastBaseInterval: .milliseconds(200),
-                                            maxRebroadcastInterval: .milliseconds(200))
-        defer { Task { await broadcaster.shutdown() } }
-        let seen = EventCollector<TxBroadcaster.Event>()
-        let events = await broadcaster.events()
-        let consumer = Task { for await event in events { seen.add(event) } }
-        defer { consumer.cancel() }
+        let fixture = try await BroadcasterFixture.make(
+            dialTimeout: .milliseconds(500), seedResolver: SeedResolver { _, _, _ in [] },
+            rebroadcastBase: .milliseconds(200), maxRebroadcast: .milliseconds(200))
+        defer { fixture.stop() }
+        let (pool, broadcaster, seen) = (fixture.pool, fixture.broadcaster, fixture.seen)
 
         _ = try await broadcaster.broadcast(makeFakeSegwitTx().serialized(includeWitness: true))
         #expect(try await broadcaster.enterRelayOnly(seats: 1))
@@ -1167,7 +1005,6 @@ struct TxBroadcasterTests {
         try await Task.sleep(for: .milliseconds(100))
         #expect(await pool.isRunning, "a resumed pool is not stopped by a session ending over it")
         #expect(await pool.mode == .full)
-        await pool.stop()
     }
 
     /// A halted retry loop is the zero-seat state reached before the pool is
@@ -1178,22 +1015,12 @@ struct TxBroadcasterTests {
     /// quiet, which is what the caller asked for.
     @Test("a session is refused while retries cannot be saved")
     func relayOnlyRefusedWhileRetriesCannotBeSaved() async throws {
-        let params = NetworkParams.signet
-        let node = LoopbackNode(params: params)
-        try await node.start()
-        defer { Task { await node.stop() } }
         let store = tempFileURL("pending-relay-blocked.json")
         defer { try? FileManager.default.removeItem(at: store.deletingLastPathComponent()) }
-
-        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint])
-        await pool.start()
-        let broadcaster = try TxBroadcaster(pool: pool, storageURL: store,
-                                            rebroadcastBaseInterval: .milliseconds(100))
-        defer { Task { await broadcaster.shutdown() } }
-        let seen = EventCollector<TxBroadcaster.Event>()
-        let events = await broadcaster.events()
-        let consumer = Task { for await event in events { seen.add(event) } }
-        defer { consumer.cancel() }
+        let fixture = try await BroadcasterFixture.make(storageURL: store,
+                                                        rebroadcastBase: .milliseconds(100))
+        defer { fixture.stop() }
+        let (pool, broadcaster, seen) = (fixture.pool, fixture.broadcaster, fixture.seen)
 
         let txid = try await broadcaster.broadcast(
             makeFakeSegwitTx().serialized(includeWitness: true))
@@ -1216,23 +1043,12 @@ struct TxBroadcasterTests {
     /// either. It ends here, and names the reason it did.
     @Test("a session whose retries stop being saved ends instead of holding the pool")
     func relayOnlyEndsWhenARetryCannotBeSaved() async throws {
-        let params = NetworkParams.signet
-        let node = LoopbackNode(params: params)
-        try await node.start()
-        defer { Task { await node.stop() } }
         let store = tempFileURL("pending-relay-halted.json")
         defer { try? FileManager.default.removeItem(at: store.deletingLastPathComponent()) }
-
-        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint])
-        await pool.start()
-        let broadcaster = try TxBroadcaster(pool: pool, storageURL: store,
-                                            rebroadcastBaseInterval: .milliseconds(200),
-                                            maxRebroadcastInterval: .milliseconds(200))
-        defer { Task { await broadcaster.shutdown() } }
-        let seen = EventCollector<TxBroadcaster.Event>()
-        let events = await broadcaster.events()
-        let consumer = Task { for await event in events { seen.add(event) } }
-        defer { consumer.cancel() }
+        let fixture = try await BroadcasterFixture.make(
+            storageURL: store, rebroadcastBase: .milliseconds(200), maxRebroadcast: .milliseconds(200))
+        defer { fixture.stop() }
+        let (pool, broadcaster, seen) = (fixture.pool, fixture.broadcaster, fixture.seen)
 
         let txid = try await broadcaster.broadcast(
             makeFakeSegwitTx().serialized(includeWitness: true))
@@ -1257,38 +1073,21 @@ struct TxBroadcasterTests {
     /// recorded anyway, over a loop that will never announce.
     @Test("a write that fails while the pool is being narrowed opens no session")
     func relayOnlyPersistenceFailureDuringNarrowingOpensNoSession() async throws {
-        let params = NetworkParams.signet
-        let node = LoopbackNode(params: params)
-        try await node.start()
-        defer { Task { await node.stop() } }
         let store = tempFileURL("pending-relay-narrowing.json")
         defer { try? FileManager.default.removeItem(at: store.deletingLastPathComponent()) }
-
-        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint])
-        await pool.start()
-        let broadcaster = try TxBroadcaster(pool: pool, storageURL: store,
-                                            rebroadcastBaseInterval: .milliseconds(100),
-                                            maxRebroadcastInterval: .milliseconds(100))
-        defer { Task { await broadcaster.shutdown() } }
-        let seen = EventCollector<TxBroadcaster.Event>()
-        let events = await broadcaster.events()
-        let consumer = Task { for await event in events { seen.add(event) } }
-        defer { consumer.cancel() }
+        let fixture = try await BroadcasterFixture.make(
+            storageURL: store, rebroadcastBase: .milliseconds(100), maxRebroadcast: .milliseconds(100))
+        defer { fixture.stop() }
+        let (pool, broadcaster, seen) = (fixture.pool, fixture.broadcaster, fixture.seen)
         let txid = try await broadcaster.broadcast(
             makeFakeSegwitTx().serialized(includeWitness: true))
 
-        let gate = NarrowingGate()
+        let gate = ParkGate()
         await pool.holdNarrowing { await gate.reach(); await gate.waitForRelease() }
-        let opening = Task { () -> Result<Bool, any Error> in
-            let outcome: Result<Bool, any Error>
-            do {
-                outcome = .success(try await broadcaster.enterRelayOnly(seats: 1))
-            } catch {
-                outcome = .failure(error)
-            }
-            await gate.reach()
-            return outcome
-        }
+        // A call that returns without ever narrowing the pool opens the gate
+        // too, so a broken path fails on an assertion instead of parking the
+        // test on a wait that will never be resumed.
+        let opening = gate.settling { try await broadcaster.enterRelayOnly(seats: 1) }
         await gate.waitForReach()
         #expect(await pool.mode == .relayOnly, "the pool is mid-narrowing")
 
@@ -1315,24 +1114,13 @@ struct TxBroadcasterTests {
     /// seat would.
     @Test("a session whose only seat will never hear about the payment ends")
     func relayOnlyEndsWhenItsSeatIsDeprioritized() async throws {
-        let params = NetworkParams.signet
-        let silent = LoopbackNode(params: params) // never requests
-        try await silent.start()
-        defer { Task { await silent.stop() } }
-        let silentEndpoint = await silent.endpoint
-
-        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [silentEndpoint])
-        await pool.start()
-        let broadcaster = try TxBroadcaster(pool: pool,
-                                            rebroadcastBaseInterval: .milliseconds(150),
-                                            maxRebroadcastInterval: .milliseconds(200),
-                                            maxAnnouncementsPerPeer: 2,
-                                            announcementTimeout: .milliseconds(100))
-        defer { Task { await broadcaster.shutdown() } }
-        let seen = EventCollector<TxBroadcaster.Event>()
-        let events = await broadcaster.events()
-        let consumer = Task { for await event in events { seen.add(event) } }
-        defer { consumer.cancel() }
+        // The node never requests: it is silent about every inv.
+        let fixture = try await BroadcasterFixture.make(
+            rebroadcastBase: .milliseconds(150), maxRebroadcast: .milliseconds(200),
+            maxAnnouncementsPerPeer: 2, announcementTimeout: .milliseconds(100))
+        defer { fixture.stop() }
+        let (pool, broadcaster, seen) = (fixture.pool, fixture.broadcaster, fixture.seen)
+        let silentEndpoint = fixture.endpoint
 
         let txid = try await broadcaster.broadcast(makeFakeSegwitTx().serialized(includeWitness: true))
         #expect(await pollUntil {
@@ -1351,37 +1139,54 @@ struct TxBroadcasterTests {
     }
 }
 
-/// Parks the pool inside `enterRelayOnly` until the test lets it go, so the
-/// broadcaster can be driven while it is genuinely suspended on that call.
-/// Polling for that window would make the test a race; this makes it an
-/// ordering. The shape is `FilterSyncTests`' `SyncGate`.
-private actor NarrowingGate {
-    private var reached = false
-    private var reachWaiter: CheckedContinuation<Void, Never>?
-    private var released = false
-    private var releaseWaiter: CheckedContinuation<Void, Never>?
+/// The scaffold most cases here open with: one loopback node, a started pool
+/// of one seated on it, a broadcaster over that pool, and a collector draining
+/// the broadcaster's events. `stop()` is for the `defer`: it ends the
+/// broadcaster, the pool and the node, in that order, off the test's thread.
+private struct BroadcasterFixture {
+    let node: LoopbackNode
+    let endpoint: PeerEndpoint
+    let pool: PeerPool
+    let broadcaster: TxBroadcaster
+    let seen: EventCollector<TxBroadcaster.Event>
+    private let consumer: Task<Void, Never>
 
-    /// Called from the hold: the pool has reached the parking spot.
-    func reach() {
-        reached = true
-        reachWaiter?.resume()
-        reachWaiter = nil
+    static func make(autoRequestDelay: Duration? = nil, storageURL: URL? = nil,
+                     dialTimeout: Duration = .seconds(5),
+                     seedResolver: SeedResolver? = nil,
+                     monitorInterval: Duration = .seconds(30),
+                     rebroadcastBase: Duration = .seconds(3_600),
+                     maxRebroadcast: Duration = .seconds(3_600),
+                     maxAnnouncementsPerPeer: Int = 3,
+                     announcementTimeout: Duration = .seconds(120)) async throws -> BroadcasterFixture {
+        let params = NetworkParams.signet
+        let node = LoopbackNode(params: params, autoRequestDelay: autoRequestDelay)
+        try await node.start()
+        let endpoint = await node.endpoint
+        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [endpoint],
+                            dialTimeout: dialTimeout, seedResolver: seedResolver,
+                            monitorInterval: monitorInterval)
+        await pool.start()
+        let broadcaster = try TxBroadcaster(pool: pool, storageURL: storageURL,
+                                            rebroadcastBaseInterval: rebroadcastBase,
+                                            maxRebroadcastInterval: maxRebroadcast,
+                                            maxAnnouncementsPerPeer: maxAnnouncementsPerPeer,
+                                            announcementTimeout: announcementTimeout)
+        let seen = EventCollector<TxBroadcaster.Event>()
+        let events = await broadcaster.events()
+        let consumer = Task { for await event in events { seen.add(event) } }
+        return BroadcasterFixture(node: node, endpoint: endpoint, pool: pool,
+                                  broadcaster: broadcaster, seen: seen, consumer: consumer)
     }
 
-    func waitForReach() async {
-        guard !reached else { return }
-        await withCheckedContinuation { reachWaiter = $0 }
-    }
-
-    func release() {
-        released = true
-        releaseWaiter?.resume()
-        releaseWaiter = nil
-    }
-
-    func waitForRelease() async {
-        guard !released else { return }
-        await withCheckedContinuation { releaseWaiter = $0 }
+    func stop() {
+        consumer.cancel()
+        let (broadcaster, pool, node) = (broadcaster, pool, node)
+        Task {
+            await broadcaster.shutdown()
+            await pool.stop()
+            await node.stop()
+        }
     }
 }
 
