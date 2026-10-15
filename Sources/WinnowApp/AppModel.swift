@@ -1009,6 +1009,16 @@ final class AppModel {
     /// after this returns, and clearing before that would leave a window where
     /// a crash loses the rollback that had already started.
     func rollBackStores(to forkHeight: UInt32) async throws {
+        try recordRollback(to: forkHeight)
+        try await wallet?.rollBack(to: forkHeight)
+        try await vaultStore.rollBack(to: forkHeight)
+        // Reactivates any own send whose confirming block fell (#157): the
+        // wallet just re-reserved its inputs, and this makes sure the network
+        // hears the transaction again instead of only our bookkeeping.
+        try await stack?.broadcaster.rollBack(to: forkHeight)
+    }
+
+    private func recordRollback(to forkHeight: UInt32) throws {
         // Throwing, and first. `try?` here defeated the whole mechanism: a
         // failed write proceeded into the rollbacks unprotected, and a crash
         // then left the stores disagreeing with no marker to trigger the redo
@@ -1019,12 +1029,6 @@ final class AppModel {
         }
         try Data(String(forkHeight).utf8).write(
             to: marker, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-        try await wallet?.rollBack(to: forkHeight)
-        try await vaultStore.rollBack(to: forkHeight)
-        // Reactivates any own send whose confirming block fell (#157): the
-        // wallet just re-reserved its inputs, and this makes sure the network
-        // hears the transaction again instead of only our bookkeeping.
-        try await stack?.broadcaster.rollBack(to: forkHeight)
     }
 
     /// Clears the marker once a sync that included a rollback has completed.
@@ -1126,36 +1130,21 @@ final class AppModel {
         status.syncing = true
         defer { status.syncing = false }
         do {
-            var scripts = try await wallet.watchScripts()
-            scripts.append(contentsOf: try await vaultStore.watchScripts(network: network))
-            let broadcaster = stack.broadcaster
+            let scripts = try await vaultStore.watchScripts(network: network)
             let network = network
             let vaultStore = vaultStore
-            try await filters.sync(watchScripts: scripts, maxBlocks: backgroundRunning ? 2_000 : nil,
-                                   onReorg: { [weak self] forkHeight in
-                guard let self else { return }
-                try await self.rollBackStores(to: forkHeight)
-            }) { match in
-                let walletEffect = try await wallet.apply(match: match)
-                for discarded in walletEffect.discardedReplacements {
-                    try await broadcaster.cancel(discarded)
-                }
+            try await WalletSync.run(wallet: wallet, filters: filters,
+                                     broadcaster: stack.broadcaster,
+                                     additionalScripts: scripts,
+                                     maxBlocks: backgroundRunning ? 2_000 : nil,
+                                     beforeReorg: { [weak self] forkHeight in
+                guard let self else { throw CancellationError() }
+                try await self.recordRollback(to: forkHeight)
+            }, onReorg: { forkHeight in
+                try await vaultStore.rollBack(to: forkHeight)
+            }, onMatch: { match in
                 try await vaultStore.apply(match: match, network: network)
-                let pending = await broadcaster.pendingTxids
-                for tx in match.block.transactions where pending.contains(tx.txid) {
-                    // The height rides along so the entry becomes a held
-                    // tombstone a reorg can resurrect, rather than being
-                    // deleted with its raw transaction (#157).
-                    try await broadcaster.markConfirmed(tx.txid, atHeight: match.height)
-                }
-            }
-            // apply() does not move the wallet frontier — FilterSync is
-            // authoritative here. Persist it so exportBundle() and the next
-            // launch's startHeight match what the UI already shows.
-            try await wallet.recordScanHeight(await filters.nextScanHeight)
-            // Held confirmation tombstones age out on the same 100-block
-            // horizon spent-coin tombstones do (#157).
-            try await broadcaster.pruneConfirmed(scannedTo: await filters.nextScanHeight)
+            })
             // Every store that a rollback touches has now been rewound and the
             // scan that followed it has finished, so the target is no longer
             // needed. Cleared only on the success path: a sync that threw may
@@ -1172,12 +1161,6 @@ final class AppModel {
                 defaults.set(now, forKey: DefaultsKey.lastCompleteCheck(network))
             }
         } catch {
-            // A later batch may have thrown after earlier ones persisted
-            // in FilterSync. Those earlier batches each passed their own
-            // checkpoint comparison before anything above ran for them, so
-            // their progress is verified and worth keeping — the batch that
-            // threw applied nothing. Keep WalletState from lagging it.
-            try? await wallet.recordScanHeight(await filters.nextScanHeight)
             // Backgrounding, a network switch or an expired background check
             // cancels the scan and closes its peers. Nothing failed.
             if !Task.isCancelled, !(error is CancellationError) {

@@ -35,9 +35,11 @@ public roadmap owns future work; it is not evidence that a feature ships.
 ## Architecture follows the app
 
 WalletCore now owns wallet state, transaction construction, peer connections,
-headers, filters, and relay in one package target. The app directly orchestrates
-those parts; there is no extra wallet/network facade or parallel library-only
-send/scan workflow. Cryptography, descriptors, and wallet networking now share
+headers, filters, and relay in one package target. The app owns their lifetimes
+and scheduling. `WalletSync.run` coordinates each filter pass with wallet state
+and pending broadcasts; additional stores join the same pass through its hooks.
+There is no parallel library-only send/scan workflow. Cryptography, descriptors,
+and wallet networking now share
 WalletCore too, including their byte encoders. Actors retain their existing
 ownership and lifetimes. Offline inspection is part of winnow-debug; there is no
 separate CLI or demo signing path.
