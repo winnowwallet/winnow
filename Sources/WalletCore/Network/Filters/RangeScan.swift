@@ -46,18 +46,23 @@ public enum RangeScanError: LocalizedError, Equatable, Sendable {
     case recordDamaged(String)
     case recordWriteFailed
 
-    public var errorDescription: String? {
-        switch self {
-        case .invalidRange, .noWatchScripts, .rangeTooWide, .tooManyScripts, .tooManyIterations,
-             .rangeBelowChain, .rangeAboveChain, .rangeSpansNoCheckpoint:
-            requestErrorDescription
-        case .filterBytesExhausted, .runTimedOut: budgetErrorDescription
-        case .recordUnreadable, .recordTooLarge, .recordDamaged, .recordWriteFailed: progressErrorDescription
+    /// The range record's reading of a storage failure. The shared file
+    /// helpers speak `FilterSyncStorageError`; the two frontier cases are the
+    /// forward scan's and cannot arise from a range record.
+    init(storage error: FilterSyncStorageError) {
+        switch error {
+        case .unreadable: self = .recordUnreadable
+        case let .tooLarge(maxBytes): self = .recordTooLarge(maxBytes: maxBytes)
+        case let .damaged(reason): self = .recordDamaged(reason)
+        case .writeFailed: self = .recordWriteFailed
+        case .frontierBeforeWallet, .frontierBeyondTip:
+            self = .recordDamaged(error.errorDescription ?? "the frontier disagrees")
         }
     }
 
-    private var requestErrorDescription: String? {
+    public var errorDescription: String? {
         switch self {
+        // MARK: The request
         case let .invalidRange(from, to):
             "Winnow was asked to scan blocks \(from) to \(to), which is not a range it can scan."
         case .noWatchScripts:
@@ -74,22 +79,12 @@ public enum RangeScanError: LocalizedError, Equatable, Sendable {
             "The restore scan ends at block \(to), above the validated chain tip \(tip)."
         case let .rangeSpansNoCheckpoint(from, to):
             "Blocks \(from) to \(to) hold no filter checkpoint, and Winnow has no verified filter header below them, so nothing could check what a peer sent. Scan a wider range."
-        default: nil
-        }
-    }
-
-    private var budgetErrorDescription: String? {
-        switch self {
+        // MARK: The budget
         case let .filterBytesExhausted(read, limit):
             "The restore scan reached its data limit (\(read) of \(limit) bytes of compact filters). It can be resumed."
         case let .runTimedOut(limit):
             "The restore scan reached its time limit (\(limit)). It can be resumed."
-        default: nil
-        }
-    }
-
-    private var progressErrorDescription: String? {
-        switch self {
+        // MARK: The progress file
         case .recordUnreadable:
             "Winnow could not read the restore scan's progress file. The scan is stopped so a payment is not skipped."
         case let .recordTooLarge(maxBytes):
@@ -98,7 +93,6 @@ public enum RangeScanError: LocalizedError, Equatable, Sendable {
             "The restore scan's progress file is damaged (\(reason)). The scan is stopped; Winnow will not replace it automatically."
         case .recordWriteFailed:
             "Winnow could not safely save the restore scan's progress. Nothing was recorded for this batch."
-        default: nil
         }
     }
 }
@@ -295,59 +289,44 @@ public struct RangeScanProgress: Codable, Sendable, Equatable {
     /// reported, never repaired: a record that cannot be read is not replaced
     /// with a fresh one, because "start over" and "resume" differ by exactly
     /// the blocks a restore would then skip.
+    ///
+    /// The file is decoded once. A forward progress file lacks the range
+    /// fields and fails that decode, and a file that carries every field under
+    /// a foreign marker passes it; either way the marker is read only to name
+    /// what the file is instead of calling it damaged, and no progress field
+    /// is trusted before `validate()`.
     public static func load(storageURL: URL?) throws -> RangeScanProgress? {
-        guard let storageURL,
-              FileManager.default.fileExists(atPath: storageURL.path) else { return nil }
-        try checkSize(at: storageURL)
+        guard let storageURL else { return nil }
         let data: Data
         do {
-            data = try Data(contentsOf: storageURL, options: .mappedIfSafe)
-        } catch {
-            throw RangeScanError.recordUnreadable
+            guard let read = try FilterSync.readRecord(
+                at: storageURL, maxBytes: FilterSync.rangeRecordMaxBytes) else { return nil }
+            data = read
+        } catch let error as FilterSyncStorageError {
+            throw RangeScanError(storage: error)
         }
-        guard data.count <= FilterSync.rangeRecordMaxBytes else {
-            throw RangeScanError.recordTooLarge(maxBytes: FilterSync.rangeRecordMaxBytes)
-        }
-        try requireRangeKind(in: data)
         let stored: RangeScanProgress
         do {
             stored = try JSONDecoder().decode(RangeScanProgress.self, from: data)
         } catch {
-            throw RangeScanError.recordDamaged("the JSON or a progress field is invalid")
+            throw notRangeRecord(in: data) ?? RangeScanError.recordDamaged(
+                "the JSON or a progress field is invalid")
+        }
+        guard stored.record == recordKind else {
+            throw notRangeRecord(in: data) ?? RangeScanError.recordDamaged(
+                "the file is not a range-scan record")
         }
         try stored.validate()
         return stored
     }
 
-    /// Refuses a file that is not a range record before any of it is believed.
-    /// A forward progress file lacks the range fields and fails the full
-    /// decode anyway; this names what the file is instead of calling it
-    /// damaged, and refuses a file that carries every field under a foreign
-    /// marker, which the full decode would accept.
-    ///
-    /// Only the marker is decoded here; no progress fields are trusted yet.
-    private static func requireRangeKind(in data: Data) throws {
-        let kind = (try? JSONDecoder().decode(RecordKind.self, from: data))?.record
-        guard kind == recordKind else {
-            throw RangeScanError.recordDamaged(
-                "the file is not a range-scan record (it is marked \(kind.map { "\"\($0)\"" } ?? "nothing"))")
-        }
-    }
-
-    /// Just the marker, so a file can be classified before it is decoded.
-    private struct RecordKind: Decodable {
-        let record: String?
-    }
-
-    private static func checkSize(at storageURL: URL) throws {
-        guard let attributes = try? FileManager.default
-            .attributesOfItem(atPath: storageURL.path) else {
-            throw RangeScanError.recordUnreadable
-        }
-        if let size = attributes[.size] as? NSNumber,
-           size.int64Value > Int64(FilterSync.rangeRecordMaxBytes) {
-            throw RangeScanError.recordTooLarge(maxBytes: FilterSync.rangeRecordMaxBytes)
-        }
+    /// The refusal for a file whose marker is not `recordKind`, or nil when it
+    /// is, which means the file is a range record that is damaged some other way.
+    private static func notRangeRecord(in data: Data) -> RangeScanError? {
+        let kind = FilterSync.recordKind(in: data)
+        guard kind != recordKind else { return nil }
+        return .recordDamaged(
+            "the file is not a range-scan record (it is marked \(kind.map { "\"\($0)\"" } ?? "nothing"))")
     }
 
     func validate() throws {
@@ -361,45 +340,21 @@ public struct RangeScanProgress: Codable, Sendable, Equatable {
         guard Data(hex: watchFingerprint)?.count == 32 else {
             throw RangeScanError.recordDamaged("the watch-script fingerprint is not 32 bytes")
         }
-        try Self.validate(filterHeaders: filterHeaders, below: nextScanHeight)
         do {
+            try FilterSync.validate(filterHeaders: filterHeaders, below: nextScanHeight,
+                                    maxPinned: FilterSync.rangeRecordMaxPinnedHeaders)
             try FilterSync.validate(receipt: crossCheck)
-        } catch let FilterSyncStorageError.damaged(reason) {
-            throw RangeScanError.recordDamaged(reason)
-        }
-    }
-
-    /// The same rules the forward progress file is held to: canonical decimal
-    /// heights (unique dictionary keys), 32-byte headers, and nothing pinned at or above
-    /// the frontier it claims to have scanned to.
-    private static func validate(filterHeaders: [String: String], below frontier: UInt32) throws {
-        guard filterHeaders.count <= FilterSync.rangeRecordMaxPinnedHeaders else {
-            throw RangeScanError.recordDamaged("there are too many pinned filter headers")
-        }
-        for (key, value) in filterHeaders {
-            guard let height = UInt32(key), String(height) == key else {
-                throw RangeScanError.recordDamaged("a filter-header height is not canonical decimal")
-            }
-            guard height < frontier else {
-                throw RangeScanError.recordDamaged("a pinned filter header is at or beyond the scan frontier")
-            }
-            guard value.utf8.count == 64, Data(hex: value)?.count == 32 else {
-                throw RangeScanError.recordDamaged("a pinned filter header is not 32 bytes")
-            }
+        } catch let error as FilterSyncStorageError {
+            throw RangeScanError(storage: error)
         }
     }
 
     func persist(to storageURL: URL?) throws {
         guard let storageURL else { return }
-        let data = try JSONEncoder().encode(self)
-        guard data.count <= FilterSync.rangeRecordMaxBytes else {
-            throw RangeScanError.recordTooLarge(maxBytes: FilterSync.rangeRecordMaxBytes)
-        }
         do {
-            try data.write(to: storageURL,
-                           options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-        } catch {
-            throw RangeScanError.recordWriteFailed
+            try FilterSync.writeRecord(self, to: storageURL, maxBytes: FilterSync.rangeRecordMaxBytes)
+        } catch let error as FilterSyncStorageError {
+            throw RangeScanError(storage: error)
         }
     }
 

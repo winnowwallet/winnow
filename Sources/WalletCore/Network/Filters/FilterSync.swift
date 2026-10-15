@@ -317,6 +317,12 @@ public actor FilterSync {
         /// nil, so there is nothing to migrate — and nil after a rollback,
         /// which is a corroboration taken on a branch that no longer exists.
         public var crossCheck: CrossCheckReceipt?
+        /// What a file says it is, when it says. Forward progress never
+        /// writes it (a nil is omitted from the JSON), so every file on disk
+        /// carries none; a range-scan record writes `RangeScanProgress.recordKind`,
+        /// which is how `validate(progress:startHeight:)` refuses one that was
+        /// handed to the forward loader.
+        public private(set) var record: String?
 
         public init(nextScanHeight: UInt32, filterHeaders: [String: String] = [:],
                     crossCheck: CrossCheckReceipt? = nil) {
@@ -1402,29 +1408,9 @@ public actor FilterSync {
     private static func load(storageURL: URL, startHeight: UInt32) throws
         -> (state: PersistenceState, progress: Progress)
     {
-        guard FileManager.default.fileExists(atPath: storageURL.path) else {
+        guard let data = try readRecord(at: storageURL, maxBytes: maximumProgressBytes) else {
             return (.missing, Progress(nextScanHeight: startHeight))
         }
-        let attributes: [FileAttributeKey: Any]
-        do {
-            attributes = try FileManager.default.attributesOfItem(atPath: storageURL.path)
-        } catch {
-            throw FilterSyncStorageError.unreadable
-        }
-        if let size = attributes[.size] as? NSNumber,
-           size.int64Value > Int64(maximumProgressBytes) {
-            throw FilterSyncStorageError.tooLarge(maxBytes: maximumProgressBytes)
-        }
-        let data: Data
-        do {
-            data = try Data(contentsOf: storageURL, options: .mappedIfSafe)
-        } catch {
-            throw FilterSyncStorageError.unreadable
-        }
-        guard data.count <= maximumProgressBytes else {
-            throw FilterSyncStorageError.tooLarge(maxBytes: maximumProgressBytes)
-        }
-        try refuseForeignRecord(in: data)
         let stored: Progress
         do {
             stored = try JSONDecoder().decode(Progress.self, from: data)
@@ -1435,51 +1421,100 @@ public actor FilterSync {
         return (.loaded, stored)
     }
 
-    /// Refuses a file that says it belongs to something else.
+    /// The bytes of a progress or range record, or nil when there is no file.
+    /// Shared with `RangeScanProgress`, which differs only in its byte cap:
+    /// size is checked from the file's attributes before anything is mapped,
+    /// and again on what was read.
+    static func readRecord(at storageURL: URL, maxBytes: Int) throws -> Data? {
+        guard FileManager.default.fileExists(atPath: storageURL.path) else { return nil }
+        let attributes: [FileAttributeKey: Any]
+        do {
+            attributes = try FileManager.default.attributesOfItem(atPath: storageURL.path)
+        } catch {
+            throw FilterSyncStorageError.unreadable
+        }
+        if let size = attributes[.size] as? NSNumber, size.int64Value > Int64(maxBytes) {
+            throw FilterSyncStorageError.tooLarge(maxBytes: maxBytes)
+        }
+        let data: Data
+        do {
+            data = try Data(contentsOf: storageURL, options: .mappedIfSafe)
+        } catch {
+            throw FilterSyncStorageError.unreadable
+        }
+        guard data.count <= maxBytes else {
+            throw FilterSyncStorageError.tooLarge(maxBytes: maxBytes)
+        }
+        return data
+    }
+
+    /// What a file says it is, decoding only the marker so no progress field
+    /// is trusted. `RangeScanProgress` writes `recordKind`; forward progress
+    /// writes nothing, and a file written before the marker existed names
+    /// nothing and still loads, which is what keeps every wallet already on
+    /// disk readable.
+    static func recordKind(in data: Data) -> String? {
+        struct RecordKind: Decodable {
+            let record: String?
+        }
+        return (try? JSONDecoder().decode(RecordKind.self, from: data))?.record
+    }
+
+    /// Writes a record atomically, refusing one over the cap before touching
+    /// the disk.
+    static func writeRecord(_ record: some Encodable, to storageURL: URL, maxBytes: Int) throws {
+        let data = try JSONEncoder().encode(record)
+        guard data.count <= maxBytes else {
+            throw FilterSyncStorageError.tooLarge(maxBytes: maxBytes)
+        }
+        do {
+            try data.write(to: storageURL,
+                           options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        } catch {
+            throw FilterSyncStorageError.writeFailed
+        }
+    }
+
+    /// A file that says it belongs to something else is not forward progress.
     ///
     /// The one that can be here by mistake is a range-scan record: it carries
     /// `nextScanHeight` and `filterHeaders` under these exact names, the
     /// decoder ignores the keys it was not asked about, and the validation
     /// below passes on what is left, so a `scanRange` pointed at this wallet's
     /// progress file would come back and be read as the wallet's own frontier.
-    /// `RangeScanProgress` writes what it is; anything that names itself is
-    /// not forward progress. A file written before the marker existed names
-    /// nothing and still loads, which is what keeps every wallet already on
-    /// disk readable.
-    ///
-    /// Kept out of `load` so the loader's branch count stays where it was.
-    private static func refuseForeignRecord(in data: Data) throws {
-        struct RecordKind: Decodable {
-            let record: String?
-        }
-        guard let kind = (try? JSONDecoder().decode(RecordKind.self, from: data))?.record else {
-            return
-        }
-        throw FilterSyncStorageError.damaged(
-            "the file is a \"\(kind)\" record, not compact-filter progress")
-    }
-
     private static func validate(progress: Progress, startHeight: UInt32) throws {
+        if let kind = progress.record {
+            throw FilterSyncStorageError.damaged(
+                "the file is a \"\(kind)\" record, not compact-filter progress")
+        }
         guard progress.nextScanHeight >= startHeight else {
             throw FilterSyncStorageError.frontierBeforeWallet(
                 stored: progress.nextScanHeight, wallet: startHeight)
         }
-        guard progress.filterHeaders.count <= maximumPinnedHeaders else {
+        try validate(filterHeaders: progress.filterHeaders, below: progress.nextScanHeight,
+                     maxPinned: maximumPinnedHeaders)
+        try validate(receipt: progress.crossCheck)
+    }
+
+    /// Canonical decimal heights (unique dictionary keys), 32-byte headers, and
+    /// nothing pinned at or above the frontier the record claims to have
+    /// scanned to. Both records are held to it.
+    static func validate(filterHeaders: [String: String], below frontier: UInt32,
+                         maxPinned: Int) throws {
+        guard filterHeaders.count <= maxPinned else {
             throw FilterSyncStorageError.damaged("there are too many pinned filter headers")
         }
-        for (key, value) in progress.filterHeaders {
+        for (key, value) in filterHeaders {
             guard let height = UInt32(key), String(height) == key else {
                 throw FilterSyncStorageError.damaged("a filter-header height is not canonical decimal")
             }
-            guard height < progress.nextScanHeight else {
+            guard height < frontier else {
                 throw FilterSyncStorageError.damaged("a pinned filter header is at or beyond the scan frontier")
             }
-            guard value.utf8.count == 64,
-                  let header = Data(hex: value), header.count == 32 else {
+            guard value.utf8.count == 64, Data(hex: value)?.count == 32 else {
                 throw FilterSyncStorageError.damaged("a pinned filter header is not 32 bytes")
             }
         }
-        try validate(receipt: progress.crossCheck)
     }
 
     /// The receipt is read back as a claim about who corroborated this
@@ -1613,15 +1648,6 @@ public actor FilterSync {
 
     private func persist(_ candidate: Progress) throws {
         guard let storageURL else { return }
-        let data = try JSONEncoder().encode(candidate)
-        guard data.count <= Self.maximumProgressBytes else {
-            throw FilterSyncStorageError.tooLarge(maxBytes: Self.maximumProgressBytes)
-        }
-        do {
-            try data.write(to: storageURL,
-                           options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-        } catch {
-            throw FilterSyncStorageError.writeFailed
-        }
+        try Self.writeRecord(candidate, to: storageURL, maxBytes: Self.maximumProgressBytes)
     }
 }
