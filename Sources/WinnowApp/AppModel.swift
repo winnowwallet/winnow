@@ -75,31 +75,14 @@ final class AppModel {
 
         var errorDescription: String? {
             switch self {
-            case .noWallet, .mnemonicUnavailable, .rootKeyUnavailable, .duplicateVault, .storageDamaged,
-                 .noStorage:
-                walletErrorDescription
-            case .paymentDetailsUnavailable, .personCannotBePaid, .personCannotCoOwn, .feeDecisionRequired,
-                 .sendReviewChanged, .vaultSpendNotRecorded:
-                paymentErrorDescription
-            case .noStack, .noPeers, .invalidPeer, .wrongNetwork: connectionErrorDescription
-            case .deviceAuthUnavailable, .deviceAuthFailed, .spendAlreadyInFlight: authorizationErrorDescription
-            }
-        }
-
-        private var walletErrorDescription: String? {
-            switch self {
+            // MARK: Wallet
             case .noWallet: "No wallet is open."
             case .mnemonicUnavailable: "The new wallet's mnemonic could not be read back from the Keychain."
             case .rootKeyUnavailable: "This wallet's signing key is limited to its own account and cannot authorize this operation."
             case .duplicateVault: "A vault with this descriptor already exists."
             case let .storageDamaged(message): message
             case .noStorage: "Winnow could not reach its storage, so a chain reorganisation could not be recorded. Syncing has stopped rather than continue on stale data."
-            default: nil
-            }
-        }
-
-        private var paymentErrorDescription: String? {
-            switch self {
+            // MARK: Payments
             case .paymentDetailsUnavailable: "Payment details aren’t available on this phone."
             case .personCannotBePaid: "This person has no pay-to key or address yet. Ask them for their Winnow card."
             case let .personCannotCoOwn(name): "\(name) has no signer key yet. Ask them for their Winnow card before creating savings together."
@@ -111,26 +94,15 @@ final class AppModel {
             case let .vaultSpendNotRecorded(txid, reason):
                 "The payment was sent (\(txid.displayHex)) but this account's coins could not be updated (\(reason)). "
                     + "Reopen the account before spending from it again."
-            default: nil
-            }
-        }
-
-        private var connectionErrorDescription: String? {
-            switch self {
+            // MARK: Connection
             case .noStack: "The sync stack is not running."
             case .noPeers: "No peers reachable. Check the network connection or add a manual peer in Settings."
             case let .invalidPeer(text): "Invalid peer “\(text)” — use host:port."
             case let .wrongNetwork(network): "This bundle is for \(network); switch the network in Settings first."
-            default: nil
-            }
-        }
-
-        private var authorizationErrorDescription: String? {
-            switch self {
+            // MARK: Authorization
             case .deviceAuthUnavailable: "Set a device passcode first — sensitive wallet actions require device authentication."
             case .deviceAuthFailed: "Device authentication failed."
             case .spendAlreadyInFlight: "Another payment is already being signed and broadcast. Wait for it to finish."
-            default: nil
             }
         }
     }
@@ -1195,9 +1167,7 @@ final class AppModel {
             // apply() does not move the wallet frontier — FilterSync is
             // authoritative here. Persist it so exportBundle() and the next
             // launch's startHeight match what the UI already shows.
-            let frontier = await filters.frontier()
-            try await wallet.recordScanHeight(frontier.nextScanHeight,
-                                              scannedThroughHash: frontier.scannedThroughHash)
+            try await persistScanFrontier(of: filters, to: wallet)
             // Held confirmation tombstones age out on the same 100-block
             // horizon spent-coin tombstones do (#157).
             try await broadcaster.pruneConfirmed(scannedTo: await filters.nextScanHeight)
@@ -1222,15 +1192,21 @@ final class AppModel {
             // checkpoint comparison before anything above ran for them, so
             // their progress is verified and worth keeping — the batch that
             // threw applied nothing. Keep WalletState from lagging it.
-            let frontier = await filters.frontier()
-            try? await wallet.recordScanHeight(frontier.nextScanHeight,
-                                               scannedThroughHash: frontier.scannedThroughHash)
+            try? await persistScanFrontier(of: filters, to: wallet)
             // Backgrounding, a network switch or an expired background check
             // cancels the scan and closes its peers. Nothing failed.
             recordSyncFailure(error)
         }
         await refresh()
         return complete
+    }
+
+    /// Writes the filter scan's frontier into the wallet file, so the wallet's
+    /// recorded height never lags what FilterSync has verified.
+    private func persistScanFrontier(of filters: FilterSync, to wallet: Wallet) async throws {
+        let frontier = await filters.frontier()
+        try await wallet.recordScanHeight(frontier.nextScanHeight,
+                                          scannedThroughHash: frontier.scannedThroughHash)
     }
 
     private func recordSyncFailure(_ error: Error) {
@@ -1465,9 +1441,7 @@ final class AppModel {
         // The UI snapshot already prefers filters.nextScanHeight; export
         // must too, in case the last persist was skipped (failed pass).
         if let filters = stack?.filters {
-            let frontier = await filters.frontier()
-            try await wallet.recordScanHeight(frontier.nextScanHeight,
-                                              scannedThroughHash: frontier.scannedThroughHash)
+            try await persistScanFrontier(of: filters, to: wallet)
         }
         var bundle = try await wallet.exportBundle(includeMnemonic: includeMnemonic)
         bundle.vaults = try await vaultStore.backupRecords()

@@ -37,16 +37,7 @@ public enum WalletError: Error, Equatable, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .invalidDescriptor, .descriptorMismatch, .accountKeyMismatch, .mnemonicUnavailable: keyErrorDescription
-        case .noPayments, .changeOutputMissing, .transactionTooLarge, .exportWhilePending,
-             .invalidTransactionAmounts:
-            paymentErrorDescription
-        case .invalidBundle, .unsupportedWalletData, .storageTooLarge: storageErrorDescription
-        }
-    }
-
-    private var keyErrorDescription: String? {
-        switch self {
+        // MARK: Keys
         case .invalidDescriptor:
             // Deliberately not echoed. This is reached with a descriptor taken
             // straight from an imported bundle, and a descriptor may carry an
@@ -61,12 +52,7 @@ public enum WalletError: Error, Equatable, LocalizedError {
             "The signing key does not match this wallet's account."
         case .mnemonicUnavailable:
             "This wallet has no recovery phrase to export — it was imported from an extended key, not a BIP39 mnemonic."
-        default: nil
-        }
-    }
-
-    private var paymentErrorDescription: String? {
-        switch self {
+        // MARK: Payments
         case .noPayments:
             "Nothing to send."
         case .changeOutputMissing:
@@ -77,12 +63,7 @@ public enum WalletError: Error, Equatable, LocalizedError {
             "Wait for pending transactions to confirm before exporting. A mid-send backup would drop the coins being spent."
         case .invalidTransactionAmounts:
             "A matched Bitcoin transaction contains invalid amounts. Wallet state was not changed."
-        default: nil
-        }
-    }
-
-    private var storageErrorDescription: String? {
-        switch self {
+        // MARK: Storage
         case let .invalidBundle(reason):
             "Invalid import bundle: \(reason)"
         case .unsupportedWalletData:
@@ -92,7 +73,6 @@ public enum WalletError: Error, Equatable, LocalizedError {
             """
         case let .storageTooLarge(maxBytes):
             "The wallet file is larger than the \(maxBytes / 1_048_576) MB this wallet can hold and was not read."
-        default: nil
         }
     }
 }
@@ -1777,9 +1757,9 @@ public actor Wallet {
         let resolved: HDKey
         switch try keyStore.load(walletID: id) {
         case let .mnemonic(words):
-            resolved = try Self.walk(HDKey(seed: BIP39.seed(mnemonic: words)), down: origin.path)
+            resolved = try HDKey(seed: BIP39.seed(mnemonic: words)).derived(path: origin.path)
         case let .masterKey(xprv):
-            resolved = try Self.walk(HDKey.deserialize(xprv), down: origin.path)
+            resolved = try HDKey.deserialize(xprv).derived(path: origin.path)
         case let .accountKey(xprv, fingerprint):
             resolved = try HDKey.deserialize(xprv)
             guard fingerprint == origin.fingerprint, Int(resolved.depth) == origin.path.count,
@@ -1788,12 +1768,6 @@ public actor Wallet {
         }
         guard resolved.isPrivate, resolved.neutered == accountKey else { throw WalletError.accountKeyMismatch }
         return resolved
-    }
-
-    private static func walk(_ key: HDKey, down path: [UInt32]) throws -> HDKey {
-        var derived = key
-        for index in path { derived = try derived.child(at: index) }
-        return derived
     }
 
     /// BIP86 key-path spend, below the account already checked for this wallet.
