@@ -111,6 +111,14 @@ CI retains evidence without building or deploying the separate website.
 
 ## Checks that need devices or external evidence
 
+The [Satochip recovery lab](../Tools/Satochip/README.md) is an explicit software
+interoperability check against a pinned applet in a Java Card simulator. It
+exercises backup serialization, fresh signing sessions and nonce failures;
+optional private Bitcoin Core checks validate the resulting transactions.
+Its report distinguishes the stock applet from a proposed counter fix. This
+does not establish physical-card or iPhone/NFC compatibility, and it is not
+part of ordinary SwiftPM CI.
+
 Simulator and in-memory tests do not establish locked-device Keychain behavior,
 actual iCloud transport or iCloud Keychain synchronization. A CloudKit save date
 confirms an upload, without establishing an end-to-end recovery result. Keep

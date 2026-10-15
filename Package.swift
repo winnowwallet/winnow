@@ -73,7 +73,8 @@ let package = Package(
         ),
         .executableTarget(
             name: "WinnowFixture",
-            dependencies: ["TestSupport"],
+            dependencies: ["TestSupport", "WalletCore", "VaultKit",
+                           .product(name: "P256K", package: "swift-secp256k1")],
             path: "Tools/Fixture",
             exclude: ["README.md"]
         ),

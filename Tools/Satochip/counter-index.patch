@@ -1,0 +1,5 @@
+--- a/src/org/satochip/applet/CardEdge.java
++++ b/src/org/satochip/applet/CardEdge.java
+@@ -3351 +3351 @@
+-        bip327_valid_ids[(short) (bip327_counter % BIP327_MAX_NB_ID)] = bip327_counter;
++        bip327_valid_ids[(short) (bip327_counter & (BIP327_MAX_NB_ID - 1))] = bip327_counter;

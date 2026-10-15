@@ -241,33 +241,52 @@ extension MuSig {
         }
     }
 
+    /// Public BIP327 inputs for a signer that keeps its key and nonces outside
+    /// this process. The signer must trust or independently verify the session
+    /// these values describe; they do not establish transaction approval.
+    public struct PartialSignParameters: Equatable, Sendable {
+        public let nonceCoefficient: Data
+        public let challengeTimesKeyCoefficient: Data
+        public let negateNonces: Bool
+        public let negateSecretKey: Bool
+    }
+
+    /// Derive the public inputs used by BIP327 Sign, including the complete
+    /// tweak/parity chain. No private key or secret nonce is needed.
+    public static func partialSignParameters(publicKey: Data, session: Session) throws -> PartialSignParameters {
+        let (context, b, noncePoint, challenge) = try session.values()
+        let coefficient = try session.coefficient(of: publicKey)
+        return PartialSignParameters(
+            nonceCoefficient: b,
+            challengeTimesKeyCoefficient: try scalarMultiply(challenge, coefficient),
+            negateNonces: noncePoint.first == 0x03,
+            negateSecretKey: (!context.hasEvenY) != (context.parityAccumulator != scalarOne))
+    }
+
     /// BIP327 Sign: the 32-byte partial signature. The secret nonce is zeroed
     /// in place — reusing a secnonce across sessions leaks the secret key.
     public static func partialSign(secretNonce: inout Data, secretKey: Data, session: Session) throws -> Data {
         defer { secretNonce.replaceSubrange(secretNonce.startIndex..., with: Data(repeating: 0, count: secretNonce.count)) }
         guard secretNonce.count == 97 else { throw MuSig2Error.invalidNonce }
-        let (context, b, noncePoint, challenge) = try session.values()
         var k1 = secretNonce.prefix(32)
         var k2 = secretNonce.subdata(in: secretNonce.startIndex + 32 ..< secretNonce.startIndex + 64)
         guard Data(k1) != scalarZero, Data(k2) != scalarZero else { throw MuSig2Error.secnonceReused }
-        let nonceIsOdd = noncePoint.first == 0x03
-        if nonceIsOdd { // negate both nonce scalars (BIP327 Sign)
-            k1 = try scalarNegate(Data(k1))
-            k2 = try scalarNegate(Data(k2))
-        }
         let secret = secretKey
         guard secret.count == 32, secret != scalarZero, secret.lexicographicallyPrecedes(groupOrder) else {
             throw MuSig2Error.invalidSecretKey
         }
         let publicKey = try privateToPublic(secret)
         guard publicKey == secretNonce.suffix(33) else { throw MuSig2Error.secnonceMismatch }
-        let coefficient = try session.coefficient(of: publicKey)
+        let parameters = try partialSignParameters(publicKey: publicKey, session: session)
+        if parameters.negateNonces {
+            k1 = try scalarNegate(Data(k1))
+            k2 = try scalarNegate(Data(k2))
+        }
         // d = g · gacc · d′ with g = −1 when the tweaked aggregate key is odd-Y.
         var effectiveSecret = secret
-        if !context.hasEvenY { effectiveSecret = try scalarNegate(effectiveSecret) }
-        if context.parityAccumulator != scalarOne { effectiveSecret = try scalarNegate(effectiveSecret) }
-        let signaturePart = try scalarMultiply(challenge, scalarMultiply(coefficient, effectiveSecret))
-        return try scalarAdd(Data(k1), scalarAdd(scalarMultiply(b, Data(k2)), signaturePart))
+        if parameters.negateSecretKey { effectiveSecret = try scalarNegate(effectiveSecret) }
+        let signaturePart = try scalarMultiply(parameters.challengeTimesKeyCoefficient, effectiveSecret)
+        return try scalarAdd(Data(k1), scalarAdd(scalarMultiply(parameters.nonceCoefficient, Data(k2)), signaturePart))
     }
 
     /// BIP327 PartialSigVerify: s·G == R_s + e·a·g·gacc·P with R_s the

@@ -148,6 +148,25 @@ struct MuSig2Tests {
         }
     }
 
+    @Test("external signer inputs pin the first BIP327 signing vector")
+    func externalSignerParameters() throws {
+        let vectors = try Self.vectors("sign_verify_vectors.json")
+        let row = (vectors["valid_test_cases"] as! [[String: Any]])[0]
+        let pubkeys = Self.hexList(vectors["pubkeys"]!)
+        let keys = (row["key_indices"] as! [Int]).map { pubkeys[$0] }
+        let session = MuSig.Session(
+            aggregateNonce: Self.hexList(vectors["aggnonces"]!)[row["aggnonce_index"] as! Int],
+            publicKeys: keys, message: Self.hexList(vectors["msgs"]!)[row["msg_index"] as! Int])
+        let parameters = try MuSig.partialSignParameters(publicKey: keys[row["signer_index"] as! Int], session: session)
+        #expect(parameters.nonceCoefficient == Self.hex("f6311d2583176bb178ec12973b760a2d733544d4c72b4b3a8c260f7679f7d9c6"))
+        #expect(parameters.challengeTimesKeyCoefficient == Self.hex("f696bb3be7fc4ee399c173813d0bddded1471cfe8acf5f729b1610d489eb3600"))
+        #expect(parameters.negateNonces)
+        #expect(!parameters.negateSecretKey)
+        #expect(throws: MuSig.MuSig2Error.unknownSigner) {
+            try MuSig.partialSignParameters(publicKey: Data(repeating: 0, count: 33), session: session)
+        }
+    }
+
     @Test("signing with plain and x-only tweaks (the Taproot vault shape)")
     func tweaks() throws {
         let vectors = try Self.vectors("tweak_vectors.json")

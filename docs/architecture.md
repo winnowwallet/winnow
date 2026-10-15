@@ -15,7 +15,7 @@ tools use the root [Package.swift](../Package.swift) and
 | [TestSupport](../Tests/Support/README.md) | In-memory keys, controlled peers and disposable Bitcoin Core fixtures | WalletCore, VaultKit and P256K; development only |
 | [winnow-debug](../Tools/Debug/README.md) | Offline inspection, diagnostics, generators and network soaks | WalletCore |
 | [WinnowFuzz](../Tools/Fuzz/README.md) | Bounded hostile-input parsing and invariants | WalletCore and VaultKit through WinnowFuzzCore |
-| [winnow-fixture](../Tools/Fixture/README.md) | Test-bank preparation | TestSupport |
+| [winnow-fixture](../Tools/Fixture/README.md) | Test-bank preparation and the [Satochip recovery lab](../Tools/Satochip/README.md) coordinator | TestSupport, WalletCore, VaultKit and P256K |
 
 WalletCore never imports VaultKit. `VaultRecord` stays in WalletCore because
 wallet state and backup imports carry optional shared accounts. A saved account
