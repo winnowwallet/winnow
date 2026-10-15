@@ -13,6 +13,13 @@ public enum FilterSyncError: LocalizedError, Equatable, Sendable {
     case filterHeaderMismatch(height: UInt32)
     /// A cfilter arrived for a block we did not ask about.
     case unexpectedBlockHash
+    /// The pool is holding seats for transaction relay only
+    /// (`PeerPool.enterRelayOnly(seats:)`), so there is no read side to run.
+    case relayOnly
+    /// `FilterSync.CrossCheckPolicy.requireDistinctSources` is in force and
+    /// the peers that agreed about our filter commitments did not span
+    /// acquisition channels, so the run advanced nothing.
+    case crossCheckUnavailable(String)
 
     public var errorDescription: String? {
         switch self {
@@ -20,6 +27,8 @@ public enum FilterSyncError: LocalizedError, Equatable, Sendable {
             "Finishing sync. Try loading the payment again in a moment."
         case .noPeers:
             "No Bitcoin peers are available for compact-filter synchronization."
+        case .relayOnly:
+            "Winnow is keeping Bitcoin peers connected only to finish relaying a payment. Resume syncing to scan for new blocks."
         case let .peersCoolingDown(count):
             "\(count) Bitcoin peer\(count == 1 ? " is" : "s are") resting briefly after a slow reply. Scanning will resume on its own."
         case let .checkpointMismatch(reason):
@@ -30,6 +39,8 @@ public enum FilterSyncError: LocalizedError, Equatable, Sendable {
             "A compact filter did not match its authenticated header at block \(height)."
         case .unexpectedBlockHash:
             "A Bitcoin peer returned a compact filter for a block Winnow did not request."
+        case let .crossCheckUnavailable(reason):
+            "Winnow could not check this scan against connections from different sources (\(reason)). Nothing was scanned; it will try again as the peer pool changes."
         }
     }
 }
@@ -78,9 +89,14 @@ public struct BlockMatch: Sendable, Equatable {
 ///
 /// Flow per `sync` run:
 /// 1. Sync the block-header chain to the peer tip (getheaders).
-/// 2. `getcfcheckpt` at the tip from up to 3 peers; peers that disagree with
-///    the majority answer are disconnected (BIP157 filters are not
-///    consensus-committed — cross-peer comparison is the mitigation).
+/// 2. `getcfcheckpt` at the tip from up to 3 peers spanning source classes —
+///    the same selection step 3 uses, not seating order; peers that disagree
+///    with the majority answer are disconnected (BIP157 filters are not
+///    consensus-committed — cross-peer comparison is the mitigation). Which
+///    endpoints agreed, and through which acquisition channels, is recorded
+///    as a `CrossCheckReceipt` and saved beside the frontier, and
+///    `CrossCheckPolicy` decides whether an answer that came through a single
+///    channel may advance the scan at all.
 /// 3. `getcfheaders` per ≤1000-block batch from up to 3 peers spanning source
 ///    classes, judged by the same strict-majority rule as step 2 — never by
 ///    which peer was seated first; the announced previous filter header must
@@ -127,16 +143,171 @@ public actor FilterSync {
     /// it is matched is a tenth of what it was.
     public static let defaultFiltersPerChunk: UInt32 = 100
 
+    /// The most bytes one `cfilter` message may carry before the peer sending
+    /// it is refused, and the unit `chunkByteBound` multiplies out.
+    ///
+    /// Derived, because nothing already stated bounds it usefully.
+    /// `GCSFilter.maxEncodedSize` is the decoder's resource ceiling and is
+    /// 4,000,000 — the same number as `MessageFramer.maxPayloadSize`, so a
+    /// burst bounded by it is bounded by exactly what the framer already
+    /// enforced, message by message, and 100 of those is 400 MB.
+    ///
+    /// A BIP158 basic filter is bounded by the block it summarises. The
+    /// element set is one entry per non-OP_RETURN output plus one per spent
+    /// prevout script, and a block of at most 4,000,000 serialized bytes
+    /// (Core's MAX_BLOCK_SERIALIZED_SIZE, which is also the protocol message
+    /// maximum) cannot hold more than 4,000,000 / 9 ≈ 444,444 outputs, the
+    /// smallest output being 8 value bytes and a 1-byte empty script; inputs
+    /// are 41 bytes each and so bound the count lower still. Golomb-Rice at
+    /// P=19 spends 19 remainder bits plus a unary terminator per element, and
+    /// the quotients over the whole sorted set sum to at most n·M / 2^19 ≈
+    /// 1.5n bits, so an n-element filter is under 21.5n bits — about 2.7n
+    /// bytes, or ~1.19 MB at the maximum n. This rounds that up, and stays
+    /// far above the 15–20 KB a real full block actually produces.
+    ///
+    /// It is a resource bound, deliberately not a plausibility one: refusing
+    /// at anything near what honest peers send would drop them on the first
+    /// unusual block, and that is a worse failure than holding 1.25 MB.
+    public static let maxFilterMessageBytes = 1_250_000
+
+    /// How many bytes a chunk of `filters` cfilters may total. The bound
+    /// travels with the request, so a short final chunk is bounded by its own
+    /// length rather than by the chunk size the run was configured with.
+    static func chunkByteBound(filters: Int) -> Int {
+        filters * maxFilterMessageBytes
+    }
+
+    /// How many distinct source classes must agree before
+    /// `CrossCheckPolicy.requireDistinctSources` lets a scan advance. Two,
+    /// because what it rules out is one channel agreeing with itself, and how
+    /// many answers are needed to name a liar is a separate question the
+    /// strict-majority tally already asks.
+    public static let minimumAgreeingSourceClasses = 2
+
+    /// Whether a scan may advance on answers that all reached us through one
+    /// acquisition channel.
+    ///
+    /// `crossSourceSet` already prefers a set that spans classes, but it is a
+    /// ceiling and not a quota: one class, or one peer, is used rather than
+    /// refused. Two ordinary pool states reach that, neither of them an
+    /// attack. `DiversityPolicy` exempts manual peers from the source rule, so
+    /// someone who typed in three of their own nodes has one class holding
+    /// every seat; and the ceiling counts against `peerCount` rather than
+    /// against how many peers are actually connected, so a pool sitting at two
+    /// of its three seats admits two peers of one class. In both, the
+    /// comparison that is supposed to span channels can run entirely inside
+    /// one of them.
+    ///
+    /// Mainnet defaults to `requireDistinctSources`. A caller may explicitly
+    /// choose degraded single-source verification after explaining the tradeoff
+    /// to its user. Test networks default to `acceptSingleSource` so a local
+    /// fixture or explicitly chosen test node can operate on its own.
+    public enum CrossCheckPolicy: String, Codable, Sendable, CaseIterable {
+        public static func `default`(for network: BitcoinNetwork) -> Self {
+            network == .mainnet ? .requireDistinctSources : .acceptSingleSource
+        }
+
+        /// Whatever agreed is enough, down to a lone surviving peer.
+        case acceptSingleSource
+        /// The adopted `cfcheckpt` answer must have come from peers of at
+        /// least `minimumAgreeingSourceClasses` distinct known classes, or the
+        /// run throws `FilterSyncError.crossCheckUnavailable` having changed
+        /// nothing.
+        case requireDistinctSources
+
+        /// Whether this run's agreement may advance spend-relevant state.
+        func admits(_ receipt: CrossCheckReceipt) -> Bool {
+            switch self {
+            case .acceptSingleSource: true
+            case .requireDistinctSources: receipt.spansDistinctSources
+            }
+        }
+    }
+
+    /// Who agreed about the filter commitments a run scanned on, kept so a
+    /// caller can say afterwards which acquisition channels corroborated the
+    /// answer rather than inferring it from configuration — which, per
+    /// `CrossCheckPolicy`, does not imply it.
+    ///
+    /// It attests to the checkpoint comparison the run anchored on, not to
+    /// every request that followed it. A peer that agreed and then dropped is
+    /// still named, because what was corroborated across channels is the
+    /// answer this run scanned against; the per-batch cfheaders comparison
+    /// then runs over whichever approved peers are still there, and the batch
+    /// commit is refused if it disagrees with that answer either way.
+    ///
+    /// Saved with the frontier and rewritten on every commit, so the two
+    /// always describe the same pass; a run that advances nothing leaves the
+    /// previous receipt alone because it left the frontier alone too. A
+    /// degraded run under `acceptSingleSource` writes an honest one-class
+    /// receipt rather than none — missing corroboration is a thing to record,
+    /// not to hide — and `spansDistinctSources` is what separates the two.
+    public struct CrossCheckReceipt: Codable, Sendable, Equatable {
+        /// One peer whose `cfcheckpt` answer was adopted.
+        public struct Agreement: Codable, Sendable, Equatable {
+            /// `PeerEndpoint.description`: host and port, which is what the
+            /// pool already writes to its peers file.
+            public let endpoint: String
+            /// The class the pool reached this endpoint through, and nil when
+            /// it knows none. An unknown class never counts towards
+            /// `spansDistinctSources`: not knowing where a peer came from is
+            /// not evidence that it came from somewhere else.
+            public let source: PeerSource?
+
+            public init(endpoint: String, source: PeerSource?) {
+                self.endpoint = endpoint
+                self.source = source
+            }
+        }
+
+        /// The chain height the answers were about.
+        public let tipHeight: UInt32
+        /// SHA256d over the adopted `cfcheckpt` message, hex. Two receipts
+        /// carrying the same digest name the same answer, so runs can be
+        /// compared without keeping the checkpoint list itself.
+        public let answerDigest: String
+        /// The peers whose answer was adopted, in the order they were asked.
+        public let agreed: [Agreement]
+
+        public init(tipHeight: UInt32, answerDigest: String, agreed: [Agreement]) {
+            self.tipHeight = tipHeight
+            self.answerDigest = answerDigest
+            self.agreed = agreed
+        }
+
+        /// The distinct known classes among `agreed`.
+        public var sourceClasses: Set<PeerSource> { Set(agreed.compactMap(\.source)) }
+
+        /// Whether the agreement spans acquisition channels.
+        ///
+        /// "At least two distinct classes agreed" and "no single class
+        /// supplied every agreeing answer" are one predicate, not two, once
+        /// the classes being counted are the *agreeing peers'* rather than the
+        /// pool's. Counting the pool's is the mistake this type exists to
+        /// stop: a pool holding three classes proves nothing about which of
+        /// them answered.
+        public var spansDistinctSources: Bool {
+            sourceClasses.count >= FilterSync.minimumAgreeingSourceClasses
+        }
+    }
+
     /// Persisted sync progress.
     public struct Progress: Codable, Sendable, Equatable {
         /// Height of the next block whose filter must be scanned.
         public var nextScanHeight: UInt32
         /// Pinned filter headers: decimal height → hex (internal byte order).
         public var filterHeaders: [String: String]
+        /// The cross-check the run that last moved this frontier ran. Nil in a
+        /// file written before receipts existed — an absent field decodes to
+        /// nil, so there is nothing to migrate — and nil after a rollback,
+        /// which is a corroboration taken on a branch that no longer exists.
+        public var crossCheck: CrossCheckReceipt?
 
-        public init(nextScanHeight: UInt32, filterHeaders: [String: String] = [:]) {
+        public init(nextScanHeight: UInt32, filterHeaders: [String: String] = [:],
+                    crossCheck: CrossCheckReceipt? = nil) {
             self.nextScanHeight = nextScanHeight
             self.filterHeaders = filterHeaders
+            self.crossCheck = crossCheck
         }
     }
 
@@ -154,27 +325,49 @@ public actor FilterSync {
     /// whole pool, so a full-pool comparison necessarily spans more than one
     /// source. It also uses all the evidence available instead of discarding a
     /// third of it, at the cost of one extra round trip per sync.
+    ///
+    /// That last argument holds less than it reads, which is why the peers
+    /// asked are now chosen by `crossSourceSet` rather than by seating order
+    /// and why `CrossCheckPolicy` counts the classes that actually answered.
+    /// `DiversityPolicy` exempts manual peers from the source rule, so an
+    /// all-manual pool is one class holding every seat; and its ceiling counts
+    /// against `peerCount`, not against how many peers are connected, so a
+    /// pool at two of three seats admits two peers of one class. In both, a
+    /// full-pool comparison spans exactly one source.
     public let requiredCheckpointPeers: Int
     /// Filters per `getcfilters` request, clamped to 1 ... `maxRangePerRequest`.
     /// A caller that is tighter on memory than on round trips lowers it; see
     /// `defaultFiltersPerChunk`.
     public let filtersPerChunk: UInt32
+    /// Whether this instance may advance on answers from a single acquisition
+    /// channel. Mainnet requires distinct sources unless explicitly overridden.
+    public let crossCheckPolicy: CrossCheckPolicy
     private let storageURL: URL?
     public nonisolated let persistenceState: PersistenceState
     private var progress: Progress
-    private var requesting = false
+    var requesting = false
+    var rangeRun: RangeScanRun?
 
     private static let maximumProgressBytes = 128 * 1_024 * 1_024
     private static let maximumPinnedHeaders = 2_000_000
+    /// A receipt names the peers that answered one `getcfcheckpt` round, which
+    /// is at most three. The bound is generous rather than exact because it is
+    /// here to stop a file growing without limit, not to restate a request
+    /// size a later version may change.
+    private static let maximumReceiptEntries = 64
+    /// `host:port`, and a hostname is bounded at 253 characters.
+    private static let maximumReceiptEndpointBytes = 320
 
     public init(pool: PeerPool, chain: HeaderChain, startHeight: UInt32,
                 storageURL: URL? = nil, requiredCheckpointPeers: Int = 3,
-                filtersPerChunk: UInt32 = FilterSync.defaultFiltersPerChunk) throws {
+                filtersPerChunk: UInt32 = FilterSync.defaultFiltersPerChunk,
+                crossCheckPolicy: CrossCheckPolicy? = nil) throws {
         self.pool = pool
         self.chain = chain
         self.storageURL = storageURL
         self.requiredCheckpointPeers = requiredCheckpointPeers
         self.filtersPerChunk = min(max(1, filtersPerChunk), Self.maxRangePerRequest)
+        self.crossCheckPolicy = crossCheckPolicy ?? .default(for: pool.params.network)
         if let storageURL {
             let result = try Self.load(storageURL: storageURL, startHeight: startHeight)
             persistenceState = result.state
@@ -189,6 +382,15 @@ public actor FilterSync {
     /// Highest fully-scanned height; nil when nothing has been scanned yet.
     public var lastScannedHeight: UInt32? {
         progress.nextScanHeight == 0 ? nil : progress.nextScanHeight - 1
+    }
+
+    /// The next height to scan and the hash of the last block scanned, read
+    /// together so a caller can persist both (`Wallet.recordScanHeight`)
+    /// without a pass landing between two reads.
+    public func frontier() async -> (nextScanHeight: UInt32, scannedThroughHash: Data?) {
+        let next = progress.nextScanHeight
+        guard next > 0 else { return (next, nil) }
+        return (next, await chain.blockHash(at: next - 1))
     }
 
     public func filterHeader(at height: UInt32) -> Data? {
@@ -224,6 +426,12 @@ public actor FilterSync {
         throw lastError
     }
 
+    /// The cross-check that authorised the frontier on disk, which is what a
+    /// caller reads after a restart to say which sources it is standing on.
+    /// Nil means no run has advanced this store since receipts existed, or a
+    /// rollback cleared one — never "it was corroborated and we lost the note".
+    public var lastCrossCheck: CrossCheckReceipt? { progress.crossCheck }
+
     /// `maxBlocks` bounds one run: at most that many blocks are scanned before
     /// it returns, and the next call resumes from the persisted frontier. Nil
     /// scans to the tip, which is what every caller had before. A bounded run
@@ -233,26 +441,27 @@ public actor FilterSync {
     /// `onReorg` is called with the fork height when the header sync replaced a
     /// branch, and is awaited **before** any filter work resumes.
     ///
+    /// Returns the run's `CrossCheckReceipt` — who agreed about the filter
+    /// commitments it scanned on — or nil for a run that found nothing to
+    /// scan and so compared nobody. The same receipt is saved with the
+    /// frontier, so a caller that restarts reads `lastCrossCheck` instead.
+    /// Discardable: a caller that does not check its corroboration is in
+    /// exactly the position it was in before receipts existed.
+    ///
     /// The ordering is the requirement, not a convenience. Scanning forward
     /// from a frontier that describes the orphaned branch is precisely the bug
     /// being fixed, so the rollback has to finish first, and a throw from it
     /// aborts the sync rather than proceeding with state that is known stale
     /// (#127).
+    @discardableResult
     public func sync(watchScripts: [Data],
                      maxBlocks: UInt32? = nil,
                      onReorg: (@Sendable (UInt32) async throws -> Void)? = nil,
-                     onMatch: @Sendable (BlockMatch) async throws -> Void) async throws {
+                     onMatch: @Sendable (BlockMatch) async throws -> Void) async throws
+        -> CrossCheckReceipt? {
         try beginRequest()
         defer { requesting = false }
-        var peers = await pool.connectedPeers()
-        guard !peers.isEmpty else {
-            // Same distinction as `PeerPool.syncHeaders`: since transport
-            // failures cool peers off rather than banning them, an empty pool
-            // is routinely a transient state rather than a peerless one, and
-            // saying "no peers are available" would be untrue (#82).
-            let cooling = await pool.coolingEndpoints.count
-            throw cooling > 0 ? FilterSyncError.peersCoolingDown(cooling) : FilterSyncError.noPeers
-        }
+        var peers = try await peersForReading()
 
         // 1. Headers to tip. A stale or broken peer is evicted and the pool
         // retries another peer without discarding already-persisted progress.
@@ -268,19 +477,19 @@ public actor FilterSync {
         let tip = await chain.height
         let tipHash = await chain.tipHash
         try Self.validate(progress: progress, againstTip: tip)
-        guard tip >= progress.nextScanHeight else { return }
+        guard tip >= progress.nextScanHeight else { return nil }
         // How far this run may go. Everything below stops at the ceiling
         // rather than the tip, and a run that asked for no blocks at all stops
         // before any filter request is sent.
         guard let room = Self.scanCeiling(frontier: progress.nextScanHeight,
-                                          maxBlocks: maxBlocks, tip: tip) else { return }
+                                          maxBlocks: maxBlocks, tip: tip) else { return nil }
 
         // 2. cfcheckpt cross-peer comparison: collect answers about our tip,
         // adopt the majority, and only peers whose answer matched may go on
         // to serve filters. A pinned boundary the adopted reference
         // contradicts is rewound here, before any filter is read, when the
         // reference has the cross-source agreement to outrank it.
-        let (reference, approvedEndpoints) = try await adoptReference(
+        let (reference, approvedEndpoints, receipt) = try await adoptReference(
             from: peers, tipHash: tipHash, tip: tip, onReorg: onReorg)
         peers = try await approved(peers: approvedEndpoints)
         // A rewind may have moved the frontier back; the ceiling follows it.
@@ -329,6 +538,10 @@ public actor FilterSync {
             // later check can still ask for is kept.
             candidate.filterHeaders = Self.prunedFilterHeaders(
                 proposedHeaders, frontier: candidate.nextScanHeight)
+            // Written on every batch rather than once at the end, so the
+            // corroboration on disk can never describe an older pass than the
+            // frontier beside it — including when a later batch throws.
+            candidate.crossCheck = receipt
             try persist(candidate)
             progress = candidate
         }
@@ -344,6 +557,96 @@ public actor FilterSync {
            let announced = reference.filterHeaders.last, pinned != announced {
             throw FilterSyncError.checkpointMismatch("checkpoint filter header at \(lastCheckpoint) disagrees with cfcheckpt")
         }
+        return receipt
+    }
+
+    /// The peers a run may read the chain over, refused in the read side's own
+    /// terms. A relay-only pool is holding seats so a signed payment can finish
+    /// going out, not so the chain can be read over them; the header sync
+    /// would refuse anyway, and refusing first spends no cfcheckpt round trip.
+    /// Entry only: a run already past this keeps reading over the seats if the
+    /// pool narrows underneath it (see `PeerPool.enterRelayOnly(seats:)`; the
+    /// caller cancels and awaits a running scan before narrowing). An empty
+    /// pool is routinely a transient state rather than a peerless one, since
+    /// transport failures cool peers off rather than banning them, so "no
+    /// peers" is said only when nothing is cooling (#82).
+    func peersForReading() async throws -> [PeerConnection] {
+        guard await pool.mode == .full else { throw FilterSyncError.relayOnly }
+        let peers = await pool.connectedPeers()
+        guard !peers.isEmpty else {
+            let cooling = await pool.coolingEndpoints.count
+            throw cooling > 0 ? FilterSyncError.peersCoolingDown(cooling) : FilterSyncError.noPeers
+        }
+        return peers
+    }
+
+    /// The cfcheckpt anchoring every run is judged against, shared by the
+    /// forward sync and the range scan so the two cannot drift: collect the
+    /// peers' answers about the tip, adopt the majority, require it to speak
+    /// for every boundary the tip has, build the receipt naming who agreed,
+    /// admit it under the cross-check policy, and hand back the endpoints
+    /// allowed to serve filters.
+    ///
+    /// Core's ProcessGetCFCheckPt returns exactly `stopHeight / 1000` headers,
+    /// so a shorter list is not a terse peer: it is a list that says nothing
+    /// about the boundaries it omits, and every comparison below reads the
+    /// reference by index and compares only the heights it mentions. An empty
+    /// list once retired every boundary comparison at once and let a sync
+    /// report success on a filter-commitment chain no checkpoint ever covered.
+    /// A sub-1000-block chain announcing nothing is honest and permitted: the
+    /// expectation is the count our own tip implies, which is zero there.
+    ///
+    /// The receipt is built before the policy is consulted so a refusal can
+    /// say what it saw, and the approved set is derived from the same agreeing
+    /// peers by construction rather than by two filters that could drift. The
+    /// policy runs ahead of every effect a run could have, including its first
+    /// `onMatch`.
+    func anchoredReference(peers: [PeerConnection], tip: UInt32, tipHash: Data) async throws
+        -> (reference: CFCheckptMessage, approved: Set<String>, receipt: CrossCheckReceipt) {
+        let checkpoints = try await collectedCheckpoints(from: peers, tipHash: tipHash, tip: tip)
+        let reference = try await majorityReference(of: checkpoints).message
+        let expected = Int(tip / Self.checkpointInterval)
+        guard reference.filterHeaders.count == expected else {
+            throw FilterSyncError.checkpointMismatch(
+                "cfcheckpt announced \(reference.filterHeaders.count) checkpoints for tip \(tip), expected \(expected)")
+        }
+        let agreeing = checkpoints.filter { $0.message == reference }
+        let receipt = Self.receipt(tipHeight: tip, answer: reference, agreed: agreeing)
+        try requireAdmissible(receipt)
+        let approved = await Self.endpoints(of: agreeing.map(\.peer))
+        return (reference, approved, receipt)
+    }
+
+    /// Refuses the run when the agreement does not meet the policy, naming
+    /// what was seen rather than what was wanted: "cannot cross-check yet" is
+    /// only worth showing someone if it can say how far short the pool fell.
+    func requireAdmissible(_ receipt: CrossCheckReceipt) throws {
+        guard crossCheckPolicy.admits(receipt) else {
+            let peers = receipt.agreed.count
+            let classes = receipt.sourceClasses.count
+            throw FilterSyncError.crossCheckUnavailable(
+                "\(peers) peer\(peers == 1 ? "" : "s") agreed, from \(classes) known source class\(classes == 1 ? "" : "es")")
+        }
+    }
+
+    /// The run's receipt: the adopted answer, digested, and the peers that
+    /// gave it beside the class the pool reached each of them through.
+    ///
+    /// The class is read from the pool rather than assumed from the seat, and
+    /// nil — a peer the pool has no class for — is carried through as nil
+    /// rather than guessed at, because `spansDistinctSources` has to be able
+    /// to refuse it.
+    static func receipt(
+        tipHeight: UInt32, answer: CFCheckptMessage,
+        agreed: [(peer: PeerConnection, source: PeerSource?, message: CFCheckptMessage)])
+        -> CrossCheckReceipt {
+        CrossCheckReceipt(
+            tipHeight: tipHeight,
+            answerDigest: SHA256d.hash(answer.serialized).hex,
+            agreed: agreed.map {
+                CrossCheckReceipt.Agreement(endpoint: $0.peer.endpoint.description,
+                                            source: $0.source)
+            })
     }
 
     /// A branch was replaced, so everything derived from the old one is wrong:
@@ -364,18 +667,11 @@ public actor FilterSync {
     /// pinned has to be rewound before a filter is read.
     private func adoptReference(from peers: [PeerConnection], tipHash: Data, tip: UInt32,
                                 onReorg: (@Sendable (UInt32) async throws -> Void)?) async throws
-        -> (reference: CFCheckptMessage, approved: Set<String>) {
-        let checkpoints = try await collectedCheckpoints(from: peers, tipHash: tipHash, tip: tip)
-        let vote = try await majorityReference(of: checkpoints)
-        // The list was captured before any eviction, and `misbehaving`
-        // triggers `replenish`, so a plain re-read could hand back brand-new
-        // peers that never went through this comparison. Intersect, never
-        // refresh — see `approved(peers:)`.
-        let approved = await Self.endpoints(
-            of: checkpoints.filter { $0.message == vote.message }.map(\.peer))
-        try await reconcilePins(with: vote.message, crossSource: vote.crossSource,
+        -> (reference: CFCheckptMessage, approved: Set<String>, receipt: CrossCheckReceipt) {
+        let result = try await anchoredReference(peers: peers, tip: tip, tipHash: tipHash)
+        try await reconcilePins(with: result.reference, crossSource: result.receipt.spansDistinctSources,
                                 tip: tip, onReorg: onReorg)
-        return (vote.message, approved)
+        return result
     }
 
     /// Pinned checkpoint headers must match the adopted reference. When one
@@ -434,10 +730,25 @@ public actor FilterSync {
     /// cannot trip this: it echoes the stop hash we sent, so a tip that
     /// advances mid-loop simply means we scan to the tip we asked about and
     /// catch the rest on the next run.
-    private func collectedCheckpoints(from peers: [PeerConnection], tipHash: Data, tip: UInt32)
-        async throws -> [(peer: PeerConnection, message: CFCheckptMessage)] {
-        let checkpointPeers = Array(peers.prefix(max(1, min(3, requiredCheckpointPeers))))
-        var checkpoints: [(peer: PeerConnection, message: CFCheckptMessage)] = []
+    ///
+    /// Which peers are asked is `crossSourceSet`'s decision, the same one the
+    /// cfheaders layer makes, rather than `prefix` over seating order: this is
+    /// the comparison every later check is anchored to, so it is the last
+    /// place that should be settled by which peer happened to connect first.
+    /// Each answer carries the class the pool reached its peer through, so the
+    /// receipt names channels that answered instead of channels that were
+    /// dialled.
+    func collectedCheckpoints(from peers: [PeerConnection], tipHash: Data, tip: UInt32)
+        async throws -> [(peer: PeerConnection, source: PeerSource?, message: CFCheckptMessage)] {
+        let sourced = await sourced(peers)
+        let classes = Dictionary(
+            sourced.compactMap { entry in
+                entry.source.map { (entry.peer.endpoint.description, $0) }
+            },
+            uniquingKeysWith: { first, _ in first })
+        let checkpointPeers = Self.crossSourceSet(
+            sourced, limit: max(1, min(3, requiredCheckpointPeers)))
+        var checkpoints: [(peer: PeerConnection, source: PeerSource?, message: CFCheckptMessage)] = []
         checkpoints.reserveCapacity(checkpointPeers.count)
         for peer in checkpointPeers {
             let response: PeerMessage
@@ -466,7 +777,7 @@ public actor FilterSync {
                 await pool.misbehaving(peer, reason: "cfcheckpt count mismatch")
                 continue
             }
-            checkpoints.append((peer, message))
+            checkpoints.append((peer, classes[peer.endpoint.description], message))
         }
         guard !checkpoints.isEmpty else {
             throw FilterSyncError.badPeerResponse(
@@ -486,14 +797,14 @@ public actor FilterSync {
     /// correctness: filters are not committed by Bitcoin consensus. Source
     /// diversity reduces correlated failures; it does not prove independence.
     private func majorityReference(
-        of checkpoints: [(peer: PeerConnection, message: CFCheckptMessage)])
+        of checkpoints: [(peer: PeerConnection, source: PeerSource?, message: CFCheckptMessage)])
         async throws -> (message: CFCheckptMessage, crossSource: Bool) {
         guard checkpoints.count > 1 else { return (checkpoints[0].message, false) }
         let answers: [(peer: PeerConnection, value: CFCheckptMessage)] =
             checkpoints.map { (peer: $0.peer, value: $0.message) }
         guard let majority = Self.strictMajority(of: answers) else {
-            for (peer, _) in checkpoints {
-                await pool.misbehaving(peer, reason: "cfcheckpt no majority")
+            for entry in checkpoints {
+                await pool.misbehaving(entry.peer, reason: "cfcheckpt no majority")
             }
             throw FilterSyncError.checkpointMismatch("no cfcheckpt majority across \(checkpoints.count) peers")
         }
@@ -579,7 +890,7 @@ public actor FilterSync {
 
     /// The comparison over headers a batch has proposed but not committed,
     /// so the batch can be refused before any of it is applied.
-    private static func checkPinnedBoundaries(of headers: [String: String],
+    static func checkPinnedBoundaries(of headers: [String: String],
                                               against reference: CFCheckptMessage,
                                               tip: UInt32) throws {
         if let height = lowestDisputedBoundary(of: headers, against: reference, tip: tip) {
@@ -591,7 +902,7 @@ public actor FilterSync {
 
     /// Endpoint descriptions of `connections`, for comparing peer identity
     /// across a pool that may have been replenished underneath us.
-    private static func endpoints(of connections: [PeerConnection]) async -> Set<String> {
+    static func endpoints(of connections: [PeerConnection]) async -> Set<String> {
         var result: Set<String> = []
         for connection in connections { result.insert(connection.endpoint.description) }
         return result
@@ -603,12 +914,26 @@ public actor FilterSync {
     /// its checkpoints compared is exactly what the cross-peer check exists to
     /// exclude, so continuing without an approved peer would silently drop the
     /// protection instead of failing closed.
-    private func approved(peers approvedEndpoints: Set<String>) async throws -> [PeerConnection] {
+    func approved(peers approvedEndpoints: Set<String>) async throws -> [PeerConnection] {
         var result: [PeerConnection] = []
         for peer in await pool.connectedPeers() {
             if approvedEndpoints.contains(peer.endpoint.description) { result.append(peer) }
         }
         guard !result.isEmpty else { throw FilterSyncError.noPeers }
+        return result
+    }
+
+    /// Each peer beside the class the pool reached it through, which is what
+    /// `crossSourceSet` selects on. Both lanes ask for it, so both ask the
+    /// pool the same way; a peer the pool has no class for carries nil rather
+    /// than a guess.
+    private func sourced(_ peers: [PeerConnection])
+        async -> [(peer: PeerConnection, source: PeerSource?)] {
+        var result: [(peer: PeerConnection, source: PeerSource?)] = []
+        result.reserveCapacity(peers.count)
+        for peer in peers {
+            result.append((peer, await pool.source(of: peer.endpoint)))
+        }
         return result
     }
 
@@ -638,9 +963,9 @@ public actor FilterSync {
 
     /// Fetches cfheaders for [batchStart, batchStop] and pins the filter
     /// header chain to our block-header chain.
-    private func pinFilterHeaders(batchStart: UInt32, batchStop: UInt32, stopHash: Data,
-                                  peers: [PeerConnection],
-                                  startingFrom storedHeaders: [String: String]) async throws
+    func pinFilterHeaders(batchStart: UInt32, batchStop: UInt32, stopHash: Data,
+                          peers: [PeerConnection],
+                          startingFrom storedHeaders: [String: String]) async throws
         -> [String: String]
     {
         // Always cross-check cfheaders across peers when the pool has them
@@ -679,20 +1004,27 @@ public actor FilterSync {
                 batchStart: requestStart, batchStop: requestStop, stopHash: requestHash,
                 queryPeers: queryPeers)
             try anchorPreviousHeader(of: message, batchStart: requestStart, in: &headers)
-            var previous = message.previousFilterHeader
-            for (index, filterHash) in message.filterHashes.enumerated() {
-                let height = requestStart + UInt32(index)
-                let header = SHA256d.hash(filterHash + previous)
-                if let pinned = Self.filterHeader(at: height, in: storedHeaders), pinned != header {
-                    throw FilterSyncError.filterHeaderMismatch(height: height)
-                }
-                headers[String(height)] = header.hex
-                previous = header
-            }
+            try Self.appendFilterHeaders(message, startingAt: requestStart,
+                                         checking: storedHeaders, into: &headers)
             if requestStop == batchStop { break }
             requestStart = requestStop + 1
         }
         return headers
+    }
+
+    private static func appendFilterHeaders(_ message: CFHeadersMessage, startingAt start: UInt32,
+                                            checking storedHeaders: [String: String],
+                                            into headers: inout [String: String]) throws {
+        var previous = message.previousFilterHeader
+        for (index, filterHash) in message.filterHashes.enumerated() {
+            let height = start + UInt32(index)
+            let header = SHA256d.hash(filterHash + previous)
+            if let pinned = Self.filterHeader(at: height, in: storedHeaders), pinned != header {
+                throw FilterSyncError.filterHeaderMismatch(height: height)
+            }
+            headers[String(height)] = header.hex
+            previous = header
+        }
     }
 
     /// One cfheaders answer for the batch, judged by strict majority across
@@ -811,10 +1143,10 @@ public actor FilterSync {
     /// A 1000-filter burst was held whole until its last message landed, so
     /// peak memory was a batch; a chunk is matched and dropped before the next
     /// one is asked for, so peak memory is a chunk however long the batch is.
-    private func scanFilters(batchStart: UInt32, batchStop: UInt32, peer: PeerConnection,
-                             watchScripts: [Data],
-                             filterHeaders: [String: String],
-                             onMatch: @Sendable (BlockMatch) async throws -> Void) async throws {
+    func scanFilters(batchStart: UInt32, batchStop: UInt32, peer: PeerConnection,
+                     watchScripts: [Data],
+                     filterHeaders: [String: String],
+                     onMatch: @Sendable (BlockMatch) async throws -> Void) async throws {
         let count = Int(batchStop - batchStart + 1)
         var seen: Set<UInt32> = []
         var chunkStart = batchStart
@@ -846,27 +1178,82 @@ public actor FilterSync {
                            onMatch: @Sendable (BlockMatch) async throws -> Void) async throws
         -> Set<UInt32>
     {
+        // Nil unless a restore-only range scan is running, in which case its
+        // run deadline is read here rather than only between batches: a batch
+        // is a thousand blocks, and a cap checked once per batch would be a
+        // cap on batches.
+        try checkRangeDeadline()
         guard let stopHash = await chain.blockHash(at: chunkStop) else {
             throw FilterSyncError.badPeerResponse("missing header at \(chunkStop)")
         }
         let count = Int(chunkStop - chunkStart + 1)
         let overlay = peer.endpoint.isOverlay
-        let responses = try await peer.requestMany(
-            .getcfilters(GetCFiltersRequest(startHeight: chunkStart, stopHash: stopHash)),
-            expecting: "cfilter", count: count, timeout: Self.chunkTimeout(filters: count, overlay: overlay))
+        let responses = try await readFilterChunk(from: peer, start: chunkStart, stopHash: stopHash,
+                                                   count: count, overlay: overlay)
 
         var heightByHash: [Data: UInt32] = [:]
         for height in chunkStart ... chunkStop {
             if let hash = await chain.blockHash(at: height) { heightByHash[hash] = height }
         }
 
+        // Every filter of the chunk is verified against its pinned header
+        // before any of them is matched, so a filter that does not reproduce
+        // its header fails the chunk before a match has been delivered.
         var seen: Set<UInt32> = []
+        var verified: [(height: UInt32, message: CFilterMessage)] = []
+        verified.reserveCapacity(responses.count)
         var chunkBytes = 0
         for response in responses {
             let (height, message) = try verifiedFilter(from: response, heightByHash: heightByHash,
                                                        seen: &seen, filterHeaders: filterHeaders)
             chunkBytes += message.filter.count
-            guard !watchScripts.isEmpty else { continue }
+            verified.append((height, message))
+        }
+        peakChunkFilterBytesForTest = max(peakChunkFilterBytesForTest, chunkBytes)
+        // The range scan's byte cap, charged for the whole chunk before any of
+        // it is matched: the bytes have been read either way, and charging
+        // them here means a refusal names everything the run has downloaded
+        // so far. A run overshoots its cap by at most one chunk. Nothing is
+        // charged, and nothing can refuse, on the forward path.
+        try chargeRangeFilterBytes(chunkBytes)
+        guard !watchScripts.isEmpty else { return seen }
+        try await matchFilters(verified, from: peer, watchScripts: watchScripts, onMatch: onMatch)
+        return seen
+    }
+
+    private func readFilterChunk(from peer: PeerConnection, start: UInt32, stopHash: Data,
+                                  count: Int, overlay: Bool) async throws -> [PeerMessage] {
+        do {
+            return try await peer.requestMany(
+                .getcfilters(GetCFiltersRequest(startHeight: start, stopHash: stopHash)),
+                expecting: "cfilter", count: count, maxTotalBytes: Self.chunkByteBound(filters: count),
+                timeout: Self.chunkTimeout(filters: count, overlay: overlay))
+        } catch let error as PeerError {
+            if case .protocolViolation = error {
+                await pool.misbehaving(peer, reason: error.localizedDescription)
+            }
+            throw error
+        }
+    }
+
+    /// Matches a chunk's verified filters against the watch set and delivers
+    /// every hit, reading the run deadline before each filter. Its own
+    /// function so `scanChunk` stays inside the complexity budget: the two
+    /// halves are one chunk read and then judged, and the split follows the
+    /// seam where the range scan's byte cap is charged between them.
+    private func matchFilters(_ verified: [(height: UInt32, message: CFilterMessage)],
+                              from peer: PeerConnection, watchScripts: [Data],
+                              onMatch: @Sendable (BlockMatch) async throws -> Void) async throws {
+        for (height, message) in verified {
+            // The run deadline again, per filter rather than per chunk.
+            // Reading it once before the request bounds how long the run
+            // waits for filters and nothing else: every match below fetches a
+            // whole block on a 120-second timeout and then awaits the caller's
+            // `onMatch`, and at a full watch set BIP158 hands back a false
+            // positive every few dozen blocks, so a chunk of 100 can hold a
+            // run for far longer than the cap it was given. Nil, and free, on
+            // the forward path.
+            try checkRangeDeadline()
             let parsed = try message.parsedFilter()
             let filter = try GCSFilter(p: GCSFilter.defaultP, m: GCSFilter.defaultM,
                                        key: Data(message.blockHash.prefix(16)),
@@ -875,8 +1262,6 @@ public actor FilterSync {
             try await deliverMatchedBlock(from: peer, height: height,
                                           blockHash: message.blockHash, onMatch: onMatch)
         }
-        peakChunkFilterBytesForTest = max(peakChunkFilterBytesForTest, chunkBytes)
-        return seen
     }
 
     /// A chunk's deadline, taken from the whole-batch ceiling it replaces:
@@ -942,6 +1327,7 @@ public actor FilterSync {
         async throws {
         let block = try await verifiedBlock(from: peer, height: height, blockHash: blockHash)
         try await onMatch(BlockMatch(height: height, blockHash: blockHash, block: block))
+        try chargeRangeBlockBytes(block.serialized.count)
     }
 
     private func verifiedBlock(from peer: PeerConnection, height: UInt32, blockHash: Data,
@@ -968,7 +1354,7 @@ public actor FilterSync {
         }
     }
 
-    private static func filterHeader(at height: UInt32, in headers: [String: String]) -> Data? {
+    static func filterHeader(at height: UInt32, in headers: [String: String]) -> Data? {
         headers[String(height)].flatMap { Data(hex: $0) }
     }
 
@@ -997,6 +1383,7 @@ public actor FilterSync {
         guard data.count <= maximumProgressBytes else {
             throw FilterSyncStorageError.tooLarge(maxBytes: maximumProgressBytes)
         }
+        try refuseForeignRecord(in: data)
         let stored: Progress
         do {
             stored = try JSONDecoder().decode(Progress.self, from: data)
@@ -1007,6 +1394,30 @@ public actor FilterSync {
         return (.loaded, stored)
     }
 
+    /// Refuses a file that says it belongs to something else.
+    ///
+    /// The one that can be here by mistake is a range-scan record: it carries
+    /// `nextScanHeight` and `filterHeaders` under these exact names, the
+    /// decoder ignores the keys it was not asked about, and the validation
+    /// below passes on what is left, so a `scanRange` pointed at this wallet's
+    /// progress file would come back and be read as the wallet's own frontier.
+    /// `RangeScanProgress` writes what it is; anything that names itself is
+    /// not forward progress. A file written before the marker existed names
+    /// nothing and still loads, which is what keeps every wallet already on
+    /// disk readable.
+    ///
+    /// Kept out of `load` so the loader's branch count stays where it was.
+    private static func refuseForeignRecord(in data: Data) throws {
+        struct RecordKind: Decodable {
+            let record: String?
+        }
+        guard let kind = (try? JSONDecoder().decode(RecordKind.self, from: data))?.record else {
+            return
+        }
+        throw FilterSyncStorageError.damaged(
+            "the file is a \"\(kind)\" record, not compact-filter progress")
+    }
+
     private static func validate(progress: Progress, startHeight: UInt32) throws {
         guard progress.nextScanHeight >= startHeight else {
             throw FilterSyncStorageError.frontierBeforeWallet(
@@ -1015,14 +1426,9 @@ public actor FilterSync {
         guard progress.filterHeaders.count <= maximumPinnedHeaders else {
             throw FilterSyncStorageError.damaged("there are too many pinned filter headers")
         }
-        var parsedHeights = Set<UInt32>()
-        parsedHeights.reserveCapacity(progress.filterHeaders.count)
         for (key, value) in progress.filterHeaders {
             guard let height = UInt32(key), String(height) == key else {
                 throw FilterSyncStorageError.damaged("a filter-header height is not canonical decimal")
-            }
-            guard parsedHeights.insert(height).inserted else {
-                throw FilterSyncStorageError.damaged("two filter-header keys name the same height")
             }
             guard height < progress.nextScanHeight else {
                 throw FilterSyncStorageError.damaged("a pinned filter header is at or beyond the scan frontier")
@@ -1031,6 +1437,30 @@ public actor FilterSync {
                   let header = Data(hex: value), header.count == 32 else {
                 throw FilterSyncStorageError.damaged("a pinned filter header is not 32 bytes")
             }
+        }
+        try validate(receipt: progress.crossCheck)
+    }
+
+    /// The receipt is read back as a claim about who corroborated this
+    /// frontier, so it is bounded on the way in like everything else in this
+    /// file. Nothing here decides whether the claim is true — it cannot; the
+    /// peers are gone — only that the file cannot grow without limit and that
+    /// a caller reading the digest gets 32 bytes or an error.
+    static func validate(receipt: CrossCheckReceipt?) throws {
+        guard let receipt else { return }
+        guard receipt.agreed.count <= maximumReceiptEntries else {
+            throw FilterSyncStorageError.damaged("the cross-check receipt names too many peers")
+        }
+        // The shape a pinned filter header is held to, for the same reason:
+        // 64 characters of hex, not merely something that decodes to 32 bytes
+        // once it has been trimmed.
+        guard receipt.answerDigest.utf8.count == 64,
+              let digest = Data(hex: receipt.answerDigest), digest.count == 32 else {
+            throw FilterSyncStorageError.damaged("the cross-check receipt's answer digest is not 32 bytes")
+        }
+        let plausible = 1 ... maximumReceiptEndpointBytes
+        guard receipt.agreed.allSatisfy({ plausible.contains($0.endpoint.utf8.count) }) else {
+            throw FilterSyncStorageError.damaged("a cross-check receipt endpoint is not a plausible length")
         }
     }
 
@@ -1056,6 +1486,13 @@ public actor FilterSync {
     /// Never moves the frontier forward: a fork at or above the current
     /// frontier means nothing scanned is affected, and advancing here would
     /// skip blocks that have never been read.
+    ///
+    /// The cross-check receipt is cleared, including when the frontier does
+    /// not move. It records agreement about a tip on the branch that was just
+    /// replaced, so keeping it would leave the store claiming corroboration
+    /// for a chain it is no longer on — and a claim that survives the evidence
+    /// is worse than none. The next sync writes a fresh one before it commits
+    /// anything.
     public func rollBack(to forkHeight: UInt32) throws {
         let resumeFrom = forkHeight == UInt32.max ? forkHeight : forkHeight + 1
         var candidate = progress
@@ -1064,6 +1501,7 @@ public actor FilterSync {
             guard let height = UInt32(key) else { return false }
             return height <= forkHeight
         }
+        candidate.crossCheck = nil
         guard candidate != progress else { return }
         try persist(candidate)
         progress = candidate

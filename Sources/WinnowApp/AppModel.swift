@@ -54,6 +54,8 @@ final class AppModel {
         case noStack
         case noPeers
         case mnemonicUnavailable
+        case rootKeyUnavailable
+        case feeDecisionRequired(rate: Double, floor: Double)
         case invalidPeer(String)
         case wrongNetwork(String)
         case duplicateVault
@@ -73,25 +75,62 @@ final class AppModel {
 
         var errorDescription: String? {
             switch self {
+            case .noWallet, .mnemonicUnavailable, .rootKeyUnavailable, .duplicateVault, .storageDamaged,
+                 .noStorage:
+                walletErrorDescription
+            case .paymentDetailsUnavailable, .personCannotBePaid, .personCannotCoOwn, .feeDecisionRequired,
+                 .sendReviewChanged, .vaultSpendNotRecorded:
+                paymentErrorDescription
+            case .noStack, .noPeers, .invalidPeer, .wrongNetwork: connectionErrorDescription
+            case .deviceAuthUnavailable, .deviceAuthFailed, .spendAlreadyInFlight: authorizationErrorDescription
+            }
+        }
+
+        private var walletErrorDescription: String? {
+            switch self {
             case .noWallet: "No wallet is open."
+            case .mnemonicUnavailable: "The new wallet's mnemonic could not be read back from the Keychain."
+            case .rootKeyUnavailable: "This wallet's signing key is limited to its own account and cannot authorize this operation."
+            case .duplicateVault: "A vault with this descriptor already exists."
+            case let .storageDamaged(message): message
+            case .noStorage: "Winnow could not reach its storage, so a chain reorganisation could not be recorded. Syncing has stopped rather than continue on stale data."
+            default: nil
+            }
+        }
+
+        private var paymentErrorDescription: String? {
+            switch self {
             case .paymentDetailsUnavailable: "Payment details aren’t available on this phone."
             case .personCannotBePaid: "This person has no pay-to key or address yet. Ask them for their Winnow card."
             case let .personCannotCoOwn(name): "\(name) has no signer key yet. Ask them for their Winnow card before creating savings together."
-            case .noStack: "The sync stack is not running."
-            case .noPeers: "No peers reachable. Check the network connection or add a manual peer in Settings."
-            case .mnemonicUnavailable: "The new wallet's mnemonic could not be read back from the Keychain."
-            case let .invalidPeer(text): "Invalid peer “\(text)” — use host:port."
-            case let .wrongNetwork(network): "This bundle is for \(network); switch the network in Settings first."
-            case .duplicateVault: "A vault with this descriptor already exists."
+            case let .feeDecisionRequired(rate, floor):
+                "Peers report a relay floor of \(floor) sat/vB, above the selected \(rate) sat/vB. "
+                    + "Review the fee and enter an explicit rate in Advanced mode, or wait. "
+                    + "Winnow will not raise the automatic peer-driven rate above 120 sat/vB."
             case .sendReviewChanged: "The available coins, fee, or change changed. Review the payment again before signing."
-            case let .storageDamaged(message): message
-            case .deviceAuthUnavailable: "Set a device passcode first — sensitive wallet actions require device authentication."
-            case .deviceAuthFailed: "Device authentication failed."
-            case .spendAlreadyInFlight: "Another payment is already being signed and broadcast. Wait for it to finish."
             case let .vaultSpendNotRecorded(txid, reason):
                 "The payment was sent (\(txid.displayHex)) but this account's coins could not be updated (\(reason)). "
                     + "Reopen the account before spending from it again."
-            case .noStorage: "Winnow could not reach its storage, so a chain reorganisation could not be recorded. Syncing has stopped rather than continue on stale data."
+            default: nil
+            }
+        }
+
+        private var connectionErrorDescription: String? {
+            switch self {
+            case .noStack: "The sync stack is not running."
+            case .noPeers: "No peers reachable. Check the network connection or add a manual peer in Settings."
+            case let .invalidPeer(text): "Invalid peer “\(text)” — use host:port."
+            case let .wrongNetwork(network): "This bundle is for \(network); switch the network in Settings first."
+            default: nil
+            }
+        }
+
+        private var authorizationErrorDescription: String? {
+            switch self {
+            case .deviceAuthUnavailable: "Set a device passcode first — sensitive wallet actions require device authentication."
+            case .deviceAuthFailed: "Device authentication failed."
+            case .spendAlreadyInFlight: "Another payment is already being signed and broadcast. Wait for it to finish."
+            default: nil
             }
         }
     }
@@ -393,6 +432,12 @@ final class AppModel {
     /// On means re-derive every block's work from block 0, which is what the
     /// app did before the checkpoint existed.
     private(set) var verifyFromGenesis: Bool
+    /// An explicit degraded-verification choice, limited to this app session.
+    private(set) var allowSingleSourceMainnet = false
+
+    var filterCrossCheckPolicy: FilterSync.CrossCheckPolicy {
+        network == .mainnet && !allowSingleSourceMainnet ? .requireDistinctSources : .acceptSingleSource
+    }
     /// Off by default. Gates the network picker and every other control a
     /// beginner should never have to read. Global, not per network: it is a
     /// statement about the user, not the chain.
@@ -1096,7 +1141,8 @@ final class AppModel {
 
     private func makeFilterSync(pool: PeerPool, chain: HeaderChain, startHeight: UInt32) throws -> FilterSync {
         try FilterSync(pool: pool, chain: chain, startHeight: startHeight,
-                       storageURL: storageDirectory()?.appending(path: "filters.json"))
+                       storageURL: storageDirectory()?.appending(path: "filters.json"),
+                       crossCheckPolicy: filterCrossCheckPolicy)
     }
 
     private func startSyncLoop() {
@@ -1153,7 +1199,9 @@ final class AppModel {
             // apply() does not move the wallet frontier — FilterSync is
             // authoritative here. Persist it so exportBundle() and the next
             // launch's startHeight match what the UI already shows.
-            try await wallet.recordScanHeight(await filters.nextScanHeight)
+            let frontier = await filters.frontier()
+            try await wallet.recordScanHeight(frontier.nextScanHeight,
+                                              scannedThroughHash: frontier.scannedThroughHash)
             // Held confirmation tombstones age out on the same 100-block
             // horizon spent-coin tombstones do (#157).
             try await broadcaster.pruneConfirmed(scannedTo: await filters.nextScanHeight)
@@ -1178,18 +1226,24 @@ final class AppModel {
             // checkpoint comparison before anything above ran for them, so
             // their progress is verified and worth keeping — the batch that
             // threw applied nothing. Keep WalletState from lagging it.
-            try? await wallet.recordScanHeight(await filters.nextScanHeight)
+            let frontier = await filters.frontier()
+            try? await wallet.recordScanHeight(frontier.nextScanHeight,
+                                               scannedThroughHash: frontier.scannedThroughHash)
             // Backgrounding, a network switch or an expired background check
             // cancels the scan and closes its peers. Nothing failed.
-            if !Task.isCancelled, !(error is CancellationError) {
-                status.lastSyncError = error.localizedDescription
-                let transient = Self.isTransientSyncError(error)
-                transientSyncFailures = transient ? transientSyncFailures + 1 : 0
-                transientSyncError = transient ? error.localizedDescription : nil
-            }
+            recordSyncFailure(error)
         }
         await refresh()
         return complete
+    }
+
+    private func recordSyncFailure(_ error: Error) {
+        if !Task.isCancelled, !(error is CancellationError) {
+            status.lastSyncError = error.localizedDescription
+            let transient = Self.isTransientSyncError(error)
+            transientSyncFailures = transient ? transientSyncFailures + 1 : 0
+            transientSyncError = transient ? error.localizedDescription : nil
+        }
     }
 
     /// Keep replaced originals beside the payment that superseded them.
@@ -1415,7 +1469,9 @@ final class AppModel {
         // The UI snapshot already prefers filters.nextScanHeight; export
         // must too, in case the last persist was skipped (failed pass).
         if let filters = stack?.filters {
-            try await wallet.recordScanHeight(await filters.nextScanHeight)
+            let frontier = await filters.frontier()
+            try await wallet.recordScanHeight(frontier.nextScanHeight,
+                                              scannedThroughHash: frontier.scannedThroughHash)
         }
         var bundle = try await wallet.exportBundle(includeMnemonic: includeMnemonic)
         bundle.vaults = try await vaultStore.backupRecords()
@@ -1711,9 +1767,17 @@ final class AppModel {
     /// peers' BIP133 floor
     /// (FeePolicy, docs/write-side.md §4).
     func resolvedFeeRate(priority: FeePolicy.Priority, override: Double?) async -> Double {
+        await resolvedFee(priority: priority, override: override).rate
+    }
+
+    private func resolvedFee(priority: FeePolicy.Priority, override: Double?) async -> FeePolicy.Resolution {
         let observed = await wallet?.observedFeeRates ?? []
-        return FeePolicy.resolve(priority: priority, override: override,
-                                 observed: observed, floorSatPerVByte: status.feeFloorSatPerVByte)
+        return FeePolicy.resolution(priority: priority, override: override,
+                                    observed: observed, floorSatPerVByte: status.feeFloorSatPerVByte)
+    }
+
+    static func requireRelayFee(rate: Double, floor: Double?) throws {
+        if let floor, rate < floor { throw AppError.feeDecisionRequired(rate: rate, floor: floor) }
     }
 
     /// What a send will look like at the resolved feerate (coin selection run
@@ -1868,7 +1932,9 @@ final class AppModel {
     /// selection at the resolved feerate.
     func previewSend(destination: String, amount: Int64, priority: FeePolicy.Priority,
                      override: Double?, accountID: String? = nil) async throws -> SendPreview {
-        let feeRate = await resolvedFeeRate(priority: priority, override: override)
+        let resolution = await resolvedFee(priority: priority, override: override)
+        try Self.requireRelayFee(rate: resolution.rate, floor: resolution.clampedFloor)
+        let feeRate = resolution.rate
         let trimmed = destination.trimmingCharacters(in: .whitespacesAndNewlines)
         let payments = [try Payment(amount: amount, address: trimmed, network: network)]
         if let accountID {
@@ -2058,7 +2124,11 @@ final class AppModel {
     /// `feeRateSatPerVByte` (known from the send preview) enables the
     /// broadcaster's BIP133 fee-floor events.
     func broadcast(_ transaction: WalletCore.Transaction, feeRateSatPerVByte: Double? = nil) async throws -> Data {
-        guard let broadcaster = stack?.broadcaster else { throw AppError.noStack }
+        guard let stack else { throw AppError.noStack }
+        let broadcaster = stack.broadcaster
+        if let rate = feeRateSatPerVByte {
+            try Self.requireRelayFee(rate: rate, floor: await stack.pool.feeFilterFloorSatPerVByte())
+        }
         let raw = transaction.serialized(includeWitness: true)
         let txid = try await broadcaster.broadcast(raw, feeRateSatPerVByte: feeRateSatPerVByte)
         e2e?.journal("transaction.broadcast", fields: ["txid": txid.displayHex, "raw": raw.hex])
@@ -2615,6 +2685,7 @@ final class AppModel {
         switch try keyStore.load(walletID: walletID) {
         case let .mnemonic(words): master = try HDKey(seed: BIP39.seed(mnemonic: words))
         case let .masterKey(xprv): master = try HDKey.deserialize(xprv)
+        case .accountKey: throw AppError.rootKeyUnavailable
         }
         return try body(master)
     }
@@ -2684,6 +2755,7 @@ final class AppModel {
         cloudBackups.suspend()
         guard e2e?.forcedNetwork == nil || e2e?.forcedNetwork == newNetwork else { return }
         guard newNetwork != network else { return }
+        allowSingleSourceMainnet = false
         suspendNetworking()
         syncTask?.cancel()
         syncTask = nil
@@ -2811,6 +2883,20 @@ final class AppModel {
         suspendNetworking()
         await stopNetworking()
         await activate()
+        await refresh()
+    }
+
+    /// Stop and await the old scan before changing its verification policy.
+    /// The choice is intentionally not persisted or transferred to another network.
+    func setAllowSingleSourceMainnet(_ enabled: Bool) async {
+        guard network == .mainnet, enabled != allowSingleSourceMainnet else { return }
+        await cancelBackgroundSync()
+        let oldScan = syncTask
+        suspendNetworking()
+        await stopNetworking()
+        await oldScan?.value
+        allowSingleSourceMainnet = enabled
+        if wallet != nil { await activate() }
         await refresh()
     }
 

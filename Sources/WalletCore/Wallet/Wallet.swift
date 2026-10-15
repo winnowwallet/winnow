@@ -6,6 +6,8 @@ public enum WalletError: Error, Equatable, LocalizedError {
     case invalidDescriptor(String)
     /// Bundle descriptor does not match the one derived from its mnemonic.
     case descriptorMismatch
+    /// The loaded signing key does not belong to the descriptor's account.
+    case accountKeyMismatch
     case invalidBundle(String)
     case noPayments
     /// The built transaction lost its change output (should not happen).
@@ -35,7 +37,16 @@ public enum WalletError: Error, Equatable, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        // The payload is bound and discarded on purpose; see below.
+        case .invalidDescriptor, .descriptorMismatch, .accountKeyMismatch, .mnemonicUnavailable: keyErrorDescription
+        case .noPayments, .changeOutputMissing, .transactionTooLarge, .exportWhilePending,
+             .invalidTransactionAmounts:
+            paymentErrorDescription
+        case .invalidBundle, .unsupportedWalletData, .storageTooLarge: storageErrorDescription
+        }
+    }
+
+    private var keyErrorDescription: String? {
+        switch self {
         case .invalidDescriptor:
             // Deliberately not echoed. This is reached with a descriptor taken
             // straight from an imported bundle, and a descriptor may carry an
@@ -46,20 +57,34 @@ public enum WalletError: Error, Equatable, LocalizedError {
                 + "because a descriptor can carry key material."
         case .descriptorMismatch:
             "Bundle descriptor does not match the mnemonic."
-        case let .invalidBundle(reason):
-            "Invalid import bundle: \(reason)"
+        case .accountKeyMismatch:
+            "The signing key does not match this wallet's account."
+        case .mnemonicUnavailable:
+            "This wallet has no recovery phrase to export — it was imported from an extended key, not a BIP39 mnemonic."
+        default: nil
+        }
+    }
+
+    private var paymentErrorDescription: String? {
+        switch self {
         case .noPayments:
             "Nothing to send."
         case .changeOutputMissing:
             "The built transaction lost its change output."
         case let .transactionTooLarge(vsize, limit):
             "The signed transaction is \(vsize) vbytes, above the \(limit)-vbyte relay maximum."
-        case .mnemonicUnavailable:
-            "This wallet has no recovery phrase to export — it was imported from an extended key, not a BIP39 mnemonic."
         case .exportWhilePending:
             "Wait for pending transactions to confirm before exporting. A mid-send backup would drop the coins being spent."
         case .invalidTransactionAmounts:
             "A matched Bitcoin transaction contains invalid amounts. Wallet state was not changed."
+        default: nil
+        }
+    }
+
+    private var storageErrorDescription: String? {
+        switch self {
+        case let .invalidBundle(reason):
+            "Invalid import bundle: \(reason)"
         case .unsupportedWalletData:
             """
             This wallet contains unsupported signing data and cannot be opened here. \
@@ -67,6 +92,7 @@ public enum WalletError: Error, Equatable, LocalizedError {
             """
         case let .storageTooLarge(maxBytes):
             "The wallet file is larger than the \(maxBytes / 1_048_576) MB this wallet can hold and was not read."
+        default: nil
         }
     }
 }
@@ -252,10 +278,18 @@ public struct HistoryEntry: Equatable, Sendable, Codable {
     /// so received payments can name a funding address without keeping the
     /// witnesses around. Empty for older entries until details reload.
     public var fundingScripts: [Data]
+    /// The block this payment confirmed in, so a restore can check the entry
+    /// against headers alone instead of fetching the block again. Nil while
+    /// pending and for history recorded before it was kept. Internal byte
+    /// order; JSON uses display hex.
+    public var blockHash: Data?
+    /// Known recipient and change outputs from a locally prepared send.
+    /// Nil means unavailable, including history from older wallet files.
+    public var outputs: Outputs?
 
     public init(txid: Data, height: UInt32, received: Int64, spent: Int64,
                 fee: Int64? = nil, replacedBy: Data? = nil, rawTransaction: Data? = nil,
-                fundingScripts: [Data] = []) {
+                fundingScripts: [Data] = [], blockHash: Data? = nil, outputs: Outputs? = nil) {
         self.txid = txid
         self.height = height
         self.received = received
@@ -264,9 +298,12 @@ public struct HistoryEntry: Equatable, Sendable, Codable {
         self.replacedBy = replacedBy
         self.rawTransaction = rawTransaction
         self.fundingScripts = fundingScripts
+        self.blockHash = blockHash
+        self.outputs = outputs
     }
 
     public func transaction() throws -> Transaction? {
+        try outputs?.validate()
         guard let rawTransaction else { return nil }
         let transaction = try Transaction.decode(rawTransaction)
         guard transaction.txid == txid else {
@@ -280,10 +317,13 @@ public struct HistoryEntry: Equatable, Sendable, Codable {
             }
             total += output.value
         }
+        try outputs?.validate(against: transaction)
         return transaction
     }
 
-    private enum CodingKeys: String, CodingKey { case txid, height, received, spent, fee, replacedBy, rawTransaction, fundingScripts }
+    private enum CodingKeys: String, CodingKey {
+        case txid, height, received, spent, fee, replacedBy, rawTransaction, fundingScripts, blockHash, outputs
+    }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -301,14 +341,27 @@ public struct HistoryEntry: Equatable, Sendable, Codable {
         } else {
             replacedBy = nil
         }
+        let height = try container.decode(UInt32.self, forKey: .height)
+        let blockHash: Data?
+        if let blockHex = try container.decodeIfPresent(String.self, forKey: .blockHash) {
+            guard let block = Data(hex: blockHex), block.count == 32, height > 0 else {
+                throw DecodingError.dataCorruptedError(forKey: .blockHash, in: container,
+                                                       debugDescription: "bad block hash, or one on a pending payment")
+            }
+            blockHash = Data(block.reversed())
+        } else {
+            blockHash = nil
+        }
         self.init(txid: Data(txid.reversed()),
-                  height: try container.decode(UInt32.self, forKey: .height),
+                  height: height,
                   received: try container.decode(Int64.self, forKey: .received),
                   spent: try container.decode(Int64.self, forKey: .spent),
                   fee: try container.decodeIfPresent(Int64.self, forKey: .fee),
                   replacedBy: replacedBy,
                   rawTransaction: try container.decodeIfPresent(Data.self, forKey: .rawTransaction),
-                  fundingScripts: try container.decodeIfPresent([Data].self, forKey: .fundingScripts) ?? [])
+                  fundingScripts: try container.decodeIfPresent([Data].self, forKey: .fundingScripts) ?? [],
+                  blockHash: blockHash,
+                  outputs: try container.decodeIfPresent(Outputs.self, forKey: .outputs))
         _ = try transaction()
     }
 
@@ -322,6 +375,8 @@ public struct HistoryEntry: Equatable, Sendable, Codable {
         try container.encodeIfPresent(replacedBy?.displayHex, forKey: .replacedBy)
         try container.encodeIfPresent(rawTransaction, forKey: .rawTransaction)
         if !fundingScripts.isEmpty { try container.encode(fundingScripts, forKey: .fundingScripts) }
+        try container.encodeIfPresent(blockHash?.displayHex, forKey: .blockHash)
+        try container.encodeIfPresent(outputs, forKey: .outputs)
     }
 }
 
@@ -415,6 +470,10 @@ public struct WalletState: Codable, Equatable, Sendable {
     /// Height of the next block whose filter must be scanned (mirrors the
     /// FilterSync progress after the last scan).
     public var nextScanHeight: UInt32
+    /// The hash of block `nextScanHeight - 1`, the last one scanned, so a
+    /// restore can check that its starting point is still on the best chain.
+    /// Nil until a scan records it. Internal byte order; JSON uses display hex.
+    public var scannedThroughHash: Data?
     /// Every coin row, spent ones included. Mutations go through this; reads
     /// should almost always use `utxos`, which hides the tombstones.
     public var allUtxos: [WalletUTXO]
@@ -448,7 +507,7 @@ public struct WalletState: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case descriptor, network, creationHeight, nextReceiveIndex, nextChangeIndex
-        case nextScanHeight, utxos, history, observedFeeRates, pendingSends
+        case nextScanHeight, scannedThroughHash, utxos, history, observedFeeRates, pendingSends
     }
 
     public init(from decoder: any Decoder) throws {
@@ -459,6 +518,15 @@ public struct WalletState: Codable, Equatable, Sendable {
         nextReceiveIndex = try container.decode(UInt32.self, forKey: .nextReceiveIndex)
         nextChangeIndex = try container.decode(UInt32.self, forKey: .nextChangeIndex)
         nextScanHeight = try container.decode(UInt32.self, forKey: .nextScanHeight)
+        if let hashHex = try container.decodeIfPresent(String.self, forKey: .scannedThroughHash) {
+            guard let hash = Data(hex: hashHex), hash.count == 32, nextScanHeight > 0 else {
+                throw DecodingError.dataCorruptedError(forKey: .scannedThroughHash, in: container,
+                                                       debugDescription: "bad scan frontier hash")
+            }
+            scannedThroughHash = Data(hash.reversed())
+        } else {
+            scannedThroughHash = nil
+        }
         allUtxos = try container.decode([WalletUTXO].self, forKey: .utxos)
         history = try container.decode([HistoryEntry].self, forKey: .history)
         observedFeeRates = try container.decodeIfPresent([Double].self, forKey: .observedFeeRates) ?? []
@@ -526,6 +594,7 @@ public struct WalletState: Codable, Equatable, Sendable {
         try container.encode(nextReceiveIndex, forKey: .nextReceiveIndex)
         try container.encode(nextChangeIndex, forKey: .nextChangeIndex)
         try container.encode(nextScanHeight, forKey: .nextScanHeight)
+        try container.encodeIfPresent(scannedThroughHash?.displayHex, forKey: .scannedThroughHash)
         try container.encode(allUtxos, forKey: .utxos)
         try container.encode(history, forKey: .history)
         try container.encode(observedFeeRates, forKey: .observedFeeRates)
@@ -656,6 +725,41 @@ public actor Wallet {
                                 accountKey: accountKey.neutered, keyStore: keyStore,
                                 storageURL: storageURL, state: state)
         try keyStore.store(.mnemonic(mnemonic), for: wallet.id)
+        try persistNewWallet(state: state, storageURL: storageURL, walletID: wallet.id, keyStore: keyStore)
+        return wallet
+    }
+
+    /// Creates a wallet without receiving a root key or recovery words.
+    /// The caller supplies the private key at m/86'/coin_type'/account' and its
+    /// master fingerprint. The wallet checks the key's shape; a child key alone
+    /// cannot prove the claimed ancestry or recover the master's fingerprint.
+    /// Signing also binds the loaded key to the descriptor's account xpub.
+    public static func create(accountKey: HDKey, masterFingerprint: UInt32,
+                              network: BitcoinNetwork, keyStore: any KeyStore,
+                              storageURL: URL? = nil, creationHeight: UInt32 = 0,
+                              account: UInt32 = 0) throws -> Wallet {
+        guard account < HDKey.hardenedOffset else { throw BIP32Error.invalidPath }
+        let path = [86, coinType(for: network), account].map { $0 + HDKey.hardenedOffset }
+        guard accountKey.isPrivate, Int(accountKey.depth) == path.count,
+              accountKey.childIndex == path.last
+        else { throw WalletError.accountKeyMismatch }
+        let origin = Descriptor.KeyOrigin(fingerprint: masterFingerprint, path: path)
+        let descriptor = makeDescriptor(accountKey: accountKey, origin: origin, network: network)
+        let state = WalletState(descriptor: descriptor.serialized(), network: network.rawValue,
+                                creationHeight: creationHeight, nextScanHeight: creationHeight)
+        let wallet = try Wallet(network: network, descriptor: descriptor,
+                                accountKey: accountKey.neutered, keyStore: keyStore,
+                                storageURL: storageURL, state: state)
+        try keyStore.store(.accountKey(xprv: accountKey.serialized(network: hdNetwork(for: network)),
+                                       masterFingerprint: masterFingerprint), for: wallet.id)
+        try persistNewWallet(state: state, storageURL: storageURL, walletID: wallet.id, keyStore: keyStore)
+        return wallet
+    }
+
+    /// Creation is one operation: remove the newly stored key if writing the
+    /// initial state fails, so an interrupted creation can be retried.
+    private static func persistNewWallet(state: WalletState, storageURL: URL?,
+                                         walletID: String, keyStore: any KeyStore) throws {
         do {
             if let storageURL {
                 let data = try JSONEncoder().encode(state)
@@ -666,10 +770,9 @@ public actor Wallet {
             // Wallet creation is one logical operation: do not leave a
             // keychain entry that makes an idempotent retry fail after local
             // state persistence was interrupted.
-            try? keyStore.delete(walletID: wallet.id)
+            try? keyStore.delete(walletID: walletID)
             throw error
         }
-        return wallet
     }
 
     /// The most a persisted wallet file may weigh. A busy wallet's history with
@@ -739,6 +842,7 @@ public actor Wallet {
 
     public var creationHeight: UInt32 { state.creationHeight }
     public var nextScanHeight: UInt32 { state.nextScanHeight }
+    public var scannedThroughHash: Data? { state.scannedThroughHash }
     public var nextReceiveIndex: UInt32 { state.nextReceiveIndex }
     public var nextChangeIndex: UInt32 { state.nextChangeIndex }
     /// Safe because every state ingress validates individual coins and the
@@ -850,10 +954,40 @@ public actor Wallet {
     /// `apply(match:)` does not move `nextScanHeight` — only this call does. The live app drives FilterSync
     /// directly and must record after each pass, or `exportBundle()` will
     /// emit the creation/import height while the UI shows the filter actor.
-    public func recordScanHeight(_ nextScanHeight: UInt32) throws {
+    ///
+    /// `scannedThroughHash` is the hash of block `nextScanHeight - 1`
+    /// (`FilterSync.frontier()` reads the two together). Without it the
+    /// stored hash is cleared, never left describing another height.
+    public func recordScanHeight(_ nextScanHeight: UInt32, scannedThroughHash: Data? = nil) throws {
+        precondition(scannedThroughHash.map { $0.count == 32 && nextScanHeight > 0 } ?? true,
+                     "a scan frontier hash names the last scanned block")
         state.nextScanHeight = nextScanHeight
+        state.scannedThroughHash = scannedThroughHash
         pruneSpentCoins(scannedTo: nextScanHeight)
         try persist()
+    }
+
+    /// Reserves every address below the supplied cursors, for example when
+    /// restoring an application's record of addresses already handed out.
+    /// Neither cursor can move backwards. Both are persisted together before
+    /// the live state changes, so a failed write leaves the reservation retryable.
+    ///
+    /// Cursors must leave room for the non-hardened gap-limit lookahead. The
+    /// caller must bound and authenticate its recovery record before using it:
+    /// watching addresses costs work proportional to the resulting cursors.
+    /// This does not scan history or move the forward scan height.
+    public func advanceCursors(nextReceiveIndex receive: UInt32? = nil,
+                               nextChangeIndex change: UInt32? = nil) throws {
+        var candidate = state
+        candidate.nextReceiveIndex = max(candidate.nextReceiveIndex, receive ?? 0)
+        candidate.nextChangeIndex = max(candidate.nextChangeIndex, change ?? 0)
+        let maximum = HDKey.hardenedOffset - Self.gapLimit
+        guard candidate.nextReceiveIndex <= maximum, candidate.nextChangeIndex <= maximum
+        else { throw BIP32Error.invalidPath }
+        guard candidate.nextReceiveIndex != state.nextReceiveIndex
+                || candidate.nextChangeIndex != state.nextChangeIndex else { return }
+        try persist(candidate)
+        state = candidate
     }
 
     /// How far back spent rows are kept.
@@ -941,7 +1075,7 @@ public actor Wallet {
                 || state.history.contains(where: { $0.txid == txid })
             guard touchesWallet else { continue }
 
-            recordConfirmedHistory(of: tx, txid: txid, height: match.height,
+            recordConfirmedHistory(of: tx, txid: txid, height: match.height, blockHash: match.blockHash,
                                    received: receivedAmount, spent: accountedSpent,
                                    feeIsExact: allInputsOurs)
         }
@@ -955,7 +1089,7 @@ public actor Wallet {
     /// or appending a new entry — retires its pending record, and samples the
     /// feerate. The fee is exact only when every input was ours (the BIP341
     /// sighash commits to amounts, so our own sends qualify).
-    private func recordConfirmedHistory(of tx: Transaction, txid: Data, height: UInt32,
+    private func recordConfirmedHistory(of tx: Transaction, txid: Data, height: UInt32, blockHash: Data,
                                         received: Int64, spent: Int64, feeIsExact: Bool) {
         var fee: Int64? = nil
         if feeIsExact, spent > 0 {
@@ -972,13 +1106,15 @@ public actor Wallet {
         if let existing = state.history.firstIndex(where: { $0.txid == txid }) {
             // Known pending send (height 0) reaching confirmation.
             state.history[existing].height = height
+            state.history[existing].blockHash = blockHash
             state.history[existing].rawTransaction = tx.serialized(includeWitness: false)
             state.history[existing].fundingScripts = FundingSources.fundingScripts(of: tx)
         } else {
             state.history.append(HistoryEntry(txid: txid, height: height,
                                               received: received, spent: spent, fee: fee,
                                               rawTransaction: tx.serialized(includeWitness: false),
-                                              fundingScripts: FundingSources.fundingScripts(of: tx)))
+                                              fundingScripts: FundingSources.fundingScripts(of: tx),
+                                              blockHash: blockHash))
         }
         state.pendingSends.removeAll { $0.txid == txid }
     }
@@ -1249,6 +1385,22 @@ public actor Wallet {
         }
     }
 
+    /// Classify only positive outputs, using the same watch map as coin application.
+    func classifyOutputs(of transaction: Transaction) throws -> HistoryEntry.Outputs {
+        let map = try watchMap()
+        var result = HistoryEntry.Outputs()
+        for (vout, output) in transaction.outputs.enumerated() where output.value > 0 {
+            switch map[output.scriptPubKey]?.chain {
+            case .change: result.change.append(UInt32(vout))
+            case .receive: continue
+            case nil:
+                result.external.append(.init(vout: UInt32(vout), amount: output.value,
+                                             scriptPubKey: output.scriptPubKey))
+            }
+        }
+        return result
+    }
+
     /// Commits a prepared send to wallet state: the spent UTXOs leave the
     /// spendable set at once (so a second send can't double-spend the
     /// unconfirmed tx) and the change output enters it as pending (height 0)
@@ -1289,7 +1441,8 @@ public actor Wallet {
                                           spent: prepared.selected.reduce(0) { $0 + $1.amount },
                                           fee: prepared.fee,
                                           rawTransaction: signed.serialized(includeWitness: false),
-                                          fundingScripts: FundingSources.fundingScripts(of: signed)))
+                                          fundingScripts: FundingSources.fundingScripts(of: signed),
+                                          outputs: try classifyOutputs(of: signed)))
         updated.pendingSends.append(PendingSend(
             rawTransaction: signed.serialized(includeWitness: true), selected: prepared.selected,
             changeIndex: prepared.change == nil ? nil : prepared.changeIndex,
@@ -1401,7 +1554,8 @@ public actor Wallet {
             txid: signed.txid, height: 0, received: prepared.change?.amount ?? 0,
             spent: prepared.selected.reduce(0) { $0 + $1.amount }, fee: prepared.built.fee,
             rawTransaction: signed.serialized(includeWitness: false),
-            fundingScripts: FundingSources.fundingScripts(of: signed)))
+            fundingScripts: FundingSources.fundingScripts(of: signed),
+                                          outputs: try classifyOutputs(of: signed)))
         updated.pendingSends.remove(at: pendingIndex)
         updated.pendingSends.append(PendingSend(
             rawTransaction: signed.serialized(includeWitness: true), selected: prepared.selected,
@@ -1537,11 +1691,8 @@ public actor Wallet {
                                                        originPath: origin.path))
         }
         var psbt = try PSBT(unsignedTx: transaction, inputs: inputInfo, outputs: outputInfo)
-        // One KeyStore read and one seed derivation for the whole operation,
-        // handed down to each input the way the vault entries take `master`
-        // (`Vault.partialSign`), rather than a PBKDF2 run per input. The key
-        // still lives no longer than this call.
-        let master = try masterKey()
+        // Resolve and bind the account key once for this signing operation.
+        let signingAccount = try accountPrivateKey()
         for (index, utxo) in selected.enumerated() {
             // BIP86 key-path spend: the output key is the account key tweaked
             // by the coin's own chain/index coordinates. Both sends and
@@ -1549,7 +1700,7 @@ public actor Wallet {
             try psbt.signKeyPath(
                 input: index,
                 tweakedPrivateKey: tweakedPrivateKey(chain: utxo.chain, index: utxo.index,
-                                                     master: master))
+                                                     account: signingAccount))
         }
         try psbt.finalize()
         return (psbt, try psbt.extractedTransaction())
@@ -1574,24 +1725,36 @@ public actor Wallet {
         return origin
     }
 
-    /// The master key from the KeyStore — loaded just for the duration of one
-    /// signing operation, never held in wallet state.
-    private func masterKey() throws -> HDKey {
+    /// Resolve a root secret down the descriptor origin, or use an account
+    /// secret at that origin. Loading an account key must not derive the
+    /// hardened origin path a second time. No private key enters wallet state.
+    private func accountPrivateKey() throws -> HDKey {
+        let origin = Self.originUnchecked(of: descriptor)
+        let resolved: HDKey
         switch try keyStore.load(walletID: id) {
         case let .mnemonic(words):
-            try HDKey(seed: BIP39.seed(mnemonic: words))
+            resolved = try Self.walk(HDKey(seed: BIP39.seed(mnemonic: words)), down: origin.path)
         case let .masterKey(xprv):
-            try HDKey.deserialize(xprv)
+            resolved = try Self.walk(HDKey.deserialize(xprv), down: origin.path)
+        case let .accountKey(xprv, fingerprint):
+            resolved = try HDKey.deserialize(xprv)
+            guard fingerprint == origin.fingerprint, Int(resolved.depth) == origin.path.count,
+                  resolved.childIndex == origin.path.last
+            else { throw WalletError.accountKeyMismatch }
         }
+        guard resolved.isPrivate, resolved.neutered == accountKey else { throw WalletError.accountKeyMismatch }
+        return resolved
     }
 
-    /// BIP86 tweaked private key for one of our addresses (key-path spend),
-    /// derived from the `master` its caller loaded for this signing operation.
-    private func tweakedPrivateKey(chain: AddressChain, index: UInt32, master: HDKey) throws -> Data {
-        let originPath = Self.originUnchecked(of: descriptor).path
-        var key = master
-        for step in originPath { key = try key.child(at: step) }
-        key = try key.child(at: UInt32(chain.rawValue)).child(at: index)
+    private static func walk(_ key: HDKey, down path: [UInt32]) throws -> HDKey {
+        var derived = key
+        for index in path { derived = try derived.child(at: index) }
+        return derived
+    }
+
+    /// BIP86 key-path spend, below the account already checked for this wallet.
+    private func tweakedPrivateKey(chain: AddressChain, index: UInt32, account: HDKey) throws -> Data {
+        let key = try account.child(at: UInt32(chain.rawValue)).child(at: index)
         guard let secret = key.privateKey else {
             throw WalletError.invalidDescriptor("neutered key in signing path")
         }
@@ -1636,7 +1799,7 @@ public actor Wallet {
             switch secret {
             case let .mnemonic(words):
                 mnemonic = words
-            case .masterKey:
+            case .masterKey, .accountKey:
                 throw WalletError.mnemonicUnavailable
             }
         } else {
@@ -1646,6 +1809,7 @@ public actor Wallet {
             descriptor: descriptor.serialized(),
             network: network.rawValue,
             lastKnownHeight: lastKnownHeight,
+            lastKnownBlockHash: state.scannedThroughHash,
             utxos: state.utxos,
             history: state.history,
             nextReceiveIndex: state.nextReceiveIndex,
@@ -1708,12 +1872,30 @@ public actor Wallet {
         // inputs are equally unsafe to select. Its entry re-pends the same
         // way; only the re-announcement half is ours-only, because only our
         // own transactions are in the broadcaster.
+        Self.rependSpenders(above: forkHeight, in: &candidate)
+        Self.rewindCoins(above: forkHeight, in: &candidate.allUtxos)
+        candidate.history.removeAll { $0.height > forkHeight }
+        // Never forward: a fork at or above the frontier leaves nothing that
+        // was scanned in doubt, and advancing here would skip unread blocks.
+        candidate.nextScanHeight = min(state.nextScanHeight,
+                                       forkHeight == UInt32.max ? forkHeight : forkHeight + 1)
+        // A frontier that moved back names a block this rewind just doubted.
+        if candidate.nextScanHeight != state.nextScanHeight { candidate.scannedThroughHash = nil }
+        guard candidate != state else { return }
+        try persist(candidate)
+        state = candidate
+    }
+
+    /// A disconnected spender is still live in mempools. Re-pend its receipt
+    /// and retain the corresponding input reservations before rewinding coins.
+    private static func rependSpenders(above forkHeight: UInt32, in candidate: inout WalletState) {
         var rependedSpenders: Set<Data> = []
         for index in candidate.history.indices
             where candidate.history[index].height > forkHeight && candidate.history[index].spent > 0
         {
             rependedSpenders.insert(candidate.history[index].txid)
             candidate.history[index].height = 0
+            candidate.history[index].blockHash = nil
         }
         for index in candidate.allUtxos.indices {
             guard let marker = candidate.allUtxos[index].spent,
@@ -1729,15 +1911,6 @@ public actor Wallet {
                 ? WalletUTXO.SpentMarker(spentBy: marker.spentBy, height: nil)
                 : nil
         }
-        Self.rewindCoins(above: forkHeight, in: &candidate.allUtxos)
-        candidate.history.removeAll { $0.height > forkHeight }
-        // Never forward: a fork at or above the frontier leaves nothing that
-        // was scanned in doubt, and advancing here would skip unread blocks.
-        candidate.nextScanHeight = min(state.nextScanHeight,
-                                       forkHeight == UInt32.max ? forkHeight : forkHeight + 1)
-        guard candidate != state else { return }
-        try persist(candidate)
-        state = candidate
     }
 
     /// The coin rows a fork takes away: everything confirmed above it, since

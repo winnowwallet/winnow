@@ -1,7 +1,11 @@
-Winnow 0.8.4: vaults, contact cards and recovery checks
+Winnow: fee policy, peer verification and recovery checks
 
-This build reorganizes the internal vault and cloud-backup code. No changes to signing rules, account access or the backup format are intended.
+Mainnet scans now require compact-filter checkpoint agreement from at least two known peer acquisition source classes. If verification is unavailable, Settings offers an explicit single-source choice for the current session; relaunching returns to strict verification. Source classes do not prove that peers have different operators.
 
-After updating, check that existing vaults, contact cards, balances and transaction history are still available. Check payment approvals and automatic cloud-backup updates. Use a separate test wallet to check manual backup export and file import, and use test-network funds for send tests.
+Automatic peer-driven fee increases now use the majority of configured peer seats and stop at 120 sat/vB. A higher reported floor requires an explicit fee decision. Peer floors are relay hints, not fee estimates or guarantees that a transaction will be accepted.
+
+After updating, check existing wallets, vaults, contact cards, balances, transaction history and payment approvals. Check fee previews, refusals and the session-only verification setting. Use test-network funds for sends and a separate test wallet for backup export and file import. Automatic cloud-backup updates should still work; replacement-device iCloud recovery remains unverified.
+
+The shared library gains account-key signing, durable address cursors, bounded range recovery, recipient metadata, confirmation hashes and relay-only APIs. This build does not add a completed hardware-card or iPhone NFC signing flow. Recording block hashes alone does not validate an imported backup.
 
 Report bugs at https://github.com/winnowwallet/winnow/issues. Include the app version, device, network, routing mode and steps to reproduce. Never include recovery words, private keys or wallet backup files.

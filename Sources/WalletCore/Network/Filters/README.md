@@ -35,3 +35,30 @@ to bound a single run; the next one resumes from the saved frontier.
 exercise verification, damaged progress, disagreement, and rollback.
 The [UI journey](../../../../UITests/README.md) discovers and confirms ordinary
 and shared-account payments through the real signet node's filters.
+
+Mainnet requires checkpoint agreement from at least two known acquisition source
+classes by default. `CrossCheckPolicy.acceptSingleSource` is an explicit degraded
+choice; test networks use it by default. Source classes describe acquisition,
+not independent operators or consensus proof. A `CrossCheckReceipt` records the
+answer digest, compared tip, endpoints and known classes that actually agreed;
+configuration alone is not evidence. Receipts persist atomically with progress
+and clear on rollback. Unknown provenance cannot satisfy the strict policy.
+The app's Advanced settings can authorize degraded mainnet verification for the
+current session after a warning; restarting or changing networks clears it.
+
+`scanRange(from:to:watchScripts:limits:storageURL:onMatch:)` is an opt-in recovery
+primitive. Its separate `RangeScanProgress` file cannot replace the forward
+progress file. It never syncs headers or moves the forward frontier. Callers own
+the recovery birthday, derivation expansion and fixed-point loop; one complete
+pass is not proof the whole wallet has been recovered. Interrupted batches may
+redeliver matches, so callbacks must be idempotent.
+
+Default range limits are 105,120 blocks, 2,000 scripts, 64 MiB of filters plus
+matched blocks, 300 seconds per run and 10 passes. Hard ceilings are 262,800
+blocks, 20,000 scripts, 1 GiB, one hour and 50 passes. Exhaustion refuses rather
+than claiming completion. Byte accounting can overshoot by one bounded filter
+chunk plus one block; time can overshoot by one outstanding peer request or
+callback. A resumed scan retains committed batches and verifies its anchor.
+Ranges lacking a checkpoint boundary or an already verified anchor fail closed
+except on chains shorter than the first checkpoint interval. Range scanning is
+covered by [RangeScan tests](../../../../Tests/WalletCoreTests/Network/RangeScanTests.swift).
