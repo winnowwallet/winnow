@@ -34,14 +34,31 @@ struct FeeResolutionTests {
                                          floorSatPerVByte: rate, peerFloorCap: 120)
         #expect(quote.rate == 7)
         #expect(quote.clampedFloor == nil)
+        #expect(!FeePolicy.acceptsRate(rate), "and the caller can tell before it substitutes")
+    }
+
+    @Test("only nil means uncapped: a cap of zero refuses every automatic increase and says so")
+    func explicitCaps() {
+        let none = FeePolicy.resolution(priority: .low, floorSatPerVByte: 2_000, peerFloorCap: 0)
+        #expect(none.rate == 2)
+        #expect(none.clampedFloor == 2_000)
+        let negative = FeePolicy.resolution(priority: .low, floorSatPerVByte: 2_000, peerFloorCap: -5)
+        #expect(negative == none)
+        let huge = FeePolicy.resolution(priority: .low, floorSatPerVByte: 2_000, peerFloorCap: 1e9)
+        #expect(huge.rate == 2_000)
+        #expect(huge.clampedFloor == nil)
+        #expect(FeePolicy.resolution(priority: .low, floorSatPerVByte: 2_000, peerFloorCap: nil).rate == 2_000)
+        #expect(FeePolicy.acceptsRate(1) && FeePolicy.acceptsRate(10_000))
     }
 
     @Test("the shared default caps automatic peer-driven fees and reports a required decision")
     func defaultUnchanged() {
-        #expect(FeePolicy.resolve(floorSatPerVByte: 200) == 120)
         #expect(FeePolicy.resolution(floorSatPerVByte: 200).rate == 120)
         #expect(FeePolicy.resolution(floorSatPerVByte: 200).clampedFloor == 200)
         #expect(FeePolicy.resolution(floorSatPerVByte: 200, peerFloorCap: nil).rate == 200)
+        // The uncapped rule keeps its meaning: never below the reported floor.
+        #expect(FeePolicy.resolve(floorSatPerVByte: 200) == 200)
+        #expect(FeePolicy.resolve(override: 300, floorSatPerVByte: 200) == 300)
     }
 
     @Test("the live pool uses configured-seat majority rather than the first or highest report")
@@ -55,23 +72,21 @@ struct FeeResolutionTests {
         await pool.start()
         defer { Task { await pool.stop(); for node in nodes { await node.stop() } } }
         #expect(await pool.connectedPeers().count == 3)
-        try await nodes[0].send(.feefilter(200_000))
-        #expect(try await Self.eventually { await pool.feeFilterFloorSatPerVByte(aggregation: .strictest) == 200 })
+        // Nobody has reported: no majority floor, and nobody connected refuses anything.
         #expect(await pool.feeFilterFloorSatPerVByte() == nil)
+        #expect(await pool.feeFilterFloorSatPerVByte(aggregation: .mostLenient) == nil)
+        try await nodes[0].send(.feefilter(200_000))
+        #expect(await pollUntil(.seconds(3)) { await pool.feeFilterFloorSatPerVByte(aggregation: .strictest) == 200 })
+        #expect(await pool.feeFilterFloorSatPerVByte() == nil)
+        #expect(await pool.feeFilterFloorSatPerVByte(aggregation: .mostLenient) == nil,
+                "two seats have not reported, and each would still relay anything")
         try await nodes[1].send(.feefilter(2_000))
-        #expect(try await Self.eventually { await pool.feeFilterFloorSatPerVByte() == 2 })
+        #expect(await pollUntil(.seconds(3)) { await pool.feeFilterFloorSatPerVByte() == 2 })
         try await nodes[2].send(.feefilter(3_000))
-        #expect(try await Self.eventually { await pool.feeFilterFloorSatPerVByte() == 3 })
+        #expect(await pollUntil(.seconds(3)) { await pool.feeFilterFloorSatPerVByte() == 3 })
         #expect(await pool.feeFilterFloorSatPerVByte(aggregation: .strictest) == 200)
-    }
-
-    private static func eventually(_ condition: () async -> Bool) async throws -> Bool {
-        let deadline = ContinuousClock.now + .seconds(3)
-        while ContinuousClock.now < deadline {
-            if await condition() { return true }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        return false
+        #expect(await pool.feeFilterFloorSatPerVByte(aggregation: .mostLenient) == 2,
+                "the lowest floor anyone connected reports is the rate below which nobody relays")
     }
 
     @Test("a lone reporting peer cannot impose a floor on a three-seat pool")

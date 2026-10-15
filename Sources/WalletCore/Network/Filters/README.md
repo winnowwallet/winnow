@@ -36,15 +36,18 @@ exercise verification, damaged progress, disagreement, and rollback.
 The [UI journey](../../../../UITests/README.md) discovers and confirms ordinary
 and shared-account payments through the real signet node's filters.
 
-Mainnet requires checkpoint agreement from at least two known acquisition source
-classes by default. `CrossCheckPolicy.acceptSingleSource` is an explicit degraded
-choice; test networks use it by default. Source classes describe acquisition,
-not independent operators or consensus proof. A `CrossCheckReceipt` records the
-answer digest, compared tip, endpoints and known classes that actually agreed;
-configuration alone is not evidence. Receipts persist atomically with progress
-and clear on rollback. Unknown provenance cannot satisfy the strict policy.
-The app's Advanced settings can authorize degraded mainnet verification for the
-current session after a warning; restarting or changing networks clears it.
+A checkpoint comparison records a `CrossCheckReceipt`: the answer digest,
+compared tip, endpoints and known acquisition source classes that actually
+agreed; configuration alone is not evidence. Receipts persist atomically with
+progress and clear on rollback. `CrossCheckPolicy.requireDistinctSources`
+refuses a run whose agreeing peers span fewer than two known classes, and cools
+off rather than bans the peers such a vote outvoted. Every network defaults to
+`acceptSingleSource`, the behaviour before the policy existed, because an
+overlay-only or all-manual pool can never span two classes; making the strict
+policy the mainnet default needs its own change with a way for those pools to
+satisfy it. Source classes describe acquisition, not independent operators or
+consensus proof, and unknown provenance cannot satisfy the strict policy. The
+app does not expose the policy yet.
 
 `scanRange(from:to:watchScripts:limits:storageURL:onMatch:)` is an opt-in recovery
 primitive. Its separate `RangeScanProgress` file cannot replace the forward

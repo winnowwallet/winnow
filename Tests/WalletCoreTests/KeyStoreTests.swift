@@ -45,7 +45,11 @@ struct KeyStoreTests {
         #expect(WalletSecret.mnemonic(testMnemonic).serialized == Data("mnemonic\n\(testMnemonic)".utf8))
         #expect(WalletSecret.masterKey(key).serialized == Data("xprv\n\(key)".utf8))
         for malformed in ["account/1", "account/1\n73c5da0a", "account/1\n73C5DA0A\n\(key)",
-                          "account/1\n73c5da0\n\(key)", "account/1\n73c5da0a\n\(key)\nextra"] {
+                          "account/1\n73c5da0\n\(key)", "account/1\n73c5da0a\n\(key)\nextra",
+                          // A header that is not exactly `account/<digits>` is damage,
+                          // not a newer version to send the user elsewhere for.
+                          "account/1x\n73c5da0a\n\(key)", "account/\n73c5da0a\n\(key)",
+                          "account/1 \n73c5da0a\n\(key)"] {
             #expect(throws: KeyStoreError.malformedSecret) {
                 _ = try WalletSecret(serialized: Data(malformed.utf8))
             }

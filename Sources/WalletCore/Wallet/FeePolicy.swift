@@ -19,8 +19,14 @@ public enum FeePolicy {
     public static let maximumPeerFloorSatPerVByte: Double = 120
 
     public enum FloorAggregation: Sendable {
+        /// The highest floor any connected peer reports.
         case strictest
+        /// The lower median across configured seats, missing reports as zero.
         case seatMajority
+        /// The lowest floor any connected peer reports: the rate below which
+        /// nobody connected would relay. A connected peer that has not
+        /// reported yet counts as accepting anything.
+        case mostLenient
     }
 
     public struct Resolution: Equatable, Sendable {
@@ -45,11 +51,13 @@ public enum FeePolicy {
         }
     }
 
-    /// Resolves the feerate to use (sat/vB). See the type doc for the order.
+    /// Resolves the feerate to use (sat/vB), never below the reported floor.
+    /// This is the uncapped rule; `resolution` is the one that can cap a
+    /// peer-driven increase, and the only one that can say it did.
     public static func resolve(priority: Priority = .medium, override: Double? = nil,
                                observed: [Double] = [], floorSatPerVByte: Double? = nil) -> Double {
         resolution(priority: priority, override: override, observed: observed,
-                   floorSatPerVByte: floorSatPerVByte).rate
+                   floorSatPerVByte: floorSatPerVByte, peerFloorCap: nil).rate
     }
 
     /// A validated estimate with an optional, explicitly selected peer-floor
@@ -66,8 +74,24 @@ public enum FeePolicy {
         guard let floor = usable(floorSatPerVByte) else {
             return Resolution(rate: base, clampedFloor: nil)
         }
-        let rate = max(base, min(floor, usable(peerFloorCap) ?? maximumSatPerVByte))
+        let rate = max(base, min(floor, effectiveCap(peerFloorCap)))
         return Resolution(rate: rate, clampedFloor: rate < floor ? floor : nil)
+    }
+
+    /// Only nil means uncapped. An explicit cap is clamped into the usable
+    /// band rather than discarded, so a cap of zero means no automatic
+    /// peer-driven increase at all, reported as a clamped floor, instead of
+    /// quietly selecting no cap. A non-finite cap is treated as none.
+    private static func effectiveCap(_ cap: Double?) -> Double {
+        guard let cap, cap.isFinite else { return maximumSatPerVByte }
+        return min(max(cap, 0), maximumSatPerVByte)
+    }
+
+    /// Whether a rate is one the policy can work with: finite, positive and
+    /// inside the band coin selection accepts. An override outside it should
+    /// be refused where it was typed rather than silently replaced.
+    public static func acceptsRate(_ rate: Double) -> Bool {
+        usable(rate) != nil
     }
 
     private static func usable(_ rate: Double?) -> Double? {
@@ -99,19 +123,19 @@ extension PeerPool {
     /// Explicit aggregation for an embedding application's policy. The
     /// no-argument overload selects the majority policy.
     public func feeFilterFloorSatPerVByte(aggregation: FeePolicy.FloorAggregation) async -> Double? {
+        var reports: [Double] = []
+        var unreported = 0
+        for peer in connectedPeers() {
+            if let floor = await peer.feeFilter {
+                reports.append(Double(floor) / 1_000)
+            } else {
+                unreported += 1
+            }
+        }
         switch aggregation {
-        case .strictest:
-            var reports: [Double] = []
-            for peer in connectedPeers() {
-                if let floor = await peer.feeFilter { reports.append(Double(floor) / 1_000) }
-            }
-            return reports.max()
-        case .seatMajority:
-            var reports: [Double] = []
-            for peer in connectedPeers() {
-                if let floor = await peer.feeFilter { reports.append(Double(floor) / 1_000) }
-            }
-            return FeePolicy.seatMajorityFloor(reported: reports, seats: peerCount)
+        case .strictest: return reports.max()
+        case .seatMajority: return FeePolicy.seatMajorityFloor(reported: reports, seats: peerCount)
+        case .mostLenient: return unreported > 0 ? nil : reports.min()
         }
     }
 

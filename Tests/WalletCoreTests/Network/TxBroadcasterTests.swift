@@ -1248,6 +1248,107 @@ struct TxBroadcasterTests {
         #expect(await poolIsStopped(pool))
         #expect(await broadcaster.pendingTxids == [txid])
     }
+
+    /// The halt can also land inside the narrowing: the write fails on an
+    /// attempt that fires while the pool is being narrowed, so the end it
+    /// calls finds no session yet, and the loop is dead by the time the
+    /// narrowing reports its seats. The re-check on the far side has to see
+    /// that, or the session the check before the narrowing refuses is
+    /// recorded anyway, over a loop that will never announce.
+    @Test("a write that fails while the pool is being narrowed opens no session")
+    func relayOnlyPersistenceFailureDuringNarrowingOpensNoSession() async throws {
+        let params = NetworkParams.signet
+        let node = LoopbackNode(params: params)
+        try await node.start()
+        defer { Task { await node.stop() } }
+        let store = tempFileURL("pending-relay-narrowing.json")
+        defer { try? FileManager.default.removeItem(at: store.deletingLastPathComponent()) }
+
+        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint])
+        await pool.start()
+        let broadcaster = try TxBroadcaster(pool: pool, storageURL: store,
+                                            rebroadcastBaseInterval: .milliseconds(100),
+                                            maxRebroadcastInterval: .milliseconds(100))
+        defer { Task { await broadcaster.shutdown() } }
+        let seen = EventCollector<TxBroadcaster.Event>()
+        let events = await broadcaster.events()
+        let consumer = Task { for await event in events { seen.add(event) } }
+        defer { consumer.cancel() }
+        let txid = try await broadcaster.broadcast(
+            makeFakeSegwitTx().serialized(includeWitness: true))
+
+        let gate = NarrowingGate()
+        await pool.holdNarrowing { await gate.reach(); await gate.waitForRelease() }
+        let opening = Task { () -> Result<Bool, any Error> in
+            let outcome: Result<Bool, any Error>
+            do {
+                outcome = .success(try await broadcaster.enterRelayOnly(seats: 1))
+            } catch {
+                outcome = .failure(error)
+            }
+            await gate.reach()
+            return outcome
+        }
+        await gate.waitForReach()
+        #expect(await pool.mode == .relayOnly, "the pool is mid-narrowing")
+
+        // The store goes out from under the retry loop while the broadcaster
+        // is suspended on the narrowing; the next attempt halts the loop.
+        try FileManager.default.removeItem(at: store.deletingLastPathComponent())
+        #expect(await pollUntil(.seconds(15)) {
+            seen.events.contains { if case .persistenceFailed = $0 { return true }; return false }
+        }, "the loop has to halt inside the narrowing for the case to exist")
+        await gate.release()
+
+        let opened = try await opening.value.get()
+        #expect(opened == false, "a session over a halted loop is refused on the far side too")
+        #expect(await broadcaster.isRelayOnly == false)
+        #expect(await poolIsStopped(pool), "the pool goes quiet, which is what the caller asked for")
+        #expect(await broadcaster.pendingTxids == [txid])
+    }
+
+    /// A seat can be present and useless: a peer announced to the maximum
+    /// number of times without ever asking for the payment is skipped for
+    /// good, and a relay-only session kept over nothing but such seats is
+    /// peers held open for a relay that has already stopped. The attempt
+    /// that finds no seat it can announce to ends the session, as a lost
+    /// seat would.
+    @Test("a session whose only seat will never hear about the payment ends")
+    func relayOnlyEndsWhenItsSeatIsDeprioritized() async throws {
+        let params = NetworkParams.signet
+        let silent = LoopbackNode(params: params) // never requests
+        try await silent.start()
+        defer { Task { await silent.stop() } }
+        let silentEndpoint = await silent.endpoint
+
+        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [silentEndpoint])
+        await pool.start()
+        let broadcaster = try TxBroadcaster(pool: pool,
+                                            rebroadcastBaseInterval: .milliseconds(150),
+                                            maxRebroadcastInterval: .milliseconds(200),
+                                            maxAnnouncementsPerPeer: 2,
+                                            announcementTimeout: .milliseconds(100))
+        defer { Task { await broadcaster.shutdown() } }
+        let seen = EventCollector<TxBroadcaster.Event>()
+        let events = await broadcaster.events()
+        let consumer = Task { for await event in events { seen.add(event) } }
+        defer { consumer.cancel() }
+
+        let txid = try await broadcaster.broadcast(makeFakeSegwitTx().serialized(includeWitness: true))
+        #expect(await pollUntil {
+            seen.events.contains { $0 == .deprioritized(txid: txid, peer: silentEndpoint) }
+        }, "the only seat has stopped being worth announcing to")
+
+        // The session opens over the seat it has, and the next attempt finds
+        // that seat cannot be announced to for anything still pending.
+        #expect(try await broadcaster.enterRelayOnly(seats: 1))
+        #expect(await pollUntil(.seconds(15)) {
+            seen.events.contains(.relaySessionEnded(reason: .seatsGone))
+        }, "a seat that will never hear about the payment is a seat that is gone")
+        #expect(await broadcaster.isRelayOnly == false)
+        #expect(await poolIsStopped(pool))
+        #expect(await broadcaster.pendingTxids == [txid], "the payment stays saved for the next start()")
+    }
 }
 
 /// Parks the pool inside `enterRelayOnly` until the test lets it go, so the

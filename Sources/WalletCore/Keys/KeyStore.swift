@@ -71,6 +71,13 @@ public enum WalletSecret: Equatable, Sendable {
             // A malformed header may contain the payload; never echo it.
             let version = header.dropFirst(Self.accountPrefix.count)
                 .prefix { $0 >= "0" && $0 <= "9" }.prefix(8)
+            // `account/1` is this build's own format, so a header that starts
+            // like it and is not exactly it is damage, not a newer version to
+            // send someone to other software for. A header naming another
+            // version is reported by its bounded label alone.
+            guard !version.isEmpty, Self.accountPrefix + version != Self.accountHeader else {
+                throw KeyStoreError.malformedSecret
+            }
             throw KeyStoreError.unsupportedSecretVersion(Self.accountPrefix + version)
         default: throw KeyStoreError.malformedSecret
         }

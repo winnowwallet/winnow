@@ -430,12 +430,18 @@ extension Wallet {
         // Prefer the exported cursor so a spent-out restore does not
         // reissue address 0. Never go below the UTXO-derived floor — a
         // tampered-low cursor would otherwise reuse a live coin's address.
+        let cursors = try boundedCursors(
+            receive: max(bundle.nextReceiveIndex ?? 0, fromReceiveUTXOs),
+            change: max(bundle.nextChangeIndex ?? 0, fromChangeUTXOs))
+        guard bundle.lastKnownHeight < UInt32.max else {
+            throw WalletError.invalidBundle("last known height \(bundle.lastKnownHeight) is out of range")
+        }
         var state = WalletState(
             descriptor: descriptor.serialized(),
             network: network.rawValue,
             creationHeight: bundle.lastKnownHeight,
-            nextReceiveIndex: max(bundle.nextReceiveIndex ?? 0, fromReceiveUTXOs),
-            nextChangeIndex: max(bundle.nextChangeIndex ?? 0, fromChangeUTXOs),
+            nextReceiveIndex: cursors.receive,
+            nextChangeIndex: cursors.change,
             nextScanHeight: bundle.lastKnownHeight + 1,
             utxos: utxos,
             history: history
@@ -512,6 +518,18 @@ extension Wallet {
 
     /// The claimed history, with txids well-formed and amounts inside the
     /// supply — bounded hostile input like everything else in a bundle.
+    /// The cursors a bundle may set, under the bound `advanceCursors`
+    /// enforces: a restore cannot name a window the gap-limit lookahead cannot
+    /// derive from, which would trap or spin the first scan after import.
+    private static func boundedCursors(receive: UInt32, change: UInt32) throws
+        -> (receive: UInt32, change: UInt32) {
+        let maximum = HDKey.hardenedOffset - Self.gapLimit
+        guard receive <= maximum, change <= maximum else {
+            throw WalletError.invalidBundle("address cursors leave no room for the gap-limit window")
+        }
+        return (receive, change)
+    }
+
     /// A claimed block hash in internal byte order, or nil when the bundle
     /// names none. A pending entry has no block to name.
     private static func blockHash(_ hex: String?, confirmed: Bool) throws -> Data? {

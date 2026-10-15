@@ -198,13 +198,16 @@ public actor FilterSync {
     /// comparison that is supposed to span channels can run entirely inside
     /// one of them.
     ///
-    /// Mainnet defaults to `requireDistinctSources`. A caller may explicitly
-    /// choose degraded single-source verification after explaining the tradeoff
-    /// to its user. Test networks default to `acceptSingleSource` so a local
-    /// fixture or explicitly chosen test node can operate on its own.
+    /// Every network defaults to `acceptSingleSource`, which is how the scan
+    /// behaved before the policy existed: a pool that can only ever reach one
+    /// class (overlay-only routing seats census peers alone; a user who typed
+    /// in every seat holds manual peers alone) keeps syncing. Requiring
+    /// distinct sources on mainnet by default is a product decision for its
+    /// own change, with a way for those pools to satisfy it; a caller that
+    /// wants it today passes `requireDistinctSources` explicitly.
     public enum CrossCheckPolicy: String, Codable, Sendable, CaseIterable {
         public static func `default`(for network: BitcoinNetwork) -> Self {
-            network == .mainnet ? .requireDistinctSources : .acceptSingleSource
+            .acceptSingleSource
         }
 
         /// Whatever agreed is enough, down to a lone surviving peer.
@@ -257,6 +260,18 @@ public actor FilterSync {
             public init(endpoint: String, source: PeerSource?) {
                 self.endpoint = endpoint
                 self.source = source
+            }
+
+            private enum CodingKeys: String, CodingKey { case endpoint, source }
+
+            /// A class this build does not know decodes as nil — "unknown
+            /// never counts" is already what nil means — rather than refusing
+            /// the whole progress file over a note about who corroborated it.
+            public init(from decoder: any Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                endpoint = try container.decode(String.self, forKey: .endpoint)
+                source = try container.decodeIfPresent(String.self, forKey: .source)
+                    .flatMap(PeerSource.init(rawValue:))
             }
         }
 
@@ -340,12 +355,12 @@ public actor FilterSync {
     /// `defaultFiltersPerChunk`.
     public let filtersPerChunk: UInt32
     /// Whether this instance may advance on answers from a single acquisition
-    /// channel. Mainnet requires distinct sources unless explicitly overridden.
+    /// channel. Defaults to `CrossCheckPolicy.default(for:)` for the network.
     public let crossCheckPolicy: CrossCheckPolicy
     private let storageURL: URL?
     public nonisolated let persistenceState: PersistenceState
     private var progress: Progress
-    var requesting = false
+    private var requesting = false
     var rangeRun: RangeScanRun?
 
     private static let maximumProgressBytes = 128 * 1_024 * 1_024
@@ -397,10 +412,15 @@ public actor FilterSync {
         progress.filterHeaders[String(height)].flatMap { Data(hex: $0) }
     }
 
-    private func beginRequest() throws {
+    /// One run at a time, shared by `sync`, `transaction(_:at:)` and
+    /// `scanRange`: all three take this flag, so any of them while another
+    /// is running throws `busy` having changed nothing.
+    func beginRequest() throws {
         guard !requesting else { throw FilterSyncError.busy }
         requesting = true
     }
+
+    func endRequest() { requesting = false }
 
     /// Fetch a historical receipt without changing scan progress or balances.
     /// Peer requests match by command, so they cannot overlap a filter scan.
@@ -411,7 +431,10 @@ public actor FilterSync {
             throw FilterSyncError.badPeerResponse("the payment's block header is unavailable")
         }
         var lastError: any Error = FilterSyncError.noPeers
-        for peer in await pool.connectedPeers().prefix(3) {
+        // Through the same gate as a scan: a relay-only pool holds its seats
+        // for a payment going out, and a bad block here would unseat the only
+        // one through `misbehaving` with nothing to dial a replacement.
+        for peer in try await peersForReading().prefix(3) {
             try Task.checkCancellation()
             do {
                 let block = try await verifiedBlock(from: peer, height: height, blockHash: hash,
@@ -474,8 +497,7 @@ public actor FilterSync {
         try await rollBackIfForked(headerOutcome, onReorg: onReorg)
         peers = await pool.connectedPeers()
         guard !peers.isEmpty else { throw FilterSyncError.noPeers }
-        let tip = await chain.height
-        let tipHash = await chain.tipHash
+        let (tip, tipHash) = await chain.tipSnapshot
         try Self.validate(progress: progress, againstTip: tip)
         guard tip >= progress.nextScanHeight else { return nil }
         // How far this run may go. Everything below stops at the ceiling
@@ -814,10 +836,26 @@ public actor FilterSync {
             try await refuseDisputedVote(checkpoints.map(\.peer),
                                          reason: "cfcheckpt: one source class outvotes another")
         }
-        for peer in majority.minority {
-            await pool.misbehaving(peer, reason: "cfcheckpt mismatch")
-        }
+        // A majority the policy is about to refuse is not evidence against
+        // the peers that disagreed with it: under `requireDistinctSources` a
+        // single-class majority advances nothing, so its dissenters are cooled
+        // off rather than struck from the persisted good-peers list on that
+        // one channel's word. Only a majority the run can stand on bans.
+        await dismissMinority(majority.minority,
+                              condemned: vote.crossSource || crossCheckPolicy == .acceptSingleSource)
         return (majority.value, vote.crossSource)
+    }
+
+    /// The peers outvoted by a majority: struck when the majority is one the
+    /// run can stand on, cooled off when the policy is about to refuse it.
+    private func dismissMinority(_ peers: [PeerConnection], condemned: Bool) async {
+        for peer in peers {
+            if condemned {
+                await pool.misbehaving(peer, reason: "cfcheckpt mismatch")
+            } else {
+                await pool.transportFailure(peer, reason: "cfcheckpt mismatch in a single-class vote")
+            }
+        }
     }
 
     /// What a vote's source classes say about it. `crossSource`: the agreeing
@@ -1327,7 +1365,10 @@ public actor FilterSync {
         async throws {
         let block = try await verifiedBlock(from: peer, height: height, blockHash: blockHash)
         try await onMatch(BlockMatch(height: height, blockHash: blockHash, block: block))
-        try chargeRangeBlockBytes(block.serialized.count)
+        // Serialising a block again is only worth it when a range budget is
+        // counting; the forward scan would otherwise pay it on every match for
+        // a number it throws away.
+        if rangeRun != nil { try chargeRangeBlockBytes(block.serialized.count) }
     }
 
     private func verifiedBlock(from peer: PeerConnection, height: UInt32, blockHash: Data,

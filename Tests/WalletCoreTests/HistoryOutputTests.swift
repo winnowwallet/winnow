@@ -145,4 +145,39 @@ struct HistoryOutputTests {
         // The txid is correct, but the recipient script contradicts those bytes.
         #expect(throws: (any Error).self) { try entry.transaction() }
     }
+
+    /// An imported pending entry may carry a breakdown with no bytes to check
+    /// it against. The block that confirms it brings the bytes; a breakdown
+    /// they contradict is dropped there, so the file the wallet writes is one
+    /// its own decoder accepts on the next launch.
+    @Test("confirming an imported entry drops metadata its bytes contradict, and the file reopens")
+    func contradictedImportedMetadataIsDropped() async throws {
+        let url = tempFileURL("contradicted-outputs-wallet.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let keyStore = InMemoryKeyStore()
+        let transaction = makeFakeSegwitTx()
+        let source = try makeTestWallet(creationHeight: 400)
+        var claimed = ImportBundle.KnownTransaction(txid: transaction.txid.displayHex, height: 0,
+                                                    received: 0, spent: 0)
+        claimed.outputs = .init(external: [.init(vout: 0, amount: transaction.outputs[0].value + 1,
+                                                 scriptPubKey: transaction.outputs[0].scriptPubKey)])
+        let bundle = try await ImportBundle(network: "signet",
+                                            descriptor: source.descriptor.serialized(),
+                                            mnemonic: testMnemonic,
+                                            lastKnownHeight: 500, utxos: [], transactions: [claimed])
+        let wallet = try Wallet.importing(bundle, keyStore: keyStore, storageURL: url)
+        #expect(try #require(await wallet.history.first).outputs != nil,
+                "display metadata without bytes is accepted on import")
+
+        try await wallet.apply(match: fakeMatch(height: 600, transactions: [transaction]))
+        let confirmed = try #require(await wallet.history.first { $0.txid == transaction.txid })
+        #expect(confirmed.height == 600)
+        #expect(confirmed.rawTransaction != nil)
+        #expect(confirmed.outputs == nil, "the breakdown the bytes contradict is gone")
+
+        let reopened = try Wallet.open(storageURL: url, keyStore: keyStore)
+        let entry = try #require(await reopened.history.first { $0.txid == transaction.txid })
+        #expect(entry.outputs == nil)
+        #expect(try entry.transaction()?.txid == transaction.txid)
+    }
 }

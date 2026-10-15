@@ -5,20 +5,6 @@ import XCTest
 
 @MainActor
 final class LibraryPolicyTests: XCTestCase {
-    func testMainnetRequiresDistinctSourcesUntilAnExplicitSessionChoice() async {
-        let defaults = makeDefaults()
-        let model = makeModel(defaults: defaults)
-        XCTAssertEqual(model.network, .mainnet)
-        XCTAssertEqual(model.filterCrossCheckPolicy, .requireDistinctSources)
-        await model.setAllowSingleSourceMainnet(true)
-        XCTAssertEqual(model.filterCrossCheckPolicy, .acceptSingleSource)
-        XCTAssertTrue(model.allowSingleSourceMainnet)
-        XCTAssertEqual(makeModel(defaults: defaults).filterCrossCheckPolicy, .requireDistinctSources,
-                       "relaunch must not inherit degraded verification")
-        await model.setAllowSingleSourceMainnet(false)
-        XCTAssertEqual(model.filterCrossCheckPolicy, .requireDistinctSources)
-    }
-
     func testCappedPeerFloorRequiresANewFeeDecision() throws {
         let quote = FeePolicy.resolution(floorSatPerVByte: 200)
         XCTAssertEqual(quote.rate, 120)
@@ -35,7 +21,7 @@ final class LibraryPolicyTests: XCTestCase {
         XCTAssertThrowsError(try AppModel.requireRelayFee(rate: 200, floor: 201))
     }
 
-    func testNetworkSwitchEndsDegradedChoiceAndKeepsPreferencesIsolated() async throws {
+    func testNetworkSwitchKeepsPreferencesIsolated() async throws {
         let environment = ["WINNOW_E2E": "1", "WINNOW_E2E_RUN": "policy-switch-\(UUID().uuidString)",
                            "WINNOW_E2E_ENTROPY": String(repeating: "a1", count: 16),
                            "WINNOW_E2E_RESET": "1"]
@@ -50,21 +36,13 @@ final class LibraryPolicyTests: XCTestCase {
         defaults.set(["mainnet.example:8333"], forKey: AppModel.DefaultsKey.manualPeers(.mainnet))
         defaults.set(["signet.example:38333"], forKey: AppModel.DefaultsKey.manualPeers(.signet))
         await model.switchNetwork(to: .mainnet)
-        await model.setAllowSingleSourceMainnet(true)
-        XCTAssertTrue(model.allowSingleSourceMainnet)
         await model.switchNetwork(to: .signet)
-        XCTAssertFalse(model.allowSingleSourceMainnet)
         XCTAssertEqual(model.manualPeers, ["signet.example:38333"])
         XCTAssertEqual(model.stage, .onboarding)
         await model.switchNetwork(to: .mainnet)
-        XCTAssertEqual(model.filterCrossCheckPolicy, .requireDistinctSources)
         XCTAssertEqual(model.manualPeers, ["mainnet.example:8333"])
         XCTAssertNil(model.walletID)
         XCTAssertEqual(model.stage, .onboarding)
-        // Selecting the current network is a no-op, not a policy change.
-        await model.setAllowSingleSourceMainnet(true)
-        await model.switchNetwork(to: .mainnet)
-        XCTAssertTrue(model.allowSingleSourceMainnet)
     }
 
     func testNetworkSwitchReopensOnlyItsOwnWalletAndRefusesDamagedState() async throws {
@@ -96,9 +74,7 @@ final class LibraryPolicyTests: XCTestCase {
         XCTAssertNoThrow(try keys.load(walletID: id))
         let damaged = Data("unreadable wallet fixture".utf8)
         try damaged.write(to: signetFile)
-        await model.setAllowSingleSourceMainnet(true)
         await model.switchNetwork(to: .signet)
-        XCTAssertFalse(model.allowSingleSourceMainnet)
         XCTAssertNil(model.walletID)
         guard case .storageDamaged = model.stage else {
             return XCTFail("a damaged network wallet was treated as empty")

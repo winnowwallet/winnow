@@ -953,15 +953,15 @@ struct FilterSyncAdversaryTests {
             })
     }
 
-    @Test("mainnet defaults to strict verification and a caller can explicitly select degraded verification")
+    @Test("every network defaults to single-source verification; strict verification is an explicit choice")
     func networkDefaults() async throws {
-        #expect(FilterSync.CrossCheckPolicy.default(for: .mainnet) == .requireDistinctSources)
+        #expect(FilterSync.CrossCheckPolicy.default(for: .mainnet) == .acceptSingleSource)
         #expect(FilterSync.CrossCheckPolicy.default(for: .signet) == .acceptSingleSource)
         let pool = PeerPool(params: .mainnet, peerCount: 0)
         let chain = try HeaderChain(params: .mainnet, start: .checkpoint)
-        let strict = try FilterSync(pool: pool, chain: chain, startHeight: await chain.startHeight)
-        let degraded = try FilterSync(pool: pool, chain: chain, startHeight: await chain.startHeight,
-                                      crossCheckPolicy: .acceptSingleSource)
+        let strict = try FilterSync(pool: pool, chain: chain, startHeight: await chain.startHeight,
+                                    crossCheckPolicy: .requireDistinctSources)
+        let degraded = try FilterSync(pool: pool, chain: chain, startHeight: await chain.startHeight)
         #expect(await strict.crossCheckPolicy == .requireDistinctSources)
         #expect(await degraded.crossCheckPolicy == .acceptSingleSource)
     }
@@ -1017,11 +1017,12 @@ struct FilterSyncAdversaryTests {
     }
 
     /// The case the pool ceiling is supposed to make impossible and does not.
-    /// Three manual peers, one lying about filter commitments: the majority
-    /// rule works exactly as it should — two answers outvote one, and the liar
-    /// is evicted — and the two that agreed are the same channel, because
+    /// Three manual peers, one lying about filter commitments: two answers
+    /// outvote one, and the two that agreed are the same channel, because
     /// manual peers are exempt from the source rule. A majority of one channel
-    /// is what `requireDistinctSources` refuses.
+    /// is what `requireDistinctSources` refuses — and a majority it refuses to
+    /// stand on condemns nobody: the dissenter is cooled off its seat, not
+    /// struck from the persisted good-peers list on that channel's word.
     @Test("a 2-of-3 majority inside one source class advances nothing")
     func singleClassMajorityIsRefused() async throws {
         let fixture = try await Self.threePeerFixture(
@@ -1048,10 +1049,13 @@ struct FilterSyncAdversaryTests {
         #expect(await fixture.sync.lastCrossCheck == nil)
         #expect(!FileManager.default.fileExists(atPath: fixture.progressFile.path),
                 "a refused run persists nothing at all")
-        // The comparison still ran: only the advance was refused, so the liar
-        // is gone either way. A refusal that also stopped the eviction would
-        // leave the pool worse off than the permissive path.
+        // The comparison still ran and the dissenter is off its seat, but on
+        // the strength of a vote the policy declined: cooled off, so the pool
+        // seats other candidates before the next attempt, and not banned.
         #expect(!(await Self.connectedEndpoints(fixture.pool)).contains(liarEndpoint.description))
+        #expect(await fixture.pool.rejectionReasons[liarEndpoint] == "cfcheckpt mismatch in a single-class vote",
+                "a single-class majority is not evidence against the peer it outvoted")
+        #expect(await fixture.pool.coolingEndpoints.contains(liarEndpoint))
         await fixture.pool.stop()
     }
 

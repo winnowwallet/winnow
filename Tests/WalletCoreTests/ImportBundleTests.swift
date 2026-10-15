@@ -190,6 +190,24 @@ struct ImportBundleTests {
         #expect(throws: WalletError.invalidBundle("transaction history has invalid amounts")) {
             _ = try Wallet.importing(invalidHistory, keyStore: InMemoryKeyStore())
         }
+        // Bounds a hostile bundle used to be able to trap or spin the wallet
+        // on: a height with no block after it, and a cursor past the window
+        // the gap-limit lookahead can derive from.
+        var heightAtTheTop = bundle
+        heightAtTheTop.lastKnownHeight = UInt32.max
+        #expect(throws: WalletError.invalidBundle("last known height \(UInt32.max) is out of range")) {
+            _ = try Wallet.importing(heightAtTheTop, keyStore: InMemoryKeyStore())
+        }
+        var cursorPastTheWindow = bundle
+        cursorPastTheWindow.nextReceiveIndex = UInt32.max
+        #expect(throws: WalletError.invalidBundle("address cursors leave no room for the gap-limit window")) {
+            _ = try Wallet.importing(cursorPastTheWindow, keyStore: InMemoryKeyStore())
+        }
+        var changeCursorPastTheWindow = bundle
+        changeCursorPastTheWindow.nextChangeIndex = HDKey.hardenedOffset
+        #expect(throws: WalletError.invalidBundle("address cursors leave no room for the gap-limit window")) {
+            _ = try Wallet.importing(changeCursorPastTheWindow, keyStore: InMemoryKeyStore())
+        }
     }
 
     @Test("verify report: confirmed, spent-since-bundle (mismatch), discovered")

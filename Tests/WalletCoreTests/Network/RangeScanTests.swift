@@ -168,6 +168,40 @@ struct RangeScanTests {
         #expect(try RangeScanProgress.load(storageURL: recordURL) == stored)
     }
 
+    /// A record's pass number comes off disk, so it is bounded on the way in:
+    /// a number past the ceiling is damage to report, not a trap on `+ 1`
+    /// when a changed script set makes it the next pass. And the identity a
+    /// pass is told apart by ignores repeats as well as order, so a caller
+    /// that rebuilds its watch list with an overlap resumes rather than
+    /// starting the range again as a new pass.
+    @Test("a pass number past the ceiling is damage, and a repeated script is the same set")
+    func iterationPastTheCeilingIsDamage() async throws {
+        let (sync, base) = try Self.offline()
+        let recordURL = tempFileURL("range-iterations-overflow.json")
+        defer { try? FileManager.default.removeItem(at: recordURL.deletingLastPathComponent()) }
+        let fingerprint = RangeScanProgress.fingerprint(of: [Self.script])
+        try RangeScanProgress(from: base, to: base, nextScanHeight: base,
+                              watchFingerprint: fingerprint, iteration: Int.max)
+            .persist(to: recordURL)
+        await #expect(throws: RangeScanError.recordDamaged("the pass number is out of range")) {
+            try await sync.scanRange(from: base, to: base, watchScripts: [Self.otherScript],
+                                     storageURL: recordURL) { _ in }
+        }
+        try RangeScanProgress(from: base, to: base, nextScanHeight: base,
+                              watchFingerprint: fingerprint,
+                              iteration: RangeScanLimits.iterationsCeiling)
+            .persist(to: recordURL)
+        // The pass after the last permitted one is refused by name, not by trap.
+        await #expect(throws: RangeScanError.tooManyIterations(
+            count: RangeScanLimits.iterationsCeiling + 1, limit: RangeScanLimits().maxIterations)) {
+            try await sync.scanRange(from: base, to: base, watchScripts: [Self.otherScript],
+                                     storageURL: recordURL) { _ in }
+        }
+        #expect(RangeScanProgress.fingerprint(of: [Self.script, Self.otherScript, Self.otherScript])
+            == RangeScanProgress.fingerprint(of: [Self.otherScript, Self.script]))
+        #expect(fingerprint != RangeScanProgress.fingerprint(of: [Self.script, Self.otherScript]))
+    }
+
     /// Each cap is clamped to its ceiling on the way in rather than validated,
     /// so a caller cannot loosen one by asking for more — which is the whole
     /// reason a back-scan is allowed to exist in a forward-only library.
@@ -538,6 +572,25 @@ struct RangeScanTests {
             return
         }
         #expect(reason.contains("pinned header at 1000"))
+        #expect(collector.matches.isEmpty)
+
+        // One block above the boundary is not boundary-free: the first batch
+        // pins the header at 1,000 as its anchor and compares it, so the same
+        // node is caught at the same height rather than the range refused.
+        var aboveBoundary: (any Error)?
+        do {
+            _ = try await fixture.sync.scanRange(
+                from: 1_001, to: 1_100,
+                watchScripts: [fixture.synthetic.watchScript],
+                storageURL: fixture.rangeFile) { collector.add($0) }
+        } catch {
+            aboveBoundary = error
+        }
+        guard case let .checkpointMismatch(anchorReason)? = aboveBoundary as? FilterSyncError else {
+            Issue.record("expected the anchor at 1000 to be compared, got \(String(describing: aboveBoundary))")
+            return
+        }
+        #expect(anchorReason.contains("pinned header at 1000"))
         #expect(collector.matches.isEmpty)
     }
 

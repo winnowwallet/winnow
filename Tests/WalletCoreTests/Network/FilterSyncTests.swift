@@ -992,6 +992,23 @@ struct FilterSyncTests {
     /// A receipt is a claim about peers that are gone, so nothing can check
     /// that it is true. What can be checked is that it is shaped like one, and
     /// it is checked on the way in like every other field in this file.
+    /// A receipt is a note about who corroborated the frontier. A class this
+    /// build does not know is nil in that note — unknown never counts — and
+    /// not a reason to refuse the whole progress file after a downgrade.
+    @Test("an unknown source class in a receipt decodes as unknown, not as damage")
+    func unknownSourceClassIsLenient() throws {
+        let foreign = Data(#"{"endpoint":"10.0.0.1:8333","source":"carrierPigeon"}"#.utf8)
+        let agreement = try JSONDecoder().decode(FilterSync.CrossCheckReceipt.Agreement.self, from: foreign)
+        #expect(agreement.endpoint == "10.0.0.1:8333")
+        #expect(agreement.source == nil)
+        let known = try JSONDecoder().decode(
+            FilterSync.CrossCheckReceipt.Agreement.self,
+            from: Data(#"{"endpoint":"10.0.0.2:8333","source":"manual"}"#.utf8))
+        #expect(known.source == .manual)
+        let encoded = try JSONEncoder().encode(known)
+        #expect(try JSONDecoder().decode(FilterSync.CrossCheckReceipt.Agreement.self, from: encoded) == known)
+    }
+
     @Test("a damaged cross-check receipt fails closed rather than being read")
     func invalidReceiptFields() throws {
         let pool = PeerPool(params: .signet, peerCount: 0, manualPeers: [])

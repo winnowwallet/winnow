@@ -236,6 +236,12 @@ public actor PeerPool {
         // which replaces what it drops.
         relayPruneTask?.cancel()
         relayPruneTask = nil
+        // A fresh run owes nothing to the last one's session rejections. They
+        // are cleared here as well as in `stop()`, because a data fault from
+        // a scan still unwinding can land between that clear and the last
+        // disconnect, and would otherwise bar the peer for a run it never
+        // misbehaved in.
+        if !resuming { rejectedForSession = [] }
         started = true
         await replenish()
         // `mode` as well as `monitorTask`, because `replenish` above is a long
@@ -807,12 +813,18 @@ public actor PeerPool {
         }
     }
 
+    /// Drops seats whose connection has gone and refills them. The removal
+    /// is by endpoint, as `pruneRelaySeats` does it: writing the survivors
+    /// back reinstated any seat a `transportFailure`, `misbehaving` or
+    /// `enterRelayOnly` removed while the `isConnected` reads were suspended,
+    /// and a narrowing that landed inside this pass was undone by it.
     private func pruneAndReplenish() async {
-        var alive: [PeerConnection] = []
-        for peer in peers where await peer.isConnected {
-            alive.append(peer)
+        var dead: Set<PeerEndpoint> = []
+        for peer in peers where await peer.isConnected == false {
+            dead.insert(peer.endpoint)
         }
-        peers = alive
+        guard started, mode == .full else { return }
+        peers.removeAll { dead.contains($0.endpoint) }
         await replenish()
     }
 

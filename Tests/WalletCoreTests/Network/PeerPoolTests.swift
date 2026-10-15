@@ -730,6 +730,30 @@ struct PeerPoolTests {
         return (reported, live)
     }
 
+    /// `stop()` clears the run's rejections before it awaits the disconnects,
+    /// and a data fault from a scan still unwinding can land in those awaits.
+    /// The next `start()` is a new run and owes that fault nothing: the peer
+    /// is dialled again.
+    @Test("a rejection that lands after stop() does not bar the peer from the next run")
+    func lateRejectionDoesNotOutliveStop() async throws {
+        let params = NetworkParams.signet
+        let node = LoopbackNode(params: params)
+        try await node.start()
+        defer { Task { await node.stop() } }
+        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint],
+                            dialTimeout: .milliseconds(500))
+        await pool.start()
+        let seat = try #require(await pool.connectedPeers().first)
+        await pool.stop()
+        // The fault's verdict arrives after the stop already cleared the run.
+        await pool.misbehaving(seat, reason: "late data fault")
+        #expect(await pool.rejectionReasons[await seat.endpoint] == "late data fault")
+        await pool.start()
+        #expect(await pollUntil(.seconds(10)) { await pool.connectedPeers().count == 1 },
+                "a new run dials the peer the old run's late fault named")
+        await pool.stop()
+    }
+
     /// `stopIfRelayOnly` is the whole re-read, done as one job on the pool.
     ///
     /// `TxBroadcaster` ends a session from a detached task and has to ask

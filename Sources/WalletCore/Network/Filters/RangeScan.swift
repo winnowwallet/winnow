@@ -278,13 +278,13 @@ public struct RangeScanProgress: Codable, Sendable, Equatable {
             })
     }
 
-    /// One identity for a watch set, order-independent: the scripts as sorted
-    /// hex, newline-separated, hashed. A different set means a different pass
-    /// over the range, and this is what tells the two apart across a process
-    /// that stopped in between.
+    /// One identity for a watch set, independent of order and of repeats: the
+    /// distinct scripts as sorted hex, newline-separated, hashed. A different
+    /// set means a different pass over the range, and this is what tells the
+    /// two apart across a process that stopped in between.
     public static func fingerprint(of watchScripts: [Data]) -> String {
         var joined = Data()
-        for script in watchScripts.map(\.hex).sorted() {
+        for script in Set(watchScripts.map(\.hex)).sorted() {
             joined.append(contentsOf: Array(script.utf8))
             joined.append(0x0A)
         }
@@ -320,10 +320,10 @@ public struct RangeScanProgress: Codable, Sendable, Equatable {
     }
 
     /// Refuses a file that is not a range record before any of it is believed.
-    /// A forward progress file decodes cleanly into this type (it supplies
-    /// `nextScanHeight` and `filterHeaders`, and the rest would come from the
-    /// defaults), so without this a wallet's own progress file would be read
-    /// as a half-finished restore and then overwritten by one.
+    /// A forward progress file lacks the range fields and fails the full
+    /// decode anyway; this names what the file is instead of calling it
+    /// damaged, and refuses a file that carries every field under a foreign
+    /// marker, which the full decode would accept.
     ///
     /// Only the marker is decoded here; no progress fields are trusted yet.
     private static func requireRangeKind(in data: Data) throws {
@@ -355,8 +355,8 @@ public struct RangeScanProgress: Codable, Sendable, Equatable {
               UInt64(nextScanHeight) <= UInt64(to) + 1 else {
             throw RangeScanError.recordDamaged("the range and its frontier disagree")
         }
-        guard iteration >= 1 else {
-            throw RangeScanError.recordDamaged("the pass number is below one")
+        guard (1 ... RangeScanLimits.iterationsCeiling).contains(iteration) else {
+            throw RangeScanError.recordDamaged("the pass number is out of range")
         }
         guard Data(hex: watchFingerprint)?.count == 32 else {
             throw RangeScanError.recordDamaged("the watch-script fingerprint is not 32 bytes")
@@ -605,7 +605,7 @@ extension FilterSync {
     ///
     /// One run at a time, and it shares that rule with `sync`: both take the
     /// same flag, so a range scan while a forward sync is running (or the
-    /// other way round) throws `syncAlreadyRunning` having changed nothing.
+    /// other way round) throws `busy` having changed nothing.
     /// They would otherwise share one pool, and peer replies go to whichever
     /// collector expects the command first.
     @discardableResult
@@ -616,10 +616,9 @@ extension FilterSync {
                           onMatch: @Sendable (BlockMatch) async throws -> Void) async throws
         -> RangeScanOutcome
     {
-        guard !requesting else { throw FilterSyncError.busy }
-        requesting = true
+        try beginRequest()
         defer {
-            requesting = false
+            endRequest()
             rangeRun = nil
         }
         try Self.checkShape(from: from, to: to, watchScripts: watchScripts, limits: limits)
@@ -628,7 +627,7 @@ extension FilterSync {
         // Asked here as well as inside `rangeReference` so the refusal lands
         // before the record is read off disk.
         guard await pool.mode == .full else { throw FilterSyncError.relayOnly }
-        let tip = await chain.height
+        let (tip, tipHash) = await chain.tipSnapshot
         try Self.checkChain(from: from, to: to, start: await chain.startHeight, tip: tip)
 
         var record = try RangeScanProgress.resumed(
@@ -643,7 +642,7 @@ extension FilterSync {
         try Self.checkCheckpointAnchor(of: record, to: to, tip: tip)
         rangeRun = RangeScanRun(limits: limits)
         if !record.isComplete {
-            record = try await runRange(record, tip: tip, watchScripts: watchScripts,
+            record = try await runRange(record, tip: tip, tipHash: tipHash, watchScripts: watchScripts,
                                         storageURL: storageURL, onMatch: onMatch)
         }
         return RangeScanOutcome(from: from, to: to,
@@ -659,12 +658,12 @@ extension FilterSync {
     /// The batch loop, which is the forward scan's with the range's own record
     /// in place of the frontier and no reorg handling (the chain is not being
     /// advanced, so nothing can fork underneath it).
-    private func runRange(_ initial: RangeScanProgress, tip: UInt32,
+    private func runRange(_ initial: RangeScanProgress, tip: UInt32, tipHash: Data,
                           watchScripts: [Data], storageURL: URL?,
                           onMatch: @Sendable (BlockMatch) async throws -> Void) async throws
         -> RangeScanProgress
     {
-        let (reference, approvedEndpoints, receipt) = try await rangeReference(tip: tip)
+        let (reference, approvedEndpoints, receipt) = try await rangeReference(tip: tip, tipHash: tipHash)
         try Self.checkPinnedBoundaries(of: initial.filterHeaders, against: reference, tip: tip)
         var peers = try await approved(peers: approvedEndpoints)
         var record = initial
@@ -720,21 +719,20 @@ extension FilterSync {
         return record
     }
 
-    /// The cfcheckpt reference for a range scan and the peers that gave it:
-    /// the same collection, the same majority rule and the same
-    /// announced-count guard the forward scan runs, against the chain as it
-    /// stands rather than one just synced.
     /// The cfcheckpt reference for a range scan, the peers that gave it, and
     /// the receipt naming them: `anchoredReference`, exactly as the forward
     /// scan runs it, against the chain as it stands rather than one just
     /// synced. The coins a restore finds are spend-relevant state, so the
     /// cross-check policy is applied here by the same code, before any
-    /// filter is fetched.
-    private func rangeReference(tip: UInt32) async throws
+    /// filter is fetched. The tip and its hash are the pair `scanRange` read
+    /// in one job: a header sync a caller runs alongside, against the rule,
+    /// would otherwise move them apart and have honest peers banned for
+    /// announcing the count the newer tip implies.
+    private func rangeReference(tip: UInt32, tipHash: Data) async throws
         -> (reference: CFCheckptMessage, approved: Set<String>, receipt: FilterSync.CrossCheckReceipt)
     {
         let peers = try await peersForReading()
-        return try await anchoredReference(peers: peers, tip: tip, tipHash: await chain.tipHash)
+        return try await anchoredReference(peers: peers, tip: tip, tipHash: tipHash)
     }
 
     /// Everything about the request that can be judged before a peer is
@@ -780,17 +778,23 @@ extension FilterSync {
         guard frontier <= to else { return }
         if frontier == 0 || record.filterHeaders[String(frontier - 1)] != nil { return }
         guard tip >= checkpointInterval else { return }
-        guard boundary(from: frontier, through: to, tip: tip) == nil else { return }
+        // From the anchor height rather than the frontier: the first batch
+        // pins the header below its start, and `checkPinnedBoundaries`
+        // compares every boundary height in what it pins, so a range starting
+        // one block above a boundary is checked at that boundary.
+        guard boundary(from: frontier - 1, through: to, tip: tip) == nil else { return }
         throw RangeScanError.rangeSpansNoCheckpoint(from: frontier, to: to)
     }
 
     /// Defence in depth for the same rule, one batch at a time: the headers a
-    /// batch proposes must include the boundary its span covers, since that is
-    /// the only height in them `checkPinnedBoundaries` will have compared.
+    /// batch proposes must include a boundary inside its span or at the anchor
+    /// just below it, since those are the heights `checkPinnedBoundaries`
+    /// compares against the cfcheckpt reference.
     static func requireComparedBoundary(in headers: [String: String], batchStart: UInt32,
                                         batchStop: UInt32, tip: UInt32) throws {
         guard tip >= checkpointInterval else { return }
-        guard let height = boundary(from: batchStart, through: batchStop, tip: tip),
+        let low = batchStart > 0 ? batchStart - 1 : 0
+        guard let height = boundary(from: low, through: batchStop, tip: tip),
               headers[String(height)] != nil else {
             throw FilterSyncError.checkpointMismatch(
                 "blocks \(batchStart) to \(batchStop) pin no checkpoint the cfcheckpt reference covers")

@@ -107,7 +107,6 @@ struct SettingsView: View {
     @ViewBuilder
     private var backupSections: some View {
         BackupSection()
-        VerificationPolicySection()
     }
 
     @ViewBuilder

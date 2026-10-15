@@ -103,4 +103,27 @@ struct WalletCursorTests {
         #expect(await wallet.nextReceiveIndex == 20)
         #expect(await wallet.nextChangeIndex == 20)
     }
+
+    /// The same bound on the way in from disk. A state file naming a cursor
+    /// the lookahead cannot derive from is reported as damage once, rather
+    /// than trapping in `watchScripts` on every launch until the app's data
+    /// is deleted.
+    @Test("a state file with a cursor past the gap-limit window is damaged, not a crash loop")
+    func cursorPastTheWindowIsDamage() async throws {
+        let file = tempFileURL("wallet.json")
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let store = InMemoryKeyStore()
+        let wallet = try makeTestWallet(storageURL: file, keyStore: store)
+        try await wallet.advanceCursors(nextReceiveIndex: 3)
+        let object = try JSONSerialization.jsonObject(with: Data(contentsOf: file))
+        var json = try #require(object as? [String: Any])
+        json["nextReceiveIndex"] = UInt32.max
+        try JSONSerialization.data(withJSONObject: json).write(to: file)
+        #expect(throws: (any Error).self) { _ = try Wallet.open(storageURL: file, keyStore: store) }
+
+        json["nextReceiveIndex"] = HDKey.hardenedOffset - Wallet.gapLimit
+        try JSONSerialization.data(withJSONObject: json).write(to: file)
+        let reopened = try Wallet.open(storageURL: file, keyStore: store)
+        #expect(await reopened.nextReceiveIndex == HDKey.hardenedOffset - Wallet.gapLimit)
+    }
 }

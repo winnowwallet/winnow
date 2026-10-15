@@ -278,8 +278,9 @@ public struct HistoryEntry: Equatable, Sendable, Codable {
     /// so received payments can name a funding address without keeping the
     /// witnesses around. Empty for older entries until details reload.
     public var fundingScripts: [Data]
-    /// The block this payment confirmed in, so a restore can check the entry
-    /// against headers alone instead of fetching the block again. Nil while
+    /// The block this payment confirmed in, recorded so a later restore check
+    /// can compare the entry against headers without fetching the block. This
+    /// version records and carries it; nothing verifies it yet. Nil while
     /// pending and for history recorded before it was kept. Internal byte
     /// order; JSON uses display hex.
     public var blockHash: Data?
@@ -470,9 +471,10 @@ public struct WalletState: Codable, Equatable, Sendable {
     /// Height of the next block whose filter must be scanned (mirrors the
     /// FilterSync progress after the last scan).
     public var nextScanHeight: UInt32
-    /// The hash of block `nextScanHeight - 1`, the last one scanned, so a
-    /// restore can check that its starting point is still on the best chain.
-    /// Nil until a scan records it. Internal byte order; JSON uses display hex.
+    /// The hash of block `nextScanHeight - 1`, the last one scanned, recorded
+    /// so a later restore check can tell whether its starting point is still
+    /// on the best chain; this version records it without checking it. Nil
+    /// until a scan records it. Internal byte order; JSON uses display hex.
     public var scannedThroughHash: Data?
     /// Every coin row, spent ones included. Mutations go through this; reads
     /// should almost always use `utxos`, which hides the tombstones.
@@ -510,6 +512,20 @@ public struct WalletState: Codable, Equatable, Sendable {
         case nextScanHeight, scannedThroughHash, utxos, history, observedFeeRates, pendingSends
     }
 
+    /// The bound `Wallet.advanceCursors` and `Wallet.importing` enforce,
+    /// applied on the way in as well: a file naming a cursor the gap-limit
+    /// lookahead cannot derive from is damage to report, not a loop to trap
+    /// in on every launch.
+    private static func requireCursorRoom(receive: UInt32, change: UInt32,
+                                          in container: KeyedDecodingContainer<CodingKeys>) throws {
+        let maximum = HDKey.hardenedOffset - Wallet.gapLimit
+        guard receive <= maximum, change <= maximum else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .nextReceiveIndex, in: container,
+                debugDescription: "an address cursor leaves no room for the gap-limit window")
+        }
+    }
+
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         descriptor = try container.decode(String.self, forKey: .descriptor)
@@ -517,6 +533,7 @@ public struct WalletState: Codable, Equatable, Sendable {
         creationHeight = try container.decode(UInt32.self, forKey: .creationHeight)
         nextReceiveIndex = try container.decode(UInt32.self, forKey: .nextReceiveIndex)
         nextChangeIndex = try container.decode(UInt32.self, forKey: .nextChangeIndex)
+        try Self.requireCursorRoom(receive: nextReceiveIndex, change: nextChangeIndex, in: container)
         nextScanHeight = try container.decode(UInt32.self, forKey: .nextScanHeight)
         if let hashHex = try container.decodeIfPresent(String.self, forKey: .scannedThroughHash) {
             guard let hash = Data(hex: hashHex), hash.count == 32, nextScanHeight > 0 else {
@@ -935,15 +952,29 @@ public actor Wallet {
         return Array(scripts)
     }
 
+    /// The last watch map and the cursors it was derived for.
+    private var watchMapCache: (receive: UInt32, change: UInt32,
+                                map: [Data: (chain: AddressChain, index: UInt32)])?
+
     /// Watched scriptPubKey → owning (chain, index).
+    ///
+    /// A pure function of the descriptor and the two cursors, so the last map
+    /// is reused until a cursor moves: every matched block, send, fee bump
+    /// and sync pass asks for it, and each entry costs a BIP32 derivation
+    /// chain plus a taproot tweak.
     private func watchMap() throws -> [Data: (chain: AddressChain, index: UInt32)] {
-        var map: [Data: (AddressChain, UInt32)] = [:]
+        if let cached = watchMapCache,
+           cached.receive == state.nextReceiveIndex, cached.change == state.nextChangeIndex {
+            return cached.map
+        }
+        var map: [Data: (chain: AddressChain, index: UInt32)] = [:]
         for chain in [AddressChain.receive, AddressChain.change] {
             let next = chain == .receive ? state.nextReceiveIndex : state.nextChangeIndex
             for index in 0 ..< next + Self.gapLimit {
                 map[try scriptPubKey(chain: chain, index: index)] = (chain, index)
             }
         }
+        watchMapCache = (state.nextReceiveIndex, state.nextChangeIndex, map)
         return map
     }
 
@@ -1109,6 +1140,7 @@ public actor Wallet {
             state.history[existing].blockHash = blockHash
             state.history[existing].rawTransaction = tx.serialized(includeWitness: false)
             state.history[existing].fundingScripts = FundingSources.fundingScripts(of: tx)
+            state.history[existing].outputs = Self.outputsAgreeing(state.history[existing].outputs, with: tx)
         } else {
             state.history.append(HistoryEntry(txid: txid, height: height,
                                               received: received, spent: spent, fee: fee,
@@ -1117,6 +1149,18 @@ public actor Wallet {
                                               blockHash: blockHash))
         }
         state.pendingSends.removeAll { $0.txid == txid }
+    }
+
+    /// The breakdown an entry may keep once its bytes are known. A breakdown
+    /// that arrived without bytes — an imported entry's display metadata —
+    /// is dropped when the real transaction contradicts it, rather than
+    /// persisted: `HistoryEntry` refuses to decode an entry whose metadata
+    /// disagrees with its transaction, and a state file the wallet cannot
+    /// reopen is worse than a payment without recipient names.
+    private static func outputsAgreeing(_ outputs: HistoryEntry.Outputs?,
+                                        with tx: Transaction) -> HistoryEntry.Outputs? {
+        guard let outputs, (try? outputs.validate(against: tx)) != nil else { return nil }
+        return outputs
     }
 
     /// Bitcoin's transaction-value rules for every output in the block,

@@ -95,11 +95,14 @@ public actor TxBroadcaster {
         /// There is nothing left to relay: the payment confirmed, was
         /// cancelled, or was replaced. The session did what it was for.
         case drained
-        /// The seats it was holding are gone: a remote went away, or a data
-        /// fault unseated the last one. A relay-only pool dials no
-        /// replacement by design, so nothing could be announced again, and no
-        /// confirmation can arrive over a pool that refuses filter sync — the
-        /// session would have been peers held open for nothing.
+        /// The seats it was holding are gone or can no longer hear about
+        /// anything pending: a remote went away, a data fault unseated the
+        /// last one, every kept seat was deprioritized for every pending
+        /// payment, or the caller resumed full service and an attempt found
+        /// the pool empty. A relay-only pool dials no replacement by design,
+        /// so nothing could be announced again, and no confirmation can
+        /// arrive over a pool that refuses filter sync — the session would
+        /// have been peers held open for nothing.
         case seatsGone
         /// A retry could not be saved, so the backoff loop halted. Nothing
         /// will be announced again, and with no announcement and no
@@ -193,6 +196,9 @@ public actor TxBroadcaster {
     /// Whether this broadcaster narrowed the pool to a relay-only session and
     /// therefore owns stopping it when nothing is left to relay.
     private var relayOnlySession = false
+    /// The drain's stop on its way to the pool, so a session re-entered
+    /// behind it waits for it instead of being torn down by it.
+    private var closingTask: Task<Void, Never>?
 
     private static let storageVersion = 1
     private static let maximumStoredTransactions = 4_096
@@ -296,10 +302,11 @@ public actor TxBroadcaster {
     /// This is "this broadcaster still owns a stop", not "the pool is
     /// narrowed", and the two part company the moment a caller calls
     /// `PeerPool.start()`: nothing tells the broadcaster, so this stays true
-    /// over a pool back in full service until the payment drains. `pool.mode`
-    /// is the truth about the pool. A UI or lifecycle branch that wants to
-    /// say "paused" should read that, not this.
-    public var isRelayOnly: Bool { relayOnlySession }
+    /// over a pool back in full service until the payment drains or a backoff
+    /// attempt finds no seat it can announce to. `pool.mode` is the truth
+    /// about the pool. A UI or lifecycle branch that wants to say "paused"
+    /// should read that, not this; this is a test seam.
+    var isRelayOnly: Bool { relayOnlySession }
 
     /// Goes on relaying with the peer pool narrowed to a relay-only session,
     /// and stops that pool once nothing is left to relay.
@@ -352,6 +359,12 @@ public actor TxBroadcaster {
     ///   is left as they put it.
     @discardableResult
     public func enterRelayOnly(seats: Int = PeerPool.defaultRelaySeats) async throws -> Bool {
+        // A drain's stop may still be on its way to the pool. A session
+        // re-entered ahead of it would be torn down by that stale stop, so it
+        // is waited for first; what it leaves is a stopped pool, and the
+        // narrowing below then reports zero seats, as it should.
+        await closingTask?.value
+        closingTask = nil
         guard !stopped else { throw TxBroadcasterError.stopped }
         guard hasPendingRelay else {
             relayOnlySession = false
@@ -388,14 +401,17 @@ public actor TxBroadcaster {
             await pool.stopIfRelayOnly()
             return false
         }
-        // Both checks again, because the narrowing above is a suspension and
-        // this actor ran other work inside it. A confirmation landing there
-        // is the drain: it empties the pending set and calls the close, which
-        // has no session to close yet and does nothing. A session recorded
-        // now would be one over nothing, with no drain left to end it, so the
-        // pool is held open for a payment that already confirmed. A
-        // `shutdown()` landing there has ended every session, and a session
-        // recorded now would have a finished broadcaster claiming to relay.
+        // All three checks again, because the narrowing above is a suspension
+        // and this actor ran other work inside it. A confirmation landing
+        // there is the drain: it empties the pending set and calls the close,
+        // which has no session to close yet and does nothing. A session
+        // recorded now would be one over nothing, with no drain left to end
+        // it, so the pool is held open for a payment that already confirmed.
+        // A `shutdown()` landing there has ended every session, and a session
+        // recorded now would have a finished broadcaster claiming to relay. A
+        // failed write landing there has halted the backoff loop, and the end
+        // it called found no session yet, so a session recorded now would be
+        // the one over a dead loop that the check before the narrowing refuses.
         //
         // The stop is the drain's stop arriving late, so it re-reads the mode
         // for the drain's reason: a caller that resumed full service in the
@@ -403,7 +419,7 @@ public actor TxBroadcaster {
         // rather than detached, as `closeRelayOnlySession` has to, because
         // this is already async and the caller is told false only once the
         // pool has actually gone quiet.
-        guard !stopped, hasPendingRelay else {
+        guard !stopped, !persistenceBlocked, hasPendingRelay else {
             relayOnlySession = false
             await pool.stopIfRelayOnly()
             return false
@@ -552,7 +568,7 @@ public actor TxBroadcaster {
     private func closeRelayOnlySession() {
         guard relayOnlySession else { return }
         relayOnlySession = false
-        Task { [pool] in await pool.stopIfRelayOnly() }
+        closingTask = Task { [pool] in await pool.stopIfRelayOnly() }
         emit(.relaySessionEnded(reason: .drained))
     }
 
@@ -586,8 +602,27 @@ public actor TxBroadcaster {
     /// caller is told which way it went, and everything still pending stays
     /// saved for the next `PeerPool.start()`.
     private func endRelayOnlySessionIfSeatsGone() async {
-        guard relayOnlySession, await pool.connectedPeers().isEmpty else { return }
+        guard relayOnlySession else { return }
+        let peers = await pool.connectedPeers()
+        guard peers.isEmpty || !canAnnounce(toAnyOf: peers) else { return }
         await endRelayOnlySession(reason: .seatsGone)
+    }
+
+    /// Whether any seat can still hear about any pending payment. A seat
+    /// deprioritized for every payment still pending is held for nothing —
+    /// the state the session must not sit in — so it counts as gone. A
+    /// fee-filter refusal is transient and does not count; a seat with no
+    /// record for a payment has yet to be asked, and does.
+    private func canAnnounce(toAnyOf peers: [PeerConnection]) -> Bool {
+        let unconfirmed = pending.values.filter { $0.confirmedAtHeight == nil }
+        return peers.contains { peer in
+            let key = peer.endpoint.description
+            return unconfirmed.contains { entry in
+                guard let relay = entry.peers[key] else { return true }
+                if relay.state == .requested || relay.state == .served { return true }
+                return relay.state != .deprioritized && relay.announcements < maxAnnouncementsPerPeer
+            }
+        }
     }
 
     private func removeSubscriber(_ id: UUID) {
