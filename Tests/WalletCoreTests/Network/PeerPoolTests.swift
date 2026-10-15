@@ -463,11 +463,10 @@ struct PeerPoolTests {
         }
         defer { for node in nodes { Task { await node.stop() } } }
 
-        let pool = PeerPool(params: params, peerCount: 2, manualPeers: endpoints,
-                            dialTimeout: .milliseconds(500))
         // The pass runs on the replacement monitor's cadence, thirty seconds.
         // This asks for the same pass sooner rather than sleeping through it.
-        await pool.pruneRelaySeatsEvery(.milliseconds(50))
+        let pool = PeerPool(params: params, peerCount: 2, manualPeers: endpoints,
+                            dialTimeout: .milliseconds(500), monitorInterval: .milliseconds(50))
         await pool.start()
         #expect(await pool.connectedPeers().count == 2)
 

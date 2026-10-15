@@ -106,8 +106,10 @@ public actor PeerPool {
     static let transportCooldownCap: Duration = .seconds(600)
     /// How often either monitor runs: the replacement monitor full service
     /// installs, and the prune pass a relay-only session runs in its place.
-    /// One number, because "the same cadence" is the whole claim.
-    static let monitorInterval: Duration = .seconds(30)
+    /// One number for both, because "the same cadence" is the whole claim.
+    /// Fixed at init; a test that wants to watch a dead seat dropped passes a
+    /// short one instead of sleeping through half a minute.
+    private let monitorInterval: Duration
     /// How far behind our own validated header tip a peer's reported height
     /// may be before it is unseated. A hundred blocks is about sixteen hours,
     /// the wallet's own reorg horizon, and far inside what a node still in
@@ -134,10 +136,6 @@ public actor PeerPool {
     /// suspension is checked as an ordering rather than raced for. Nil
     /// outside the tests, and read nowhere else.
     private var narrowingHold: (@Sendable () async -> Void)?
-    /// The cadence the relay-only prune actually runs at: `monitorInterval`,
-    /// and test-visible (@testable) so a case can watch a dead seat be
-    /// dropped instead of sleeping through half a minute.
-    private var relayPruneInterval: Duration = PeerPool.monitorInterval
 
     /// What a pool is doing for its owner right now.
     public enum Mode: String, Sendable, Equatable {
@@ -196,6 +194,7 @@ public actor PeerPool {
                 censusCatalog: CensusCatalog? = nil,
                 gateways: PeerGatewayConfiguration = .init(),
                 avoidOnReset: Set<PeerEndpoint> = [],
+                monitorInterval: Duration = .seconds(30),
                 now: @Sendable @escaping () -> ContinuousClock.Instant = { ContinuousClock.now }) {
         self.gateways = gateways
         self.params = params
@@ -209,6 +208,7 @@ public actor PeerPool {
         self.censusCatalog = try? censusCatalog?.validated()
         self.avoidOnReset = avoidOnReset
         self.seedResolver = seedResolver ?? .routed(client: RoutedHTTPClient())
+        self.monitorInterval = monitorInterval
         self.now = now
         if let peersFileURL,
            let data = Self.boundedRead(peersFileURL),
@@ -250,9 +250,10 @@ public actor PeerPool {
         // this installs a 30-second timer for a session documented as having
         // neither a monitor nor a pruning pass.
         guard mode == .full, monitorTask == nil else { return }
+        let interval = monitorInterval
         monitorTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: Self.monitorInterval)
+                try? await Task.sleep(for: interval)
                 guard !Task.isCancelled, let self else { return }
                 await self.pruneAndReplenish()
             }
@@ -359,10 +360,6 @@ public actor PeerPool {
 
     /// Test-visible (@testable). See `narrowingHold`.
     func holdNarrowing(_ hold: (@Sendable () async -> Void)?) { narrowingHold = hold }
-
-    /// Test-visible (@testable). See `relayPruneInterval`. Read when a session
-    /// installs its prune pass, so it is set before `enterRelayOnly`.
-    func pruneRelaySeatsEvery(_ interval: Duration) { relayPruneInterval = interval }
 
     /// Stops the pool, but only while it is still the relay-only session that
     /// asked to — one actor job, so nothing can land between the question and
@@ -841,7 +838,7 @@ public actor PeerPool {
     /// relay-only session can have, with the dialling half left out.
     private func startRelayPruneMonitor() {
         relayPruneTask?.cancel()
-        let interval = relayPruneInterval
+        let interval = monitorInterval
         relayPruneTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: interval)

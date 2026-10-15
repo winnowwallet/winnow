@@ -1053,10 +1053,10 @@ struct TxBroadcasterTests {
         try await node.start()
         defer { Task { await node.stop() } }
 
-        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint])
         // The prune and the backoff attempt are what notice, in that order, so
         // both run on the test's timescale instead of the wallet's.
-        await pool.pruneRelaySeatsEvery(.milliseconds(50))
+        let pool = PeerPool(params: params, peerCount: 1, manualPeers: [await node.endpoint],
+                            monitorInterval: .milliseconds(50))
         await pool.start()
         let broadcaster = try TxBroadcaster(pool: pool,
                                             rebroadcastBaseInterval: .milliseconds(200),
