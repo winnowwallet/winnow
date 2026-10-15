@@ -191,6 +191,15 @@ public actor FilterSync {
         progress.nextScanHeight == 0 ? nil : progress.nextScanHeight - 1
     }
 
+    /// The next height to scan and the hash of the last block scanned, read
+    /// together so a caller can persist both (`Wallet.recordScanHeight`)
+    /// without a pass landing between two reads.
+    public func frontier() async -> (nextScanHeight: UInt32, scannedThroughHash: Data?) {
+        let next = progress.nextScanHeight
+        guard next > 0 else { return (next, nil) }
+        return (next, await chain.blockHash(at: next - 1))
+    }
+
     public func filterHeader(at height: UInt32) -> Data? {
         progress.filterHeaders[String(height)].flatMap { Data(hex: $0) }
     }

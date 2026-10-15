@@ -252,10 +252,15 @@ public struct HistoryEntry: Equatable, Sendable, Codable {
     /// so received payments can name a funding address without keeping the
     /// witnesses around. Empty for older entries until details reload.
     public var fundingScripts: [Data]
+    /// The block this payment confirmed in, so a restore can check the entry
+    /// against headers alone instead of fetching the block again. Nil while
+    /// pending and for history recorded before it was kept. Internal byte
+    /// order; JSON uses display hex.
+    public var blockHash: Data?
 
     public init(txid: Data, height: UInt32, received: Int64, spent: Int64,
                 fee: Int64? = nil, replacedBy: Data? = nil, rawTransaction: Data? = nil,
-                fundingScripts: [Data] = []) {
+                fundingScripts: [Data] = [], blockHash: Data? = nil) {
         self.txid = txid
         self.height = height
         self.received = received
@@ -264,6 +269,7 @@ public struct HistoryEntry: Equatable, Sendable, Codable {
         self.replacedBy = replacedBy
         self.rawTransaction = rawTransaction
         self.fundingScripts = fundingScripts
+        self.blockHash = blockHash
     }
 
     public func transaction() throws -> Transaction? {
@@ -283,7 +289,9 @@ public struct HistoryEntry: Equatable, Sendable, Codable {
         return transaction
     }
 
-    private enum CodingKeys: String, CodingKey { case txid, height, received, spent, fee, replacedBy, rawTransaction, fundingScripts }
+    private enum CodingKeys: String, CodingKey {
+        case txid, height, received, spent, fee, replacedBy, rawTransaction, fundingScripts, blockHash
+    }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -301,14 +309,26 @@ public struct HistoryEntry: Equatable, Sendable, Codable {
         } else {
             replacedBy = nil
         }
+        let height = try container.decode(UInt32.self, forKey: .height)
+        let blockHash: Data?
+        if let blockHex = try container.decodeIfPresent(String.self, forKey: .blockHash) {
+            guard let block = Data(hex: blockHex), block.count == 32, height > 0 else {
+                throw DecodingError.dataCorruptedError(forKey: .blockHash, in: container,
+                                                       debugDescription: "bad block hash, or one on a pending payment")
+            }
+            blockHash = Data(block.reversed())
+        } else {
+            blockHash = nil
+        }
         self.init(txid: Data(txid.reversed()),
-                  height: try container.decode(UInt32.self, forKey: .height),
+                  height: height,
                   received: try container.decode(Int64.self, forKey: .received),
                   spent: try container.decode(Int64.self, forKey: .spent),
                   fee: try container.decodeIfPresent(Int64.self, forKey: .fee),
                   replacedBy: replacedBy,
                   rawTransaction: try container.decodeIfPresent(Data.self, forKey: .rawTransaction),
-                  fundingScripts: try container.decodeIfPresent([Data].self, forKey: .fundingScripts) ?? [])
+                  fundingScripts: try container.decodeIfPresent([Data].self, forKey: .fundingScripts) ?? [],
+                  blockHash: blockHash)
         _ = try transaction()
     }
 
@@ -322,6 +342,7 @@ public struct HistoryEntry: Equatable, Sendable, Codable {
         try container.encodeIfPresent(replacedBy?.displayHex, forKey: .replacedBy)
         try container.encodeIfPresent(rawTransaction, forKey: .rawTransaction)
         if !fundingScripts.isEmpty { try container.encode(fundingScripts, forKey: .fundingScripts) }
+        try container.encodeIfPresent(blockHash?.displayHex, forKey: .blockHash)
     }
 }
 
@@ -415,6 +436,10 @@ public struct WalletState: Codable, Equatable, Sendable {
     /// Height of the next block whose filter must be scanned (mirrors the
     /// FilterSync progress after the last scan).
     public var nextScanHeight: UInt32
+    /// The hash of block `nextScanHeight - 1`, the last one scanned, so a
+    /// restore can check that its starting point is still on the best chain.
+    /// Nil until a scan records it. Internal byte order; JSON uses display hex.
+    public var scannedThroughHash: Data?
     /// Every coin row, spent ones included. Mutations go through this; reads
     /// should almost always use `utxos`, which hides the tombstones.
     public var allUtxos: [WalletUTXO]
@@ -448,7 +473,7 @@ public struct WalletState: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case descriptor, network, creationHeight, nextReceiveIndex, nextChangeIndex
-        case nextScanHeight, utxos, history, observedFeeRates, pendingSends
+        case nextScanHeight, scannedThroughHash, utxos, history, observedFeeRates, pendingSends
     }
 
     public init(from decoder: any Decoder) throws {
@@ -459,6 +484,15 @@ public struct WalletState: Codable, Equatable, Sendable {
         nextReceiveIndex = try container.decode(UInt32.self, forKey: .nextReceiveIndex)
         nextChangeIndex = try container.decode(UInt32.self, forKey: .nextChangeIndex)
         nextScanHeight = try container.decode(UInt32.self, forKey: .nextScanHeight)
+        if let hashHex = try container.decodeIfPresent(String.self, forKey: .scannedThroughHash) {
+            guard let hash = Data(hex: hashHex), hash.count == 32, nextScanHeight > 0 else {
+                throw DecodingError.dataCorruptedError(forKey: .scannedThroughHash, in: container,
+                                                       debugDescription: "bad scan frontier hash")
+            }
+            scannedThroughHash = Data(hash.reversed())
+        } else {
+            scannedThroughHash = nil
+        }
         allUtxos = try container.decode([WalletUTXO].self, forKey: .utxos)
         history = try container.decode([HistoryEntry].self, forKey: .history)
         observedFeeRates = try container.decodeIfPresent([Double].self, forKey: .observedFeeRates) ?? []
@@ -526,6 +560,7 @@ public struct WalletState: Codable, Equatable, Sendable {
         try container.encode(nextReceiveIndex, forKey: .nextReceiveIndex)
         try container.encode(nextChangeIndex, forKey: .nextChangeIndex)
         try container.encode(nextScanHeight, forKey: .nextScanHeight)
+        try container.encodeIfPresent(scannedThroughHash?.displayHex, forKey: .scannedThroughHash)
         try container.encode(allUtxos, forKey: .utxos)
         try container.encode(history, forKey: .history)
         try container.encode(observedFeeRates, forKey: .observedFeeRates)
@@ -739,6 +774,7 @@ public actor Wallet {
 
     public var creationHeight: UInt32 { state.creationHeight }
     public var nextScanHeight: UInt32 { state.nextScanHeight }
+    public var scannedThroughHash: Data? { state.scannedThroughHash }
     public var nextReceiveIndex: UInt32 { state.nextReceiveIndex }
     public var nextChangeIndex: UInt32 { state.nextChangeIndex }
     /// Safe because every state ingress validates individual coins and the
@@ -850,8 +886,15 @@ public actor Wallet {
     /// `apply(match:)` does not move `nextScanHeight` — only this call does. The live app drives FilterSync
     /// directly and must record after each pass, or `exportBundle()` will
     /// emit the creation/import height while the UI shows the filter actor.
-    public func recordScanHeight(_ nextScanHeight: UInt32) throws {
+    ///
+    /// `scannedThroughHash` is the hash of block `nextScanHeight - 1`
+    /// (`FilterSync.frontier()` reads the two together). Without it the
+    /// stored hash is cleared, never left describing another height.
+    public func recordScanHeight(_ nextScanHeight: UInt32, scannedThroughHash: Data? = nil) throws {
+        precondition(scannedThroughHash.map { $0.count == 32 && nextScanHeight > 0 } ?? true,
+                     "a scan frontier hash names the last scanned block")
         state.nextScanHeight = nextScanHeight
+        state.scannedThroughHash = scannedThroughHash
         pruneSpentCoins(scannedTo: nextScanHeight)
         try persist()
     }
@@ -941,7 +984,7 @@ public actor Wallet {
                 || state.history.contains(where: { $0.txid == txid })
             guard touchesWallet else { continue }
 
-            recordConfirmedHistory(of: tx, txid: txid, height: match.height,
+            recordConfirmedHistory(of: tx, txid: txid, height: match.height, blockHash: match.blockHash,
                                    received: receivedAmount, spent: accountedSpent,
                                    feeIsExact: allInputsOurs)
         }
@@ -955,7 +998,7 @@ public actor Wallet {
     /// or appending a new entry — retires its pending record, and samples the
     /// feerate. The fee is exact only when every input was ours (the BIP341
     /// sighash commits to amounts, so our own sends qualify).
-    private func recordConfirmedHistory(of tx: Transaction, txid: Data, height: UInt32,
+    private func recordConfirmedHistory(of tx: Transaction, txid: Data, height: UInt32, blockHash: Data,
                                         received: Int64, spent: Int64, feeIsExact: Bool) {
         var fee: Int64? = nil
         if feeIsExact, spent > 0 {
@@ -972,13 +1015,15 @@ public actor Wallet {
         if let existing = state.history.firstIndex(where: { $0.txid == txid }) {
             // Known pending send (height 0) reaching confirmation.
             state.history[existing].height = height
+            state.history[existing].blockHash = blockHash
             state.history[existing].rawTransaction = tx.serialized(includeWitness: false)
             state.history[existing].fundingScripts = FundingSources.fundingScripts(of: tx)
         } else {
             state.history.append(HistoryEntry(txid: txid, height: height,
                                               received: received, spent: spent, fee: fee,
                                               rawTransaction: tx.serialized(includeWitness: false),
-                                              fundingScripts: FundingSources.fundingScripts(of: tx)))
+                                              fundingScripts: FundingSources.fundingScripts(of: tx),
+                                              blockHash: blockHash))
         }
         state.pendingSends.removeAll { $0.txid == txid }
     }
@@ -1646,6 +1691,7 @@ public actor Wallet {
             descriptor: descriptor.serialized(),
             network: network.rawValue,
             lastKnownHeight: lastKnownHeight,
+            lastKnownBlockHash: state.scannedThroughHash,
             utxos: state.utxos,
             history: state.history,
             nextReceiveIndex: state.nextReceiveIndex,
@@ -1714,6 +1760,7 @@ public actor Wallet {
         {
             rependedSpenders.insert(candidate.history[index].txid)
             candidate.history[index].height = 0
+            candidate.history[index].blockHash = nil
         }
         for index in candidate.allUtxos.indices {
             guard let marker = candidate.allUtxos[index].spent,
@@ -1735,6 +1782,8 @@ public actor Wallet {
         // was scanned in doubt, and advancing here would skip unread blocks.
         candidate.nextScanHeight = min(state.nextScanHeight,
                                        forkHeight == UInt32.max ? forkHeight : forkHeight + 1)
+        // A frontier that moved back names a block this rewind just doubted.
+        if candidate.nextScanHeight != state.nextScanHeight { candidate.scannedThroughHash = nil }
         guard candidate != state else { return }
         try persist(candidate)
         state = candidate

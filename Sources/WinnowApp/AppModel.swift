@@ -1153,7 +1153,9 @@ final class AppModel {
             // apply() does not move the wallet frontier — FilterSync is
             // authoritative here. Persist it so exportBundle() and the next
             // launch's startHeight match what the UI already shows.
-            try await wallet.recordScanHeight(await filters.nextScanHeight)
+            let frontier = await filters.frontier()
+            try await wallet.recordScanHeight(frontier.nextScanHeight,
+                                              scannedThroughHash: frontier.scannedThroughHash)
             // Held confirmation tombstones age out on the same 100-block
             // horizon spent-coin tombstones do (#157).
             try await broadcaster.pruneConfirmed(scannedTo: await filters.nextScanHeight)
@@ -1178,7 +1180,9 @@ final class AppModel {
             // checkpoint comparison before anything above ran for them, so
             // their progress is verified and worth keeping — the batch that
             // threw applied nothing. Keep WalletState from lagging it.
-            try? await wallet.recordScanHeight(await filters.nextScanHeight)
+            let frontier = await filters.frontier()
+            try? await wallet.recordScanHeight(frontier.nextScanHeight,
+                                               scannedThroughHash: frontier.scannedThroughHash)
             // Backgrounding, a network switch or an expired background check
             // cancels the scan and closes its peers. Nothing failed.
             if !Task.isCancelled, !(error is CancellationError) {
@@ -1415,7 +1419,9 @@ final class AppModel {
         // The UI snapshot already prefers filters.nextScanHeight; export
         // must too, in case the last persist was skipped (failed pass).
         if let filters = stack?.filters {
-            try await wallet.recordScanHeight(await filters.nextScanHeight)
+            let frontier = await filters.frontier()
+            try await wallet.recordScanHeight(frontier.nextScanHeight,
+                                              scannedThroughHash: frontier.scannedThroughHash)
         }
         var bundle = try await wallet.exportBundle(includeMnemonic: includeMnemonic)
         bundle.vaults = try await vaultStore.backupRecords()
