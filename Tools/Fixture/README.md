@@ -2,6 +2,11 @@
 
 # Native signet bank preparation
 
+The executable also provides `satochip-recovery`, a development-only JSON
+coordinator for the [Satochip recovery lab](../Satochip/README.md). It uses public
+test keys and offline backup/PSBT code. Run it through that lab's driver; it has
+no physical-card transport and does not contact a node itself.
+
 `winnow-fixture` prepares the disposable signet bank before the recorded iPhone
 journey. It is a host executable, outside the shipping app. It uses
 [SignetFixture](../../Tests/Support/Node/SignetFixture.swift), the same helper
