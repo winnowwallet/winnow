@@ -139,6 +139,18 @@ public func exercise(_ target: FuzzTarget, data: Data, rng: inout SplitMix64) th
                 try require(script.count <= 42, "address produced an oversized standard script")
             }
         }
+        // The other strings a person pastes where an address goes: a WIF, a
+        // mini private key, an extended key under any SLIP-0132 prefix.
+        if let key = try? WIF(string) {
+            try require(key.serialized == string, "WIF canonical round trip changed bytes")
+        }
+        if let secret = try? MiniPrivateKey.secret(string) {
+            try require(secret.count == 32, "mini private key did not yield a 32-byte secret")
+        }
+        if let decoded = try? ExtendedKeyVersion.decode(string) {
+            try require(decoded.key.serialized(version: decoded.version) == string,
+                        "extended key canonical round trip changed bytes")
+        }
     case .importBundle:
         guard data.count <= 4_000_000, let bundle = try? JSONDecoder().decode(ImportBundle.self, from: data) else { return }
         let serialized = try bundle.serialized()

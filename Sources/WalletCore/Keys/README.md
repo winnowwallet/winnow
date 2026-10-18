@@ -14,6 +14,17 @@ sentence separated by U+3000 IDEOGRAPHIC SPACE, or a passphrase carrying a
 ligature or a fullwidth character, derives a different seed under NFD, one no
 other wallet agrees with, and nothing about the phrase itself would look wrong.
 
+Other wallets' single-key accounts reach the same primitives. `AccountPurpose`
+names the BIP44, BIP49, BIP84 and BIP86 account paths. `ExtendedKeyVersion`
+reads and writes the SLIP-0132 version bytes an account key arrives under
+(`ypub`, `zpub`, their multisig and testnet forms), while `HDKey.deserialize`
+and the descriptor parser keep accepting BIP32's xpub and tpub only. `WIF`
+decodes and encodes one private key with its network and compression flag and
+refuses a key from the wrong network by name; `MiniPrivateKey` turns a
+Casascius mini key into a secret. These are derivations and encodings only:
+the P2PKH, nested and native segwit scripts they lead to, and signatures over
+them, are not here, and Winnow's own wallet stays BIP86 under xpub and xprv.
+
 An embedding application can keep its root secret outside WalletCore and call
 `Wallet.create(accountKey:masterFingerprint:network:keyStore:...)` with only the
 private BIP86 account key. It supplies the key at
@@ -43,8 +54,15 @@ The [wallet](../Wallet/README.md), [signer](../Transactions/README.md), and
 [TestSupport](../../../Tests/Support/README.md), outside production sources.
 
 [BIP39](../../../Tests/BitcoinCoreTests/BIP39Tests.swift),
-[BIP32](../../../Tests/BitcoinCoreTests/BIP32Tests.swift), and
-[BIP86](../../../Tests/BitcoinCoreTests/BIP86Tests.swift) check independent vectors.
+[BIP32](../../../Tests/BitcoinCoreTests/BIP32Tests.swift),
+[BIP86](../../../Tests/BitcoinCoreTests/BIP86Tests.swift),
+[BIP49](../../../Tests/BitcoinCoreTests/BIP49Tests.swift),
+[BIP84](../../../Tests/BitcoinCoreTests/BIP84Tests.swift),
+[SLIP-0132](../../../Tests/BitcoinCoreTests/SLIP132Tests.swift),
+[WIF](../../../Tests/BitcoinCoreTests/WIFTests.swift) and
+[mini key](../../../Tests/BitcoinCoreTests/MiniPrivateKeyTests.swift) tests check
+independent vectors: the BIP texts, the SLIP's table and vectors, Bitcoin Core's
+key_io files and the wiki's mini keys.
 [KeyStore tests](../../../Tests/WalletCoreTests/KeyStoreTests.swift),
 [Keychain attributes](../../../AppTests/KeychainAttributeTests.swift), and
 [device authentication](../../../AppTests/DeviceAuthenticationTests.swift) check

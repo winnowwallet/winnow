@@ -140,8 +140,13 @@ public struct HDKey: Sendable, Equatable {
 
     /// Base58Check serialization (78-byte payload: version/depth/fingerprint/index/chain/key).
     public func serialized(network: Network = .mainnet) -> String {
+        serialized(version: isPrivate ? network.privateVersion : network.publicVersion)
+    }
+
+    /// The same payload under explicit version bytes. `ExtendedKeyVersion`
+    /// supplies the SLIP-0132 ones; the BIP32 ones come through `Network`.
+    func serialized(version: UInt32) -> String {
         var payload = Data()
-        let version = isPrivate ? network.privateVersion : network.publicVersion
         withUnsafeBytes(of: version.bigEndian) { payload.append(contentsOf: $0) }
         payload.append(depth)
         withUnsafeBytes(of: parentFingerprint.bigEndian) { payload.append(contentsOf: $0) }
@@ -159,6 +164,14 @@ public struct HDKey: Sendable, Equatable {
     /// Parses a Base58Check-serialized extended key, validating version, key material,
     /// and the master-key invariants (zero depth implies zero fingerprint/index).
     public static func deserialize(_ string: String) throws -> HDKey {
+        try deserialize(string, privateVersions: [Network.mainnet.privateVersion, Network.testnet.privateVersion],
+                        publicVersions: [Network.mainnet.publicVersion, Network.testnet.publicVersion]).key
+    }
+
+    /// The same parse against a caller's version table, answering the version
+    /// bytes it found so the caller can say what kind of key this was.
+    static func deserialize(_ string: String, privateVersions: Set<UInt32>,
+                            publicVersions: Set<UInt32>) throws -> (key: HDKey, version: UInt32) {
         let payload = try Base58Check.decode(string)
         guard payload.count == 78 else { throw BIP32Error.invalidSerializedKey }
         let version = payload.withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
@@ -168,29 +181,26 @@ public struct HDKey: Sendable, Equatable {
         let chainCode = payload.subdata(in: 13 ..< 45)
         let keyData = payload.subdata(in: 45 ..< 78)
 
-        let knownVersions: [UInt32] = [Network.mainnet.privateVersion, Network.mainnet.publicVersion,
-                                       Network.testnet.privateVersion, Network.testnet.publicVersion]
-        guard knownVersions.contains(version) else { throw BIP32Error.invalidVersion }
+        guard privateVersions.union(publicVersions).contains(version) else { throw BIP32Error.invalidVersion }
         if depth == 0, parentFingerprint != 0 || childIndex != 0 {
             throw BIP32Error.invalidSerializedKey
         }
 
-        let isPrivateVersion = version == Network.mainnet.privateVersion || version == Network.testnet.privateVersion
-        if isPrivateVersion {
+        if privateVersions.contains(version) {
             guard keyData.first == 0 else { throw BIP32Error.invalidSerializedKey }
             let secret = keyData.dropFirst()
             guard let key = try? P256K.Signing.PrivateKey(dataRepresentation: secret) else {
                 throw BIP32Error.invalidSerializedKey
             }
-            return HDKey(depth: depth, parentFingerprint: parentFingerprint, childIndex: childIndex,
-                         chainCode: chainCode, privateKey: Data(secret),
-                         publicKey: key.publicKey.dataRepresentation)
+            return (HDKey(depth: depth, parentFingerprint: parentFingerprint, childIndex: childIndex,
+                          chainCode: chainCode, privateKey: Data(secret),
+                          publicKey: key.publicKey.dataRepresentation), version)
         } else {
             guard keyData.count == 33,
                   (try? P256K.Signing.PublicKey(dataRepresentation: keyData, format: .compressed)) != nil
             else { throw BIP32Error.invalidSerializedKey }
-            return HDKey(depth: depth, parentFingerprint: parentFingerprint, childIndex: childIndex,
-                         chainCode: chainCode, privateKey: nil, publicKey: keyData)
+            return (HDKey(depth: depth, parentFingerprint: parentFingerprint, childIndex: childIndex,
+                          chainCode: chainCode, privateKey: nil, publicKey: keyData), version)
         }
     }
 

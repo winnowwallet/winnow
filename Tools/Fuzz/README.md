@@ -3,7 +3,8 @@
 # Deterministic fuzzing
 
 The harness covers fourteen parsing surfaces: PSBT, descriptors, transactions,
-blocks, wire messages (including `addr`), framing, filters, addresses, import
+blocks, wire messages (including `addr`), framing, filters, addresses (with the
+WIF, mini and SLIP-0132 keys pasted where one goes), import
 bundles, the census catalog, DNS-over-HTTPS answers, funding
 sources, Taproot control blocks, and person cards and pastes. It
 uses the local Bitcoin modules as a development target in the root package.
