@@ -154,6 +154,61 @@ struct DescriptorBoundsTests {
         #expect(try last.derived(index: 0, network: .testnet).count == 2)
     }
 
+    /// `and_v(v:1,…)` nested `depth` levels around `pk(key)`: every level is
+    /// a valid `B` fragment, so the only thing that can refuse it is the bound.
+    /// The deepest node is the `v:1` under the last `and_v`, two levels below
+    /// it (the wrapper counts), so `depth` levels build a tree
+    /// `depth + 2` deep.
+    static func nestedMiniscript(depth: Int) -> String {
+        String(repeating: "and_v(v:1,", count: depth) + "pk(\(key))" + String(repeating: ")", count: depth)
+    }
+
+    /// A miniscript has the same recursive-descent parser and the same
+    /// failure mode as the tree, and its own bound, `Miniscript.maximumDepth`,
+    /// counted on the fragments built, wrappers included. Pinned from both
+    /// sides, inside `tr()` and inside `wsh()`.
+    @Test("a miniscript at the maximum depth parses; one level past it is refused")
+    func miniscriptDepthBound() throws {
+        let deepest = Miniscript.maximumDepth - 2
+        _ = try Miniscript(Self.nestedMiniscript(depth: deepest), context: .tapscript)
+        _ = try Descriptor("wsh(\(Self.nestedMiniscript(depth: deepest)))")
+        #expect(throws: DescriptorError.miniscriptTooDeep) {
+            _ = try Miniscript(Self.nestedMiniscript(depth: deepest + 1), context: .tapscript)
+        }
+        #expect(throws: DescriptorError.miniscriptTooDeep) {
+            _ = try Descriptor("tr(\(Self.nums),\(Self.nestedMiniscript(depth: 1_000)))")
+        }
+        #expect(throws: DescriptorError.miniscriptTooDeep) {
+            _ = try Descriptor("wsh(\(Self.nestedMiniscript(depth: 50_000)))")
+        }
+    }
+
+    /// The two bounds stack: a tree at its maximum whose deepest leaf is a
+    /// miniscript at its maximum is the most the parser is ever asked to hold.
+    @Test("a tree at the maximum depth with a leaf at the maximum depth parses")
+    func combinedDepth() throws {
+        let leaf = Self.nestedMiniscript(depth: Miniscript.maximumDepth - 2)
+        let pk = "pk(\(Self.key))"
+        let depth = Parser.maximumTreeDepth
+        let inner = String(repeating: "{", count: depth) + leaf + String(repeating: ",\(pk)}", count: depth)
+        let descriptor = try Descriptor("tr(\(Self.nums),\(inner))")
+        #expect(try descriptor.derived(index: 0).count == 1)
+    }
+
+    /// A run of wrapper letters builds one node per letter without a parser
+    /// frame per letter, so the bound must count the letters, not the frames.
+    @Test("a run of wrappers counts toward the depth")
+    func wrapperRunBound() throws {
+        let deepest = Miniscript.maximumDepth - 1
+        _ = try Miniscript(String(repeating: "n", count: deepest) + ":pk(\(Self.key))", context: .tapscript)
+        #expect(throws: DescriptorError.miniscriptTooDeep) {
+            _ = try Miniscript(String(repeating: "n", count: deepest + 1) + ":pk(\(Self.key))", context: .tapscript)
+        }
+        #expect(throws: DescriptorError.miniscriptTooDeep) {
+            _ = try Descriptor("tr(\(Self.nums),\(String(repeating: "n", count: 10_000)):pk(\(Self.key)))")
+        }
+    }
+
     /// Pins the one-pass builder to the tree written out level by level —
     /// the text every depth above hands the parser.
     @Test("the nested fixture is the level-by-level tree")

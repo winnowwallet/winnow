@@ -26,7 +26,7 @@ configuration and under Xcode.
 | File | Contents |
 | --- | --- |
 | `InMemoryKeyStore.swift` | Test-only secret storage, outside the production Keychain implementation, plus `CountingKeyStore` (the same store, counting its `load` calls) |
-| `Vectors.swift` | `Vectors.data/string/json/decode` (each target passes its own `Bundle.module`), `VectorError`, `ttTags`, the shared BIP158 and BIP387/BIP390 vector loaders |
+| `Vectors.swift` | `Vectors.data/string/json/decode` (each target passes its own `Bundle.module`), `VectorError`, `ttTags`, the shared BIP158 and BIP382/383/387/390 vector loaders, and the decoders for Core's extracted miniscript and descriptor rows |
 | `TempFiles.swift` | `TempDir` (removed on deinit) and `tempFileURL(_:)` under one per-process root |
 | `ParkGate.swift` | `ParkGate`: parks code at a suspension point until the test releases it, so a race becomes an ordering |
 | `SeededRandom.swift` | `SeededRandom` (SplitMix64) with the `int`/`count` draws for coin-selection property tests |

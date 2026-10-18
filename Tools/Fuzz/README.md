@@ -2,7 +2,8 @@
 
 # Deterministic fuzzing
 
-The harness covers fourteen parsing surfaces: PSBT, descriptors, transactions,
+The harness covers fourteen parsing surfaces: PSBT, descriptors (miniscript
+leaves and `wsh()` included), transactions,
 blocks, wire messages (including `addr`), framing, filters, addresses, import
 bundles, the census catalog, DNS-over-HTTPS answers, funding
 sources, Taproot control blocks, and person cards and pastes. It

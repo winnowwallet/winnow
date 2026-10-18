@@ -1,0 +1,801 @@
+{
+ "source": "bitcoin/bitcoin v31.0 src/test/miniscript_tests.cpp",
+ "vectors": [
+  {
+   "miniscript": "l:older(1)",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL"
+   ],
+   "comment": "older(1): valid"
+  },
+  {
+   "miniscript": "l:older(0)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "older(0): k must be at least 1"
+  },
+  {
+   "miniscript": "l:older(2147483647)",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL"
+   ],
+   "comment": "older(2147483647): valid"
+  },
+  {
+   "miniscript": "l:older(2147483648)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "older(2147483648): k must be below 2^31"
+  },
+  {
+   "miniscript": "u:after(1)",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL"
+   ],
+   "comment": "after(1): valid"
+  },
+  {
+   "miniscript": "u:after(0)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "after(0): k must be at least 1"
+  },
+  {
+   "miniscript": "u:after(2147483647)",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL"
+   ],
+   "comment": "after(2147483647): valid"
+  },
+  {
+   "miniscript": "u:after(2147483648)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "after(2147483648): k must be below 2^31"
+  },
+  {
+   "miniscript": "andor(0,1,1)",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL"
+   ],
+   "comment": "andor(Bdu,B,B): valid"
+  },
+  {
+   "miniscript": "andor(a:0,1,1)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "andor(Wdu,B,B): X must be B"
+  },
+  {
+   "miniscript": "andor(0,a:1,a:1)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "andor(Bdu,W,W): Y and Z must be B/V/K"
+  },
+  {
+   "miniscript": "andor(1,1,1)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "andor(Bu,B,B): X must be d"
+  },
+  {
+   "miniscript": "andor(n:or_i(0,after(1)),1,1)",
+   "modes": [
+    "TESTMODE_VALID"
+   ],
+   "comment": "andor(Bdu,B,B): valid"
+  },
+  {
+   "miniscript": "andor(or_i(0,after(1)),1,1)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "andor(Bd,B,B): X must be u"
+  },
+  {
+   "miniscript": "c:andor(0,pk_k(03a0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247c7),pk_k(036d2b085e9e382ed10b69fc311a03f8641ccfff21574de0927513a49d9a688a00))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL",
+    "TESTMODE_NEEDSIG"
+   ],
+   "comment": "andor(Bdu,K,K): valid"
+  },
+  {
+   "miniscript": "t:andor(0,v:1,v:1)",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL"
+   ],
+   "comment": "andor(Bdu,V,V): valid"
+  },
+  {
+   "miniscript": "and_v(v:1,1)",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL"
+   ],
+   "comment": "and_v(V,B): valid"
+  },
+  {
+   "miniscript": "t:and_v(v:1,v:1)",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL"
+   ],
+   "comment": "and_v(V,V): valid"
+  },
+  {
+   "miniscript": "c:and_v(v:1,pk_k(036d2b085e9e382ed10b69fc311a03f8641ccfff21574de0927513a49d9a688a00))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL",
+    "TESTMODE_NEEDSIG"
+   ],
+   "comment": "and_v(V,K): valid"
+  },
+  {
+   "miniscript": "and_v(1,1)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "and_v(B,B): X must be V"
+  },
+  {
+   "miniscript": "and_v(pk_k(02352bbf4a4cdd12564f93fa332ce333301d9ad40271f8107181340aef25be59d5),1)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "and_v(K,B): X must be V"
+  },
+  {
+   "miniscript": "and_v(v:1,a:1)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "and_v(K,W): Y must be B/V/K"
+  },
+  {
+   "miniscript": "and_b(1,a:1)",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL"
+   ],
+   "comment": "and_b(B,W): valid"
+  },
+  {
+   "miniscript": "and_b(1,1)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "and_b(B,B): Y must W"
+  },
+  {
+   "miniscript": "and_b(v:1,a:1)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "and_b(V,W): X must be B"
+  },
+  {
+   "miniscript": "and_b(a:1,a:1)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "and_b(W,W): X must be B"
+  },
+  {
+   "miniscript": "and_b(pk_k(025601570cb47f238d2b0286db4a990fa0f3ba28d1a319f5e7cf55c2a2444da7cc),a:1)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "and_b(K,W): X must be B"
+  },
+  {
+   "miniscript": "or_b(0,a:0)",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL",
+    "TESTMODE_NEEDSIG"
+   ],
+   "comment": "or_b(Bd,Wd): valid"
+  },
+  {
+   "miniscript": "or_b(1,a:0)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "or_b(B,Wd): X must be d"
+  },
+  {
+   "miniscript": "or_b(0,a:1)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "or_b(Bd,W): Y must be d"
+  },
+  {
+   "miniscript": "or_b(0,0)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "or_b(Bd,Bd): Y must W"
+  },
+  {
+   "miniscript": "or_b(v:0,a:0)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "or_b(V,Wd): X must be B"
+  },
+  {
+   "miniscript": "or_b(a:0,a:0)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "or_b(Wd,Wd): X must be B"
+  },
+  {
+   "miniscript": "or_b(pk_k(025601570cb47f238d2b0286db4a990fa0f3ba28d1a319f5e7cf55c2a2444da7cc),a:0)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "or_b(Kd,Wd): X must be B"
+  },
+  {
+   "miniscript": "t:or_c(0,v:1)",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL"
+   ],
+   "comment": "or_c(Bdu,V): valid"
+  },
+  {
+   "miniscript": "t:or_c(a:0,v:1)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "or_c(Wdu,V): X must be B"
+  },
+  {
+   "miniscript": "t:or_c(1,v:1)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "or_c(Bu,V): X must be d"
+  },
+  {
+   "miniscript": "t:or_c(n:or_i(0,after(1)),v:1)",
+   "modes": [
+    "TESTMODE_VALID"
+   ],
+   "comment": "or_c(Bdu,V): valid"
+  },
+  {
+   "miniscript": "t:or_c(or_i(0,after(1)),v:1)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "or_c(Bd,V): X must be u"
+  },
+  {
+   "miniscript": "t:or_c(0,1)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "or_c(Bdu,B): Y must be V"
+  },
+  {
+   "miniscript": "or_d(0,1)",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL"
+   ],
+   "comment": "or_d(Bdu,B): valid"
+  },
+  {
+   "miniscript": "or_d(a:0,1)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "or_d(Wdu,B): X must be B"
+  },
+  {
+   "miniscript": "or_d(1,1)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "or_d(Bu,B): X must be d"
+  },
+  {
+   "miniscript": "or_d(n:or_i(0,after(1)),1)",
+   "modes": [
+    "TESTMODE_VALID"
+   ],
+   "comment": "or_d(Bdu,B): valid"
+  },
+  {
+   "miniscript": "or_d(or_i(0,after(1)),1)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "or_d(Bd,B): X must be u"
+  },
+  {
+   "miniscript": "or_d(0,v:1)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "or_d(Bdu,V): Y must be B"
+  },
+  {
+   "miniscript": "or_i(1,1)",
+   "modes": [
+    "TESTMODE_VALID"
+   ],
+   "comment": "or_i(B,B): valid"
+  },
+  {
+   "miniscript": "t:or_i(v:1,v:1)",
+   "modes": [
+    "TESTMODE_VALID"
+   ],
+   "comment": "or_i(V,V): valid"
+  },
+  {
+   "miniscript": "c:or_i(pk_k(03a0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247c7),pk_k(036d2b085e9e382ed10b69fc311a03f8641ccfff21574de0927513a49d9a688a00))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL",
+    "TESTMODE_NEEDSIG"
+   ],
+   "comment": "or_i(K,K): valid"
+  },
+  {
+   "miniscript": "or_i(a:1,a:1)",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "comment": "or_i(W,W): X and Y must be B/V/K"
+  },
+  {
+   "miniscript": "or_b(l:after(100),al:after(1000000000))",
+   "modes": [
+    "TESTMODE_VALID"
+   ],
+   "comment": "or_b(timelock, heighlock) valid"
+  },
+  {
+   "miniscript": "and_b(after(100),a:after(1000000000))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL",
+    "TESTMODE_TIMELOCKMIX"
+   ],
+   "comment": "and_b(timelock, heighlock) invalid"
+  },
+  {
+   "miniscript": "pk(03d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65)",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL",
+    "TESTMODE_NEEDSIG"
+   ],
+   "p2wsh_script": "2103d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65ac",
+   "tapscript": "20d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65ac",
+   "comment": "alias to c:pk_k"
+  },
+  {
+   "miniscript": "pkh(03d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65)",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL",
+    "TESTMODE_NEEDSIG"
+   ],
+   "p2wsh_script": "76a914fcd35ddacad9f2d5be5e464639441c6065e6955d88ac",
+   "tapscript": "76a914fd1690c37fa3b0f04395ddc9415b220ab1ccc59588ac",
+   "comment": "alias to c:pk_h"
+  },
+  {
+   "miniscript": "lltvln:after(1231488000)",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL"
+   ],
+   "p2wsh_script": "6300676300676300670400046749b1926869516868",
+   "tapscript": "6300676300676300670400046749b1926869516868"
+  },
+  {
+   "miniscript": "uuj:and_v(v:multi(2,03d01115d548e7561b15c38f004d734633687cf4419620095bc5b0f47070afe85a,025601570cb47f238d2b0286db4a990fa0f3ba28d1a319f5e7cf55c2a2444da7cc),after(1231488000))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL",
+    "TESTMODE_NEEDSIG",
+    "TESTMODE_TAPSCRIPT_INVALID"
+   ],
+   "p2wsh_script": "6363829263522103d01115d548e7561b15c38f004d734633687cf4419620095bc5b0f47070afe85a21025601570cb47f238d2b0286db4a990fa0f3ba28d1a319f5e7cf55c2a2444da7cc52af0400046749b168670068670068"
+  },
+  {
+   "miniscript": "or_b(un:multi(2,03daed4f2be3a8bf278e70132fb0beb7522f570e144bf615c07e996d443dee8729,024ce119c96e2fa357200b559b2f7dd5a5f02d5290aff74b03f3e471b273211c97),al:older(16))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_TAPSCRIPT_INVALID"
+   ],
+   "p2wsh_script": "63522103daed4f2be3a8bf278e70132fb0beb7522f570e144bf615c07e996d443dee872921024ce119c96e2fa357200b559b2f7dd5a5f02d5290aff74b03f3e471b273211c9752ae926700686b63006760b2686c9b"
+  },
+  {
+   "miniscript": "j:and_v(vdv:after(1567547623),older(2016))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL"
+   ],
+   "p2wsh_script": "829263766304e7e06e5db169686902e007b268",
+   "tapscript": "829263766304e7e06e5db169686902e007b268"
+  },
+  {
+   "miniscript": "t:and_v(vu:hash256(131772552c01444cd81360818376a040b7c3b2b7b0a53550ee3edde216cec61b),v:sha256(ec4916dd28fc4c10d78e287ca5d9cc51ee1ae73cbfde08c6b37324cbfaac8bc5))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL"
+   ],
+   "p2wsh_script": "6382012088aa20131772552c01444cd81360818376a040b7c3b2b7b0a53550ee3edde216cec61b876700686982012088a820ec4916dd28fc4c10d78e287ca5d9cc51ee1ae73cbfde08c6b37324cbfaac8bc58851",
+   "tapscript": "6382012088aa20131772552c01444cd81360818376a040b7c3b2b7b0a53550ee3edde216cec61b876700686982012088a820ec4916dd28fc4c10d78e287ca5d9cc51ee1ae73cbfde08c6b37324cbfaac8bc58851"
+  },
+  {
+   "miniscript": "t:andor(multi(3,02d7924d4f7d43ea965a465ae3095ff41131e5946f3c85f79e44adbcf8e27e080e,03fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556,02e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13),v:older(4194305),v:sha256(9267d3dbed802941483f1afa2a6bc68de5f653128aca9bf1461c5d0a3ad36ed2))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL",
+    "TESTMODE_TAPSCRIPT_INVALID"
+   ],
+   "p2wsh_script": "532102d7924d4f7d43ea965a465ae3095ff41131e5946f3c85f79e44adbcf8e27e080e2103fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a14602975562102e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd1353ae6482012088a8209267d3dbed802941483f1afa2a6bc68de5f653128aca9bf1461c5d0a3ad36ed2886703010040b2696851"
+  },
+  {
+   "miniscript": "or_d(multi(1,02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9),or_b(multi(3,022f01e5e15cca351daff3843fb70f3c2f0a1bdd05e5af888a67784ef3e10a2a01,032fa2104d6b38d11b0230010559879124e42ab8dfeff5ff29dc9cdadd4ecacc3f,03d01115d548e7561b15c38f004d734633687cf4419620095bc5b0f47070afe85a),su:after(500000)))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL",
+    "TESTMODE_TAPSCRIPT_INVALID"
+   ],
+   "p2wsh_script": "512102f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f951ae73645321022f01e5e15cca351daff3843fb70f3c2f0a1bdd05e5af888a67784ef3e10a2a0121032fa2104d6b38d11b0230010559879124e42ab8dfeff5ff29dc9cdadd4ecacc3f2103d01115d548e7561b15c38f004d734633687cf4419620095bc5b0f47070afe85a53ae7c630320a107b16700689b68"
+  },
+  {
+   "miniscript": "or_d(sha256(38df1c1f64a24a77b23393bca50dff872e31edc4f3b5aa3b90ad0b82f4f089b6),and_n(un:after(499999999),older(4194305)))",
+   "modes": [
+    "TESTMODE_VALID"
+   ],
+   "p2wsh_script": "82012088a82038df1c1f64a24a77b23393bca50dff872e31edc4f3b5aa3b90ad0b82f4f089b68773646304ff64cd1db19267006864006703010040b26868",
+   "tapscript": "82012088a82038df1c1f64a24a77b23393bca50dff872e31edc4f3b5aa3b90ad0b82f4f089b68773646304ff64cd1db19267006864006703010040b26868"
+  },
+  {
+   "miniscript": "and_v(or_i(v:multi(2,02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5,03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb),v:multi(2,03e60fce93b59e9ec53011aabc21c23e97b2a31369b87a5ae9c44ee89e2a6dec0a,025cbdf0646e5db4eaa398f365f2ea7a0e3d419b7e0330e39ce92bddedcac4f9bc)),sha256(d1ec675902ef1633427ca360b290b0b3045a0d9058ddb5e648b4c3c3224c5c68))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL",
+    "TESTMODE_NEEDSIG",
+    "TESTMODE_TAPSCRIPT_INVALID"
+   ],
+   "p2wsh_script": "63522102c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee52103774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb52af67522103e60fce93b59e9ec53011aabc21c23e97b2a31369b87a5ae9c44ee89e2a6dec0a21025cbdf0646e5db4eaa398f365f2ea7a0e3d419b7e0330e39ce92bddedcac4f9bc52af6882012088a820d1ec675902ef1633427ca360b290b0b3045a0d9058ddb5e648b4c3c3224c5c6887"
+  },
+  {
+   "miniscript": "j:and_b(multi(2,0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798,024ce119c96e2fa357200b559b2f7dd5a5f02d5290aff74b03f3e471b273211c97),s:or_i(older(1),older(4252898)))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NEEDSIG",
+    "TESTMODE_TAPSCRIPT_INVALID"
+   ],
+   "p2wsh_script": "82926352210279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179821024ce119c96e2fa357200b559b2f7dd5a5f02d5290aff74b03f3e471b273211c9752ae7c6351b26703e2e440b2689a68"
+  },
+  {
+   "miniscript": "and_b(older(16),s:or_d(sha256(e38990d0c7fc009880a9c07c23842e886c6bbdc964ce6bdd5817ad357335ee6f),n:after(1567547623)))",
+   "modes": [
+    "TESTMODE_VALID"
+   ],
+   "p2wsh_script": "60b27c82012088a820e38990d0c7fc009880a9c07c23842e886c6bbdc964ce6bdd5817ad357335ee6f87736404e7e06e5db192689a",
+   "tapscript": "60b27c82012088a820e38990d0c7fc009880a9c07c23842e886c6bbdc964ce6bdd5817ad357335ee6f87736404e7e06e5db192689a"
+  },
+  {
+   "miniscript": "j:and_v(v:hash160(20195b5a3d650c17f0f29f91c33f8f6335193d07),or_d(sha256(96de8fc8c256fa1e1556d41af431cace7dca68707c78dd88c3acab8b17164c47),older(16)))",
+   "modes": [
+    "TESTMODE_VALID"
+   ],
+   "p2wsh_script": "82926382012088a91420195b5a3d650c17f0f29f91c33f8f6335193d078882012088a82096de8fc8c256fa1e1556d41af431cace7dca68707c78dd88c3acab8b17164c4787736460b26868",
+   "tapscript": "82926382012088a91420195b5a3d650c17f0f29f91c33f8f6335193d078882012088a82096de8fc8c256fa1e1556d41af431cace7dca68707c78dd88c3acab8b17164c4787736460b26868"
+  },
+  {
+   "miniscript": "and_b(hash256(32ba476771d01e37807990ead8719f08af494723de1d228f2c2c07cc0aa40bac),a:and_b(hash256(131772552c01444cd81360818376a040b7c3b2b7b0a53550ee3edde216cec61b),a:older(1)))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL"
+   ],
+   "p2wsh_script": "82012088aa2032ba476771d01e37807990ead8719f08af494723de1d228f2c2c07cc0aa40bac876b82012088aa20131772552c01444cd81360818376a040b7c3b2b7b0a53550ee3edde216cec61b876b51b26c9a6c9a",
+   "tapscript": "82012088aa2032ba476771d01e37807990ead8719f08af494723de1d228f2c2c07cc0aa40bac876b82012088aa20131772552c01444cd81360818376a040b7c3b2b7b0a53550ee3edde216cec61b876b51b26c9a6c9a"
+  },
+  {
+   "miniscript": "thresh(2,multi(2,03a0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247c7,036d2b085e9e382ed10b69fc311a03f8641ccfff21574de0927513a49d9a688a00),a:multi(1,036d2b085e9e382ed10b69fc311a03f8641ccfff21574de0927513a49d9a688a00),ac:pk_k(022f01e5e15cca351daff3843fb70f3c2f0a1bdd05e5af888a67784ef3e10a2a01))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL",
+    "TESTMODE_NEEDSIG",
+    "TESTMODE_TAPSCRIPT_INVALID"
+   ],
+   "p2wsh_script": "522103a0434d9e47f3c86235477c7b1ae6ae5d3442d49b1943c2b752a68e2a47e247c721036d2b085e9e382ed10b69fc311a03f8641ccfff21574de0927513a49d9a688a0052ae6b5121036d2b085e9e382ed10b69fc311a03f8641ccfff21574de0927513a49d9a688a0051ae6c936b21022f01e5e15cca351daff3843fb70f3c2f0a1bdd05e5af888a67784ef3e10a2a01ac6c935287"
+  },
+  {
+   "miniscript": "and_n(sha256(d1ec675902ef1633427ca360b290b0b3045a0d9058ddb5e648b4c3c3224c5c68),t:or_i(v:older(4252898),v:older(144)))",
+   "modes": [
+    "TESTMODE_VALID"
+   ],
+   "p2wsh_script": "82012088a820d1ec675902ef1633427ca360b290b0b3045a0d9058ddb5e648b4c3c3224c5c68876400676303e2e440b26967029000b269685168",
+   "tapscript": "82012088a820d1ec675902ef1633427ca360b290b0b3045a0d9058ddb5e648b4c3c3224c5c68876400676303e2e440b26967029000b269685168"
+  },
+  {
+   "miniscript": "or_d(nd:and_v(v:older(4252898),v:older(4252898)),sha256(38df1c1f64a24a77b23393bca50dff872e31edc4f3b5aa3b90ad0b82f4f089b6))",
+   "modes": [
+    "TESTMODE_VALID"
+   ],
+   "p2wsh_script": "766303e2e440b26903e2e440b2696892736482012088a82038df1c1f64a24a77b23393bca50dff872e31edc4f3b5aa3b90ad0b82f4f089b68768",
+   "tapscript": "766303e2e440b26903e2e440b2696892736482012088a82038df1c1f64a24a77b23393bca50dff872e31edc4f3b5aa3b90ad0b82f4f089b68768"
+  },
+  {
+   "miniscript": "c:and_v(or_c(sha256(9267d3dbed802941483f1afa2a6bc68de5f653128aca9bf1461c5d0a3ad36ed2),v:multi(1,02c44d12c7065d812e8acf28d7cbb19f9011ecd9e9fdf281b0e6a3b5e87d22e7db)),pk_k(03acd484e2f0c7f65309ad178a9f559abde09796974c57e714c35f110dfc27ccbe))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NEEDSIG",
+    "TESTMODE_TAPSCRIPT_INVALID"
+   ],
+   "p2wsh_script": "82012088a8209267d3dbed802941483f1afa2a6bc68de5f653128aca9bf1461c5d0a3ad36ed28764512102c44d12c7065d812e8acf28d7cbb19f9011ecd9e9fdf281b0e6a3b5e87d22e7db51af682103acd484e2f0c7f65309ad178a9f559abde09796974c57e714c35f110dfc27ccbeac"
+  },
+  {
+   "miniscript": "c:and_v(or_c(multi(2,036d2b085e9e382ed10b69fc311a03f8641ccfff21574de0927513a49d9a688a00,02352bbf4a4cdd12564f93fa332ce333301d9ad40271f8107181340aef25be59d5),v:ripemd160(1b0f3c404d12075c68c938f9f60ebea4f74941a0)),pk_k(03fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL",
+    "TESTMODE_NEEDSIG",
+    "TESTMODE_TAPSCRIPT_INVALID"
+   ],
+   "p2wsh_script": "5221036d2b085e9e382ed10b69fc311a03f8641ccfff21574de0927513a49d9a688a002102352bbf4a4cdd12564f93fa332ce333301d9ad40271f8107181340aef25be59d552ae6482012088a6141b0f3c404d12075c68c938f9f60ebea4f74941a088682103fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556ac"
+  },
+  {
+   "miniscript": "and_v(andor(hash256(8a35d9ca92a48eaade6f53a64985e9e2afeb74dcf8acb4c3721e0dc7e4294b25),v:hash256(939894f70e6c3a25da75da0cc2071b4076d9b006563cf635986ada2e93c0d735),v:older(50000)),after(499999999))",
+   "modes": [
+    "TESTMODE_VALID"
+   ],
+   "p2wsh_script": "82012088aa208a35d9ca92a48eaade6f53a64985e9e2afeb74dcf8acb4c3721e0dc7e4294b2587640350c300b2696782012088aa20939894f70e6c3a25da75da0cc2071b4076d9b006563cf635986ada2e93c0d735886804ff64cd1db1",
+   "tapscript": "82012088aa208a35d9ca92a48eaade6f53a64985e9e2afeb74dcf8acb4c3721e0dc7e4294b2587640350c300b2696782012088aa20939894f70e6c3a25da75da0cc2071b4076d9b006563cf635986ada2e93c0d735886804ff64cd1db1"
+  },
+  {
+   "miniscript": "andor(hash256(5f8d30e655a7ba0d7596bb3ddfb1d2d20390d23b1845000e1e118b3be1b3f040),j:and_v(v:hash160(3a2bff0da9d96868e66abc4427bea4691cf61ccd),older(4194305)),ripemd160(44d90e2d3714c8663b632fcf0f9d5f22192cc4c8))",
+   "modes": [
+    "TESTMODE_VALID"
+   ],
+   "p2wsh_script": "82012088aa205f8d30e655a7ba0d7596bb3ddfb1d2d20390d23b1845000e1e118b3be1b3f040876482012088a61444d90e2d3714c8663b632fcf0f9d5f22192cc4c8876782926382012088a9143a2bff0da9d96868e66abc4427bea4691cf61ccd8803010040b26868",
+   "tapscript": "82012088aa205f8d30e655a7ba0d7596bb3ddfb1d2d20390d23b1845000e1e118b3be1b3f040876482012088a61444d90e2d3714c8663b632fcf0f9d5f22192cc4c8876782926382012088a9143a2bff0da9d96868e66abc4427bea4691cf61ccd8803010040b26868"
+  },
+  {
+   "miniscript": "or_i(c:and_v(v:after(500000),pk_k(02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5)),sha256(d9147961436944f43cd99d28b2bbddbf452ef872b30c8279e255e7daafc7f946))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL"
+   ],
+   "p2wsh_script": "630320a107b1692102c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5ac6782012088a820d9147961436944f43cd99d28b2bbddbf452ef872b30c8279e255e7daafc7f9468768",
+   "tapscript": "630320a107b16920c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5ac6782012088a820d9147961436944f43cd99d28b2bbddbf452ef872b30c8279e255e7daafc7f9468768"
+  },
+  {
+   "miniscript": "thresh(2,c:pk_h(025cbdf0646e5db4eaa398f365f2ea7a0e3d419b7e0330e39ce92bddedcac4f9bc),s:sha256(e38990d0c7fc009880a9c07c23842e886c6bbdc964ce6bdd5817ad357335ee6f),a:hash160(dd69735817e0e3f6f826a9238dc2e291184f0131))",
+   "modes": [
+    "TESTMODE_VALID"
+   ],
+   "p2wsh_script": "76a9145dedfbf9ea599dd4e3ca6a80b333c472fd0b3f6988ac7c82012088a820e38990d0c7fc009880a9c07c23842e886c6bbdc964ce6bdd5817ad357335ee6f87936b82012088a914dd69735817e0e3f6f826a9238dc2e291184f0131876c935287",
+   "tapscript": "76a9141a7ac36cfa8431ab2395d701b0050045ae4a37d188ac7c82012088a820e38990d0c7fc009880a9c07c23842e886c6bbdc964ce6bdd5817ad357335ee6f87936b82012088a914dd69735817e0e3f6f826a9238dc2e291184f0131876c935287"
+  },
+  {
+   "miniscript": "and_n(sha256(9267d3dbed802941483f1afa2a6bc68de5f653128aca9bf1461c5d0a3ad36ed2),uc:and_v(v:older(144),pk_k(03fe72c435413d33d48ac09c9161ba8b09683215439d62b7940502bda8b202e6ce)))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NEEDSIG"
+   ],
+   "p2wsh_script": "82012088a8209267d3dbed802941483f1afa2a6bc68de5f653128aca9bf1461c5d0a3ad36ed28764006763029000b2692103fe72c435413d33d48ac09c9161ba8b09683215439d62b7940502bda8b202e6ceac67006868",
+   "tapscript": "82012088a8209267d3dbed802941483f1afa2a6bc68de5f653128aca9bf1461c5d0a3ad36ed28764006763029000b26920fe72c435413d33d48ac09c9161ba8b09683215439d62b7940502bda8b202e6ceac67006868"
+  },
+  {
+   "miniscript": "and_n(c:pk_k(03daed4f2be3a8bf278e70132fb0beb7522f570e144bf615c07e996d443dee8729),and_b(l:older(4252898),a:older(16)))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL",
+    "TESTMODE_NEEDSIG",
+    "TESTMODE_TIMELOCKMIX"
+   ],
+   "p2wsh_script": "2103daed4f2be3a8bf278e70132fb0beb7522f570e144bf615c07e996d443dee8729ac64006763006703e2e440b2686b60b26c9a68",
+   "tapscript": "20daed4f2be3a8bf278e70132fb0beb7522f570e144bf615c07e996d443dee8729ac64006763006703e2e440b2686b60b26c9a68"
+  },
+  {
+   "miniscript": "c:or_i(and_v(v:older(16),pk_h(02d7924d4f7d43ea965a465ae3095ff41131e5946f3c85f79e44adbcf8e27e080e)),pk_h(026a245bf6dc698504c89a20cfded60853152b695336c28063b61c65cbd269e6b4))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL",
+    "TESTMODE_NEEDSIG"
+   ],
+   "p2wsh_script": "6360b26976a9149fc5dbe5efdce10374a4dd4053c93af540211718886776a9142fbd32c8dd59ee7c17e66cb6ebea7e9846c3040f8868ac",
+   "tapscript": "6360b26976a9144d4421361c3289bdad06441ffaee8be8e786f1ad886776a91460d4a7bcbd08f58e58bd208d1069837d7adb16ae8868ac"
+  },
+  {
+   "miniscript": "or_d(c:pk_h(02e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13),andor(c:pk_k(024ce119c96e2fa357200b559b2f7dd5a5f02d5290aff74b03f3e471b273211c97),older(2016),after(1567547623)))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL"
+   ],
+   "p2wsh_script": "76a914c42e7ef92fdb603af844d064faad95db9bcdfd3d88ac736421024ce119c96e2fa357200b559b2f7dd5a5f02d5290aff74b03f3e471b273211c97ac6404e7e06e5db16702e007b26868",
+   "tapscript": "76a91421ab1a140d0d305b8ff62bdb887d9fef82c9899e88ac7364204ce119c96e2fa357200b559b2f7dd5a5f02d5290aff74b03f3e471b273211c97ac6404e7e06e5db16702e007b26868"
+  },
+  {
+   "miniscript": "c:andor(ripemd160(6ad07d21fd5dfc646f0b30577045ce201616b9ba),pk_h(02d7924d4f7d43ea965a465ae3095ff41131e5946f3c85f79e44adbcf8e27e080e),and_v(v:hash256(8a35d9ca92a48eaade6f53a64985e9e2afeb74dcf8acb4c3721e0dc7e4294b25),pk_h(03d01115d548e7561b15c38f004d734633687cf4419620095bc5b0f47070afe85a)))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NEEDSIG"
+   ],
+   "p2wsh_script": "82012088a6146ad07d21fd5dfc646f0b30577045ce201616b9ba876482012088aa208a35d9ca92a48eaade6f53a64985e9e2afeb74dcf8acb4c3721e0dc7e4294b258876a914dd100be7d9aea5721158ebde6d6a1fd8fff93bb1886776a9149fc5dbe5efdce10374a4dd4053c93af5402117188868ac",
+   "tapscript": "82012088a6146ad07d21fd5dfc646f0b30577045ce201616b9ba876482012088aa208a35d9ca92a48eaade6f53a64985e9e2afeb74dcf8acb4c3721e0dc7e4294b258876a914a63d1e4d2ed109246c600ec8c19cce546b65b1cc886776a9144d4421361c3289bdad06441ffaee8be8e786f1ad8868ac"
+  },
+  {
+   "miniscript": "c:andor(u:ripemd160(6ad07d21fd5dfc646f0b30577045ce201616b9ba),pk_h(03daed4f2be3a8bf278e70132fb0beb7522f570e144bf615c07e996d443dee8729),or_i(pk_h(022f01e5e15cca351daff3843fb70f3c2f0a1bdd05e5af888a67784ef3e10a2a01),pk_h(0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798)))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NEEDSIG"
+   ],
+   "p2wsh_script": "6382012088a6146ad07d21fd5dfc646f0b30577045ce201616b9ba87670068646376a9149652d86bedf43ad264362e6e6eba6eb764508127886776a914751e76e8199196d454941c45d1b3a323f1433bd688686776a91420d637c1a6404d2227f3561fdbaff5a680dba6488868ac",
+   "tapscript": "6382012088a6146ad07d21fd5dfc646f0b30577045ce201616b9ba87670068646376a914ceedcb44b38bdbcb614d872223964fd3dca8a434886776a914f678d9b79045452c8c64e9309d0f0046056e26c588686776a914a2a75e1819afa208f6c89ae0da43021116dfcb0c8868ac"
+  },
+  {
+   "miniscript": "c:or_i(andor(c:pk_h(03d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65),pk_h(022f01e5e15cca351daff3843fb70f3c2f0a1bdd05e5af888a67784ef3e10a2a01),pk_h(02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5)),pk_k(02d7924d4f7d43ea965a465ae3095ff41131e5946f3c85f79e44adbcf8e27e080e))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL",
+    "TESTMODE_NEEDSIG"
+   ],
+   "p2wsh_script": "6376a914fcd35ddacad9f2d5be5e464639441c6065e6955d88ac6476a91406afd46bcdfd22ef94ac122aa11f241244a37ecc886776a9149652d86bedf43ad264362e6e6eba6eb7645081278868672102d7924d4f7d43ea965a465ae3095ff41131e5946f3c85f79e44adbcf8e27e080e68ac",
+   "tapscript": "6376a914fd1690c37fa3b0f04395ddc9415b220ab1ccc59588ac6476a9149b652a14674a506079f574d20ca7daef6f9a66bb886776a914ceedcb44b38bdbcb614d872223964fd3dca8a43488686720d7924d4f7d43ea965a465ae3095ff41131e5946f3c85f79e44adbcf8e27e080e68ac"
+  },
+  {
+   "miniscript": "thresh(1,c:pk_k(03d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65),altv:after(1000000000),altv:after(100))",
+   "modes": [
+    "TESTMODE_VALID"
+   ],
+   "p2wsh_script": "2103d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65ac6b6300670400ca9a3bb16951686c936b6300670164b16951686c935187",
+   "tapscript": "20d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65ac6b6300670400ca9a3bb16951686c936b6300670164b16951686c935187"
+  },
+  {
+   "miniscript": "thresh(2,c:pk_k(03d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65),ac:pk_k(03fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556),altv:after(1000000000),altv:after(100))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL",
+    "TESTMODE_TIMELOCKMIX"
+   ],
+   "p2wsh_script": "2103d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65ac6b2103fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556ac6c936b6300670400ca9a3bb16951686c936b6300670164b16951686c935287",
+   "tapscript": "20d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65ac6b20fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556ac6c936b6300670400ca9a3bb16951686c936b6300670164b16951686c935287",
+   "comment": "Additional Tapscript-related tests"
+  },
+  {
+   "miniscript": "and_v(v:multi_a(2,03d01115d548e7561b15c38f004d734633687cf4419620095bc5b0f47070afe85a,025601570cb47f238d2b0286db4a990fa0f3ba28d1a319f5e7cf55c2a2444da7cc),after(1231488000))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL",
+    "TESTMODE_NEEDSIG",
+    "TESTMODE_P2WSH_INVALID"
+   ],
+   "tapscript": "20d01115d548e7561b15c38f004d734633687cf4419620095bc5b0f47070afe85aac205601570cb47f238d2b0286db4a990fa0f3ba28d1a319f5e7cf55c2a2444da7ccba529d0400046749b1",
+   "comment": "Can use more than 20 keys in a multi_a."
+  },
+  {
+   "miniscript": "thresh(2,dv:older(42),s:pk(025cbdf0646e5db4eaa398f365f2ea7a0e3d419b7e0330e39ce92bddedcac4f9bc),s:pk(03d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL",
+    "TESTMODE_NEEDSIG",
+    "TESTMODE_P2WSH_INVALID"
+   ],
+   "tapscript": "7663012ab269687c205cbdf0646e5db4eaa398f365f2ea7a0e3d419b7e0330e39ce92bddedcac4f9bcac937c20d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65ac935287",
+   "comment": "We can have a script that has more than 201 ops (n = 99), that needs a stack size > 100 (n = 110), or has a"
+  },
+  {
+   "miniscript": "thresh(2,c:pk_k(03d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65),altv:after(100))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NEEDSIG",
+    "TESTMODE_NONMAL"
+   ],
+   "p2wsh_script": "2103d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65ac6b6300670164b16951686c935287",
+   "tapscript": "20d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65ac6b6300670164b16951686c935287",
+   "comment": "A threshold of 1 is valid."
+  },
+  {
+   "miniscript": "thresh(1,c:pk_k(03d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65),sc:pk_k(03fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NEEDSIG",
+    "TESTMODE_NONMAL"
+   ],
+   "p2wsh_script": "2103d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65ac7c2103fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556ac935187",
+   "tapscript": "20d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65ac7c20fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556ac935187",
+   "comment": "A threshold with a k larger than the number of subs is invalid"
+  },
+  {
+   "miniscript": "thresh(3,c:pk_k(03d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65),sc:pk_k(03fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556))",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "p2wsh_script": "2103d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65ac7c2103fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556ac935187",
+   "tapscript": "2103d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65ac7c2103fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556ac935187",
+   "comment": "A threshold with a k null is invalid"
+  },
+  {
+   "miniscript": "thresh(0,c:pk_k(03d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65),sc:pk_k(03fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556))",
+   "modes": [
+    "TESTMODE_INVALID"
+   ],
+   "p2wsh_script": "2103d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65ac7c2103fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556ac935187",
+   "tapscript": "2103d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65ac7c2103fff97bd5755eeea420453a14355235d382f6472f8568a18b2f057a1460297556ac935187",
+   "comment": "For CHECKMULTISIG the OP cost is the number of keys, but the stack size is the number of sigs (+1)"
+  },
+  {
+   "miniscript": "after(100)",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL"
+   ],
+   "comment": "only heightlock"
+  },
+  {
+   "miniscript": "after(1000000000)",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL"
+   ],
+   "comment": "only timelock"
+  },
+  {
+   "miniscript": "or_b(l:after(100),al:after(1000000000))",
+   "modes": [
+    "TESTMODE_VALID"
+   ],
+   "comment": "or_b(timelock, heighlock) valid"
+  },
+  {
+   "miniscript": "and_b(after(100),a:after(1000000000))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_NONMAL",
+    "TESTMODE_TIMELOCKMIX"
+   ],
+   "comment": "and_b(timelock, heighlock) invalid"
+  },
+  {
+   "miniscript": "thresh(2,ltv:after(1000000000),altv:after(100),a:pk(03d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65))",
+   "modes": [
+    "TESTMODE_VALID",
+    "TESTMODE_TIMELOCKMIX",
+    "TESTMODE_NONMAL"
+   ],
+   "comment": "thresh with k = 2"
+  },
+  {
+   "miniscript": "thresh(1,c:pk_k(03d30199d74fb5a22d47b6e054e2f378cedacffcb89904a61d75d0dbd407143e65),altv:after(1000000000),altv:after(100))",
+   "modes": [
+    "TESTMODE_VALID"
+   ],
+   "comment": "thresh with k = 1"
+  }
+ ]
+}

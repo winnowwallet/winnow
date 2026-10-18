@@ -18,6 +18,12 @@ struct DescriptorTests {
         "rawtr(musig(02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9,03dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659,023590a94e768f8e1815c2f24b4d80a8e3149316c3518ce7b7ad338368d038ca66))",
         "tr(musig(xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL,xpub68NZiKmJWnxxS6aaHmn81bvJeTESw724CRDs6HbuccFQN9Ku14VQrADWgqbhhTHBaohPX4CjNLf9fq9MYo6oDaPPLPxSb7gwQN3ih19Zm4Y)/0/*)",
         "tr(L4rK1yDtCWekvXuE6oXD9jCYfFNV2cWRpVuPLBcCU2z8TrisoyY1,multi_a(1,KzoAz5CanayRKex3fSLQ2BwJpN7U52gZvxMyk78nDMHuqrUxuSJy))",
+        // Miniscript leaves: a threshold with a timelocked branch, and an owner key path with a timelocked heir leaf.
+        "tr(50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0,thresh(2,pk(30a6069f344fb784a2b4c99540a91ee727c91e3a25ef6aae867d9c65b5f23529),s:pk(9918d400c1b8c3c478340a40117ced4054b6b58f48cdb3c89b836bdfee1f5766),adv:older(42)))",
+        "tr(xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/<0;1>/*,{pk(xpub68NZiKmJWnxxS6aaHmn81bvJeTESw724CRDs6HbuccFQN9Ku14VQrADWgqbhhTHBaohPX4CjNLf9fq9MYo6oDaPPLPxSb7gwQN3ih19Zm4Y/<0;1>/*),and_v(v:pk(xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/<2;3>/*),older(52560))})",
+        // P2WSH: sorted multisig, and BIP388's trust-minimised second factor.
+        "wsh(sortedmulti(2,xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/<0;1>/*,xpub68NZiKmJWnxxS6aaHmn81bvJeTESw724CRDs6HbuccFQN9Ku14VQrADWgqbhhTHBaohPX4CjNLf9fq9MYo6oDaPPLPxSb7gwQN3ih19Zm4Y/<0;1>/*))",
+        "wsh(and_v(v:pk(xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL/<0;1>/*),or_d(pk(xpub68NZiKmJWnxxS6aaHmn81bvJeTESw724CRDs6HbuccFQN9Ku14VQrADWgqbhhTHBaohPX4CjNLf9fq9MYo6oDaPPLPxSb7gwQN3ih19Zm4Y/<0;1>/*),older(12960))))",
     ]
 
     @Test("parse(serialize(x)) == x, with a recomputed valid checksum")
@@ -61,27 +67,70 @@ struct DescriptorTests {
         #expect(throws: DescriptorError.invalidPath) { _ = try Descriptor(doubled) }
     }
 
-    @Test("BIP388 sortedmulti_a policy descriptor parses, derives, round-trips")
-    func bip388PolicyDescriptor() throws {
+    /// The expanded `Descriptor:` lines of the BIP's two Taproot examples: a
+    /// `sortedmulti_a` leaf beside an `or_b` miniscript leaf, and a MuSig2 key
+    /// path with three timelocked MuSig2 leaves.
+    static func bip388TaprootDescriptors() throws -> [String] {
         let text = try Vectors.string("bip-0388.mediawiki", in: .module)
-        // The "Taproot wallet policy with sortedmulti_a and a miniscript leaf" example's
-        // expanded Descriptor line (a tr() with sortedmulti_a and multipath keys).
-        var descriptorText: String?
-        for line in text.components(separatedBy: .newlines) where line.hasPrefix(" Descriptor: tr(") {
-            if line.contains("sortedmulti_a") { descriptorText = String(line.dropFirst(13)) }
+        return text.components(separatedBy: .newlines)
+            .filter { $0.hasPrefix(" Descriptor: tr(") }
+            .map { String($0.dropFirst(13)) }
+    }
+
+    @Test("BIP388's Taproot examples parse, derive, and round-trip with their miniscript leaves")
+    func bip388PolicyDescriptors() throws {
+        let texts = try Self.bip388TaprootDescriptors()
+        #expect(texts.count == 3)
+        #expect(texts.contains { $0.contains("or_b(pk(") })
+        #expect(texts.contains { $0.contains("and_v(v:pk(musig(") })
+        for text in texts {
+            let descriptor = try Descriptor(text)
+            #expect(descriptor.isRanged)
+            let outputs = try descriptor.derived(index: 5)
+            #expect(outputs.count == 2, Comment(rawValue: text))
+            #expect(outputs[0].address.hasPrefix("bc1p"))
+            #expect(try Descriptor(descriptor.serialized()) == descriptor)
+            #expect(descriptor.serialized().hasPrefix(text), "canonical text differs from the BIP's")
         }
-        let text2 = try #require(descriptorText)
-        // The miniscript leaf (or_b(...)) is outside the supported subset; replace it
-        // with an equivalent pk() leaf for the engine sanity check.
-        let simplified = text2.replacingOccurrences(
-            of: "or_b(pk(xpub6GxHB9kRdFfTqYka8tgtX9Gh3Td3A9XS8uakUGVcJ9NGZ1uLrGZrRVr67DjpMNCHprZmVmceFTY4X4wWfksy8nVwPiNvzJ5pjLxzPtpnfEM/<0;1>/*),s:pk(xpub6GjFUVVYewLj5no5uoNKCWuyWhQ1rKGvV8DgXBG9Uc6DvAKxt2dhrj1EZFrTNB5qxAoBkVW3wF8uCS3q1ri9fueAa6y7heFTcf27Q4gyeh6/<0;1>/*))",
-            with: "pk(xpub6GxHB9kRdFfTqYka8tgtX9Gh3Td3A9XS8uakUGVcJ9NGZ1uLrGZrRVr67DjpMNCHprZmVmceFTY4X4wWfksy8nVwPiNvzJ5pjLxzPtpnfEM/<0;1>/*)")
-        #expect(simplified != text2)
-        let descriptor = try Descriptor(simplified)
-        #expect(descriptor.isRanged)
-        let outputs = try descriptor.derived(index: 5)
+    }
+
+    // MARK: - Liana
+
+    /// Liana's inheritance template, as its own tests print it, checksum
+    /// included: the owner in the key path, the heir in a leaf after 52,560
+    /// blocks (`liana/src/descriptors/mod.rs` at wizardsardine/liana master,
+    /// 2026-10-18).
+    static let lianaTaprootInheritance = "tr([abcdef01]xpub6Eze7yAT3Y1wGrnzedCNVYDXUqa9NmHVWck5emBaTbXtURbe1NWZbK9bsz1TiVE7Cz341PMTfYgFw1KdLWdzcM1UMFTcdQfCYhhXZ2HJvTW/<0;1>/*,and_v(v:pk([abcdef01]xpub688Hn4wScQAAiYJLPg9yH27hUpfZAUnmJejRQBCiwfP5PEDzjWMNW1wChcninxr5gyavFqbbDjdV1aK5USJz8NDVjUy7FRQaaqqXHh5SbXe/<0;1>/*),older(52560)))#0mt7e93c"
+
+    /// A Liana Taproot wallet with its deterministically derived unspendable
+    /// internal key (the BIP341 NUMS point inside an xpub whose chain code
+    /// hashes the leaf keys), a 2-of-2 primary leaf and a 1-of-2 recovery
+    /// leaf after 65,535 blocks; the checksum is Liana's.
+    static let lianaTaprootUnspendable = "tr(tpubD6NzVbkrYhZ4WUdbVsXDYBCXS8EPSYG1cAN9g4uP6uLQHMHXRvHSFkQBXy7MBeAvV8PDVJJ4o3AwYMKJHp45ci2g69UCAKteVSAJ61CnGEV/<0;1>/*,{and_v(v:pk([9e1c1983/48'/1'/0'/2']tpubDEWCLCMncbStq4BLXkQUAPqzzrh2tQUgYeQPt4NrB5D7gRraMyGbRqzPTmQGvqfdaFsXDVGSQBRgfXuNjDyfU626pxSjpQZszFNY6CzogxK/<2;3>/*),older(65535)),multi_a(2,[9e1c1983/48'/1'/0'/2']tpubDEWCLCMncbStq4BLXkQUAPqzzrh2tQUgYeQPt4NrB5D7gRraMyGbRqzPTmQGvqfdaFsXDVGSQBRgfXuNjDyfU626pxSjpQZszFNY6CzogxK/<0;1>/*,[3b1913e1/48'/1'/0'/2']tpubDFeZ2ezf4VUuTnjdhxJ1DKhLa2t6vzXZNz8NnEgeT2PN4pPqTCTeWUcaxKHPJcf1C8WzkLA71zSjDwuo4zqu4kkiL91ZUmJydC8f1gx89wM/<0;1>/*)})#ee0r4tw5"
+
+    /// Liana's P2WSH inheritance descriptor and the one address its tests
+    /// assert, receive index 11 on mainnet.
+    static let lianaWSHInheritance = "wsh(andor(pk([abcdef01]tpubDEN9WSToTyy9ZQfaYqSKfmVqmq1VVLNtYfj3Vkqh67et57eJ5sTKZQBkHqSwPUsoSskJeaYnPttHe2VrkCsKA27kUaN9SDc5zhqeLzKa1rr/<0;1>/*),older(10000),pk([abcdef01]tpubD8LYfn6njiA2inCoxwM7EuN3cuLVcaHAwLYeups13dpevd3nHLRdK9NdQksWXrhLQVxcUZRpnp5CkJ1FhE61WRAsHxDNAkvGkoQkAeWDYjV/<0;1>/*)))#2qj59a9y"
+
+    @Test("Liana's Taproot templates parse, keep Liana's checksum, and derive receive and change")
+    func lianaTaproot() throws {
+        for text in [Self.lianaTaprootInheritance, Self.lianaTaprootUnspendable] {
+            let descriptor = try Descriptor(text)
+            #expect(descriptor.serialized() == text)
+            let outputs = try descriptor.derived(index: 0, network: .testnet)
+            #expect(outputs.count == 2)
+            #expect(outputs[0].address.hasPrefix("tb1p"))
+            #expect(outputs[0] != outputs[1])
+        }
+    }
+
+    @Test("Liana's P2WSH inheritance descriptor derives the address Liana asserts")
+    func lianaWSH() throws {
+        let descriptor = try Descriptor(Self.lianaWSHInheritance)
+        #expect(descriptor.serialized() == Self.lianaWSHInheritance)
+        let outputs = try descriptor.derived(index: 11)
         #expect(outputs.count == 2)
-        #expect(outputs[0].address.hasPrefix("bc1p"))
-        #expect(try Descriptor(descriptor.serialized()) == descriptor)
+        #expect(outputs[0].address == "bc1q26gtczlz03u6juf5cxppapk4sr4fyz53s3g4zs2cgactcahqv6yqc2t8e6")
+        guard case .wsh = descriptor.expression else { Issue.record("not wsh"); return }
     }
 }

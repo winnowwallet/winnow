@@ -564,4 +564,31 @@ struct VaultAdmissionTests {
             #expect(message.contains("internal key"))
         }
     }
+
+    // MARK: Shapes the descriptor engine reads and the vault does not admit
+
+    /// The descriptor engine parses miniscript leaves, trees of several
+    /// leaves and `wsh()`; the vault boundary still admits exactly its two
+    /// shapes. Each of these is a valid descriptor and is refused by
+    /// `Vault.init`, not by the parser, so admission widens only when this
+    /// test is changed on purpose.
+    @Test("a miniscript leaf, a second leaf, a pk leaf and a wsh() descriptor are refused by the vault, not the parser")
+    func unsupportedShapesStayOutside() throws {
+        let a = Self.scriptPath(Self.originA, Self.keyA)
+        let b = Self.scriptPath(Self.originB, Self.keyB)
+        let c = Self.scriptPath(Self.originC, Self.keyC)
+        let shapes = [
+            "tr(\(Self.nums()),and_v(v:pk(\(a)),older(52560)))",
+            "tr(\(Self.nums()),{sortedmulti_a(2,\(a),\(b)),pk(\(c))})",
+            "tr(\(Self.nums()),pk(\(a)))",
+            "wsh(sortedmulti(2,\(a),\(b)))",
+            "wsh(and_v(v:pk(\(a)),or_d(pk(\(b)),older(12960))))",
+        ]
+        for text in shapes {
+            let descriptor = try Descriptor(text)
+            #expect(throws: VaultError.invalidDescriptor("expected tr(KEY, multi_a(k, …)) or tr(musig(…)/…)")) {
+                _ = try Vault(descriptor: descriptor, network: .mainnet)
+            }
+        }
+    }
 }

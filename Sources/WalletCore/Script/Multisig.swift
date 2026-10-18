@@ -7,10 +7,32 @@ public enum MultisigError: Error, Equatable {
 }
 
 /// BIP387 `multi_a` / `sortedmulti_a` k-of-n tapscript multisig construction
-/// via OP_CHECKSIGADD.
+/// via OP_CHECKSIGADD, and the BIP383 `multi` / `sortedmulti` OP_CHECKMULTISIG
+/// form a `wsh()` descriptor compiles to.
 public enum Multisig {
     /// Maximum number of keys in a `multi_a`/`sortedmulti_a` expression (BIP387).
     public static let maxKeys = 999
+
+    /// Maximum number of keys in a `multi`/`sortedmulti` expression (BIP383,
+    /// the consensus OP_CHECKMULTISIG limit).
+    public static let maxLegacyKeys = 20
+
+    /// Builds the k-of-n OP_CHECKMULTISIG script from 33-byte compressed keys
+    /// (BIP383 `multi`/`sortedmulti`, the body of a P2WSH output):
+    /// `OP_k <KEY_1> ... <KEY_n> OP_n OP_CHECKMULTISIG`. When `sorted` is set
+    /// the keys are sorted lexicographically first.
+    public static func legacyScript(threshold k: Int, compressedKeys keys: [Data], sorted: Bool) throws -> Script {
+        guard k >= 1, k <= keys.count else { throw MultisigError.invalidThreshold }
+        guard keys.count <= maxLegacyKeys else { throw MultisigError.tooManyKeys }
+        guard keys.allSatisfy({ $0.count == 33 }) else { throw MultisigError.invalidKey }
+        let ordered = sorted ? keys.sorted(by: { $0.lexicographicallyPrecedes($1) }) : keys
+        return Script.build { script in
+            script.appendScriptNumber(k)
+            for key in ordered { script.appendPush(key) }
+            script.appendScriptNumber(ordered.count)
+            script.appendOpcode(Script.Op.checkMultiSig)
+        }
+    }
 
     /// Builds the k-of-n multisig tapscript from 32-byte x-only public keys:
     /// `<KEY_1> OP_CHECKSIG <KEY_2> OP_CHECKSIGADD ... <KEY_n> OP_CHECKSIGADD OP_k OP_NUMEQUAL`

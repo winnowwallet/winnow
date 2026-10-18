@@ -122,3 +122,83 @@ extension Vectors {
         return vectors
     }
 }
+
+// MARK: - Bitcoin Core vectors extracted from its test sources
+
+/// One `Test(...)` row of Core's `src/test/miniscript_tests.cpp`: the
+/// expression, its `TESTMODE_*` flags, and the script bytes Core expects in
+/// each context where the row states them.
+public struct CoreMiniscriptVector: Decodable, Sendable {
+    public let miniscript: String
+    public let modes: [String]
+    public let p2wshScript: String?
+    public let tapscript: String?
+    public let comment: String?
+
+    enum CodingKeys: String, CodingKey {
+        case miniscript, modes, tapscript, comment
+        case p2wshScript = "p2wsh_script"
+    }
+
+    /// Whether Core expects the expression to parse as a valid script in `context`.
+    public func isValid(in context: Miniscript.Context) -> Bool {
+        !modes.contains("TESTMODE_INVALID")
+            && !(context == .p2wsh && modes.contains("TESTMODE_P2WSH_INVALID"))
+            && !(context == .tapscript && modes.contains("TESTMODE_TAPSCRIPT_INVALID"))
+    }
+
+    /// The script bytes Core states for `context`, if the row gives them.
+    public func expectedScript(in context: Miniscript.Context) -> String? {
+        context == .p2wsh ? p2wshScript : tapscript
+    }
+}
+
+/// One `Check(...)` row of Core's `src/test/descriptor_tests.cpp`: the
+/// descriptor with private keys, with public keys, normalized, its flags, and
+/// the scriptPubKeys expected at index 0, 1, 2 (one for an unranged descriptor).
+public struct CoreDescriptorVector: Decodable, Sendable {
+    public let privateText: String
+    public let publicText: String
+    public let normalized: String
+    public let flags: [String]
+    public let scriptPubKeys: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case normalized, flags, scriptPubKeys
+        case privateText = "private"
+        case publicText = "public"
+    }
+}
+
+/// One `CheckUnparsable(...)` row: a descriptor Core refuses and its reason.
+public struct CoreUnparsableDescriptor: Decodable, Sendable {
+    public let privateText: String
+    public let publicText: String
+    public let error: String
+
+    enum CodingKeys: String, CodingKey {
+        case error
+        case privateText = "private"
+        case publicText = "public"
+    }
+}
+
+public struct CoreDescriptorVectors: Decodable, Sendable {
+    public let source: String
+    public let vectors: [CoreDescriptorVector]
+    public let unparsable: [CoreUnparsableDescriptor]
+}
+
+extension Vectors {
+    /// Core's miniscript rows (`core-miniscript-v31.0.json`).
+    public static func coreMiniscript(in bundle: Bundle) throws -> [CoreMiniscriptVector] {
+        struct File: Decodable { let vectors: [CoreMiniscriptVector] }
+        return try decode(File.self, "core-miniscript-v31.0.json", in: bundle).vectors
+    }
+
+    /// Core's descriptor rows for one top level (`core-taproot-descriptors-v31.0.json`,
+    /// `core-wsh-descriptors-v31.0.json`).
+    public static func coreDescriptors(_ name: String, in bundle: Bundle) throws -> CoreDescriptorVectors {
+        try decode(CoreDescriptorVectors.self, name, in: bundle)
+    }
+}

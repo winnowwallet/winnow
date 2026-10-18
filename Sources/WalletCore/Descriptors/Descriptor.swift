@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import P256K
 
@@ -24,6 +25,13 @@ public enum DescriptorError: Error, Equatable {
     case invalidMuSig
     case derivationFailed
     case treeTooDeep
+    /// A miniscript fragment nested past `Miniscript.maximumDepth`.
+    case miniscriptTooDeep
+    /// A miniscript outside Core's grammar or context rules; the text names the rule.
+    case invalidMiniscript(String)
+    /// A well-formed miniscript Core would refuse to hold funds with, and the
+    /// subexpression at fault.
+    case unsafeMiniscript(Miniscript.Problem, String)
 }
 
 extension HDKey.Network: Equatable {
@@ -32,9 +40,11 @@ extension HDKey.Network: Equatable {
 }
 
 /// Output descriptor parse/serialize/derive engine (BIP380 general operation and
-/// checksum, BIP386 `tr()`, BIP387 `multi_a`/`sortedmulti_a` leaves, BIP389
-/// multipath, BIP390 `musig()` key expressions). Taproot-only: the supported
-/// top-level expressions are `tr(KEY)`, `tr(KEY, TREE)` and `rawtr(KEY)`.
+/// checksum, BIP382 `wsh()`, BIP383 `multi`/`sortedmulti`, BIP386 `tr()`, BIP387
+/// `multi_a`/`sortedmulti_a` leaves, BIP389 multipath, BIP390 `musig()` key
+/// expressions, and miniscript in a `tr()` leaf or a `wsh()` body). The
+/// supported top-level expressions are `tr(KEY)`, `tr(KEY, TREE)`, `rawtr(KEY)`
+/// and `wsh(SCRIPT)`.
 public struct Descriptor: Sendable, Equatable {
     /// BIP388-style key origin information: `[fingerprint/path]`.
     public struct KeyOrigin: Sendable, Equatable {
@@ -106,24 +116,45 @@ public struct Descriptor: Sendable, Equatable {
         case musig([SingleKey], Derivation)
     }
 
-    /// Script expressions. `tr`/`rawtr` are top-level only; `pk`/`multiA`/
-    /// `sortedMultiA` are only valid as `tr` leaves (BIP386/BIP387).
+    /// The top-level script expressions.
     public enum ScriptExpression: Sendable, Equatable {
         case tr(KeyExpression, ScriptTree?)
         /// `rawtr(KEY)`: P2TR output with KEY used directly as the output key (no tweak).
         case rawtr(KeyExpression)
-        case pk(KeyExpression)
+        /// `wsh(SCRIPT)`: a P2WSH output whose witness script is the leaf (BIP382).
+        case wsh(Leaf)
+    }
+
+    /// What a `tr()` leaf or a `wsh()` body holds: the multisig forms Core
+    /// keeps at the descriptor level (`multi_a`/`sortedmulti_a` under `tr()`,
+    /// BIP387; `multi`/`sortedmulti` under `wsh()`, BIP383), or a miniscript,
+    /// of which `pk(KEY)` is the simplest.
+    public enum Leaf: Sendable, Equatable {
         case multiA(threshold: Int, keys: [KeyExpression])
         case sortedMultiA(threshold: Int, keys: [KeyExpression])
+        case multi(threshold: Int, keys: [KeyExpression])
+        case sortedMulti(threshold: Int, keys: [KeyExpression])
+        case miniscript(Miniscript)
+
+        /// Every key the leaf names, in order.
+        public var keys: [KeyExpression] {
+            switch self {
+            case let .multiA(_, keys), let .sortedMultiA(_, keys),
+                 let .multi(_, keys), let .sortedMulti(_, keys):
+                return keys
+            case let .miniscript(node):
+                return node.allKeys
+            }
+        }
     }
 
     /// BIP386 TREE expression: a leaf script or `{TREE, TREE}`.
     public indirect enum ScriptTree: Sendable, Equatable {
-        case leaf(ScriptExpression)
+        case leaf(Leaf)
         case branch(ScriptTree, ScriptTree)
     }
 
-    /// A derived output: P2TR scriptPubKey and its bech32m address.
+    /// A derived output: the P2TR or P2WSH scriptPubKey and its bech32m or bech32 address.
     public struct DerivedOutput: Sendable, Equatable {
         public let scriptPubKey: Data
         public let address: String
@@ -177,10 +208,12 @@ public struct Descriptor: Sendable, Equatable {
     /// prefix is the Bitcoin network's, not the key network's: regtest keys
     /// are testnet keys, but a regtest address is `bcrt1…`, never `tb1…`.
     public func derived(index: UInt32, bitcoinNetwork: BitcoinNetwork) throws -> [DerivedOutput] {
-        try (0 ..< multipathCount()).map { choice in
+        let version = if case .wsh = expression { 0 } else { 1 }
+        return try (0 ..< multipathCount()).map { choice in
             let scriptPubKey = try resolve(expression, index: index, choice: choice, topLevel: true)
             let program = scriptPubKey.suffix(32)
-            let address = try SegwitAddress.encode(hrp: AddressDecoder.hrp(for: bitcoinNetwork), version: 1, program: program)
+            let address = try SegwitAddress.encode(hrp: AddressDecoder.hrp(for: bitcoinNetwork),
+                                                   version: version, program: program)
             return DerivedOutput(scriptPubKey: scriptPubKey, address: address)
         }
     }
@@ -206,10 +239,22 @@ public struct Descriptor: Sendable, Equatable {
         try resolve(key, index: index, choice: choice)
     }
 
+    /// The `wsh()` witness script at (`index`, multipath `choice`), keys resolved.
+    public func resolvedWitnessScript(index: UInt32, choice: Int = 0) throws -> Script {
+        guard case let .wsh(leaf) = expression else { throw DescriptorError.invalidContext }
+        return try leafScript(leaf, context: .p2wsh, index: index, choice: choice)
+    }
+
     // MARK: - Validation
 
-    /// Structural rules beyond the grammar (BIP387/BIP389/BIP390).
+    /// Structural rules beyond the grammar (BIP387/BIP389/BIP390), then the
+    /// miniscript safety gate.
     private func validate() throws {
+        try validateKeys()
+        try validateLeaves()
+    }
+
+    private func validateKeys() throws {
         for key in allKeys() {
             guard case let .musig(participants, derivation) = key else { continue }
             // musig() derivation steps must be unhardened (BIP390).
@@ -246,6 +291,56 @@ public struct Descriptor: Sendable, Equatable {
         }
     }
 
+    /// Every miniscript leaf must pass Core's gate: sane (valid, non-malleable,
+    /// every path needs a signature, no timelock mix, no repeated key, within
+    /// the resource limits) and satisfiable. The multisig leaves need none:
+    /// their threshold and key count were checked at the parse, and a
+    /// repeated key there is the vault boundary's refusal, as it is today.
+    private func validateLeaves() throws {
+        for leaf in leaves() {
+            guard case let .miniscript(node) = leaf else { continue }
+            if let (problem, culprit) = node.problem(hasDuplicateKeys: try hasDuplicateKeys(node)) {
+                throw DescriptorError.unsafeMiniscript(problem, culprit.description)
+            }
+        }
+    }
+
+    /// Core compares keys as the public keys they derive at the first
+    /// position (index 0, the first multipath choice), so a relabelled origin
+    /// or a differently written path cannot disguise a repeat. Under tapscript
+    /// the comparison is of the x-only key the script will hold, so `02K` and
+    /// `03K` are one key there, as they are in the leaf.
+    private func hasDuplicateKeys(_ node: Miniscript) throws -> Bool {
+        var seen: Set<Data> = []
+        for key in node.allKeys {
+            let resolved = try resolve(key, index: 0, choice: 0)
+            let inScript = node.context == .tapscript ? xonly(resolved) : resolved
+            if !seen.insert(inScript).inserted { return true }
+        }
+        return false
+    }
+
+    /// The leaves of the tree in order, or the `wsh()` body.
+    private func leaves() -> [Leaf] {
+        switch expression {
+        case let .tr(_, tree):
+            var collected: [Leaf] = []
+            if let tree { collectLeaves(tree, into: &collected) }
+            return collected
+        case .rawtr: return []
+        case let .wsh(leaf): return [leaf]
+        }
+    }
+
+    private func collectLeaves(_ tree: ScriptTree, into leaves: inout [Leaf]) {
+        switch tree {
+        case let .leaf(leaf): leaves.append(leaf)
+        case let .branch(left, right):
+            collectLeaves(left, into: &leaves)
+            collectLeaves(right, into: &leaves)
+        }
+    }
+
     private func multipathCount() -> Int {
         allKeys().flatMap { key -> [Int] in
             switch key {
@@ -263,19 +358,16 @@ public struct Descriptor: Sendable, Equatable {
             if let tree { collectKeys(tree, into: &keys) }
             return keys
         case let .rawtr(key): return [key]
-        case let .pk(key): return [key]
-        case let .multiA(_, keys), let .sortedMultiA(_, keys): return keys
+        case let .wsh(leaf): return leaf.keys
         }
     }
 
     private func collectKeys(_ tree: ScriptTree, into keys: inout [KeyExpression]) {
         switch tree {
-        case let .leaf(.pk(key)): keys.append(key)
-        case let .leaf(.multiA(_, ks)), let .leaf(.sortedMultiA(_, ks)): keys.append(contentsOf: ks)
+        case let .leaf(leaf): keys.append(contentsOf: leaf.keys)
         case let .branch(left, right):
             collectKeys(left, into: &keys)
             collectKeys(right, into: &keys)
-        case .leaf: break
         }
     }
 
@@ -292,36 +384,44 @@ public struct Descriptor: Sendable, Equatable {
         case let .rawtr(key):
             let outputKey = try xonly(resolve(key, index: index, choice: choice))
             return Data([0x51, 0x20]) + outputKey
-        case .pk, .multiA, .sortedMultiA:
-            throw DescriptorError.invalidContext
+        case let .wsh(leaf):
+            let script = try leafScript(leaf, context: .p2wsh, index: index, choice: choice)
+            return Data([0x00, 0x20]) + Data(SHA256.hash(data: script.bytes))
         }
     }
 
     private func resolve(_ tree: ScriptTree, index: UInt32, choice: Int) throws -> Taproot.Tree {
         switch tree {
-        case let .leaf(expression):
-            let script: Script
-            switch expression {
-            case let .pk(key):
-                script = try Script.build {
-                    $0.appendPush(try xonly(resolve(key, index: index, choice: choice)))
-                    $0.appendOpcode(Script.Op.checkSig)
-                }
-            case let .multiA(threshold, keys):
-                script = try Multisig.script(threshold: threshold,
-                                             xonlyKeys: keys.map { try xonly(resolve($0, index: index, choice: choice)) },
-                                             sorted: false)
-            case let .sortedMultiA(threshold, keys):
-                script = try Multisig.script(threshold: threshold,
-                                             xonlyKeys: keys.map { try xonly(resolve($0, index: index, choice: choice)) },
-                                             sorted: true)
-            case .tr, .rawtr:
-                throw DescriptorError.invalidContext
-            }
-            return .leaf(script: script)
+        case let .leaf(leaf):
+            return .leaf(script: try leafScript(leaf, context: .tapscript, index: index, choice: choice))
         case let .branch(left, right):
             return try .branch(resolve(left, index: index, choice: choice),
                                resolve(right, index: index, choice: choice))
+        }
+    }
+
+    /// The script a leaf compiles to at (index, multipath choice): x-only keys
+    /// in tapscript, compressed keys in P2WSH.
+    private func leafScript(_ leaf: Leaf, context: Miniscript.Context, index: UInt32, choice: Int) throws -> Script {
+        switch leaf {
+        case let .multiA(threshold, keys):
+            return try Multisig.script(threshold: threshold,
+                                       xonlyKeys: keys.map { try xonly(resolve($0, index: index, choice: choice)) },
+                                       sorted: false)
+        case let .sortedMultiA(threshold, keys):
+            return try Multisig.script(threshold: threshold,
+                                       xonlyKeys: keys.map { try xonly(resolve($0, index: index, choice: choice)) },
+                                       sorted: true)
+        case let .multi(threshold, keys):
+            return try Multisig.legacyScript(threshold: threshold,
+                                             compressedKeys: keys.map { try resolve($0, index: index, choice: choice) },
+                                             sorted: false)
+        case let .sortedMulti(threshold, keys):
+            return try Multisig.legacyScript(threshold: threshold,
+                                             compressedKeys: keys.map { try resolve($0, index: index, choice: choice) },
+                                             sorted: true)
+        case let .miniscript(node):
+            return try node.script { try resolve($0, index: index, choice: choice) }
         }
     }
 
@@ -407,7 +507,7 @@ public struct Descriptor: Sendable, Equatable {
 /// are ASCII per the BIP380 input charset).
 struct Parser {
     private let string: String
-    private(set) var index: String.Index
+    var index: String.Index
 
     init(_ string: String) {
         self.string = string
@@ -466,6 +566,10 @@ struct Parser {
             let key = try parseKeyExpression(allowMusig: true)
             try expect(")")
             return .rawtr(key)
+        case "wsh":
+            let leaf = try parseLeaf(context: .p2wsh)
+            try expect(")")
+            return .wsh(leaf)
         default:
             throw DescriptorError.unknownExpression(name)
         }
@@ -498,33 +602,12 @@ struct Parser {
             try expect("}")
             return .branch(left, right)
         }
-        let name = takeWhile { $0.isLetter || $0 == "_" }
-        try expect("(")
-        switch name {
-        case "pk":
-            let key = try parseKeyExpression(allowMusig: true)
-            try expect(")")
-            return .leaf(.pk(key))
-        case "multi_a", "sortedmulti_a":
-            let thresholdText = takeWhile(\.isNumber)
-            guard let threshold = Int(thresholdText), !thresholdText.isEmpty else {
-                throw DescriptorError.invalidThreshold
-            }
-            var keys: [Descriptor.KeyExpression] = []
-            while consume(",") { keys.append(try parseKeyExpression(allowMusig: true)) }
-            try expect(")")
-            guard threshold >= 1, threshold <= keys.count, keys.count <= Multisig.maxKeys else {
-                throw DescriptorError.invalidThreshold
-            }
-            return .leaf(name == "multi_a"
-                ? .multiA(threshold: threshold, keys: keys)
-                : .sortedMultiA(threshold: threshold, keys: keys))
-        default:
-            throw DescriptorError.unknownExpression(name)
-        }
+        return .leaf(try parseLeaf(context: .tapscript))
     }
 
-    mutating func parseKeyExpression(allowMusig: Bool) throws -> Descriptor.KeyExpression {
+    /// `allowXOnly` is false under `wsh()`, where a 32-byte key has no meaning
+    /// (Core's `ParsePubkeyInner` admits one under `tr()` alone).
+    mutating func parseKeyExpression(allowMusig: Bool, allowXOnly: Bool = true) throws -> Descriptor.KeyExpression {
         let origin = try parseOrigin()
         if allowMusig, consume("musig(") {
             // BIP390 musig(KEY, KEY, ...); nesting musig is not allowed.
@@ -540,7 +623,7 @@ struct Parser {
             if origin != nil { throw DescriptorError.invalidMuSig } // origin belongs on participants
             return .musig(participants, try parseDerivation())
         }
-        let base = try parseKeyBase()
+        let base = try parseKeyBase(allowXOnly: allowXOnly)
         let derivation = try parseDerivation()
         // Derivation steps are only defined for extended keys (BIP380).
         if case .extended = base {} else if !derivation.elements.isEmpty {
@@ -607,11 +690,11 @@ struct Parser {
 
     /// Raw hex pubkey (x-only/compressed/uncompressed), WIF private key, or
     /// BIP32 extended key.
-    mutating func parseKeyBase() throws -> Descriptor.KeyBase {
+    mutating func parseKeyBase(allowXOnly: Bool) throws -> Descriptor.KeyBase {
         let token = takeWhile(\.isHexLetterOrDigit)
         guard !token.isEmpty else { throw DescriptorError.invalidKey }
         if let data = Data(hex: token), [32, 33, 65].contains(data.count) {
-            return try Self.rawPublicKey(data)
+            return try Self.rawPublicKey(data, allowXOnly: allowXOnly)
         }
         if token.hasPrefix("xpub") || token.hasPrefix("xprv") || token.hasPrefix("tpub") || token.hasPrefix("tprv") {
             guard let key = try? HDKey.deserialize(token) else { throw DescriptorError.invalidKey }
@@ -623,8 +706,9 @@ struct Parser {
 
     /// A bare hex key of a known length, with its leading byte checked: x-only
     /// (32), compressed (33, 0x02/0x03), or uncompressed (65, 0x04).
-    private static func rawPublicKey(_ data: Data) throws -> Descriptor.KeyBase {
+    private static func rawPublicKey(_ data: Data, allowXOnly: Bool) throws -> Descriptor.KeyBase {
         switch data.count {
+        case 32: guard allowXOnly else { throw DescriptorError.invalidKey }
         case 33: guard data.first == 0x02 || data.first == 0x03 else { throw DescriptorError.invalidKey }
         case 65: guard data.first == 0x04 else { throw DescriptorError.invalidKey }
         default: break
@@ -663,20 +747,30 @@ enum Serializer {
             return "tr(\(serialize(key)))"
         case let .rawtr(key):
             return "rawtr(\(serialize(key)))"
-        case let .pk(key):
-            return "pk(\(serialize(key)))"
-        case let .multiA(threshold, keys):
-            return "multi_a(\(threshold),\(keys.map(serialize).joined(separator: ",")))"
-        case let .sortedMultiA(threshold, keys):
-            return "sortedmulti_a(\(threshold),\(keys.map(serialize).joined(separator: ",")))"
+        case let .wsh(leaf):
+            return "wsh(\(serialize(leaf)))"
         }
     }
 
     static func serialize(_ tree: Descriptor.ScriptTree) -> String {
         switch tree {
-        case let .leaf(expression): serialize(expression, topLevel: false)
+        case let .leaf(leaf): serialize(leaf)
         case let .branch(left, right): "{\(serialize(left)),\(serialize(right))}"
         }
+    }
+
+    static func serialize(_ leaf: Descriptor.Leaf) -> String {
+        switch leaf {
+        case let .multiA(threshold, keys): multisig("multi_a", threshold, keys)
+        case let .sortedMultiA(threshold, keys): multisig("sortedmulti_a", threshold, keys)
+        case let .multi(threshold, keys): multisig("multi", threshold, keys)
+        case let .sortedMulti(threshold, keys): multisig("sortedmulti", threshold, keys)
+        case let .miniscript(node): node.description
+        }
+    }
+
+    private static func multisig(_ name: String, _ threshold: Int, _ keys: [Descriptor.KeyExpression]) -> String {
+        "\(name)(\(threshold),\(keys.map(serialize).joined(separator: ",")))"
     }
 
     static func serialize(_ key: Descriptor.KeyExpression) -> String {
