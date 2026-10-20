@@ -305,7 +305,7 @@
   <li><strong>Official BIP test vectors</strong> for every cryptographic surface: BIP39/32/86 (keys), BIP340 (Schnorr), BIP341 (Taproot trees, tweaks, control blocks, sighash — script-path vectors generated via Bitcoin Core’s own functional-test framework where the official file is silent), BIP350 (bech32m), BIP158 (GCS filters, byte-for-byte against real blocks), BIP327 (MuSig2), BIP380/387/389/390 (descriptors).</li>
   <li><strong>Loopback fake-node tests</strong> for the P2P layer: handshakes, filter sync, lying-filter detection, relay state machine — deterministic, no network.</li>
   <li><strong>One end-to-end UI test</strong> makes ordinary, MuSig2, and script-path 2-of-3 payments against a private signet node. Core supplies the external cosigners, accepts the transactions, and mines blocks automatically for prompt confirmation in the app. The host records one continuous video; detailed failures stay in focused tests.</li>
-  <li><strong>The crypto boundary:</strong> all secret-key operations delegate to libsecp256k1 (via P256K) — Bitcoin Core’s constant-time, exhaustively tested curve library. No Swift code does raw curve math on secrets.</li>
+  <li><strong>The crypto boundary:</strong> single-key curve math is Winnow’s own Swift module, variable-time and not zeroized, differential-tested against libsecp256k1 (via P256K) — Bitcoin Core’s constant-time, exhaustively tested curve library — which the tests and the shared-account code still use.</li>
   </ul>
   <p>Inspect the <a href="https://github.com/winnowwallet/winnow/actions">current test runs and artifacts</a>. The <a href="/recording">payment recording</a> identifies the source and run behind that journey.</p>
   <hr />

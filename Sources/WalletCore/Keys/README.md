@@ -18,6 +18,9 @@ The [wallet](../Wallet/README.md), [signer](../Transactions/README.md), and
 [app](../../WinnowApp/README.md) use this code. The in-memory keystore stays in
 [TestSupport](../../../Tests/Support/README.md), outside production sources.
 
+BIP32 child keys and the BIP86 tweak are computed by the
+[native secp256k1 module](../../NativeSecp256k1/README.md); HMAC-SHA512 and
+PBKDF2 stay on CryptoKit and CommonCrypto.
 [BIP39](../../../Tests/BitcoinCoreTests/BIP39Tests.swift),
 [BIP32](../../../Tests/BitcoinCoreTests/BIP32Tests.swift), and
 [BIP86](../../../Tests/BitcoinCoreTests/BIP86Tests.swift) check independent vectors.

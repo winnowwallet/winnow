@@ -85,8 +85,8 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         "INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad": "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         INFOPLIST_KEY_CFBundleDisplayName: Winnow
-        # Standard/exempt crypto only (CryptoKit, libsecp256k1) — no export
-        # compliance prompt per build.
+        # Standard/exempt crypto only (CryptoKit, the in-tree secp256k1 module,
+        # libsecp256k1) — no export compliance prompt per build.
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
         # Signing, seed export/reveal, and destructive key operations
         # authenticate the device owner; Face ID may satisfy that prompt.

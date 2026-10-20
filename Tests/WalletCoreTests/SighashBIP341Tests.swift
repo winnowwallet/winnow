@@ -1,4 +1,5 @@
 import Foundation
+import NativeSecp256k1
 import P256K
 import Testing
 import TestSupport
@@ -113,6 +114,16 @@ struct SighashBIP341Tests {
             let tweaked = try P256K.Schnorr.PrivateKey(dataRepresentation: input.internalPrivkey)
                 .add([UInt8](tweak)).dataRepresentation
             #expect(tweaked == input.tweakedPrivkey, "input \(input.index)")
+        }
+    }
+
+    @Test("the native module reproduces the tweaked private keys")
+    func nativeTweakedKeys() throws {
+        let vector = try Self.vector()
+        for input in vector.inputs {
+            let key = try Secp256k1.PrivateKey(input.internalPrivkey)
+            let tweak = Taproot.tweak(internalKey: key.xOnlyKey.x, merkleRoot: input.merkleRoot)
+            #expect(try key.addingXOnly(tweak).bytes == input.tweakedPrivkey, "input \(input.index)")
         }
     }
 

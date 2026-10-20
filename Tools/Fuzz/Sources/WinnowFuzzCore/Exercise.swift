@@ -25,6 +25,9 @@ public enum FuzzTarget: String, CaseIterable, Sendable {
     case fundingSources = "funding-sources"
     case controlBlock = "control-block"
     case personPaste = "person-paste"
+    // Both secp256k1 backends on one input: native Swift and libsecp256k1
+    // must accept, reject and compute identically.
+    case nativeSecp256k1 = "native-secp256k1"
 }
 
 /// One key for the signature target: verification under a real key is the
@@ -61,7 +64,7 @@ public struct InvariantFailure: Error, CustomStringConvertible {
     public let description: String
 }
 
-private func require(_ condition: Bool, _ message: String) throws {
+func require(_ condition: Bool, _ message: String) throws {
     if !condition { throw InvariantFailure(description: message) }
 }
 
@@ -185,5 +188,7 @@ public func exercise(_ target: FuzzTarget, data: Data, rng: inout SplitMix64) th
             try require(try PersonCard.decode(card.serialized()) == card,
                         "person card canonical round trip changed semantics")
         }
+    case .nativeSecp256k1:
+        try NativeSecp256k1Exercise.run(data)
     }
 }

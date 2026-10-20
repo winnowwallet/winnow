@@ -1,5 +1,5 @@
 import Foundation
-import P256K
+import NativeSecp256k1
 
 public enum DescriptorError: Error, Equatable {
     case invalidChecksum
@@ -387,10 +387,10 @@ public struct Descriptor: Sendable, Equatable {
             }
         case let .privateKey(secret, compressed, _):
             guard compressed else { throw DescriptorError.invalidKey }
-            guard let key = try? P256K.Signing.PrivateKey(dataRepresentation: secret) else {
+            guard let key = try? Secp256k1.PrivateKey(secret) else {
                 throw DescriptorError.invalidKey
             }
-            return key.publicKey.dataRepresentation
+            return key.publicKey.compressed
         case let .extended(key, _):
             return key.publicKey
         }

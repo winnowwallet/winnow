@@ -1,5 +1,6 @@
 import Foundation
-import P256K
+import NativeSecp256k1
+import P256K // MuSig2 and script-path roles only; leaves with the vault code
 
 /// PSBT roles (BIP370/BIP371/BIP373): creator (unsigned wallet tx + UTXO
 /// data), signer (PSBT_IN_TAP_KEY_SIG for key-path, PSBT_IN_TAP_SCRIPT_SIG
@@ -452,14 +453,9 @@ extension PSBT {
         else { throw PSBTError.malformed("input \(index) witness utxo is not P2TR") }
         let sighash = try SighashBIP341.sighash(
             tx: tx, inputIndex: index, spentOutputs: spentOutputs, hashType: hashType)
-        guard let parsed = try? P256K.Schnorr.SchnorrSignature(
-            dataRepresentation: signature.prefix(64))
-        else { throw PSBTError.malformed("input \(index) tap key signature encoding") }
-        var message = [UInt8](sighash)
-        let outputKey = P256K.Schnorr.XonlyKey(dataRepresentation: script.suffix(32))
-        guard outputKey.isValid(parsed, for: &message) else {
-            throw PSBTError.malformed("input \(index) invalid tap key signature")
-        }
+        guard Secp256k1.Schnorr.verify(signature: Data(signature.prefix(64)), message: sighash,
+                                       publicKey: Data(script.suffix(32)))
+        else { throw PSBTError.malformed("input \(index) invalid tap key signature") }
         return [signature]
     }
 

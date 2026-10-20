@@ -108,7 +108,11 @@ fixes.
 The only external Swift package is `21-DOT-DEV/swift-secp256k1` version
 `0.23.2`, resolved to commit `e70a10e036a55fffea31568f0af92d69b6d449cd`, and
 `Package.resolved` is in the repository so builds record the reviewed
-revision. The app additionally embeds Arti 0.46.0 built from locked Rust
+revision. The single-key curve arithmetic no longer comes from that package:
+`Sources/NativeSecp256k1` implements BIP32 tweaks, Taproot tweaks and BIP340
+signing and verification in Swift, variable-time and without zeroization, and
+the package is kept for MuSig2 and as the differential oracle in
+`BitcoinCoreTests` and the fuzz harness's `native-secp256k1` target. The app additionally embeds Arti 0.46.0 built from locked Rust
 source ([TorBridge](https://github.com/winnowwallet/winnow/tree/archive/tor-0.7.0/TorBridge), now on the archive branch); `WalletCore` and the census
 do not link Rust.
 
@@ -228,7 +232,7 @@ README and lockfile; the census publisher (winnowwallet/census) consumes
 
 ## Baseline evidence and gaps
 
-- Present: BIP/vector suites; parser negatives and the fuzz harness's fifteen
+- Present: BIP/vector suites; parser negatives and the fuzz harness's sixteen
   targets; wallet create/send/RBF/import; Taproot script-path and MuSig2 flows;
   peer loopback, failover, filter-consensus and broadcaster tests; header
   rules with a generator-proven checkpoint; sealed-store and census-signature

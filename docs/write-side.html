@@ -59,7 +59,7 @@
   <li>Accessibility is <code>WhenUnlockedThisDeviceOnly</code> behind a <code>.userPresence</code> access control, so the Keychain itself asks for the passcode or biometrics before releasing the secret; <code>kSecAttrSynchronizable</code> is false. The JSON wallet file on disk holds the descriptor, UTXOs, and history — public material.</li>
   <li><code>Wallet.tweakedPrivateKey</code> loads the secret, derives <code>m/86'/coin'/account'/chain/index</code>, applies the BIP86 tweak (no merkle root), signs, and drops the key. The actor never holds the seed in <code>WalletState</code>.</li>
   </ul>
-  <p>All secret-key operations go through libsecp256k1 (P256K). The sighash is BIP341 <code>SIGHASH_DEFAULT</code>. Auxiliary nonce randomness is 32 fresh bytes per signature.</p>
+  <p>Single-key secret operations (derivation, the BIP86 tweak and BIP340 signing) run in Winnow's own Swift secp256k1 module, which is variable-time and does not zeroize secrets; the test suite and the fuzz harness check its signatures byte for byte against libsecp256k1. Shared-account signing still goes through libsecp256k1 (P256K). The sighash is BIP341 <code>SIGHASH_DEFAULT</code>. Auxiliary nonce randomness is 32 fresh bytes per signature.</p>
   <p>Wallet amounts and UTXOs come from locally verified blocks, not Esplora. BIP341 signatures commit to input amounts; explorer pages are external manual checks and never feed the signer.</p>
   <hr />
   <h2 id="unsupported-wallet-data">6. Unsupported wallet data</h2>

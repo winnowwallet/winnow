@@ -1,8 +1,11 @@
 import Foundation
-import P256K
+import NativeSecp256k1
+import P256K // script-path signing only; leaves with the vault code
 
 public enum SignerError: Error, Equatable {
     case invalidPrivateKey
+    /// Auxiliary randomness that is not exactly 32 bytes.
+    case invalidAuxiliaryRand
     case spentOutputCountMismatch(inputs: Int, spentOutputs: Int)
     /// No key resolved for an input's spent scriptPubKey (hex).
     case missingKey(scriptPubKey: String)
@@ -25,13 +28,12 @@ public enum Signer {
                                auxiliaryRand: Data? = nil) throws -> [Data] {
         let sighash = try SighashBIP341.sighash(tx: tx, inputIndex: inputIndex,
                                                 spentOutputs: spentOutputs, hashType: hashType)
-        guard let key = try? P256K.Schnorr.PrivateKey(dataRepresentation: tweakedPrivateKey) else {
+        guard let key = try? Secp256k1.PrivateKey(tweakedPrivateKey) else {
             throw SignerError.invalidPrivateKey
         }
-        var message = [UInt8](sighash)
-        var aux = [UInt8](auxiliaryRand ?? randomAuxiliaryRand())
-        let signature = try key.signature(message: &message, auxiliaryRand: &aux)
-        var item = signature.dataRepresentation
+        let aux = auxiliaryRand ?? randomAuxiliaryRand()
+        guard aux.count == 32 else { throw SignerError.invalidAuxiliaryRand }
+        var item = try Secp256k1.Schnorr.sign(message: sighash, privateKey: key, auxiliaryRand: aux)
         // BIP341: a 64-byte sig implies SIGHASH_DEFAULT; other types append the byte.
         if hashType != .default { item.append(hashType.rawValue) }
         return [item]

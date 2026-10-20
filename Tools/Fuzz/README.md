@@ -2,10 +2,12 @@
 
 # Deterministic fuzzing
 
-The harness covers fifteen parsing surfaces: PSBT, descriptors, transactions,
+The harness covers sixteen surfaces: PSBT, descriptors, transactions,
 blocks, wire messages (including `addr`), framing, filters, addresses, import
 bundles, the census catalog and its signature, DNS-over-HTTPS answers, funding
-sources, Taproot control blocks, and person cards and pastes. It
+sources, Taproot control blocks, person cards and pastes, and the native
+secp256k1 module compared with libsecp256k1 on the same key, tweak, message
+and signature bytes. It
 uses the local Bitcoin modules as a development target in the root package.
 Parsers in the app target (`PeopleStore`, `ReceiveAddressLabelStore`,
 `SealedStoreFile`) and WalletCore's internal `PersistedPeers` are out of its
@@ -20,14 +22,14 @@ swift run --configuration release WinnowFuzz \
   --artifact-dir /tmp/fuzz-smoke
 ```
 
-Every iteration exercises all fifteen targets, so this runs 15,000 deterministic
+Every iteration exercises all sixteen targets, so this runs 16,000 deterministic
 cases. Use `--target psbt` (or another target name) to focus a run. Keep the
 target selection, seed, input limit, and iteration count when replaying.
 
 CI runs the fixed-seed campaign for PRs, main, and Winnow releases. The separate weekly
 and manually dispatched lanes run 25,000 iterations per sanitizer with
-distinct rotating seeds: 375,000 cases under Address Sanitizer and another
-375,000 under Thread Sanitizer (25,000 × 15 targets). A manual `replay_seed` input reproduces a
+distinct rotating seeds: 400,000 cases under Address Sanitizer and another
+400,000 under Thread Sanitizer (25,000 × 16 targets). A manual `replay_seed` input reproduces a
 recorded seed. For example, replay an address-sanitized run locally with:
 
 ```sh

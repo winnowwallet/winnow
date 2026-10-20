@@ -120,6 +120,16 @@ private func binaryCorpus(for target: FuzzTarget) -> [Data] {
     case .personPaste:
         return [Data(), Data("tr(\(generatorXOnly.hex))".utf8),
                 Data("{\"winnow\":\"person-card\",\"version\":1,\"network\":\"signet\",\"name\":\"Alice\"}".utf8)]
+    case .nativeSecp256k1:
+        // secret 3, tweak 1, point G, zero message and aux, then BIP340 vector 0's
+        // signature and public key (3·G), so the seed exercises every valid branch.
+        let three = Data(repeating: 0, count: 31) + Data([3])
+        let one = Data(repeating: 0, count: 31) + Data([1])
+        let signature = Data(hex: "e907831f80848d1069a5371b402410364bdf1c5f8307b0084c55f1ce2dca8215"
+            + "25f66a4a85ea8b71e482a74f382d2ce5ebeee8fdb2172f477df4900d310536c0")!
+        let publicKey = Data(hex: "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9")!
+        return [Data(), three + one + Data([0x02]) + generatorXOnly + Data(repeating: 0, count: 64)
+                + signature + publicKey]
     }
 }
 
