@@ -1,4 +1,3 @@
-import VaultKit
 import WalletCore
 import Foundation
 
@@ -24,6 +23,9 @@ public enum FuzzTarget: String, CaseIterable, Sendable {
     case fundingSources = "funding-sources"
     case controlBlock = "control-block"
     case personPaste = "person-paste"
+    // Both secp256k1 backends on one input: native Swift and libsecp256k1
+    // must accept, reject and compute identically.
+    case nativeSecp256k1 = "native-secp256k1"
 }
 
 /// The harness's generator. `exercise` draws from it too, to vary how the
@@ -56,7 +58,7 @@ public struct InvariantFailure: Error, CustomStringConvertible {
     public let description: String
 }
 
-private func require(_ condition: Bool, _ message: String) throws {
+func require(_ condition: Bool, _ message: String) throws {
     if !condition { throw InvariantFailure(description: message) }
 }
 
@@ -168,11 +170,12 @@ public func exercise(_ target: FuzzTarget, data: Data, rng: inout SplitMix64) th
         let text = String(decoding: data, as: UTF8.self)
         for network in [BitcoinNetwork.mainnet, .signet] {
             _ = try? PersonPaste.parse(text, network: network)
-            _ = try? SharedSavingsCard.decode(text, network: network)
         }
         if let card = try? PersonCard.decode(text) {
             try require(try PersonCard.decode(card.serialized()) == card,
                         "person card canonical round trip changed semantics")
         }
+    case .nativeSecp256k1:
+        try NativeSecp256k1Exercise.run(data)
     }
 }

@@ -2,18 +2,15 @@
 
 # Wallet state and spending policy
 
-Balances, coin selection, fees, and recovery imports live here. They supply the
-state and decisions behind receiving, sending, and recovery; the GUI should not
-carry a second wallet implementation. Shared-savings vaults and people are in
-[VaultKit](../../VaultKit/README.md). The
+Balances, coin selection, fees, recovery imports and people live here. They
+supply the state and decisions behind receiving, sending and recovery; the
+GUI should not carry a second wallet implementation. The
 [architecture guide](../../../docs/architecture.md) maps the rest of WalletCore.
 
 [AppModel](../../WinnowApp/AppModel.swift) coordinates these rules with
 WalletCore networking, [key storage](../Keys/README.md), and
-[signing](../Transactions/README.md).
-VaultRecord stays here: it is shared by app persistence and the optional accounts
-in a wallet backup, so there is one representation to restore. Signing keys and live
-MuSig2 nonce sessions are not part of an account record.
+[signing](../Transactions/README.md). An import bundle written by a Winnow
+that held shared accounts is refused rather than restored without them.
 
 An embedding application can restore its reserved address ranges with
 `Wallet.advanceCursors(nextReceiveIndex:nextChangeIndex:)`. Each cursor is the
@@ -31,9 +28,9 @@ reserved ranges. No recovery record or new cursor is proof that those addresses
 have been scanned.
 
 [WalletCore tests](../../../Tests/WalletCoreTests/README.md) cover balances, selection,
-imports, and reorg recovery. [App tests](../../../AppTests/README.md)
-check persistence and protected actions; [UI journeys](../../../UITests/README.md)
-check the complete user flow.
+imports, people, and reorg recovery. [App tests](../../../AppTests/README.md)
+check persistence and protected actions; the [UI journey](../../../UITests/README.md)
+checks the complete user flow.
 
 Known send recipients are recorded in `HistoryEntry.outputs`, alongside existing
 transaction bytes and confirmation hashes. Missing metadata stays unknown; an

@@ -1,8 +1,9 @@
 # Winnow
 
 Winnow is a Bitcoin wallet for iPhone and iPad, also available on Apple silicon
-Mac as an iPad app. It receives and sends bitcoin, saves recipients, and supports
-shared accounts with more than one signing key.
+Mac as an iPad app. It receives and sends bitcoin and saves recipients. This is
+the single-key build: every payment is signed by this phone's key, and the curve
+arithmetic behind that signature is Winnow's own Swift.
 
 [App Store](https://apps.apple.com/app/id6801502501) ·
 [TestFlight](https://testflight.apple.com/join/83djpNE7) ·
@@ -12,19 +13,20 @@ shared accounts with more than one signing key.
 ## Using the wallet
 
 Winnow starts on mainnet in Simple mode. One screen holds your balance,
-Receive, Send, activity, shared savings and backup status. Open a payment to
+Receive, Send, activity and backup status. Open a payment to
 save its recipient; choose saved recipients from the Send form.
 
 Advanced mode adds Wallet, Send and Settings tabs, with signet, manual peers,
-fee controls, recovery words and raw signing exchanges. Switching modes keeps
-your wallet and settings. Use signet and test funds when trying a development
-build or a new signing setup.
+fee controls and recovery words. Switching modes keeps your wallet and
+settings. Use signet and test funds when trying a development build.
 
-Shared savings can require a threshold of keys, such as any two of three.
-Advanced mode also offers MuSig2 accounts requiring every participating key.
-The descriptor determines who can spend: a 1-of-n account needs only one key.
-Keep each signer's backup separately. See the
-[shared-wallet guide](docs/vaults.html) for setup and signing limits.
+This build has no shared accounts: no MuSig2, no threshold savings and no
+cosigner cards. A backup carrying shared-account records from the
+shared-account Winnow is refused rather than restored without those funds.
+Key derivation, the Taproot tweak and BIP340 signing run in
+[NativeSecp256k1](Sources/NativeSecp256k1/README.md), an in-tree Swift module
+that is variable-time and does not zeroize secrets. The package has no
+third-party dependencies, so the app links no code from outside this repository.
 
 ## Connections and privacy
 
@@ -50,7 +52,7 @@ height, so words alone do not reconstruct its past transaction history.
 Automatic iCloud backup is enabled by default when available. It saves an
 encrypted copy containing this phone's signing secret and wallet state. A
 successful save date confirms an upload. Keep the manual file and words as
-well, and back up other signers independently. The
+well. The
 [backup guide](docs/import.html) explains the formats and their limits.
 
 ## Development

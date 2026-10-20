@@ -1,8 +1,9 @@
 # CI and release operations
 
 Winnow has one source tree and version train for the wallet app, SwiftPM library
-products and development tools. Use the committed root package lockfile for
-both SwiftPM and Xcode. The [architecture guide](../../docs/architecture.md)
+products and development tools. The root `Package.swift` declares no
+dependencies, so there is no `Package.resolved`; Xcode must resolve no package
+beyond the local one. The [architecture guide](../../docs/architecture.md)
 explains the products; [testing](../../docs/testing.md) describes coverage and
 its limits.
 
@@ -68,7 +69,7 @@ and run. Wallet CI does not build or deploy the public website.
 A new stable `vMAJOR.MINOR.PATCH` tag triggers
 [Release](../workflows/release.yml). The tag chooses the app marketing version;
 the workflow run number chooses the build number. Existing tags stay fixed.
-The app, WalletCore and VaultKit share those tags; no separate internal version
+The app and WalletCore share those tags; no separate internal version
 bump is needed.
 
 1. Choose the intended commit and update

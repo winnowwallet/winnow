@@ -4,14 +4,14 @@
 
 These tests exercise the app's state transitions, persistence, privacy, and
 authorization boundaries without driving every case through screen taps.
-They protect the decisions behind payment review, recovery, and shared savings.
+They protect the decisions behind payment review, recovery, and the address book.
 
 The tests run in the [iOS app host](../Sources/WinnowApp/README.md) and share
 fixtures from [TestSupport](../Tests/Support/README.md).
 The local `makeModel` helper gives each test a separate settings suite and removes
 it at teardown. Pass the same suite to two models when testing persistence.
 The [UI journey](../UITests/README.md) provides complementary screen-level
-checks for ordinary and shared-account payments.
+checks for the receive and send flow.
 
 Run `scripts/ci-app-tests /tmp/winnow-app-tests` from the repository root with
 Xcode and a simulator installed. [CI](../.github/workflows/ci.yml) retains the

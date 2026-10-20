@@ -219,9 +219,6 @@ final class SendReviewBindingTests: XCTestCase {
     )
 
     func testEveryAuthorizationInputInvalidatesTheReviewIdentity() {
-        var otherAccount = baseline
-        otherAccount.accountID = "shared-savings"
-        XCTAssertNotEqual(baseline, otherAccount)
         var otherWallet = baseline
         otherWallet.walletID = "another-wallet"
         XCTAssertNotEqual(baseline, otherWallet)

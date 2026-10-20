@@ -1,6 +1,6 @@
 import CryptoKit
 import Foundation
-import P256K
+import NativeSecp256k1
 
 public enum BIP32Error: Error, Equatable {
     case invalidSeed
@@ -52,7 +52,7 @@ public struct HDKey: Sendable, Equatable {
     public init(seed: Data) throws {
         let i = Self.hmacSHA512(key: Data("Bitcoin seed".utf8), data: seed)
         let (secret, chain) = (i.prefix(32), i.suffix(32))
-        guard let _ = try? P256K.Signing.PrivateKey(dataRepresentation: secret) else {
+        guard (try? Secp256k1.PrivateKey(secret)) != nil else {
             throw BIP32Error.invalidSeed
         }
         let publicKey = try Self.publicKey(for: Data(secret))
@@ -100,16 +100,14 @@ public struct HDKey: Sendable, Equatable {
 
         do {
             if let privateKey {
-                let key = try P256K.Signing.PrivateKey(dataRepresentation: privateKey)
-                let childSecret = try key.add([UInt8](tweak)).dataRepresentation
+                let child = try Secp256k1.PrivateKey(privateKey).adding(tweak)
                 return HDKey(depth: depth + 1, parentFingerprint: fingerprint, childIndex: index,
-                             chainCode: childChain, privateKey: childSecret,
-                             publicKey: try Self.publicKey(for: childSecret))
+                             chainCode: childChain, privateKey: child.bytes,
+                             publicKey: child.publicKey.compressed)
             } else {
-                let key = try P256K.Signing.PublicKey(dataRepresentation: publicKey, format: .compressed)
-                let childPublic = try key.add([UInt8](tweak), format: .compressed).dataRepresentation
+                let child = try Secp256k1.PublicKey(compressed: publicKey).adding(tweak)
                 return HDKey(depth: depth + 1, parentFingerprint: fingerprint, childIndex: index,
-                             chainCode: childChain, privateKey: nil, publicKey: childPublic)
+                             chainCode: childChain, privateKey: nil, publicKey: child.compressed)
             }
         } catch {
             // Tweak >= n or child key invalid (probability < 2^-127 per BIP32).
@@ -179,15 +177,15 @@ public struct HDKey: Sendable, Equatable {
         if isPrivateVersion {
             guard keyData.first == 0 else { throw BIP32Error.invalidSerializedKey }
             let secret = keyData.dropFirst()
-            guard let key = try? P256K.Signing.PrivateKey(dataRepresentation: secret) else {
+            guard let key = try? Secp256k1.PrivateKey(secret) else {
                 throw BIP32Error.invalidSerializedKey
             }
             return HDKey(depth: depth, parentFingerprint: parentFingerprint, childIndex: childIndex,
                          chainCode: chainCode, privateKey: Data(secret),
-                         publicKey: key.publicKey.dataRepresentation)
+                         publicKey: key.publicKey.compressed)
         } else {
             guard keyData.count == 33,
-                  (try? P256K.Signing.PublicKey(dataRepresentation: keyData, format: .compressed)) != nil
+                  (try? Secp256k1.PublicKey(compressed: keyData)) != nil
             else { throw BIP32Error.invalidSerializedKey }
             return HDKey(depth: depth, parentFingerprint: parentFingerprint, childIndex: childIndex,
                          chainCode: chainCode, privateKey: nil, publicKey: keyData)
@@ -199,6 +197,6 @@ public struct HDKey: Sendable, Equatable {
     }
 
     static func publicKey(for secret: Data) throws -> Data {
-        try P256K.Signing.PrivateKey(dataRepresentation: secret).publicKey.dataRepresentation
+        try Secp256k1.PrivateKey(secret).publicKey.compressed
     }
 }

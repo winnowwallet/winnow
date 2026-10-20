@@ -154,8 +154,10 @@ public struct ImportBundle: Codable, Equatable, Sendable {
     public var lastKnownBlockHash: String?
     public var utxos: [UTXO]
     public var transactions: [KnownTransaction]
-    /// Shared and extra-device accounts. Older backups omit them.
-    public var vaults: [VaultRecord]?
+    /// Shared accounts written by a Winnow that still had them. This build
+    /// cannot hold their coins, so a bundle carrying any is refused outright
+    /// rather than restored without them (see `decode`).
+    var vaults: [UnsupportedVaultRecord]?
     /// Next unused BIP86 receive index. Absent from v1 files and from
     /// writers that only knew UTXO-derived maxima; the importer then
     /// falls back to `max(receive UTXO index) + 1`.
@@ -224,7 +226,6 @@ public struct ImportBundle: Codable, Equatable, Sendable {
     /// then materialised and scanned.
     public static let maximumSerializedBytes = 8 * 1024 * 1024
     public static let maximumEntries = 50_000
-    public static let maximumVaults = 100
 
     /// Decodes a bundle from untrusted text, refusing implausible sizes before
     /// allocating anything proportional to them.
@@ -249,10 +250,7 @@ public struct ImportBundle: Codable, Equatable, Sendable {
             throw WalletError.invalidBundle(
                 "bundle declares \(bundle.transactions.count) transactions, above the \(maximumEntries) limit")
         }
-        guard (bundle.vaults?.count ?? 0) <= maximumVaults,
-              (bundle.vaults ?? []).reduce(0, { $0 + $1.allUtxos.count }) <= maximumEntries else {
-            throw WalletError.invalidBundle("too many shared accounts or account coins")
-        }
+        guard (bundle.vaults ?? []).isEmpty else { throw WalletError.unsupportedWalletData }
         return bundle
     }
 
@@ -275,7 +273,6 @@ public struct ImportBundle: Codable, Equatable, Sendable {
 
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encodeIfPresent(vaults, forKey: .vaults)
         try container.encode(version, forKey: .version)
         try container.encode(network, forKey: .network)
         try container.encodeIfPresent(descriptor, forKey: .descriptor)
@@ -338,6 +335,13 @@ public struct ImportBundle: Codable, Equatable, Sendable {
                           height: utxo.height,
                           isCoinbase: utxo.isCoinbase ?? false)
     }
+}
+
+/// A shared-account record from an older bundle. It decodes from any JSON
+/// value and keeps nothing: its presence alone makes the bundle unsupported.
+struct UnsupportedVaultRecord: Codable, Equatable, Sendable {
+    init(from decoder: any Decoder) throws {}
+    func encode(to encoder: any Encoder) throws {}
 }
 
 /// The outcome of verifying an import bundle by forward-scanning from its
@@ -492,7 +496,7 @@ extension Wallet {
         }
         let parsed = try Descriptor(bundleDescriptor)
         _ = try Self.origin(of: parsed)
-        guard case let .tr(.single(key), nil) = parsed.expression,
+        guard case let .tr(key) = parsed.expression,
               case let .extended(account, _) = key.base
         else { throw WalletError.invalidDescriptor(bundleDescriptor) }
         return (parsed, account.neutered)

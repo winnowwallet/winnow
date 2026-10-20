@@ -1,5 +1,14 @@
 import Foundation
-import P256K
+import NativeSecp256k1
+
+public enum BIP86Error: Error, Equatable {
+    /// The internal key is not 32 bytes or has no point on the curve.
+    case invalidInternalKey
+    /// The secret is not 32 bytes, is zero, or is not below the group order.
+    case invalidPrivateKey
+    /// The tweak produced an unusable key (probability about 2^-128).
+    case tweakFailed
+}
 
 /// BIP86 single-key Taproot derivation: m/86'/coin'/account'/change/index.
 public enum BIP86 {
@@ -23,16 +32,20 @@ public enum BIP86 {
 
     /// BIP341 taptweak with no script tree: Q = P + H_taptweak(P)*G.
     public static func tweakedOutputKey(internalKey: Data) throws -> Data {
-        let tweak = TaggedHash.hash("TapTweak", internalKey)
-        let key = P256K.Schnorr.XonlyKey(dataRepresentation: internalKey)
-        return Data(try key.add([UInt8](tweak)).bytes)
+        guard let key = try? Secp256k1.XOnlyKey(internalKey) else { throw BIP86Error.invalidInternalKey }
+        let tweak = TaggedHash.hash("TapTweak", key.x)
+        guard let tweaked = try? key.adding(tweak) else { throw BIP86Error.tweakFailed }
+        return tweaked.x
     }
 
-    /// Tweaked private key matching `tweakedOutputKey` (key-path spending).
+    /// Tweaked private key matching `tweakedOutputKey` (key-path spending):
+    /// the secret is negated first when its public key has an odd y.
     public static func tweakedPrivateKey(_ secret: Data) throws -> Data {
-        let key = try P256K.Schnorr.PrivateKey(dataRepresentation: secret)
-        let tweak = TaggedHash.hash("TapTweak", Data(key.xonly.bytes))
-        return try key.add([UInt8](tweak)).dataRepresentation
+        guard let key = try? Secp256k1.PrivateKey(secret) else { throw BIP86Error.invalidPrivateKey }
+        guard let tweaked = try? key.addingXOnly(tweak: { TaggedHash.hash("TapTweak", $0.x) }) else {
+            throw BIP86Error.tweakFailed
+        }
+        return tweaked.bytes
     }
 
     /// BIP86 address: bech32m, witness v1, program = tweaked output key.

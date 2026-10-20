@@ -1,11 +1,21 @@
-Winnow: fee refusals, peer verification receipts and recovery checks
+Winnow single-key build on Swift-only curve math (internal test)
 
-Compact-filter checkpoint comparisons now record which peer acquisition source classes agreed, and the shared library can require two classes before a scan advances. This build keeps the previous behaviour on every network: a scan advances on whatever agreed. Source classes do not prove that peers have different operators.
+This build is the specialized single-key Winnow. Shared accounts are gone: no MuSig2, no 2-of-3 vaults, no cosigner cards, no shared savings. Every address and signature comes from Winnow's own Swift secp256k1 module instead of libsecp256k1. The module is variable-time and does not clear secrets from memory; that is accepted for this test build. Compact-filter sync, peer routing, people, labels and backups are unchanged.
 
-Automatic peer-driven fee increases now use the majority of configured peer seats and stop at 120 sat/vB. A rate below what any connected peer would relay, or below a reported floor above that cap, is refused before signing and asks for an explicit rate; this applies to payments, fee bumps and shared-savings spends. Peer floors are relay hints, not fee estimates or guarantees that a transaction will be accepted.
+Do not install this build on a phone that holds funds in shared accounts. It cannot see them, creating or deleting a wallet in it removes the shared-account records, and it replaces the automatic iCloud backup with one that has no shared accounts. Use a phone with only an ordinary wallet, or a fresh install.
 
-After updating, check existing wallets, vaults, contact cards, balances, transaction history and payment approvals. Check fee previews and refusals, including a fee bump on a pending payment and an override typed outside the accepted range. Use test-network funds for sends and a separate test wallet for backup export and file import. Automatic cloud-backup updates should still work; replacement-device iCloud recovery remains unverified.
+This build also carries the shared library changes from Winnow 0.8.6. Automatic peer-driven fee increases use the majority of configured peer seats and stop at 120 sat/vB; a rate below what any connected peer would relay, or below a reported floor above that cap, is refused before signing and asks for an explicit rate. Compact-filter checkpoint comparisons record which peer acquisition source classes agreed.
 
-The shared library gains account-key signing, durable address cursors, bounded range recovery, recipient metadata, confirmation hashes and relay-only APIs. This build does not add a completed hardware-card or iPhone NFC signing flow. Recording block hashes alone does not validate an imported backup.
+Ordinary wallet
 
-Report bugs at https://github.com/winnowwallet/winnow/issues. Include the app version, device, network, routing mode and steps to reproduce. Never include recovery words, private keys or wallet backup files.
+Switch to signet (Advanced → Settings → Signet), receive from a faucet, send a payment and watch it confirm. Restore the same recovery words in the App Store Winnow on another device: the first receive address must match. Pay a saved person and a pasted address. Bump the fee on a pending payment.
+
+Backups
+
+Restore a backup file written by the App Store Winnow that has no shared accounts: it must restore. A file that carries shared accounts must be refused with a clear message, never restored partially.
+
+Upgrading from an earlier version
+
+Check that your ordinary wallet, history, saved people, labels, routing and settings are still there. Shared accounts are expected to be absent in this build.
+
+Report bugs publicly at https://github.com/winnowwallet/winnow/issues. Include the app version, device, network, routing mode and steps to reproduce. Never include recovery words, private keys, or wallet backup files.

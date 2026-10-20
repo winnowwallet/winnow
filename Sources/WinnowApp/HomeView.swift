@@ -13,22 +13,17 @@ struct FeeBumpReviewInputs: Equatable {
     }
 }
 
-/// Advanced mode's Wallet tab: balance (confirmed sats), the vault tools,
-/// sync detail, and the local transaction history. History speaks in
-/// confirmed blocks only — a pending send we broadcast is labeled "awaiting
-/// confirmation", never "incoming" (docs/read-side.md §3.3). Beginner mode
-/// shows the same wallet on one screen (BeginnerHomeView) and reuses the
-/// rows and the payment detail below.
+/// Advanced mode's Wallet tab: balance (confirmed sats), sync detail, and
+/// the local transaction history. History speaks in confirmed blocks only —
+/// a pending send we broadcast is labeled "awaiting confirmation", never
+/// "incoming" (docs/read-side.md §3.3). Beginner mode shows the same wallet
+/// on one screen (BeginnerHomeView) and reuses the rows and the payment
+/// detail below.
 struct HomeView: View {
-    var sendFrom: (String) -> Void
     /// Opens Send pre-addressed to a saved person, from a payment's detail.
     var sendToPerson: (String) -> Void
     @Environment(AppModel.self) private var model
     @State private var showReceive = false
-    @State private var showSharedSavings = false
-    @State private var showExtraDevice = false
-    @State private var showAddSavings = false
-    @State private var showAdvancedAccount = false
 
     var body: some View {
         NavigationStack {
@@ -47,32 +42,6 @@ struct HomeView: View {
                             .foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 4)
-                }
-
-                Section("Savings") {
-                    ForEach(model.vaults) { record in
-                        if let vault = try? model.vault(for: record) {
-                            NavigationLink {
-                                AccountDetailView(recordID: record.id) { sendFrom(record.id) }
-                            } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(record.name)
-                                    Text("\(vault.threshold) of \(vault.signerCount) keys required · \(satsText(record.balance))")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .accessibilityIdentifier("walletSavings-\(record.name)")
-                        }
-                    }
-                    Button("Save with other people") { showSharedSavings = true }
-                        .accessibilityIdentifier("walletSharedSavingsButton")
-                    Button("Add a shared account") { showAddSavings = true }
-                        .accessibilityIdentifier("addSharedSavingsButton")
-                    Button("New account with custom rules") { showAdvancedAccount = true }
-                        .accessibilityIdentifier("newVaultButton")
-                    Button("Require another signing device") { showExtraDevice = true }
-                        .accessibilityIdentifier("walletExtraDeviceButton")
                 }
 
                 Section("Sync") {
@@ -154,10 +123,6 @@ struct HomeView: View {
             .sheet(isPresented: $showReceive) {
                 ReceiveView()
             }
-            .sheet(isPresented: $showSharedSavings) { SharedSavingsCreateView() }
-            .sheet(isPresented: $showAddSavings) { AddSharedSavingsView() }
-            .sheet(isPresented: $showAdvancedAccount) { VaultCreateView() }
-            .sheet(isPresented: $showExtraDevice) { VaultCreateView(role: .muSig2) }
             .refreshable {
                 await model.syncNow()
             }

@@ -79,14 +79,13 @@ private func binaryCorpus(for target: FuzzTarget) -> [Data] {
         return [Data(), Data([0x70, 0x73, 0x62, 0x74, 0xFF]), Data(hex:
             "70736274ff01fb040200000001020402000000010401000105010000")!]
     case .descriptor:
-        // Extended keys so mutation can reach the multipath, tree, multisig
-        // and musig grammar, not just a raw key inside tr().
+        // Extended keys so mutation can reach the origin, multipath and
+        // wildcard grammar, not just a raw key inside tr().
         let account = "xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL"
         let other = "xpub68NZiKmJWnxxS6aaHmn81bvJeTESw724CRDs6HbuccFQN9Ku14VQrADWgqbhhTHBaohPX4CjNLf9fq9MYo6oDaPPLPxSb7gwQN3ih19Zm4Y"
         return [Data(), Data("tr(\(generatorXOnly.hex))".utf8), Data("rawtr(\(generatorXOnly.hex))".utf8),
                 Data("tr([deadbeef/86'/0'/0']\(account)/<0;1>/*)".utf8),
-                Data("tr(\(account)/<0;1>/*,{pk(\(other)/0/*),sortedmulti_a(2,\(account)/*,\(other)/0/0/*)})".utf8),
-                Data("tr(musig(\(account),\(other))/0/*)".utf8)]
+                Data("tr(\(other)/0/*)".utf8)]
     case .transaction:
         return [Data(), minimalTransaction]
     case .block:
@@ -117,6 +116,16 @@ private func binaryCorpus(for target: FuzzTarget) -> [Data] {
     case .personPaste:
         return [Data(), Data("tr(\(generatorXOnly.hex))".utf8),
                 Data("{\"winnow\":\"person-card\",\"version\":1,\"network\":\"signet\",\"name\":\"Alice\"}".utf8)]
+    case .nativeSecp256k1:
+        // secret 3, tweak 1, point G, zero message and aux, then BIP340 vector 0's
+        // signature and public key (3·G), so the seed exercises every valid branch.
+        let three = Data(repeating: 0, count: 31) + Data([3])
+        let one = Data(repeating: 0, count: 31) + Data([1])
+        let signature = Data(hex: "e907831f80848d1069a5371b402410364bdf1c5f8307b0084c55f1ce2dca8215"
+            + "25f66a4a85ea8b71e482a74f382d2ce5ebeee8fdb2172f477df4900d310536c0")!
+        let publicKey = Data(hex: "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9")!
+        return [Data(), three + one + Data([0x02]) + generatorXOnly + Data(repeating: 0, count: 64)
+                + signature + publicKey]
     }
 }
 
