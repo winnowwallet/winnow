@@ -5,10 +5,10 @@ A Bitcoin wallet for iOS with on-device compact-filter matching, written in Swif
 **[Download on the App Store](https://apps.apple.com/app/id6801502501)** — pre-release builds ship through [TestFlight](https://testflight.apple.com/join/83djpNE7). Mainnet by default; signet is one Advanced-mode toggle away. See the [roadmap](https://winnowwallet.com/roadmap) for the status of earlier proposals.
 
 - **Pure P2P by default.** The read side is BIP157/158 compact block filters served by full-node peers — the wallet does not send its watch list to a wallet-history server. Peers still observe requests, relay traffic and connection metadata. Bounded **mempool windows** (short full-relay subscriptions while the Receive or Send screen is open) give 0-conf payment detection and propagation tracking without any server. Read [how it works](https://winnowwallet.com/architecture).
-- **Taproot today.** Ordinary receiving uses P2TR (BIP86); shared accounts use MuSig2 key-path or threshold script-path signing. There is no ECDSA signing path or P2WSH Safe.
-- **Pay people and share control.** Save a public payment card or Bitcoin address. From Wallet, create shared savings with a threshold such as 2-of-3: any two keys can spend while one is unavailable. A 1-of-n policy permits one key to spend. Cards carry public keys only.
-- **Require another signing device.** Advanced mode offers MuSig2 accounts where every key must participate. The single integration journey receives and sends with a phone-plus-Core account, followed by a script-path 2-of-3 account. Focused tests check wallet and account rules. Hardware-wallet compatibility needs its own test. Read about [shared signing and its limits](docs/vaults.html).
-- **Bitcoin cryptography:** the single-key path (BIP32 derivation, BIP86 and Taproot tweaks, BIP340 signing and verification) runs on an in-tree Swift secp256k1 module, [NativeSecp256k1](Sources/NativeSecp256k1/README.md). It is variable-time and does not zeroize secrets; every operation is differential-tested, signatures byte for byte, against [`swift-secp256k1`](https://github.com/21-DOT-DEV/swift-secp256k1) (Bitcoin Core's libsecp256k1), pinned, the only third-party dependency, which stays for MuSig2 shared accounts and as the test suite's oracle. The embedded Tor client shipped in 0.6 through 0.7.0 was removed in 0.7.1 (its source is kept on the `archive/tor-0.7.0` branch). Winnow bundles no Tor or I2P client; it can route peer connections through Tor and I2P SOCKS gateways you run on your own Tailscale network ([peer gateways](docs/peer-gateways.md)).
+- **Taproot today.** Receiving uses P2TR (BIP86) and every spend is a key-path spend with this phone's key. There is no ECDSA signing path, no script-path signing and no P2WSH Safe.
+- **Pay people.** Save a public payment card or Bitcoin address and pick it from Saved recipients in Send. Cards carry public keys only.
+- **One key, this phone.** This build has no shared accounts: no MuSig2, no script-path thresholds, no cosigner cards. A backup that carries shared-account records from the shared-account Winnow is refused rather than restored without those funds. Hardware-wallet compatibility needs its own test.
+- **Bitcoin cryptography:** the single-key path (BIP32 derivation, BIP86 and Taproot tweaks, BIP340 signing and verification) runs on an in-tree Swift secp256k1 module, [NativeSecp256k1](Sources/NativeSecp256k1/README.md). It is variable-time and does not zeroize secrets; every operation is differential-tested, signatures byte for byte, against [`swift-secp256k1`](https://github.com/21-DOT-DEV/swift-secp256k1) (Bitcoin Core's libsecp256k1), pinned, the only third-party dependency; the shipped app does not link it, and it stays as the test suite's oracle and the signet miner's ECDSA signer. The embedded Tor client shipped in 0.6 through 0.7.0 was removed in 0.7.1 (its source is kept on the `archive/tor-0.7.0` branch). Winnow bundles no Tor or I2P client; it can route peer connections through Tor and I2P SOCKS gateways you run on your own Tailscale network ([peer gateways](docs/peer-gateways.md)).
 - **Warned explorer links** — choose mempool.space or a custom Esplora website; Winnow opens it only after a tap and privacy warning, never as a wallet backend.
 
 ## Release roadmap
@@ -28,18 +28,17 @@ state, and P2P networking in one target. The winnow-debug tool and fuzz harness
 use that same implementation. Explorer links open an external website after a warning.
 
 The [testing and feature policy](docs/testing.md) keeps one iPhone integration
-journey: an ordinary receive/send, MuSig2 receive/send with one Core cosigner,
-then script-path 2-of-3 receive/send with two Core cosigners available. The phone
-and one Core key approve the 2-of-3 payment; the third key stays unused. The
-private signet fixture mines blocks automatically for prompt confirmation.
+journey: create a wallet, receive, send and watch the payment confirm on a real
+signet node. The private signet fixture mines blocks automatically for prompt
+confirmation.
 App, wallet, and protocol tests cover detailed rules; there is no separate
 DifferentialTests target or broad interoperability matrix. One continuous
 video presents the journey on the [recording page](https://winnowwallet.com/recording).
 The automated UI journey currently runs only on iPhone; it does not establish
-iPad UI coverage. The homepage gives an overview, illustrates
-the signing choices, shows the run's sixteen checkpoint screenshots in order,
-and links to the full recording. Detailed guidance and test evidence live on
-separate pages.
+iPad UI coverage. The public homepage still presents the
+sixteen-checkpoint journey of the shared-account Winnow and links to its
+recording; this build's journey records six checkpoints. Detailed guidance and
+test evidence live on separate pages.
 The public site and its generator live in [winnowwallet/website](https://github.com/winnowwallet/website). Wallet CI retains the original recording evidence without building or deploying the site.
 
 ## Directory guides
@@ -115,16 +114,15 @@ App-bundled HTML/CSS changes still require fresh tests. Missing evidence runs
 the full checks; manual, nightly, and release runs always run fresh.
 
 Mainnet is the default network, and the app starts in beginner mode: one
-screen with the balance, Receive, Send, your activity, shared savings once you
-have any, and automatic backup status — no settings. Manual backup is offered when
+screen with the balance, Receive, Send, your activity, and automatic backup
+status — no settings. Manual backup is offered when
 iCloud is unavailable; Advanced contains recovery words and the cloud-backup switch. Open a payment to save or rename its
-recipient, then pick them from Saved recipients in Send. The same Send form
-handles every account: choose the account, recipient, and amount, then review
-the fee. Shared accounts continue to their required approvals before anything
-is sent. Advanced, in the corner of that screen, switches to the three-tab
+recipient, then pick them from Saved recipients in Send. The Send form takes a
+recipient and an amount, then shows the fee for review before this phone signs.
+Advanced, in the corner of that screen, switches to the three-tab
 interface — Wallet, Send, Settings — with the test network, your own peers,
-chain verification, the block explorer, custom fees, fee bumping, build
-details and the raw vault tools; Simple, on the Wallet tab, switches back and
+chain verification, the block explorer, custom fees, fee bumping and build
+details; Simple, on the Wallet tab, switches back and
 keeps every setting. Switch to signet there for development. Point the app at
 your own filter-serving node (Settings → Manual peers); the node needs
 `blockfilterindex=1` and `peerblockfilters=1`.
@@ -136,7 +134,7 @@ GUI diagnostics live in [Tools/Debug](Tools/Debug/README.md). Use
 `scripts/winnow-debug diagnostics` for local simulator logs and screenshots.
 The demo and publication workflow has been retired. The single
 `test01CreateReceiveSendConfirm` journey in `UITests/WinnowAppUITests.swift`
-covers ordinary, MuSig2, and script-path 2-of-3 payments on iPhone. The host
+covers one receive, send and confirmation on iPhone. The host
 records one continuous video; checkpoint screenshots remain secondary artifacts.
 Lower-level tests cover detailed feature behavior. The recording’s provenance
 identifies exactly which version and payments it shows.

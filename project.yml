@@ -60,8 +60,6 @@ targets:
         buildPhase: resources
       - path: docs/write-side.html
         buildPhase: resources
-      - path: docs/vaults.html
-        buildPhase: resources
       - path: docs/import.html
         buildPhase: resources
     dependencies:
@@ -99,7 +97,7 @@ targets:
         CODE_SIGN_STYLE: Automatic
 
   # Unit tests, hosted in the app. TestSupport carries the shared fixtures
-  # (temp files, wallet and vault builders, the fake segwit transaction).
+  # (temp files, wallet builders, the fake segwit transaction).
   WinnowAppTests:
     type: bundle.unit-test
     platform: iOS
@@ -126,7 +124,7 @@ targets:
         DEVELOPMENT_TEAM: "2858MX5336"
 
   # One iPhone UI journey (XCUITest) receives, sends and confirms for an
-  # ordinary wallet, MuSig2 and 2-of-3 on local custom signet, with run artifacts.
+  # ordinary wallet on local custom signet, with run artifacts.
   # Node access (bitcoin-cli mining/funding) happens from
   # the macOS test-runner process. The miner and RPC helpers live in the
   # package's TestSupport library (Tests/Support), whose process and key

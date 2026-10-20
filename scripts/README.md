@@ -29,9 +29,8 @@ still mines 101 blocks without a bank snapshot from another run.
 
 The script records one continuous `journey.mp4` alongside the test's checkpoint
 screenshots, logs, and result
-bundle. The journey covers ordinary-wallet, MuSig2, and 2-of-3 payments;
-Core wallets provide the other signing keys. There is no separate differential
-test launcher or CI job.
+bundle. The journey covers one ordinary receive, send and confirmation. There
+is no separate differential test launcher or CI job.
 
 Host preparation reports `SIGNET_BANK_PREPARATION_SECONDS`; XCTest's
 `SIGNET_SETUP_SECONDS` now measures only chain and bank readiness checks.
@@ -51,7 +50,7 @@ journey requires the signet fixture configuration described in
 
 [prepare-site-artifact](prepare-site-artifact) normalizes a successful journey
 with `--normalize-journey <results> --media-output <directory>`. The bundle
-contains the normalized movie, 16 checkpoint images, and original recording
+contains the normalized movie, 6 checkpoint images, and original recording
 provenance. `--validate-media <bundle>` validates retained evidence. Website
 sources, builds, and deployment are owned by winnowwallet/website.
 

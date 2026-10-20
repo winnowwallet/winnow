@@ -3,7 +3,7 @@
 # Bitcoin primitive tests
 
 Known-answer and adversarial tests protect the cryptographic, key-derivation,
-descriptor, and script rules behind receiving, recovery, and shared signing.
+descriptor, and script rules behind receiving, recovery, and signing.
 They exercise WalletCore primitives directly so a wrong primitive is easier to locate
 than through a complete app journey.
 

@@ -26,15 +26,15 @@ configuration and under Xcode.
 | File | Contents |
 | --- | --- |
 | `InMemoryKeyStore.swift` | Test-only secret storage, outside the production Keychain implementation, plus `CountingKeyStore` (the same store, counting its `load` calls) |
-| `Vectors.swift` | `Vectors.data/string/json/decode` (each target passes its own `Bundle.module`), `VectorError`, `ttTags`, the shared BIP158 and BIP387/BIP390 vector loaders |
+| `Vectors.swift` | `Vectors.data/string/json/decode` (each target passes its own `Bundle.module`), `VectorError`, `ttTags`, the shared BIP158 vector loader |
 | `TempFiles.swift` | `TempDir` (removed on deinit) and `tempFileURL(_:)` under one per-process root |
 | `SeededRandom.swift` | `SeededRandom` (SplitMix64) with the `int`/`count` draws for coin-selection property tests |
 | `Collectors.swift` | `MatchCollector`, `EventCollector`, `pollUntil`, `settle` |
 | `WalletFixtures.swift` | `testEntropy`, `testMnemonic`, `testMaster`, `fakeHeader`, `coinbaseInput`, `fakeMatch`, `matureCoinbase`, `testChainTip`, `makeTestWallet`, `fund`, `fundedWallet` |
 | `TestScripts.swift` | `TestScripts.p2trDestination`, `TestScripts.bip86FirstMainnetAddress` |
-| `TestVaults.swift` | Deterministic cosigner masters, key expressions, the 2-of-3 `multi_a` and 2-of-2 MuSig2 vault builders, `funding` |
+| `TestKeys.swift` | `TestKeys.master(entropyByte:)`, `masters()`, and the `keyExpression`/`bareKeyExpression` text that people and label tests paste |
 | `P2P/` | `SyntheticChain`/`makeSyntheticChain`, `minedHeader`, `makeTestParams`, `makeFakeSegwitTx`, `ResumeOnce`, `LoopbackNode`, `LoopbackHTTPServer` |
-| `Node/` | `BitcoinCLI`, `CoreSigner`, `HostProcess`, `SignetMiner`, `SignetFixture`: the custom-signet node and other signing wallets used by the UI journey |
+| `Node/` | `BitcoinCLI`, `HostProcess`, `SignetMiner`, `SignetFixture`: the custom-signet node used by the UI journey |
 
 Helpers that only one target can use stay in that target: `blockOutputScripts`
 in `BitcoinCoreTests/TestHelpers.swift` and anything that

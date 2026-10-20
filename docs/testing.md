@@ -18,9 +18,8 @@ public roadmap owns future work; it is not evidence that a feature ships.
 ## What earns a place
 
 - A user-facing feature needs clear usage instructions and focused tests for
-  its decisions and failure cases. One UI integration journey checks ordinary,
-  MuSig2, and script-path 2-of-3 receiving, sending, and confirmation through
-  the real app. Detailed coverage belongs in app, wallet, and protocol tests
+  its decisions and failure cases. One UI integration journey checks receiving,
+  sending, and confirmation through the real app. Detailed coverage belongs in app, wallet, and protocol tests
   without repeated screen navigation.
 - A debugging command needs a concrete diagnostic purpose, a runbook, and
   meaningful command/protocol checks. Help output alone does not prove a live
@@ -49,13 +48,10 @@ app release version.
 ## Which tests say what
 
 The one integration test is `test01CreateReceiveSendConfirm` in
-`UITests/WinnowAppUITests.swift`. It starts with a quick ordinary receive and
-send, then receives and sends with a 2-of-2 MuSig2 account shared by the phone
-and one Core cosigner. Finally it receives and sends through a script-path
-2-of-3 account containing the phone’s key and two Core cosigners. Both Core
-wallets know that account, but only the phone and one Core key approve its
-payment. The test checks the funded destinations, accepted transactions, and
-confirmation through the app. The private signet fixture mines blocks
+`UITests/WinnowAppUITests.swift`. It creates a wallet, receives from the
+fixture's bank, sends a payment back and watches it confirm. The test checks
+the funded destination, the accepted transaction, and confirmation through the
+app. The private signet fixture mines blocks
 automatically so confirmations follow promptly. The automated journey runs on an iPhone simulator; there is no iPad UI
 job currently.
 
@@ -86,15 +82,13 @@ legacy LOC reporter and its tests were removed.
 
 The detailed rules stay in smaller suites. `AppTests/PeoplePaymentTests.swift`
 and `AppTests/SenderLabelTests.swift` cover people, payment decisions, and sender
-labels. `AppTests/WalletStartupTests.swift` and `AppTests/VaultBackupTests.swift`
-cover persisted startup and backup state. `Tests/WalletCoreTests/VaultSpendTests.swift`
-checks threshold and missing-signature rules. These focused checks supplement
+labels. `AppTests/WalletStartupTests.swift` and `AppTests/CloudBackupTests.swift`
+cover persisted startup and backup state. These focused checks supplement
 the journey without repeating every behavior through screen navigation.
 
-Policy explanations must come from the actual descriptor, including 1-of-n.
 Names, contact mappings, and PSBT metadata must not change signing requirements
-or establish output ownership. Keep adversarial checks for altered policies,
-forged change metadata, missing signatures, and nonce reuse. Provider, trust,
+or establish output ownership. Keep adversarial checks for forged change
+metadata and missing signatures. Provider, trust,
 physical key separation, and coercion claims require evidence outside a
 simulator; their unverified integrations belong on the roadmap.
 
@@ -109,7 +103,7 @@ simulator; their unverified integrations belong on the roadmap.
 - ToolsTests and the fuzz harness cover debugging commands and hostile inputs.
 
 The larger UI story suite and separate differential matrix are retired. The
-three payment flows share one journey; other detailed behavior and interruptions
+one payment flow is the journey; other detailed behavior and interruptions
 use focused tests. The [recording page](https://winnowwallet.com/recording)
 shows the continuous journey and its source provenance. Older guide
 illustrations retain their provenance.

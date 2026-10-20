@@ -15,7 +15,7 @@ same Apple Account. Restoring still requires selecting a backup and authenticati
 before decrypting and installing the key.
 
 The backup contains this phone's recovery phrase, wallet descriptor, tracked
-funds, payment history, address counters, shared accounts, saved people and
+funds, payment history, address counters, saved people and
 payment cards, sender names, receive-address labels, display name and interface
 mode. Other owners' signing keys are not on this phone and are not included.
 Watch-only and xprv-only imports cannot enable this mnemonic-based backup.

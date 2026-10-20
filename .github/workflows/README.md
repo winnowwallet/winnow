@@ -25,10 +25,9 @@ smoke, dependency and provenance checks, and the app's Debug and Release checks.
 It builds the Debug app and both test runners once,
 then runs app unit tests and the recorded UI journey with `test-without-building`.
 It also checks the Release build, resolved dependencies, warnings and exclusion
-of test controls from the shipping app. The UI suite runs one iPhone journey through ordinary-wallet, MuSig2, and
-2-of-3 receive, send, and confirmation against one signet fixture, plus the
-peer-gateway settings test. Core wallets
-supply the other signing keys. There is no separate
+of test controls from the shipping app. The UI suite runs one iPhone journey through
+receive, send, and confirmation against one signet fixture, plus the
+peer-gateway settings test. There is no separate
 architecture lane, differential target, selector job, complexity job, or LOC job.
 Runner, Xcode and Bitcoin versions are recorded in fresh test logs.
 

@@ -43,6 +43,17 @@ Status vocabulary:
 - **Blocked release:** an acceptance requirement for a mainnet beta remains
   open; this does not assert that an exploitable vulnerability is known.
 
+**Single-key build.** This tree has no shared accounts: the vault, MuSig2 and
+script-path code and the suites that evidenced it (`VaultFlowTests`,
+`VaultCosignerIdentityTests`, `VaultDraftIdentityTests`,
+`VaultSignerIndependenceTests`, `MuSig2SessionSafetyTests`,
+`VaultThresholdTests`, `VaultInteropDiffTests`, `PSBTConversionDiffTests`)
+were removed with it, and `ImportBundle` refuses a backup that carries vault
+records. S4 and S8 therefore have no subject in this build; their rows, and
+the vault clauses of S2, S3, S6, S7 and S9, record the evidence as it stood
+in the shared-account Winnow. S3's remaining subject is the descriptor
+vectors and the people store's key checks.
+
 | ID | Invariant | Recorded deterministic evidence | Recorded negative/manual evidence and gaps | Historical status |
 |---|---|---|---|---|
 | S1 | Secrets never enter ordinary state, persistent logs, E2E journals, or public artifacts. | `KeyStoreTests`, export redaction/staging tests, story publication/redaction tests. Keychain protection is now **observed rather than asserted** (`AppTests/KeychainAttributeTests`, hosted in the Winnow iOS test app so it has the entitlements the package suite lacks): a secret stored through `KeychainStore` is read back and its recorded attributes checked, with each of the two mutations — weakening the class to `AfterFirstUnlock`, and marking the item synchronizable — killing exactly its own assertion and no other. The read-back query deliberately matches `kSecAttrSynchronizableAny`, because a narrower query fails a wrongly-synchronized item as *not found*, which proves the item changed and not which way. **The simulator cannot show that iOS enforces the class when the device locks** — no data protection, no Secure Enclave — so that half stays open against hardware. Since 2026-09-15 (IR-023) the item also carries a `.userPresence` access control, so the Keychain runs the passcode-or-biometric check itself rather than trusting the app's call sites; the same suite reads the recorded constraint back, checks that an automated run's item has none, and exercises the in-place upgrade of an item stored by an earlier version. The simulator records the constraint and then releases the secret to a read that forbids interaction, so enforcement, like the protection class, is hardware evidence. | Release-binary E2E exclusion **done** (negative control: the same check fails on the Debug build with all five markers) and secret canary scan **done** (positive, canary and planted-secret controls proven; clean against the arm64 release archive). `SEC-006` is closed: a capture run with no readable pinned entropy is refused rather than generating a real seed, so published screenshots cannot contain live key material. Clipboard handoff now runs through a named policy with a recorded rationale (`SEC-014`): recovery words stay on-device for two minutes, interchange material expires after five and may cross devices deliberately. The E2E journal is inspected by value as well as by field name (`SEC-015`): mnemonics, extended private keys, and the run's own entropy are all refused, with false-positive controls for txids and raw transactions. Remaining: iOS Keychain integration; error and OS-log inspection; screenshot/background/crash checks. | Partial; blocked release |

@@ -36,15 +36,15 @@ Mac mini. Same-repository pull requests and
 trusted push, manual, nightly and release runs include the signet journey.
 Fork pull requests use the same hosted runner image for package and app checks,
 without the node fixture, UI journey or deployment credentials.
-The UI journey uses `Tests/Support/Node` for chain operations and Core-held
-cosigner keys. The broad differential target and its separate CI job are retired.
+The UI journey uses `Tests/Support/Node` for chain operations. The broad
+differential target and its separate CI job are retired.
 
 The workflow provisions Python on every run and installs the Bitcoin Core and
 video tools when a fresh journey is needed. Debug build products use a per-run
 DerivedData directory. The temporary node starts from a fresh fixture through
 `scripts/signet-fixture`, without a persistent prepared-bank or simulator cache.
-The iPhone journey covers ordinary-wallet,
-MuSig2 and 2-of-3 payments, with Core supplying the other signing keys.
+The iPhone journey covers one ordinary
+receive, send and confirmation.
 
 The build job owns fixture setup and teardown under its temporary directory.
 Test logs, checkpoint screenshots, the continuous video, and result bundles use a fresh `mktemp` evidence
