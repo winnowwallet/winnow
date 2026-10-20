@@ -16,9 +16,17 @@ let package = Package(
         .package(url: "https://github.com/21-DOT-DEV/swift-secp256k1", exact: "0.23.2"),
     ],
     targets: [
+        // Pure-Swift secp256k1 for the single-key BIP86 path (variable-time;
+        // see Sources/NativeSecp256k1/README.md). Foundation and CryptoKit only.
+        .target(
+            name: "NativeSecp256k1",
+            exclude: ["README.md"]
+        ),
+        // P256K remains only for the vault code (MuSig2 point arithmetic);
+        // the single-key path uses NativeSecp256k1.
         .target(
             name: "WalletCore",
-            dependencies: [.product(name: "P256K", package: "swift-secp256k1")],
+            dependencies: ["NativeSecp256k1", .product(name: "P256K", package: "swift-secp256k1")],
             exclude: [
                 "Crypto/README.md",
                 "Descriptors/README.md",
@@ -42,9 +50,11 @@ let package = Package(
             path: "Tools/Debug/Sources/WinnowDebug",
             exclude: ["README.md"]
         ),
+        // P256K: the native-secp256k1 target compares both backends.
         .target(
             name: "WinnowFuzzCore",
-            dependencies: ["WalletCore"],
+            dependencies: ["WalletCore", "NativeSecp256k1",
+                           .product(name: "P256K", package: "swift-secp256k1")],
             path: "Tools/Fuzz/Sources/WinnowFuzzCore",
             exclude: ["README.md"]
         ),
@@ -70,15 +80,18 @@ let package = Package(
             path: "Tools/Fixture",
             exclude: ["README.md"]
         ),
+        // P256K: the native curve code is differential-tested against it.
         .testTarget(
             name: "BitcoinCoreTests",
-            dependencies: ["WalletCore", "TestSupport"],
+            dependencies: ["WalletCore", "TestSupport", "NativeSecp256k1",
+                           .product(name: "P256K", package: "swift-secp256k1")],
             exclude: ["README.md"],
             resources: [.copy("Vectors")]
         ),
         .testTarget(
             name: "WalletCoreTests",
-            dependencies: ["WalletCore", "TestSupport"],
+            dependencies: ["WalletCore", "TestSupport", "NativeSecp256k1",
+                           .product(name: "P256K", package: "swift-secp256k1")],
             exclude: ["Network/README.md", "README.md"],
             resources: [.copy("Vectors")]
         ),

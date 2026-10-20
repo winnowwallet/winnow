@@ -4,7 +4,9 @@
 
 These copies of Bitcoin specifications and known-answer data anchor derivation,
 signatures, descriptors, and encoding tests to expected values outside Winnow.
-The nested [BIP327 vectors](bip327/README.md) cover MuSig2.
+The nested [BIP327 vectors](bip327/README.md) cover MuSig2, and the
+[native-secp256k1 fixtures](native-secp256k1/README.md) hold independently
+computed field, square-root and x-only answers for the Swift curve module.
 
 [Primitive tests](../README.md) load named resources through
 [Vectors.swift](../../Support/Vectors.swift). SwiftPM copies this directory
