@@ -60,7 +60,7 @@ struct SavedRecipientsView: View {
     }
 }
 
-/// One editor for a saved recipient, a payment's address, or a co-owner's card.
+/// One editor for a saved recipient or a payment's address.
 /// With `txid` set it labels a received payment instead: a name is enough on
 /// its own, and the funding addresses the payment itself reveals — or the
 /// explicitly tapped explorer lookup — can be attached to the person.
@@ -68,7 +68,6 @@ struct AddPersonView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     var person: PersonRecord?
-    var forSigning = false
     /// The received payment being labelled, when this sheet is a sender flow.
     var txid: Data?
     /// Offline-reconstructed funding addresses (WalletCore `FundingSources`).
@@ -86,10 +85,9 @@ struct AddPersonView: View {
     @State private var selectedFundingAddress: String?
     @State private var selectedFundingProvenance: PersonRecord.DestinationProvenance?
 
-    init(person: PersonRecord? = nil, address: String = "", forSigning: Bool = false,
+    init(person: PersonRecord? = nil, address: String = "",
          txid: Data? = nil, senderCandidates: [AppModel.SenderCandidate] = []) {
         self.person = person
-        self.forSigning = forSigning
         self.txid = txid
         self.senderCandidates = senderCandidates
         _name = State(initialValue: person?.name ?? "")
@@ -110,7 +108,7 @@ struct AddPersonView: View {
         if !pasted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, parsed == nil { return false }
         if person != nil { return true }
         if labelingSender { return true } // a name alone is a valid label
-        return forSigning ? parsed?.signerKey != nil : parsed?.payTo != nil
+        return parsed?.payTo != nil
     }
 
     var body: some View {
@@ -119,8 +117,7 @@ struct AddPersonView: View {
                 Section {
                     TextField("Name", text: $name).accessibilityIdentifier("personNameField")
                     if person?.payTo == nil {
-                        TextField(forSigning ? "Paste a card or signer key" : "Paste an address or card",
-                                  text: $pasted, axis: .vertical)
+                        TextField("Paste an address or card", text: $pasted, axis: .vertical)
                             .autocorrectionDisabled().textInputAutocapitalization(.never)
                             .accessibilityIdentifier("personPasteField")
                         Button("Paste from clipboard") { pasted = model.pasteboardText() ?? "" }
@@ -188,10 +185,6 @@ struct AddPersonView: View {
                             Text(payTo.derivesFreshAddresses ? "Fresh address each payment" : "Uses this same address each time")
                                 .accessibilityIdentifier("personPayToSummary")
                         }
-                        if forSigning {
-                            Text(parsed.signerKey != nil ? "Can approve shared payments" : "Ask for their signer key or Winnow card")
-                                .accessibilityIdentifier("personSignerSummary")
-                        }
                     }.font(.footnote).foregroundStyle(.secondary)
                 }
                 if let error { Text(error).foregroundStyle(.red).accessibilityIdentifier("personError") }
@@ -225,7 +218,7 @@ struct AddPersonView: View {
     private var navigationTitle: String {
         if labelingSender { return "Save sender" }
         if let person, person.payTo == nil { return "Add destination for \(person.name)" }
-        return person?.isSavedRecipient == true ? "Rename recipient" : forSigning ? "Add co-owner" : "Save recipient"
+        return person?.isSavedRecipient == true ? "Rename recipient" : "Save recipient"
     }
 
     /// Shown wherever a guessed funding address could be attached.
@@ -285,12 +278,11 @@ struct AddPersonView: View {
                     try await model.updateRecipient(id: person.id, name: effectiveName, saved: true)
                 } else if labelingSender {
                     let record = try await model.addPerson(name: effectiveName, payTo: parsed?.payTo,
-                                                           signerKey: nil,
                                                            provenance: destinationProvenance,
                                                            source: destinationSource)
                     try await model.labelReceivedSender(txid: txid!, personID: record.id)
                 } else if let parsed {
-                    try await model.addPerson(name: effectiveName, payTo: parsed.payTo, signerKey: parsed.signerKey)
+                    try await model.addPerson(name: effectiveName, payTo: parsed.payTo)
                 }
                 dismiss()
             } catch { self.error = error.localizedDescription }
@@ -327,16 +319,10 @@ struct ShareMyCardView: View {
                         }
                         CopyableTextBlock(text: cardText)
                             .accessibilityIdentifier("ownCardBlock")
-                        if let fingerprint = model.ownSignerFingerprint {
-                            LabeledContent("Your key") {
-                                Text(fingerprint).font(.system(.body, design: .monospaced))
-                            }
-                            .accessibilityIdentifier("ownSignerFingerprint")
-                        }
                     } header: {
                         Text("Your card")
                     } footer: {
-                        Text("This card carries public keys only. Anyone who has it can pay you and can see every address it derives, the same way your wallet does. People who pay you from their address book use the same list of addresses as your Receive screen, so two people paying at once can land on one address — a privacy detail, never a loss. Your key’s fingerprint is what a co-owner sees next to your name; if theirs reads differently, the card they hold is not yours.")
+                        Text("This card carries public keys only. Anyone who has it can pay you and can see every address it derives, the same way your wallet does. People who pay you from their address book use the same list of addresses as your Receive screen, so two people paying at once can land on one address — a privacy detail, never a loss.")
                     }
                 } else {
                     Section {
