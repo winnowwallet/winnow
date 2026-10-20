@@ -66,6 +66,9 @@ targets:
         product: WalletCore
       - package: Winnow
         product: VaultKit
+      # Fixed public-vector experiment; WalletCore keeps its existing P256K path.
+      - package: Winnow
+        product: CryptoResearch
     settings:
       base:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

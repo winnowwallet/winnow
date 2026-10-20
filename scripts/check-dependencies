@@ -6,6 +6,10 @@ import pathlib
 import re
 import subprocess
 
+NATIVE_ID = 'native-secp256k1-swift-test'
+NATIVE_URL = 'https://github.com/posix4e/native-secp256k1-swift-test'
+NATIVE_REVISION = '2ef204167972efc428486e823fc79b1f1bf0e9e7'
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--xcode', type=pathlib.Path, metavar='DERIVED_DATA')
 args = parser.parse_args()
@@ -19,17 +23,35 @@ def manifest(path):
         ['swift', 'package', '--package-path', str(path), 'dump-package'], text=True))
 
 def pins(path):
-    return {p['identity']: (p['location'], p['state'])
-            for p in json.loads(path.read_text())['pins']}
+    entries = json.loads(path.read_text())['pins']
+    result = {p['identity']: (p['location'], p['state']) for p in entries}
+    if len(result) != len(entries):
+        raise SystemExit('duplicate dependency identity in the root lockfile')
+    return result
 
 expected = pins(root / 'Package.resolved')
-if set(expected) != {'swift-secp256k1'}:
+if set(expected) != {'swift-secp256k1', NATIVE_ID}:
     raise SystemExit('unexpected root dependency; review the monorepo dependency policy')
+if expected[NATIVE_ID] != (NATIVE_URL, {'revision': NATIVE_REVISION}):
+    raise SystemExit('the public-vector experiment must use the reviewed native revision')
+remotes = {}
+for dependency in manifest(root)['dependencies']:
+    sources = dependency.get('sourceControl', [])
+    if len(sources) != 1 or sources[0]['identity'] in remotes:
+        raise SystemExit('unexpected root manifest dependency')
+    remote = sources[0]
+    remotes[remote['identity']] = remote
+if set(remotes) != set(expected):
+    raise SystemExit('root manifest and lockfile dependency identities disagree')
+for identity, (location, _) in expected.items():
+    if remotes[identity]['location'] != {'remote': [{'urlString': location}]}:
+        raise SystemExit('root manifest and lockfile dependency locations disagree')
 version = expected['swift-secp256k1'][1]['version']
-remote = manifest(root)['dependencies'][0]['sourceControl'][0]
-if remote['requirement'] != {'exact': [version]}:
+if remotes['swift-secp256k1']['requirement'] != {'exact': [version]}:
     raise SystemExit('root manifest and lockfile disagree')
-if not re.search(r'^  swift-secp256k1:\n    url: [^\n]+\n    exactVersion: '+re.escape(version)+r'\s*$', project, re.M):
+if remotes[NATIVE_ID]['requirement'] != {'revision': [NATIVE_REVISION]}:
+    raise SystemExit('the root manifest must pin the reviewed native revision')
+if not re.search(r'^  swift-secp256k1:\n    url: '+re.escape(expected['swift-secp256k1'][0])+r'\n    exactVersion: '+re.escape(version)+r'\s*$', project, re.M):
     raise SystemExit('Xcode must pin the root third-party version')
 if args.xcode:
     # Xcode can share the root lockfile instead of writing a workspace copy.
@@ -41,4 +63,4 @@ if args.xcode:
               for d in dependencies if d['state']['name'] == 'sourceControlCheckout'}
     if actual != expected:
         raise SystemExit('Xcode resolved dependencies differ from the root lockfile')
-print('The app uses the local Winnow package and its committed third-party pin')
+print('The app uses the local Winnow package and its committed third-party pins')

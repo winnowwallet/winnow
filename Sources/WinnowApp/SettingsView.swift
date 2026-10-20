@@ -267,6 +267,17 @@ struct SettingsView: View {
                 LabeledContent("Wallet ID", value: model.walletID ?? "—")
             }
             Button("Design papers") { showPapers = true }
+            NavigationLink {
+                CryptoResearchView()
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Label("Cryptography research", systemImage: "flask")
+                    Text("Experimental · bundled public examples only")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .accessibilityIdentifier("cryptoResearchLink")
         }
     }
 

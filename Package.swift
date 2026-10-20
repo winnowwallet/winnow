@@ -5,6 +5,8 @@ let package = Package(
     name: "Winnow",
     platforms: [.iOS(.v17), .macOS(.v14)],
     products: [
+        // Fixed public-vector experiment; never a wallet cryptography provider.
+        .library(name: "CryptoResearch", targets: ["CryptoResearch"]),
         .library(name: "WalletCore", targets: ["WalletCore"]),
         // Shared-savings vaults and the contact cards they are built from, on WalletCore.
         .library(name: "VaultKit", targets: ["VaultKit"]),
@@ -16,8 +18,22 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/21-DOT-DEV/swift-secp256k1", exact: "0.23.2"),
+        .package(
+            url: "https://github.com/posix4e/native-secp256k1-swift-test",
+            revision: "2ef204167972efc428486e823fc79b1f1bf0e9e7"
+        ),
     ],
     targets: [
+        .target(
+            name: "CryptoResearch",
+            dependencies: [.product(name: "NativeSecp256k1", package: "native-secp256k1-swift-test")],
+            exclude: ["README.md"],
+            resources: [.copy("Fixtures")]
+        ),
+        .testTarget(
+            name: "CryptoResearchTests",
+            dependencies: ["CryptoResearch"]
+        ),
         .target(
             name: "WalletCore",
             dependencies: [.product(name: "P256K", package: "swift-secp256k1")],

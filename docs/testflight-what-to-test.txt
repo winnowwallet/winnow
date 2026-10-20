@@ -1,3 +1,5 @@
+Experimental cryptography research demo: in Advanced mode, open Settings → About → Cryptography research. The screen has a fixed “Experimental” notice: “Public data only. Do not rely on this for keys or payments.” Run the 318 bundled public examples and check that the warning stays visible with the results. A matching run means only that those stored examples matched their reference answers; it is not a security certification. The experiment accepts no wallet input and does not control wallet key validation, signing, addresses or spending. The wallet uses its existing backend. Report any mismatch, crash, unresponsive controls or unreadable warning. No real funds or recovery phrases are needed to exercise the demo.
+
 Winnow: fee refusals, peer verification receipts and recovery checks
 
 Compact-filter checkpoint comparisons now record which peer acquisition source classes agreed, and the shared library can require two classes before a scan advances. This build keeps the previous behaviour on every network: a scan advances on whatever agreed. Source classes do not prove that peers have different operators.

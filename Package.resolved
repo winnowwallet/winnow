@@ -1,6 +1,14 @@
 {
-  "originHash" : "e2c656a031a3360cda81b73a573326a404632197b41e9b0f9c441ea4710e86db",
+  "originHash" : "b667c207402bbfaeb73a873733bec17fd77544679afeae2bb7b8e3e259ecd2fd",
   "pins" : [
+    {
+      "identity" : "native-secp256k1-swift-test",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/posix4e/native-secp256k1-swift-test",
+      "state" : {
+        "revision" : "2ef204167972efc428486e823fc79b1f1bf0e9e7"
+      }
+    },
     {
       "identity" : "swift-secp256k1",
       "kind" : "remoteSourceControl",
