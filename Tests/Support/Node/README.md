@@ -9,6 +9,12 @@ wallet sign each block's BIP325 challenge over RPC
 (`signrawtransactionwithwallet`), as Bitcoin Core's reference miner does, so
 the harness carries no ECDSA and the challenge key never leaves the node.
 
+`CoreSigner` gives the journey a Bitcoin Core wallet as the other MuSig2
+signer. Core generates its key; the test reads its public key expression,
+imports the account descriptor with that key private, and calls
+`walletprocesspsbt` for each round. Only the public expression reaches the
+app.
+
 `SignetFixture` shares the bank setup used by the native
 [winnow-fixture prepare-bank](../../../Tools/Fixture/README.md) command and the UI journey's readiness checks.
 The host command reuses `BitcoinCLI` and `SignetMiner` to mature the bank before

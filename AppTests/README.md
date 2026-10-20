@@ -18,6 +18,10 @@ Xcode and a simulator installed. [CI](../.github/workflows/ci.yml) retains the
 result bundle and logs. Keychain attributes and authentication policy are tested;
 actual locked-device behavior still needs [device evidence](../docs/security/README.md).
 
+[MuSig2 account storage](MuSig2StoreTests.swift) checks backups, payments,
+spends and reorgs in the sealed account file, and refuses tampered, unsealed
+and oversized files without rewriting them.
+
 [Receive address labels](ReceiveAddressLabelTests.swift) check wallet/network
 isolation, atomic persistence, address rotation and relaunch, bounded metadata,
 and exact output matching without creating a sender contact.

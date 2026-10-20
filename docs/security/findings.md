@@ -63,6 +63,11 @@ for comparison with the dated validation rows below:
 - S2: the fixed send/RBF and vault boundaries still need UI automation,
   double-submit/interruption tests, and an independent review.
 - S4: MuSig2 nonce interruption/replay/concurrency coverage is incomplete.
+  In the single-key build with raw MuSig2 accounts, secret nonces exist only
+  in the signing screen's memory: leaving the screen, backgrounding the app or
+  restarting it scrubs them and the exchange starts again, so no nonce
+  survives a crash between rounds. They pass through the native module's
+  variable-time arithmetic, an accepted limit recorded in its README.
 - S5: the wallet does not roll back after a reorg (`SEC-016`, open). The swap
   is now reported by `HeaderChain.lastReorg`, but no consumer acts on it.
 - S5/S10: sanitizer and sustained fuzz evidence now exists (ThreadSanitizer over

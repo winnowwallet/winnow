@@ -296,6 +296,21 @@ final class AppModel {
     /// The wallet's own watched scripts, cached so a payment's outputs can be
     /// labelled "pays you" without an actor hop.
     private(set) var ownWatchScripts: Set<Data> = []
+    /// MuSig2 accounts (Advanced mode only), mirrored from the store.
+    private(set) var muSig2Accounts: [MuSig2AccountRecord] = [] {
+        didSet {
+            guard muSig2Accounts != oldValue else { return }
+            ownedMuSig2Scripts = Set(muSig2Accounts.flatMap { record in
+                let account = try? MuSig2Account(record.descriptor, network: network)
+                let count = max(record.nextReceiveIndex, record.nextChangeIndex) + Wallet.gapLimit
+                return (try? account?.watchScripts(upTo: count)) ?? []
+            })
+        }
+    }
+    /// Set when `musig2.json` could not be read. Shown on the MuSig2 screens;
+    /// the store refuses mutations meanwhile. Never blocks boot.
+    private(set) var muSig2StorageNotice: String?
+    private var ownedMuSig2Scripts: Set<Data> = []
     private(set) var wallet: Wallet?
     private(set) var stack: SyncStack?
     /// Copies of the wallet's id/descriptor for synchronous access (the Wallet
@@ -321,6 +336,7 @@ final class AppModel {
     /// and when the app leaves the screen.
     let keychainAuthentication = KeychainAuthentication()
     let peopleStore: PeopleStore
+    let muSig2Store: MuSig2Store
     let cloudBackups: CloudBackupController
     private let allowsCloudBackup: Bool
     private var cloudPreparationTask: Task<Void, Never>?
@@ -448,10 +464,11 @@ final class AppModel {
             service: keychainService,
             protection: e2e == nil ? .userPresence : .deviceOnly,
             authentication: keychainAuthentication)
-        // The people file's seal key sits under the same service, so the E2E
-        // wipe covers it along with the wallet secret.
+        // The people and MuSig2 files' seal keys sit under the same service,
+        // so the E2E wipe covers them along with the wallet secret.
         let storeKeys = storeKeys ?? KeychainStoreKeyVault(service: keychainService)
         peopleStore = PeopleStore(keys: storeKeys)
+        muSig2Store = MuSig2Store(keys: storeKeys)
         let defaults = e2e?.defaults ?? defaults
         self.defaults = defaults
         let initialGatewaySettings: PeerGatewaySettings
@@ -535,6 +552,7 @@ final class AppModel {
             UIPasteboard.general.string = clipboard
         }
         await configurePeople()
+        await configureMuSig2()
         guard let walletURL = walletURL() else {
             stage = .storageDamaged(
                 "Winnow could not access its protected local storage. No wallet files or keys were changed.")
@@ -971,8 +989,8 @@ final class AppModel {
     /// Rolls the wallet back to a fork height, recording the target before
     /// touching anything.
     ///
-    /// The three stores persist independently -- wallet JSON, filters.json,
-    /// broadcast.json -- so a crash mid-rollback leaves them
+    /// The four stores persist independently -- wallet JSON, musig2.json,
+    /// filters.json, broadcast.json -- so a crash mid-rollback leaves them
     /// disagreeing. Because a rollback is a pure function of the height, it is
     /// idempotent, and that turns recovery into a redo rather than a repair:
     /// write the target first, roll each store back, clear the target once the
@@ -994,6 +1012,7 @@ final class AppModel {
         try Data(String(forkHeight).utf8).write(
             to: marker, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         try await wallet?.rollBack(to: forkHeight)
+        try await muSig2Store.rollBack(to: forkHeight)
         // Reactivates any own send whose confirming block fell (#157): the
         // wallet just re-reserved its inputs, and this makes sure the network
         // hears the transaction again instead of only our bookkeeping.
@@ -1016,6 +1035,7 @@ final class AppModel {
               let forkHeight = UInt32(text.trimmingCharacters(in: .whitespacesAndNewlines))
         else { return }
         try await wallet?.rollBack(to: forkHeight)
+        try await muSig2Store.rollBack(to: forkHeight)
         // The same stores `rollBackStores` rewinds, plus the filter frontier.
         // Without this, a crash between the marker and the broadcaster's
         // rewind leaves an own send whose block fell parked forever, so the
@@ -1096,8 +1116,13 @@ final class AppModel {
         status.syncing = true
         defer { status.syncing = false }
         do {
-            let scripts = try await wallet.watchScripts()
+            // One filter stream for the wallet and its MuSig2 accounts: an
+            // account is just more watched scripts.
+            var scripts = try await wallet.watchScripts()
+            scripts.append(contentsOf: try await muSig2Store.watchScripts(network: network))
             let broadcaster = stack.broadcaster
+            let muSig2Store = muSig2Store
+            let network = network
             try await filters.sync(watchScripts: scripts, maxBlocks: backgroundRunning ? 2_000 : nil,
                                    onReorg: { [weak self] forkHeight in
                 guard let self else { return }
@@ -1107,6 +1132,7 @@ final class AppModel {
                 for discarded in walletEffect.discardedReplacements {
                     try await broadcaster.cancel(discarded)
                 }
+                try await muSig2Store.apply(match: match, network: network)
                 let pending = await broadcaster.pendingTxids
                 for tx in match.block.transactions where pending.contains(tx.txid) {
                     // The height rides along so the entry becomes a held
@@ -1225,6 +1251,7 @@ final class AppModel {
         status = snapshot
         people = await peopleStore.all
         senderByTxid = await peopleStore.senderLabels
+        muSig2Accounts = await muSig2Store.all
         configureReceiveAddressLabels()
         journalSnapshotIfChanged()
         scheduleCloudBackup()
@@ -1314,6 +1341,9 @@ final class AppModel {
     private func importWallet(bundle: ImportBundle, authenticate: Bool,
                               afterCommit: (@MainActor (String) async throws -> Void)? = nil) async throws -> ImportReport? {
         guard bundle.network == network.rawValue else { throw AppError.wrongNetwork(bundle.network) }
+        // Before anything is written: a bundle whose MuSig2 accounts cannot be
+        // restored must not replace the wallet half-way.
+        try MuSig2Store.validate(bundle.vaults ?? [], network: network)
         if authenticate, bundle.mnemonic != nil {
             try await authenticateSensitiveAction(
                 reason: "Import this wallet's recovery phrase")
@@ -1336,6 +1366,8 @@ final class AppModel {
         // the same FilterSync/HeaderChain race — crossed getheaders/getcfilter
         // responses on the shared peer). The loop starts on the way out.
         try await adopt(wallet: wallet, startSync: false)
+        try await muSig2Store.restore(bundle.vaults ?? [])
+        muSig2Accounts = await muSig2Store.all
         defer { if isActive { startSyncLoop() } }
         if let afterCommit { try await afterCommit(wallet.id) }
         else { await prepareImportedCloudBackup(bundle) }
@@ -1351,7 +1383,13 @@ final class AppModel {
         }
         // A verification failure (e.g. a peer serving a bad filter) is a real
         // error for the user, not the "no peers yet" soft path.
-        let report = try await wallet.verifyImport(bundle, using: filters)
+        let restoredStore = muSig2Store
+        let restoredNetwork = network
+        let report = try await wallet.verifyImport(
+            bundle, using: filters,
+            additionalScripts: restoredStore.watchScripts(network: network)) { match in
+                try await restoredStore.apply(match: match, network: restoredNetwork)
+            }
         await refresh()
         e2e?.journal("import.verified", fields: [
             "scannedFromHeight": String(report.scannedFromHeight),
@@ -1384,7 +1422,9 @@ final class AppModel {
         if let filters = stack?.filters {
             try await persistScanFrontier(of: filters, to: wallet)
         }
-        let bundle = try await wallet.exportBundle(includeMnemonic: includeMnemonic)
+        var bundle = try await wallet.exportBundle(includeMnemonic: includeMnemonic)
+        let accounts = try await muSig2Store.backupRecords()
+        bundle.vaults = accounts.isEmpty ? nil : accounts
         let serialized = try bundle.serialized()
         e2e?.journal("wallet.exported", fields: [
             "bundleVersion": String(bundle.version),
@@ -1415,11 +1455,12 @@ final class AppModel {
         // the user's, not one wallet's view of the chain, and holds only
         // public keys.
         if let dir = storageDirectory() {
-            for name in ["filters.json", "broadcast.json", "vaults.json", "receive-labels.json", "cloud-backup.json"] {
+            for name in ["filters.json", "broadcast.json", "vaults.json", "musig2.json", "receive-labels.json", "cloud-backup.json"] {
                 try? FileManager.default.removeItem(at: dir.appending(path: name))
             }
         }
         await configurePeople()
+        await configureMuSig2()
         receiveLabelStore = nil
         self.wallet = wallet
         walletID = await wallet.id
@@ -1547,7 +1588,7 @@ final class AppModel {
         // that is one wallet's view must not survive into the next one.
         // people.json stays, on purpose: see `adopt(wallet:)`.
         if let dir = storageDirectory() {
-            for name in ["wallet.json", "filters.json", "broadcast.json", "vaults.json", "receive-labels.json", "cloud-backup.json"] {
+            for name in ["wallet.json", "filters.json", "broadcast.json", "vaults.json", "musig2.json", "receive-labels.json", "cloud-backup.json"] {
                 try? FileManager.default.removeItem(at: dir.appending(path: name))
             }
         }
@@ -1560,6 +1601,7 @@ final class AppModel {
         status = Status()
         syncPhase = .idle
         await configurePeople()
+        await configureMuSig2()
         stage = .onboarding
         e2e?.journal("wallet.destroyed", fields: ["walletID": walletID])
 
@@ -2062,6 +2104,223 @@ final class AppModel {
         return multipathSuffix ? base + "/<0;1>/*" : base
     }
 
+    // MARK: - MuSig2 accounts (Advanced mode)
+
+    enum MuSig2ActionError: LocalizedError, Equatable {
+        case unknownAccount
+        case notAParticipant
+        case accountHoldsCoins
+        /// Broadcast, but the account's coins could not be updated: the spent
+        /// coins must not be offered to the next spend.
+        case spendNotRecorded(txid: Data, reason: String)
+
+        var errorDescription: String? {
+            switch self {
+            case .unknownAccount: "This MuSig2 account is no longer on this phone."
+            case .notAParticipant:
+                "No participant of this descriptor is this wallet's key. Put this phone's key in the musig() list."
+            case .accountHoldsCoins:
+                "This account still holds coins or a pending payment. Spend them first: a removed account is not scanned, and adding it again does not find coins it already had."
+            case let .spendNotRecorded(txid, reason):
+                "Sent as \(txid.displayHex), but the account could not be updated: \(reason) Do not spend from it again until it syncs."
+            }
+        }
+    }
+
+    /// This wallet's participant key for a `musig()` descriptor: the BIP86
+    /// account xpub with its origin and no suffix of its own (BIP390).
+    func muSig2KeyExpression() throws -> String {
+        try ownKeyExpression(multipathSuffix: false)
+    }
+
+    /// A pasted descriptor checked for this phone: the supported account
+    /// shape, this network, and one participant that is this wallet's key.
+    func muSig2Account(validating text: String) throws -> MuSig2Account {
+        let account = try MuSig2Account(text.trimmingCharacters(in: .whitespacesAndNewlines), network: network)
+        guard let walletDescriptor, case let .tr(key) = walletDescriptor.expression,
+              case let .extended(accountKey, _) = key.base, account.includes(accountKey: accountKey)
+        else { throw MuSig2ActionError.notAParticipant }
+        return account
+    }
+
+    func muSig2Account(for record: MuSig2AccountRecord) throws -> MuSig2Account {
+        try MuSig2Account(record.descriptor, network: network)
+    }
+
+    /// Files the account and starts watching it from the next block scanned:
+    /// scanning is forward-only, so coins it held before are not found.
+    @discardableResult
+    func addMuSig2Account(name: String, descriptor text: String) async throws -> MuSig2AccountRecord {
+        let account = try muSig2Account(validating: text)
+        var height: UInt32 = 0
+        if let filters = stack?.filters {
+            height = await filters.nextScanHeight
+        } else if let wallet {
+            height = await wallet.nextScanHeight
+        }
+        let record = try await muSig2Store.add(name: DisplayName.normalized(name) ?? "", account: account,
+                                               createdAtHeight: height)
+        muSig2Accounts = await muSig2Store.all
+        e2e?.journal("musig2.accountAdded", fields: [
+            "id": record.id, "descriptor": record.descriptor, "height": String(height),
+            "firstAddress": (try? account.address(index: 0)) ?? "",
+        ])
+        return record
+    }
+
+    /// Only an empty account can go: its coins would vanish from view, and
+    /// the forward-only scan would not find them again.
+    func removeMuSig2Account(id: String) async throws {
+        guard let record = muSig2Accounts.first(where: { $0.id == id }) else { return }
+        guard record.allUtxos.allSatisfy({ $0.spent?.height != nil }) else {
+            throw MuSig2ActionError.accountHoldsCoins
+        }
+        try await muSig2Store.remove(id: id)
+        muSig2Accounts = await muSig2Store.all
+    }
+
+    func newMuSig2ReceiveAddress(id: String) async throws {
+        try await muSig2Store.advanceReceiveIndex(id: id)
+        muSig2Accounts = await muSig2Store.all
+    }
+
+    /// The descriptor coordinates a spend may pay back into: every coin's
+    /// own, plus the next receive and change slots. Rebuilt from trusted
+    /// local state each time; PSBT metadata never decides ownership.
+    func muSig2OwnedCoordinates(for record: MuSig2AccountRecord) -> [MuSig2Account.OutputCoordinate] {
+        record.utxos.map { MuSig2Account.OutputCoordinate(choice: $0.chain.rawValue, index: $0.index) } + [
+            MuSig2Account.OutputCoordinate(choice: AddressChain.receive.rawValue, index: record.nextReceiveIndex),
+            MuSig2Account.OutputCoordinate(choice: AddressChain.change.rawValue, index: record.nextChangeIndex),
+        ]
+    }
+
+    /// Proves a PSBT is an exact, safe spend of the account's known coins.
+    func reviewMuSig2Spend(_ psbt: PSBT, record: MuSig2AccountRecord) throws -> MuSig2Account.SpendReview {
+        try muSig2Account(for: record).reviewSpend(psbt, knownUTXOs: record.utxos,
+                                                   ownedOutputCoordinates: muSig2OwnedCoordinates(for: record),
+                                                   chainTip: status.tipHeight)
+    }
+
+    /// The creator role: one payment, change to the next change address.
+    func createMuSig2Spend(record: MuSig2AccountRecord, address: String, amount: Int64,
+                           feeRateSatPerVByte: Double) async throws -> PSBT {
+        let payment = try Payment(amount: amount, address: address.trimmingCharacters(in: .whitespacesAndNewlines),
+                                  network: network)
+        let psbt = try muSig2Account(for: record).createSpend(
+            utxos: record.utxos, payments: [payment], changeIndex: record.nextChangeIndex,
+            feeRateSatPerVByte: feeRateSatPerVByte, chainTip: await chainTipHeight)
+        journalPSBT(stage: "musig2-created", psbt: psbt)
+        return psbt
+    }
+
+    /// Round 1: after device authentication, this wallet's public nonce on
+    /// every input. The secret nonces go back to the caller's memory only.
+    func attachMuSig2Nonces(_ psbt: PSBT, record: MuSig2AccountRecord)
+        async throws -> (psbt: PSBT, secretNonces: [Int: [Data: Data]]) {
+        let account = try muSig2Account(for: record)
+        let key = try await muSig2SigningKey(reason: "Start signing this MuSig2 payment")
+        var signed = psbt
+        let nonces = try account.attachNonces(&signed, signingKey: key, knownUTXOs: record.utxos,
+                                              ownedOutputCoordinates: muSig2OwnedCoordinates(for: record),
+                                              chainTip: status.tipHeight)
+        journalPSBT(stage: "musig2-public-nonces", psbt: signed)
+        return (signed, nonces)
+    }
+
+    /// Round 2: after device authentication, this wallet's partial signature
+    /// on every input. The nonces are consumed; the copy here is scrubbed.
+    func signMuSig2Spend(_ psbt: PSBT, record: MuSig2AccountRecord,
+                         secretNonces: [Int: [Data: Data]]) async throws -> PSBT {
+        var nonces = secretNonces
+        defer { Self.scrub(&nonces) }
+        let account = try muSig2Account(for: record)
+        let key = try await muSig2SigningKey(reason: "Sign this MuSig2 payment")
+        var signed = psbt
+        try account.sign(&signed, signingKey: key, secretNonces: &nonces, knownUTXOs: record.utxos,
+                         ownedOutputCoordinates: muSig2OwnedCoordinates(for: record), chainTip: status.tipHeight)
+        journalPSBT(stage: "musig2-partial-signed", psbt: signed)
+        return signed
+    }
+
+    /// Aggregates the partial signatures, finalizes, broadcasts, then moves
+    /// the spent coins to in-flight and the change to pending, under the
+    /// same gate as a wallet send.
+    func broadcastMuSig2Spend(_ psbt: PSBT, record: MuSig2AccountRecord) async throws -> Data {
+        try await exclusively(.spending) {
+            let account = try muSig2Account(for: record)
+            let coordinates = muSig2OwnedCoordinates(for: record)
+            var working = psbt
+            if working.inputs.contains(where: { $0.tapKeySignature == nil && $0.finalScriptWitness == nil }) {
+                try account.aggregate(&working, knownUTXOs: record.utxos, ownedOutputCoordinates: coordinates,
+                                      chainTip: status.tipHeight)
+            }
+            let transaction = try account.finalizeSpend(&working, knownUTXOs: record.utxos,
+                                                        ownedOutputCoordinates: coordinates,
+                                                        chainTip: status.tipHeight)
+            let txid = try await broadcast(transaction,
+                                           feeRateSatPerVByte: Self.feeRate(of: transaction, spending: record.utxos))
+            let changeScript = try account.scriptPubKey(index: record.nextChangeIndex,
+                                                        choice: AddressChain.change.rawValue)
+            let hasChange = transaction.outputs.contains { $0.scriptPubKey == changeScript }
+            do {
+                try await muSig2Store.recordSpend(id: record.id, transaction: transaction,
+                                                  changeIndex: hasChange ? record.nextChangeIndex : nil)
+            } catch {
+                muSig2Accounts = await muSig2Store.all
+                throw MuSig2ActionError.spendNotRecorded(txid: txid, reason: error.localizedDescription)
+            }
+            muSig2Accounts = await muSig2Store.all
+            e2e?.journal("musig2.spendBroadcast", fields: ["id": record.id, "txid": txid.displayHex])
+            return txid
+        }
+    }
+
+    /// The fee rate of a spend of known coins, for the relay-floor gate a
+    /// wallet send passes; nil when an input is not one of them.
+    static func feeRate(of transaction: WalletCore.Transaction, spending coins: [WalletUTXO]) -> Double? {
+        var inputs: Int64 = 0
+        for input in transaction.inputs {
+            guard let coin = coins.first(where: { $0.outpoint == input.previousOutput }) else { return nil }
+            inputs += coin.amount
+        }
+        let fee = inputs - transaction.outputs.reduce(0) { $0 + $1.value }
+        let vsize = TransactionBuilder.vsize(of: transaction)
+        guard fee > 0, vsize > 0 else { return nil }
+        return Double(fee) / Double(vsize)
+    }
+
+    /// The wallet's account key for one MuSig2 round, after the same device
+    /// check as a send.
+    private func muSig2SigningKey(reason: String) async throws -> HDKey {
+        guard let wallet else { throw AppError.noWallet }
+        try await authenticateSensitiveAction(reason: reason)
+        defer { keychainAuthentication.revoke() }
+        try Task.checkCancellation()
+        return try await wallet.muSig2SigningKey()
+    }
+
+    /// Overwrites every secret nonce before dropping the dictionary. Best
+    /// effort: the keys are materialised first so no view keeps the storage
+    /// shared, and a `Data` shared with another copy is copied, not zeroed.
+    static func scrub(_ nonces: inout [Int: [Data: Data]]) {
+        for input in Array(nonces.keys) {
+            for key in Array(nonces[input]?.keys ?? [:].keys) {
+                let count = nonces[input]?[key]?.count ?? 0
+                nonces[input]?[key]?.resetBytes(in: 0 ..< count)
+            }
+        }
+        nonces.removeAll(keepingCapacity: false)
+    }
+
+    /// Records only the public PSBT exchanged with other signers (E2E mode).
+    /// Secret nonces never enter a PSBT.
+    func journalPSBT(stage: String, psbt: PSBT) {
+        e2e?.journal("psbt.generated", fields: [
+            "stage": stage, "base64": psbt.base64,
+            "inputCount": String(psbt.inputs.count), "outputCount": String(psbt.outputs.count),
+        ])
+    }
+
     // MARK: - People
 
     /// Reads the address book file for the current network. Damage is a
@@ -2184,7 +2443,7 @@ final class AppModel {
     }
 
     func paymentRecipients(_ entry: HistoryEntry) -> [PaymentRecipient] {
-        Self.paymentRecipients(entry, owned: ownWatchScripts,
+        Self.paymentRecipients(entry, owned: ownWatchScripts.union(ownedMuSig2Scripts),
                                people: recipientByScript, network: network)
     }
 
@@ -2338,6 +2597,7 @@ final class AppModel {
         defaults.set(newNetwork.rawValue, forKey: DefaultsKey.network)
         loadNetworkScopedSettings()
         await configurePeople()
+        await configureMuSig2()
         guard let walletURL = walletURL() else {
             stage = .storageDamaged(
                 "Winnow could not access its protected local storage. No wallet files or keys were changed.")
@@ -2625,6 +2885,22 @@ final class AppModel {
 
     private func peopleURL() -> URL? {
         storageDirectory()?.appending(path: "people.json")
+    }
+
+    private func muSig2URL() -> URL? {
+        storageDirectory()?.appending(path: "musig2.json")
+    }
+
+    /// Reads this wallet's MuSig2 accounts. Damage is a notice, not a stage:
+    /// the wallet keeps working, and the accounts' coins stay on chain.
+    func configureMuSig2() async {
+        switch await muSig2Store.configure(storageURL: muSig2URL(), network: network) {
+        case let .damaged(message):
+            muSig2StorageNotice = message
+        case .missing, .loaded:
+            muSig2StorageNotice = nil
+        }
+        muSig2Accounts = await muSig2Store.all
     }
 
     private func parsedManualPeers() -> [PeerEndpoint] {

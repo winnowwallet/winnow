@@ -1,8 +1,8 @@
-Winnow single-key build on Swift-only curve math (internal test)
+Winnow single-key build with raw MuSig2 accounts, on Swift-only curve math (internal test)
 
-This build is the specialized single-key Winnow. Shared accounts are gone: no MuSig2, no 2-of-3 vaults, no cosigner cards, no shared savings. Every address and signature comes from Winnow's own Swift secp256k1 module instead of libsecp256k1. The module is variable-time and does not clear secrets from memory; that is accepted for this test build. Compact-filter sync, peer routing, people, labels and backups are unchanged.
+This build is the specialized single-key Winnow. Advanced mode adds raw MuSig2 accounts: paste an n-of-n tr(musig(...)/<0;1>/*) descriptor that includes this phone's key, receive into it, and sign spends as PSBT text with the other signers. There are no 2-of-3 vaults, cosigner cards or shared savings. Every address and signature, MuSig2 included, comes from Winnow's own Swift secp256k1 module instead of libsecp256k1. The module is variable-time and does not clear secrets or MuSig2 nonces from memory; that is accepted for this test build. Compact-filter sync, peer routing, people, labels and backups are unchanged.
 
-Do not install this build on a phone that holds funds in shared accounts. It cannot see them, creating or deleting a wallet in it removes the shared-account records, and it replaces the automatic iCloud backup with one that has no shared accounts. Use a phone with only an ordinary wallet, or a fresh install.
+Do not install this build on a phone that holds funds in threshold vaults or shared savings. It cannot see them, creating or deleting a wallet in it removes those records, and it replaces the automatic iCloud backup with one that has no threshold accounts. Use a phone with only an ordinary wallet, or a fresh install.
 
 This build also carries the shared library changes from Winnow 0.8.6. Automatic peer-driven fee increases use the majority of configured peer seats and stop at 120 sat/vB; a rate below what any connected peer would relay, or below a reported floor above that cap, is refused before signing and asks for an explicit rate. Compact-filter checkpoint comparisons record which peer acquisition source classes agreed.
 
@@ -10,12 +10,16 @@ Ordinary wallet
 
 Switch to signet (Advanced → Settings → Signet), receive from a faucet, send a payment and watch it confirm. Restore the same recovery words in the App Store Winnow on another device: the first receive address must match. Pay a saved person and a pasted address. Bump the fee on a pending payment.
 
+MuSig2 accounts
+
+On signet, in Advanced mode, copy this phone's key from Wallet → Add MuSig2 account, build tr(musig(PHONE_KEY,OTHER_KEY)/<0;1>/*) with a second signer such as Bitcoin Core, paste it and check the first address on both. Fund it, create a PSBT, add this phone's nonce, combine the other signer's, add the partial signature, combine theirs and broadcast. Leaving the screen between rounds must discard the exchange.
+
 Backups
 
-Restore a backup file written by the App Store Winnow that has no shared accounts: it must restore. A file that carries shared accounts must be refused with a clear message, never restored partially.
+Restore a backup file written by the App Store Winnow that has no threshold accounts: it must restore, MuSig2 accounts included. A file that carries a threshold or script-path account must be refused with a clear message, never restored partially.
 
 Upgrading from an earlier version
 
-Check that your ordinary wallet, history, saved people, labels, routing and settings are still there. Shared accounts are expected to be absent in this build.
+Check that your ordinary wallet, history, saved people, labels, routing and settings are still there. Threshold vaults and shared savings are expected to be absent in this build.
 
 Report bugs publicly at https://github.com/winnowwallet/winnow/issues. Include the app version, device, network, routing mode and steps to reproduce. Never include recovery words, private keys, or wallet backup files.

@@ -154,10 +154,11 @@ public struct ImportBundle: Codable, Equatable, Sendable {
     public var lastKnownBlockHash: String?
     public var utxos: [UTXO]
     public var transactions: [KnownTransaction]
-    /// Shared accounts written by a Winnow that still had them. This build
-    /// cannot hold their coins, so a bundle carrying any is refused outright
-    /// rather than restored without them (see `decode`).
-    var vaults: [UnsupportedVaultRecord]?
+    /// MuSig2 accounts (`MuSig2AccountRecord`), under the key the
+    /// shared-account Winnow used for all its accounts. Key-path MuSig2
+    /// accounts restore; a bundle carrying any other kind of account is
+    /// refused outright rather than restored without it (see `decode`).
+    public var vaults: [MuSig2AccountRecord]?
     /// Next unused BIP86 receive index. Absent from v1 files and from
     /// writers that only knew UTXO-derived maxima; the importer then
     /// falls back to `max(receive UTXO index) + 1`.
@@ -226,6 +227,7 @@ public struct ImportBundle: Codable, Equatable, Sendable {
     /// then materialised and scanned.
     public static let maximumSerializedBytes = 8 * 1024 * 1024
     public static let maximumEntries = 50_000
+    public static let maximumVaults = 100
 
     /// Decodes a bundle from untrusted text, refusing implausible sizes before
     /// allocating anything proportional to them.
@@ -250,7 +252,17 @@ public struct ImportBundle: Codable, Equatable, Sendable {
             throw WalletError.invalidBundle(
                 "bundle declares \(bundle.transactions.count) transactions, above the \(maximumEntries) limit")
         }
-        guard (bundle.vaults ?? []).isEmpty else { throw WalletError.unsupportedWalletData }
+        guard (bundle.vaults?.count ?? 0) <= maximumVaults,
+              (bundle.vaults ?? []).reduce(0, { $0 + $1.allUtxos.count }) <= maximumEntries else {
+            throw WalletError.invalidBundle("too many MuSig2 accounts or account coins")
+        }
+        // Threshold and script-path accounts from the shared-account Winnow
+        // have no home here; their coins must not vanish from a restore.
+        if let vaults = bundle.vaults, !vaults.isEmpty {
+            guard let network = BitcoinNetwork(rawValue: bundle.network),
+                  vaults.allSatisfy({ (try? MuSig2Account($0.descriptor, network: network)) != nil })
+            else { throw WalletError.unsupportedWalletData }
+        }
         return bundle
     }
 
@@ -283,6 +295,7 @@ public struct ImportBundle: Codable, Equatable, Sendable {
         try container.encode(transactions, forKey: .transactions)
         try container.encodeIfPresent(nextReceiveIndex, forKey: .nextReceiveIndex)
         try container.encodeIfPresent(nextChangeIndex, forKey: .nextChangeIndex)
+        try container.encodeIfPresent(vaults, forKey: .vaults)
     }
 
     /// The bundle's claimed UTXOs in wallet form.
@@ -335,13 +348,6 @@ public struct ImportBundle: Codable, Equatable, Sendable {
                           height: utxo.height,
                           isCoinbase: utxo.isCoinbase ?? false)
     }
-}
-
-/// A shared-account record from an older bundle. It decodes from any JSON
-/// value and keeps nothing: its presence alone makes the bundle unsupported.
-struct UnsupportedVaultRecord: Codable, Equatable, Sendable {
-    init(from decoder: any Decoder) throws {}
-    func encode(to encoder: any Encoder) throws {}
 }
 
 /// The outcome of verifying an import bundle by forward-scanning from its

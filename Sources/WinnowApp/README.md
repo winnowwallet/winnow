@@ -12,9 +12,17 @@ The automated UI journey currently covers iPhone only.
 
 Wallet is the one account and transaction list. Payment details save or rename a
 recipient; Send holds the saved-recipient picker and the amount. The reviewed
-proposal is signed with this phone's key after the owner authenticates; there is
-no shared account, approval screen or PSBT exchange with other signers. Advanced
+proposal is signed with this phone's key after the owner authenticates. Advanced
 mode keeps coins and the raw descriptor under Technical details.
+
+Advanced mode's Wallet tab also lists MuSig2 accounts
+([MuSig2Views.swift](MuSig2Views.swift)), never shown in Simple mode. Add takes
+a pasted descriptor, Account shows the receive address, coins and descriptor,
+and one PSBT screen creates or combines a spend and runs round 1, round 2 and
+the broadcast. Each round asks for device authentication. Secret nonces stay
+in that screen's memory and are scrubbed when it closes, the app backgrounds or
+the exchange restarts. [MuSig2Store](MuSig2Store.swift) keeps the accounts in a
+sealed `musig2.json` per wallet.
 Removing a shortcut preserves
 past labels and fresh-address counters in the existing
 people.json store. Receive shares the wallet’s payment card.

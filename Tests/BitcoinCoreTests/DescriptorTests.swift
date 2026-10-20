@@ -56,11 +56,12 @@ struct DescriptorTests {
         #expect(throws: DescriptorError.invalidPath) { _ = try Descriptor(doubled) }
     }
 
-    /// Script trees, multisig leaves and musig() aggregation belong to the
-    /// shared-account Winnow. Here they are not a descriptor at all: the
-    /// parser stops at the first character the single-key grammar does not
-    /// expect, so nothing downstream can treat such text as a key it holds.
-    @Test("script trees, multisig leaves and musig() are refused at the parse")
+    /// Script trees and multisig leaves belong to the shared-account Winnow.
+    /// Here they are not a descriptor at all: the parser stops at the first
+    /// character the key-path grammar does not expect, so nothing downstream
+    /// can treat such text as a key it holds. Key-path `musig()` is accepted;
+    /// BIP390Tests covers it.
+    @Test("script trees and multisig leaves are refused at the parse")
     func multiKeyFormsRefused() {
         let xpub = "xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL"
         let other = "xpub68NZiKmJWnxxS6aaHmn81bvJeTESw724CRDs6HbuccFQN9Ku14VQrADWgqbhhTHBaohPX4CjNLf9fq9MYo6oDaPPLPxSb7gwQN3ih19Zm4Y"
@@ -68,8 +69,8 @@ struct DescriptorTests {
             "tr(0260b2003c386519fc9eadf2b5cf124dd8eea4c4e68d5e154050a9346ea98ce600,pk(669b8afcec803a0d323e9a17f3ea8e68e8abe5a278020a929adbec52421adbd0))",
             "tr(\(xpub)/<0;1>/*,{pk(\(other)/0/*),multi_a(2,\(xpub)/*,\(other)/0/0/*)})",
             "tr(\(xpub)/<0;1>/*,sortedmulti_a(1,\(other)/0/*))",
-            "tr(musig(\(xpub),\(other))/0/*)",
-            "rawtr(musig(02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9,03dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659))",
+            "tr(musig(\(xpub),\(other))/0/*,pk(\(other)/1/*))",
+            "tr(musig(musig(\(xpub),\(other)))/0/*)",
             "pk(\(xpub)/0/*)",
             "multi_a(1,\(xpub)/0/*)",
         ] {

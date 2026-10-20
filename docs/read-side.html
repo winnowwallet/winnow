@@ -233,8 +233,8 @@
   <tr>
   <td>6</td>
   <td>Shared custody</td>
-  <td>Not in this build</td>
-  <td>One key on this phone: no vault descriptor, no cosigner ceremony. A backup carrying vault records is refused.</td>
+  <td>Raw MuSig2 accounts</td>
+  <td>Advanced mode watches n-of-n <code>tr(musig(…)/&lt;0;1&gt;/*)</code> accounts in the same filter scan. No threshold vaults; a backup carrying one is refused.</td>
   </tr>
   <tr>
   <td>7</td>
@@ -304,8 +304,8 @@
   <ul>
   <li><strong>Official BIP test vectors</strong> for every cryptographic surface: BIP39/32/86 (keys), BIP340 (Schnorr), BIP341 (Taproot tweaks, control blocks, sighash), BIP350 (bech32m), BIP158 (GCS filters, byte-for-byte against real blocks), BIP380 (descriptors).</li>
   <li><strong>Loopback fake-node tests</strong> for the P2P layer: handshakes, filter sync, lying-filter detection, relay state machine — deterministic, no network.</li>
-  <li><strong>One end-to-end UI test</strong> makes one payment against a private signet node. Core funds the wallet, accepts the transaction, and mines blocks automatically for prompt confirmation in the app. The host records one continuous video; detailed failures stay in focused tests.</li>
-  <li><strong>The crypto boundary:</strong> single-key curve math is Winnow’s own Swift module, variable-time and not zeroized, checked byte for byte against answers recorded from libsecp256k1 (Bitcoin Core’s constant-time, exhaustively tested curve library) and the BIP340 reference implementation; nothing in the repository links libsecp256k1.</li>
+  <li><strong>One end-to-end UI test</strong> makes one payment against a private signet node, then spends from a 2-of-2 MuSig2 account with Core as the other signer. Core funds the wallet, accepts both transactions, and mines blocks automatically for prompt confirmation in the app. The host records one continuous video; detailed failures stay in focused tests.</li>
+  <li><strong>The crypto boundary:</strong> curve math, MuSig2 included, is Winnow’s own Swift module, variable-time and not zeroized, checked byte for byte against answers recorded from libsecp256k1 (Bitcoin Core’s constant-time, exhaustively tested curve library) and the BIP340 reference implementation; nothing in the repository links libsecp256k1.</li>
   </ul>
   <p>Inspect the <a href="https://github.com/winnowwallet/winnow/actions">current test runs and artifacts</a>. The <a href="/recording">payment recording</a> identifies the source and run behind that journey.</p>
   <hr />

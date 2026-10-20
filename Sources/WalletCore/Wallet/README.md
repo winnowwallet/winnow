@@ -9,8 +9,12 @@ GUI should not carry a second wallet implementation. The
 
 [AppModel](../../WinnowApp/AppModel.swift) coordinates these rules with
 WalletCore networking, [key storage](../Keys/README.md), and
-[signing](../Transactions/README.md). An import bundle written by a Winnow
-that held shared accounts is refused rather than restored without them.
+[signing](../Transactions/README.md). `MuSig2Account` is the raw n-of-n
+account: its descriptor shape, participant checks, spend review (known coins,
+own change, a fee of at most a tenth, all outputs committed), PSBT creation and
+both MuSig2 rounds. An import bundle carries MuSig2 account records; one
+written by a Winnow that held threshold or script-path accounts is refused
+rather than restored without them.
 
 An embedding application can restore its reserved address ranges with
 `Wallet.advanceCursors(nextReceiveIndex:nextChangeIndex:)`. Each cursor is the

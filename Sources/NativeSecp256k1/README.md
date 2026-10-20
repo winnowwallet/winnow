@@ -2,18 +2,19 @@
 
 # Native secp256k1
 
-A pure-Swift implementation of the secp256k1 operations the single-key BIP86
-wallet needs: scalar arithmetic modulo the group order, field arithmetic
-modulo the curve prime, point addition and scalar multiplication, x-only and
-compressed key encodings, BIP32-style key tweaks, BIP340 signing and
-verification, and the BIP340 tagged hash. It depends only on Foundation and
-CryptoKit (for SHA-256).
+A pure-Swift implementation of the secp256k1 operations Winnow needs: scalar
+arithmetic modulo the group order, field arithmetic modulo the curve prime,
+point addition and scalar multiplication, x-only and compressed key encodings,
+BIP32-style key tweaks, BIP340 signing and verification, and the BIP340 tagged
+hash. It depends only on Foundation and CryptoKit (for SHA-256).
 
 WalletCore's key derivation, Taproot tweaks, signer and PSBT finalizer are the
-consumers. MuSig2, script-path multisig, ECDSA and ECDH are out of scope: the
-module implements exactly the operations the ordinary receive and send path
-calls, with the same inputs, outputs and failure cases as the libsecp256k1
-wrapper it replaces.
+consumers, and so is its BIP327 MuSig2: key aggregation, nonces, partial
+signatures and their aggregation. For MuSig2 the module also exposes plain
+arithmetic, `Secp256k1.ScalarModN` (zero allowed, unlike a private key) and
+point addition, negation and multiplication on `PublicKey`, each returning
+nil for the point at infinity. Script-path multisig, ECDSA and ECDH are out of
+scope.
 
 ## Limits
 
@@ -23,6 +24,13 @@ deliberate first-version trade-off recorded in the main README; a later pass
 would replace the conditional subtractions, the per-bit branch in scalar
 multiplication and the secret-indexed table lookup with constant-time
 selects, and clear the scalar copies made while signing and tweaking.
+
+MuSig2 widens what that covers. A participant's secret nonces pass through the
+same variable-time scalar and point code as its key, and a leak of either
+nonce gives away the key just as surely. That is accepted for this version on
+the same terms. Nonce reuse, the failure MuSig2 punishes hardest, is handled
+above this module: WalletCore zeroes each secret nonce as it signs and refuses
+a zeroed one, and the app keeps them in memory only.
 
 Every operation rejects malformed input by throwing or returning `nil`; none
 traps. Taproot output-key tweaks run on control blocks taken from incoming
@@ -35,7 +43,9 @@ outside this module: the [native-secp256k1 fixtures](../../Tests/BitcoinCoreTest
 (Python integer arithmetic, and key, tweak, signature and verification
 answers recorded from libsecp256k1 and the BIP340 reference implementation,
 which had to agree), the official BIP340 vectors, and the BIP32, BIP86 and
-BIP341 vectors already used by WalletCore. BIP340 signatures must match the
+BIP341 vectors already used by WalletCore. The BIP327 vectors exercise the
+MuSig2 arithmetic, and the UI journey has Bitcoin Core's own MuSig2 co-sign
+and mine a spend that this module aggregated. BIP340 signatures must match the
 recorded ones byte for byte under a fixed auxiliary input. The repository
 links no second curve implementation, so the recorded fixtures hold edge
 cases and random inputs go to the fuzz harness: its `native-secp256k1` target

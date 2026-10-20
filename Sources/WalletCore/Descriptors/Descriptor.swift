@@ -20,6 +20,9 @@ public enum DescriptorError: Error, Equatable {
     case invalidKey
     case invalidPath
     case derivationFailed
+    /// A `musig()` expression that breaks BIP390: nested, empty, with an
+    /// origin of its own, a hardened step, or ranged participants under a suffix.
+    case invalidMuSig
 }
 
 extension HDKey.Network: Equatable {
@@ -28,10 +31,10 @@ extension HDKey.Network: Equatable {
 }
 
 /// Output descriptor parse/serialize/derive engine (BIP380 general operation
-/// and checksum, BIP386 `tr()`, BIP389 multipath). Single-key Taproot only:
-/// the supported expressions are `tr(KEY)` and `rawtr(KEY)`, where KEY is one
-/// key with an optional origin and derivation suffix. Script trees, multisig
-/// leaves and `musig()` aggregation are not part of this wallet.
+/// and checksum, BIP386 `tr()`, BIP389 multipath, BIP390 `musig()`). Taproot
+/// key-path only: `tr(KEY)`, `rawtr(KEY)` and `tr(musig(KEY, ...)/DERIV)`, where
+/// KEY is one key with an optional origin and derivation suffix. Script trees
+/// and multisig leaves are not part of this wallet and fail to parse.
 public struct Descriptor: Sendable, Equatable {
     /// BIP388-style key origin information: `[fingerprint/path]`.
     public struct KeyOrigin: Sendable, Equatable {
@@ -96,10 +99,28 @@ public struct Descriptor: Sendable, Equatable {
         }
     }
 
+    /// BIP390 `musig(KEY, KEY, ...)` with its optional unhardened BIP328
+    /// derivation suffix. Participants keep their written order; the
+    /// aggregate sorts them (KeySort) as BIP390 requires.
+    public struct MuSigKey: Sendable, Equatable {
+        public var participants: [SingleKey]
+        public var derivation: Derivation
+
+        public init(participants: [SingleKey], derivation: Derivation = Derivation()) {
+            self.participants = participants
+            self.derivation = derivation
+        }
+    }
+
     /// Top-level script expressions.
     public enum ScriptExpression: Sendable, Equatable {
         /// `tr(KEY)`: P2TR output with KEY as the internal key, BIP86-tweaked.
         case tr(SingleKey)
+        /// `tr(musig(KEY, ...)/DERIV)`: P2TR key-path output whose internal key is
+        /// the BIP327 aggregate of the participants, BIP86-tweaked; no script tree.
+        case trMuSig(MuSigKey)
+        /// `rawtr(musig(KEY, ...)/DERIV)`: the aggregate used directly as the output key.
+        case rawtrMuSig(MuSigKey)
         /// `rawtr(KEY)`: P2TR output with KEY used directly as the output key (no tweak).
         case rawtr(SingleKey)
     }
@@ -132,6 +153,7 @@ public struct Descriptor: Sendable, Equatable {
         let expression = try parser.parseTopLevel()
         guard parser.atEnd else { throw DescriptorError.unexpectedCharacter(parser.peek()!) }
         self.expression = expression
+        try validate()
     }
 
     /// Canonical serialization with a freshly computed BIP380 checksum.
@@ -140,15 +162,36 @@ public struct Descriptor: Sendable, Equatable {
         return body + "#" + DescriptorChecksum.create(body)
     }
 
-    /// The one key expression of the descriptor.
-    public var key: SingleKey {
+    /// The one key expression of a single-key descriptor; nil for `musig()`.
+    public var key: SingleKey? {
         switch expression {
         case let .tr(key), let .rawtr(key): key
+        case .trMuSig, .rawtrMuSig: nil
+        }
+    }
+
+    /// The `musig()` key expression, when the descriptor has one.
+    public var muSigKey: MuSigKey? {
+        switch expression {
+        case let .trMuSig(muSig), let .rawtrMuSig(muSig): muSig
+        case .tr, .rawtr: nil
+        }
+    }
+
+    /// Every derivation in the descriptor: the key's own, or each participant's
+    /// plus the `musig()` suffix.
+    private var derivations: [Derivation] {
+        switch expression {
+        case let .tr(key), let .rawtr(key): [key.derivation]
+        case let .trMuSig(muSig), let .rawtrMuSig(muSig): muSig.participants.map(\.derivation) + [muSig.derivation]
         }
     }
 
     /// Whether the key expression contains a `/*` wildcard.
-    public var isRanged: Bool { key.derivation.isRanged }
+    public var isRanged: Bool { derivations.contains(where: \.isRanged) }
+
+    /// Number of BIP389 multipath choices (1 without a multipath element).
+    public var multipathCount: Int { derivations.map(\.multipathCount).max() ?? 1 }
 
     /// Derives the output(s) at `index` (ignored when the descriptor has no
     /// wildcard). Returns one output per BIP389 multipath choice — receive and
@@ -156,7 +199,7 @@ public struct Descriptor: Sendable, Equatable {
     /// prefix is the Bitcoin network's, not the key network's: regtest keys
     /// are testnet keys, but a regtest address is `bcrt1…`, never `tb1…`.
     public func derived(index: UInt32, bitcoinNetwork: BitcoinNetwork) throws -> [DerivedOutput] {
-        try (0 ..< key.derivation.multipathCount).map { choice in
+        try (0 ..< multipathCount).map { choice in
             let scriptPubKey = try resolve(expression, index: index, choice: choice)
             let program = scriptPubKey.suffix(32)
             let address = try SegwitAddress.encode(hrp: AddressDecoder.hrp(for: bitcoinNetwork), version: 1, program: program)
@@ -181,6 +224,54 @@ public struct Descriptor: Sendable, Equatable {
         case let .rawtr(key):
             let outputKey = xonly(try resolve(key, index: index, choice: choice))
             return Data([0x51, 0x20]) + outputKey
+        case let .trMuSig(muSig):
+            let internalKeyBytes = xonly(try resolve(muSig, index: index, choice: choice))
+            return try Taproot.scriptPubKey(internalKey: internalKeyBytes, merkleRoot: nil)
+        case let .rawtrMuSig(muSig):
+            return Data([0x51, 0x20]) + xonly(try resolve(muSig, index: index, choice: choice))
+        }
+    }
+
+    /// The 33-byte aggregate key of a `musig()` expression at (index, choice):
+    /// KeySort, KeyAgg, then BIP328 derivation from the synthetic xpub.
+    func resolve(_ muSig: MuSigKey, index: UInt32, choice: Int) throws -> Data {
+        let keys = try participantKeys(muSig, index: index, choice: choice)
+        let aggregate = try MuSig.aggregate(MuSig.keySort(keys))
+        guard !muSig.derivation.elements.isEmpty else { return aggregate }
+        let synthetic = try MuSig.syntheticExtendedKey(aggregatePublicKey: aggregate)
+        return try apply(muSig.derivation, to: synthetic, index: index, choice: choice).publicKey
+    }
+
+    /// Each participant's 33-byte key at (index, choice), in written order.
+    func participantKeys(_ muSig: MuSigKey, index: UInt32, choice: Int) throws -> [Data] {
+        try muSig.participants.map { try compressed(derive($0, index: index, choice: choice)) }
+    }
+
+    // MARK: - Validation
+
+    /// BIP390 rules beyond the grammar, and BIP389 agreement of multipath counts.
+    private func validate() throws {
+        guard let muSig = muSigKey else { return }
+        for element in muSig.derivation.elements {
+            switch element {
+            case let .step(step) where step >= HDKey.hardenedOffset: throw DescriptorError.invalidMuSig
+            case let .multipath(values) where values.contains(where: { $0 >= HDKey.hardenedOffset }):
+                throw DescriptorError.invalidMuSig
+            case .wildcard(hardened: true): throw DescriptorError.invalidMuSig
+            default: break
+            }
+        }
+        if !muSig.derivation.elements.isEmpty {
+            // With a suffix, participants are xpubs without their own range.
+            for participant in muSig.participants {
+                guard case .extended = participant.base, !participant.derivation.isRanged,
+                      participant.derivation.multipathCount == 1
+                else { throw DescriptorError.invalidMuSig }
+            }
+        }
+        let counts = derivations.map(\.multipathCount).filter { $0 > 1 }
+        if let first = counts.first, counts.contains(where: { $0 != first }) {
+            throw DescriptorError.invalidPath
         }
     }
 
@@ -300,17 +391,25 @@ struct Parser {
 
     // MARK: Grammar
 
-    /// `tr(KEY)` or `rawtr(KEY)`. A tree after the key, a `musig()` expression
-    /// or any other script is a parse error, not a descriptor this wallet holds.
+    /// `tr(KEY)`, `tr(musig(KEY, ...)/DERIV)` or `rawtr(KEY)`. A tree after the
+    /// key or any other script is a parse error, not a descriptor this wallet holds.
     mutating func parseTopLevel() throws -> Descriptor.ScriptExpression {
         let name = takeWhile { $0.isLetter || $0 == "_" }
         try expect("(")
         switch name {
         case "tr":
+            if let muSig = try parseMuSig() {
+                try expect(")")
+                return .trMuSig(muSig)
+            }
             let key = try parseKeyExpression()
             try expect(")")
             return .tr(key)
         case "rawtr":
+            if let muSig = try parseMuSig() {
+                try expect(")")
+                return .rawtrMuSig(muSig)
+            }
             let key = try parseKeyExpression()
             try expect(")")
             return .rawtr(key)
@@ -322,6 +421,27 @@ struct Parser {
     /// The most steps a key origin may name: the largest `HDKey.depth`, since
     /// a key at depth 255 has no child a byte can count.
     static let maximumOriginSteps = Int(UInt8.max)
+
+    /// BIP390 `musig(KEY, KEY, ...)` plus its derivation suffix, or nil when the
+    /// key is not a `musig()`. Nesting, an empty list and an origin on the
+    /// `musig(` itself are refused; origins belong on the participants.
+    mutating func parseMuSig() throws -> Descriptor.MuSigKey? {
+        let start = index
+        let origin = try parseOrigin()
+        guard consume("musig(") else {
+            index = start
+            return nil
+        }
+        guard origin == nil else { throw DescriptorError.invalidMuSig }
+        var participants: [Descriptor.SingleKey] = []
+        repeat {
+            if peek() == "m" || peek() == ")" { throw DescriptorError.invalidMuSig }
+            participants.append(try parseKeyExpression())
+        } while consume(",")
+        try expect(")")
+        guard !participants.isEmpty else { throw DescriptorError.invalidMuSig }
+        return Descriptor.MuSigKey(participants: participants, derivation: try parseDerivation())
+    }
 
     mutating func parseKeyExpression() throws -> Descriptor.SingleKey {
         let origin = try parseOrigin()
@@ -446,7 +566,15 @@ enum Serializer {
             "tr(\(serialize(key)))"
         case let .rawtr(key):
             "rawtr(\(serialize(key)))"
+        case let .trMuSig(muSig):
+            "tr(\(serialize(muSig)))"
+        case let .rawtrMuSig(muSig):
+            "rawtr(\(serialize(muSig)))"
         }
+    }
+
+    static func serialize(_ muSig: Descriptor.MuSigKey) -> String {
+        "musig(\(muSig.participants.map(serialize).joined(separator: ",")))" + serialize(muSig.derivation)
     }
 
     static func serialize(_ key: Descriptor.SingleKey) -> String {

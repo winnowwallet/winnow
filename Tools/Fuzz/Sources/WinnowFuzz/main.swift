@@ -85,7 +85,9 @@ private func binaryCorpus(for target: FuzzTarget) -> [Data] {
         let other = "xpub68NZiKmJWnxxS6aaHmn81bvJeTESw724CRDs6HbuccFQN9Ku14VQrADWgqbhhTHBaohPX4CjNLf9fq9MYo6oDaPPLPxSb7gwQN3ih19Zm4Y"
         return [Data(), Data("tr(\(generatorXOnly.hex))".utf8), Data("rawtr(\(generatorXOnly.hex))".utf8),
                 Data("tr([deadbeef/86'/0'/0']\(account)/<0;1>/*)".utf8),
-                Data("tr(\(other)/0/*)".utf8)]
+                Data("tr(\(other)/0/*)".utf8),
+                Data("tr(musig(\(account),\(other))/<0;1>/*)".utf8),
+                Data("rawtr(musig(02\(generatorXOnly.hex),\(other)))".utf8)]
     case .transaction:
         return [Data(), minimalTransaction]
     case .block:

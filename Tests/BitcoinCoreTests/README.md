@@ -13,6 +13,9 @@ The `NativeSecp256k1*` suites check the [native curve module](../../Sources/Nati
 layer by layer (integers, field, scalars and points, keys, BIP340) against
 those vectors, byte for byte against answers recorded from libsecp256k1;
 the timing suite is opt-in and asserts nothing.
+`NativeSecp256k1ArithmeticTests` checks the public scalar and point arithmetic
+MuSig2 uses; `MuSig2Tests` runs the BIP327 vectors and the session-safety
+refusals on it, and `BIP390Tests` the published `musig()` descriptor vectors.
 The test target keeps its primitive-focused name; production has one WalletCore target.
 
 Run `swift test --filter BitcoinCoreTests` from the repository root.

@@ -43,16 +43,23 @@ Status vocabulary:
 - **Blocked release:** an acceptance requirement for a mainnet beta remains
   open; this does not assert that an exploitable vulnerability is known.
 
-**Single-key build.** This tree has no shared accounts: the vault, MuSig2 and
+**Single-key build with raw MuSig2 accounts.** The threshold vault and
 script-path code and the suites that evidenced it (`VaultFlowTests`,
 `VaultCosignerIdentityTests`, `VaultDraftIdentityTests`,
-`VaultSignerIndependenceTests`, `MuSig2SessionSafetyTests`,
-`VaultThresholdTests`, `VaultInteropDiffTests`, `PSBTConversionDiffTests`)
-were removed with it, and `ImportBundle` refuses a backup that carries vault
-records. S4 and S8 therefore have no subject in this build; their rows, and
-the vault clauses of S2, S3, S6, S7 and S9, record the evidence as it stood
-in the shared-account Winnow. S3's remaining subject is the descriptor
-vectors and the people store's key checks.
+`VaultSignerIndependenceTests`, `VaultThresholdTests`,
+`VaultInteropDiffTests`, `PSBTConversionDiffTests`) were removed, and
+`ImportBundle` refuses a backup that carries a threshold or script-path
+account. MuSig2 came back as n-of-n key-path accounts only, in Advanced mode.
+S4 has a subject again: `MuSig2SessionSafetyTests` (8 tests) and the BIP327
+vectors run against the native arithmetic, and the app holds secret nonces
+only in the signing screen's memory, scrubbed when it closes or the app
+backgrounds. S3 and S8 cover the account shape: `MuSig2AccountTests` refuses a
+repeated or relabelled participant, an origin that does not match its key, a
+participant suffix, another network and a private key, and carries 2-of-2 and
+3-of-3 spends end to end. The UI journey has Bitcoin Core 31.1 complete both
+rounds with the phone and mine the result. The rows below record the evidence
+as it stood in the shared-account Winnow; the threshold clauses of S2, S3, S6,
+S7, S8 and S9 have no subject in this build.
 
 | ID | Invariant | Recorded deterministic evidence | Recorded negative/manual evidence and gaps | Historical status |
 |---|---|---|---|---|

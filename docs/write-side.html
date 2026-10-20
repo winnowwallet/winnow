@@ -26,7 +26,7 @@
   <nav class="contents" aria-label="On this page"><a href="#coin-selection-and-change">Coins and change</a><a href="#fees-without-a-mempool">Fees</a><a href="#signing">Signing</a><a href="#getting-it-out">Relay</a><a href="#what-still-leaks">Privacy</a></nav>
   <h2 id="the-problem">Four steps</h2><ol><li>Select enough coins for the payment and fee.</li><li>Build a transaction and return any change to your wallet.</li><li>Review the address, amount and fee before signing.</li><li>Broadcast through peers, then distinguish relay from confirmation.</li></ol>
   <h2 id="one-spend-shape">2. One spend shape</h2>
-  <p>Everyday spends are BIP86 P2TR key-path. The signed witness is one 64-byte Schnorr signature (<code>SIGHASH_DEFAULT</code>); fee math uses 66 witness bytes per input (compact-size count + length + 64). Script-path and MuSig2 shapes belong to <a href="/vaults">vaults</a> and plug into the same builder via <code>witnessBytesPerInput</code>.</p>
+  <p>Everyday spends are BIP86 P2TR key-path. The signed witness is one 64-byte Schnorr signature (<code>SIGHASH_DEFAULT</code>); fee math uses 66 witness bytes per input (compact-size count + length + 64). A MuSig2 account spend has the same shape: its aggregate signature is one 64-byte key-path signature, so it uses the same builder and fee math.</p>
   <p>The phone <em>receives</em> only P2TR. It <em>pays</em> standard P2PKH, P2SH, P2WPKH, P2WSH and P2TR addresses. Destination diversity is a payment-layer concern; the wallet’s own outputs stay one type so coin selection, change, and watch-list code have a single script shape.</p>
   <p>Transactions are version 2, empty <code>scriptSig</code>s, and sequence <code>0xFFFFFFFD</code> (locktime-disabled, BIP125 opt-in RBF). A pending send with change can be fee-bumped in the transaction history; signaling replacement from the first broadcast avoids a policy surprise when it is needed.</p>
   <hr />
@@ -52,7 +52,7 @@
   <p>History retains the old txid as <strong>replaced</strong> and adds the new pending entry. If the original wins the confirmation race before the replacement propagates, scanning discards the replacement descendant and its locally-counted change before applying the confirmed original. Conversely, if broadcasting succeeds but the replacement’s state commit fails, its exact input set still identifies it as the winner when scanned and removes the original pending change. Neither race can double-count balance.</p>
   <hr />
   <h2 id="signing">5. Signing</h2>
-  <p>The everyday path is PSBTv2 even for single-sig (BIP370/371): creator attaches witness UTXOs and Taproot key-origin metadata, the signer writes <code>PSBT_IN_TAP_KEY_SIG</code>, the finalizer extracts a raw transaction. One pipeline with <a href="/vaults">vaults</a>, instead of a private “just sign it” shortcut that would drift.</p>
+  <p>The everyday path is PSBTv2 even for single-sig (BIP370/371): creator attaches witness UTXOs and Taproot key-origin metadata, the signer writes <code>PSBT_IN_TAP_KEY_SIG</code>, the finalizer extracts a raw transaction. MuSig2 accounts use the same pipeline with the BIP373 fields added, instead of a private “just sign it” shortcut that would drift.</p>
   <p>Secrets:</p>
   <ul>
   <li>The seed is a BIP39 mnemonic (12 words, 16 bytes of entropy) or a master xprv, stored by <code>KeychainStore</code> under the wallet id (master fingerprint, 8 hex chars).</li>

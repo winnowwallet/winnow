@@ -55,6 +55,29 @@ enum NativeSecp256k1Exercise {
         try checkPublicKey(fields)
         try checkXOnlyKey(fields)
         try checkVerification(fields)
+        try checkArithmetic(fields)
+    }
+
+    /// The group arithmetic MuSig2 uses: scalar sums map to point sums,
+    /// a point plus its negation is infinity, and multiplying the generator
+    /// as a point agrees with the fixed-base table.
+    private static func checkArithmetic(_ fields: Fields) throws {
+        guard let s = try? Secp256k1.ScalarModN(fields.secret),
+              let t = try? Secp256k1.ScalarModN(fields.tweak) else { return }
+        let sG = Secp256k1.PublicKey.generatorMultiple(s)
+        let tG = Secp256k1.PublicKey.generatorMultiple(t)
+        try require((sG == nil) == s.isZero, "only a zero scalar gives infinity")
+        let sum: Secp256k1.PublicKey?
+        switch (sG, tG) {
+        case let (p?, q?): sum = p.adding(q)
+        case let (p, q): sum = p ?? q
+        }
+        try require(sum == Secp256k1.PublicKey.generatorMultiple(s + t), "(s + t)·G differs from s·G + t·G")
+        if let sG {
+            try require(sG.adding(sG.negated) == nil, "P + (−P) is not infinity")
+            let g = try Secp256k1.PublicKey(compressed: Secp256k1.PrivateKey(Data(count: 31) + Data([1])).publicKey.compressed)
+            try require(g.multiplied(by: s) == sG, "G·s as a point differs from the fixed-base table")
+        }
     }
 
     private static func checkPrivateKey(_ fields: Fields) throws {

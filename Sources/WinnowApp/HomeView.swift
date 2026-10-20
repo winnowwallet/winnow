@@ -94,6 +94,8 @@ struct HomeView: View {
                     .disabled(model.status.syncing)
                 }
 
+                MuSig2Section()
+
                 Section("Transactions") {
                     if model.status.history.isEmpty {
                         Text("No transactions yet. Payments appear here once they confirm in a block.")
@@ -108,6 +110,7 @@ struct HomeView: View {
             }
             .navigationTitle("Winnow")
             .navigationDestination(for: Data.self) { PaymentDetailView(txid: $0, sendToPerson: sendToPerson) }
+            .navigationDestination(for: MuSig2Route.self) { MuSig2Section.destination($0) }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     // The way back to the one-screen interface. Every
