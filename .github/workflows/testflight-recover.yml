@@ -1,6 +1,8 @@
 name: TestFlight recovery
 
-# Resume group assignment for one uploaded build; never archives or uploads.
+# Resume notes and the internal group for one uploaded build; never archives
+# or uploads. External beta review is requested only when the person
+# dispatching ticks `external_review`: a review request cannot be withdrawn.
 on:
   workflow_dispatch:
     inputs:
@@ -10,6 +12,10 @@ on:
       build_number:
         description: "Build number, i.e. the run number of the release that uploaded it"
         required: true
+      external_review:
+        description: "Also request external beta review and add the build to the public link (cannot be withdrawn)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -31,21 +37,25 @@ jobs:
       - name: Prepare signing credentials
         run: scripts/ci-sign.sh
 
-      - name: TestFlight groups (internal + external)
+      - name: TestFlight internal group, external review on request
         env:
           ASC_KEY_PATH: ${{ runner.temp }}/winnow-signing/AuthKey.p8
           TESTFLIGHT_MARKETING_VERSION: ${{ inputs.marketing_version }}
           TESTFLIGHT_BUILD_NUMBER: ${{ inputs.build_number }}
+          TESTFLIGHT_EXTERNAL_REVIEW: ${{ inputs.external_review }}
         run: |
           chmod +x scripts/testflight.sh
           scripts/testflight.sh wait-processing
           scripts/testflight.sh notes
           scripts/testflight.sh internal
-          # Report Apple's current states before attempting review. The final
-          # external and status commands below still have to succeed.
           scripts/testflight.sh status || true
-          scripts/testflight.sh external
-          scripts/testflight.sh status
+          # External beta review is a person's decision, made by ticking
+          # external_review on the dispatch form once the internal group has
+          # used the build. A review request cannot be withdrawn.
+          if [ "$TESTFLIGHT_EXTERNAL_REVIEW" = "true" ]; then
+            scripts/testflight.sh external
+            scripts/testflight.sh status
+          fi
 
       - name: Remove App Store Connect key
         if: always()

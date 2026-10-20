@@ -1,23 +1,19 @@
-Winnow 0.7.13: every verified Tor and I2P peer, plus background chain checks
+Winnow 0.8.7: single-key build on Swift-only curve math (internal test)
 
-The daily peer list is no longer cut to 2,000 Tor and 2,000 I2P peers; Winnow now keeps every one the census verified (3,212 Tor and 2,451 I2P on 2026-09-29). Once the census publishes the full list, Tor-only and I2P-only routing should connect as before, just with more peers to choose from. Advanced → Settings → Refresh peer list should succeed.
+This build is the specialized single-key Winnow. Shared accounts are gone: no MuSig2, no 2-of-3 vaults, no cosigner cards, no shared savings. Every address and signature comes from Winnow's own Swift secp256k1 module instead of libsecp256k1. The module is variable-time and does not clear secrets from memory; that is accepted for this test build. Compact-filter sync, peer routing, people, labels and backups are unchanged.
 
-Winnow now asks iOS to let it check the chain while closed. iOS decides when these run, usually no more than every 15 minutes and often less, and never after you force-quit Winnow or with Background App Refresh off (Settings → General → Background App Refresh).
+Do not install this build on a phone that holds funds in shared accounts. It cannot see them, creating or deleting a wallet in it removes the shared-account records, and it replaces the automatic iCloud backup with one that has no shared accounts. Use a phone with only an ordinary wallet, or a fresh install.
 
-Background checks
+Ordinary wallet
 
-In Advanced → Sync, note "Chain last checked … ago". Leave Winnow in the background (do not force-quit it) for an hour or more, ideally on Wi-Fi and charging. Reopen Advanced → Sync before the foreground sync finishes: the time should be recent, from while Winnow was closed. A payment sent to you while it was closed should appear quickly on open.
+Switch to signet (Advanced → Settings → Signet), receive from a faucet, send a payment and watch it confirm. Restore the same recovery words in the App Store Winnow on another device: the first receive address must match. Pay a saved person and a pasted address. Bump the fee on a pending payment.
 
-Private routing in the background
+Backups
 
-With Tailscale connected and your Tor and I2P gateways running, open Winnow once so the green Private banner shows, then background it. Turn Tailscale off and wait: background checks should skip rather than connect directly, so "Chain last checked" should not advance until you reopen Winnow. Turn Tailscale back on and it should advance again.
+Restore a backup file written by the App Store Winnow that has no shared accounts: it must restore. A file that carries shared accounts must be refused with a clear message, never restored partially.
 
-Simple mode errors
+Upgrading from an earlier version
 
-In simple mode, a peer dropping mid-sync (previously a red "The peer disconnected (closed).") should no longer show. If the connection keeps failing for several passes, a plain message should say Winnow keeps losing its connection. Advanced → Sync still shows every error.
-
-Upgrading from an older version
-
-Check that your accounts, transaction history, backups, routing and saved settings remain available after the update.
+Check that your ordinary wallet, history, saved people, labels, routing and settings are still there. Shared accounts are expected to be absent in this build.
 
 Report bugs publicly at https://github.com/winnowwallet/winnow/issues. Include the app version, device, network, routing mode and steps to reproduce. Never include recovery words, private keys, or wallet backup files.

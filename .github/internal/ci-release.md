@@ -11,8 +11,8 @@ is swift-secp256k1. Xcode resolution must match that root lockfile.
 | --- | --- | --- |
 | CI | PR, main push, nightly, manual, release caller | One validation lane (four WarpBuild jobs or one hosted build job) owns lint/test gates, package and debugging tests, app/Keychain tests and signet UI journey, release warning and E2E exclusion gates, inspection smoke, provenance, fixed fuzz corpus, and journey evidence normalization |
 | Fuzz sanitizers | Weekly or manual seed replay | Sustained address/thread sanitizer coverage; does not repeat normal suites |
-| Release | New stable version tag or manual validation | Calls CI, then signs/uploads and publishes only for tag pushes |
-| TestFlight recovery | Manual, exact version and build number | Finish notes/group assignment for an existing upload |
+| Release | New stable version tag or manual validation | Calls CI, then signs, uploads, assigns the internal TestFlight group and publishes only for tag pushes; never requests external beta review |
+| TestFlight recovery | Manual, exact version and build number | Finish notes and the internal group for an existing upload; external beta review only when `external_review` is ticked |
 | App Store submission | Manual | Attach a processed build and optionally submit for review |
 | TestFlight feedback | Manual, with an age recipient | Pull tester comments, screenshots and crash logs encrypted to that recipient; the log shows counts only |
 
@@ -76,6 +76,14 @@ requirement for every release. Its validation and vector update are described in
 The signed app archive is checked for E2E controls and its provenance is
 attached to the GitHub release.
 
+After upload the job waits for processing, sets notes from
+`docs/testflight-what-to-test.txt` and assigns the internal group. It never
+requests external beta distribution: a review request cannot be withdrawn, so
+that is a person's decision once the internal group has used the build, made
+with `scripts/testflight.sh external` and the exact version and build number,
+or by dispatching TestFlight recovery with `external_review` ticked. A green
+Release run never means external testers can install.
+
 The CI workflow is reused directly, so release definitions cannot drift into a
 second copy of package/app/fuzz checks. One unfiltered Debug `build-for-testing`
 builds the app and both test runners. App unit tests and the UI journey then
@@ -88,7 +96,8 @@ and bundled resources.
 
 If App Store Connect processing outlasts a release, use **TestFlight recovery**
 with its exact marketing version and build number; do not upload that number
-again. App Store submission remains a separate deliberate operation.
+again. Recovery stops at the internal group unless `external_review` is
+ticked. App Store submission remains a separate deliberate operation.
 
 To read tester feedback, run **TestFlight feedback** with an `age` public key
 whose private key stays on your machine, download the `testflight-feedback-<run>`

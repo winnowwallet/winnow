@@ -181,7 +181,7 @@ jobs:
           xcrun altool --upload-app -f build/export/WinnowApp.ipa -t ios \
             --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
 
-      - name: TestFlight groups (internal + external)
+      - name: TestFlight internal group
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
@@ -191,7 +191,11 @@ jobs:
           scripts/testflight.sh wait-processing
           scripts/testflight.sh notes
           scripts/testflight.sh internal
-          scripts/testflight.sh external
+          # External beta review is never requested here. A review request
+          # cannot be withdrawn, so handing a build to external testers is a
+          # decision made by a person, after the internal group has used it:
+          # TestFlight recovery with `external_review` ticked, or
+          # `scripts/testflight.sh external`, as the runbook describes.
 
       - name: Remove App Store Connect key
         if: always()
