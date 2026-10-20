@@ -43,11 +43,11 @@ Status vocabulary:
 - **Blocked release:** an acceptance requirement for a mainnet beta remains
   open; this does not assert that an exploitable vulnerability is known.
 
-**Native build.** The shared-account Winnow's vault and MuSig2 code was
+**Native build.** The shared-account Winnow's threshold vault code was
 removed with the suites that evidenced it (`VaultFlowTests`,
 `VaultCosignerIdentityTests`, `VaultDraftIdentityTests`,
-`VaultSignerIndependenceTests`, `MuSig2SessionSafetyTests`,
-`VaultThresholdTests`, `VaultInteropDiffTests`, `PSBTConversionDiffTests`).
+`VaultSignerIndependenceTests`, `VaultThresholdTests`, `VaultInteropDiffTests`,
+`PSBTConversionDiffTests`).
 Raw k-of-n script-path multisig accounts were then ported back onto the
 native curve module (`MultisigAccount`), with their admission rules
 (SEC-009, SEC-019, SEC-020) and spend review (SEC-004) evidenced by
@@ -72,11 +72,20 @@ change and any spend of that change (`SEC-031`); the lookahead is the
 wallet's gap limit, because every signer's phone hands out addresses (`SEC-032`);
 and a reorg puts a spend from a fallen block back in flight, its inputs still
 reserved, as the wallet does since #157 (`SEC-033`).
-S4 has
-no subject in this build, and `ImportBundle` refuses a backup carrying a
-MuSig2 record. S8's remaining subject is that script-path account; its row
-and the vault clauses of S2, S3, S6, S7 and S9 below still record the evidence
-as it stood in the shared-account Winnow, including tests not ported here.
+MuSig2 came back as n-of-n key-path accounts only, in Advanced mode, so S4
+has a subject again: `MuSig2SessionSafetyTests` and the BIP327 vectors run
+against the native arithmetic, and the app holds secret nonces only in the
+signing screen's memory, scrubbed when it closes or the app backgrounds.
+`MuSig2AccountTests` refuses a repeated or relabelled participant, an origin
+that does not match its key, a participant suffix, another network and a
+private key, and carries 2-of-2 and 3-of-3 spends end to end; the UI journey
+has Bitcoin Core complete both rounds with the phone and mine the result.
+MuSig2 accounts follow the same sync rules (`SEC-039`, evidenced by the
+same five tests in `MuSig2StoreTests`). `ImportBundle` restores both kinds of
+account and refuses a backup carrying any other. S8's subjects are those two
+account kinds; its row and the vault clauses of S2, S3, S6, S7 and S9 below
+still record the evidence as it stood in the shared-account Winnow, including
+tests not ported here.
 
 | ID | Invariant | Recorded deterministic evidence | Recorded negative/manual evidence and gaps | Historical status |
 |---|---|---|---|---|

@@ -10,10 +10,10 @@ The [architecture guide](architecture.md) explains source ownership, and the
 
 | Suite | Exercises | Boundaries |
 | --- | --- | --- |
-| [BitcoinCoreTests](../Tests/BitcoinCoreTests/README.md) | Cryptographic and encoding vectors, the native secp256k1 module, descriptors, scripts and parser bounds | Vectors and parser checks do not demonstrate a user workflow |
-| [WalletCoreTests](../Tests/WalletCoreTests/README.md) | Coin selection, fees, imports, people and contact cards, reorgs, peer behavior and synchronization | Controlled peers and fixtures cover their asserted cases |
-| [AppTests](../AppTests/README.md) | Review, authorization, persistence, startup, recipients, backup state and iOS integration | Most cloud cases use in-memory stores; a simulator cannot prove device-lock enforcement |
-| [UITests](../UITests/README.md) | A recorded iPhone payment journey and peer-setting persistence | No automated iPad journey or hardware-wallet matrix |
+| [BitcoinCoreTests](../Tests/BitcoinCoreTests/README.md) | Cryptographic and encoding vectors, the native secp256k1 module, BIP327 MuSig2 and BIP390 descriptors, scripts and parser bounds | Vectors and parser checks do not demonstrate a user workflow |
+| [WalletCoreTests](../Tests/WalletCoreTests/README.md) | Coin selection, fees, imports, people and contact cards, MuSig2 accounts and BIP373 PSBTs, reorgs, peer behavior and synchronization | Controlled peers and fixtures cover their asserted cases |
+| [AppTests](../AppTests/README.md) | Review, authorization, persistence (MuSig2 accounts included), startup, recipients, backup state and iOS integration | Most cloud cases use in-memory stores; a simulator cannot prove device-lock enforcement |
+| [UITests](../UITests/README.md) | A recorded iPhone payment journey, a MuSig2 spend co-signed by Bitcoin Core, and peer-setting persistence | No automated iPad journey or hardware-wallet matrix |
 | [ToolsTests](../Tests/ToolsTests/README.md) and [fuzzing](../Tools/Fuzz/README.md) | Debugging commands, generators, parser regressions and hostile inputs | A bounded corpus or fuzz run establishes only its own executed coverage |
 | [Script regressions](../scripts/tests/README.md) | CI evidence, media validation and release helpers | These check tooling rather than wallet payments |
 

@@ -10,13 +10,16 @@ for Core. Key-path inputs are signed into PSBT_IN_TAP_KEY_SIG. Multisig
 inputs carry the BIP371 leaf script, leaf-hashed origins and
 PSBT_IN_TAP_SCRIPT_SIG entries; the finalizer verifies every script-path
 signature against the recomputed sighash, checks the leaf commits to the spent
-output, and builds the BIP387 witness once the leaf's threshold is met.
-MuSig2 fields are carried as unknown pairs and never interpreted.
+output, and builds the BIP387 witness once the leaf's threshold is met. The
+BIP373 MuSig2 fields (participants, public nonces, partial signatures) are
+read and written for key-path spends, and the roles build a BIP327 session
+from them and aggregate the partials into PSBT_IN_TAP_KEY_SIG.
 
 [Transaction construction](../Transactions/README.md) and the
 [wallet](../Wallet/README.md) consume these types.
 
 [PSBT tests](../../../Tests/WalletCoreTests/PSBTTests.swift) cover parsing, combination,
-and finalization. [Fuzz regressions](../../../Tests/ToolsTests/Cases/psbt/README.md)
+and finalization; [MuSig2 PSBT tests](../../../Tests/WalletCoreTests/PSBTMuSig2Tests.swift)
+cover the BIP373 fields and a two-signer exchange. [Fuzz regressions](../../../Tests/ToolsTests/Cases/psbt/README.md)
 keep a previously problematic encoding in the ordinary test run.
 Accepting a PSBT does not itself authorize its payment outputs; the app reviews those.

@@ -2,9 +2,9 @@
 
 Winnow's app owns the user interaction and device integration. WalletCore
 provides its Bitcoin rules, on top of NativeSecp256k1, Winnow's own Swift
-secp256k1 module. Shared control is limited to raw k-of-n script-path multisig
-accounts in Advanced mode, optionally with a Ledger as one signer over
-Bluetooth; there is no MuSig2. The app and development
+secp256k1 module. Shared control is limited to two raw account kinds in
+Advanced mode: k-of-n script-path multisig accounts, optionally with a Ledger
+as one signer over Bluetooth, and n-of-n key-path MuSig2 accounts. The app and development
 tools use the root [Package.swift](../Package.swift), which declares no
 dependencies, so there is no lockfile.
 
@@ -13,16 +13,19 @@ dependencies, so there is no lockfile.
 | Component | Owns | Depends on |
 | --- | --- | --- |
 | [WinnowApp](../Sources/WinnowApp/README.md) | SwiftUI screens, payment review, authentication, lifecycle, persistence, background scheduling and iCloud backup | WalletCore and Apple frameworks |
-| WalletCore | Keys, descriptors, scripts, PSBTs, transactions, wallet state, people and contact cards, and Bitcoin P2P networking | NativeSecp256k1 |
-| [NativeSecp256k1](../Sources/NativeSecp256k1/README.md) | Field, scalar and point arithmetic, BIP32 and Taproot tweaks, BIP340 signing and verification; variable-time, not zeroized | Foundation and CryptoKit |
+| WalletCore | Keys, descriptors, scripts, PSBTs, transactions, wallet state, MuSig2 accounts (BIP327 signing, BIP373 PSBT fields), people and contact cards, and Bitcoin P2P networking | NativeSecp256k1 |
+| [NativeSecp256k1](../Sources/NativeSecp256k1/README.md) | Field, scalar and point arithmetic (public for MuSig2), BIP32 and Taproot tweaks, BIP340 signing and verification; variable-time, not zeroized | Foundation and CryptoKit |
 | [TestSupport](../Tests/Support/README.md) | In-memory keys, controlled peers and disposable Bitcoin Core fixtures | WalletCore; development only |
 | [winnow-debug](../Tools/Debug/README.md) | Offline inspection, diagnostics, generators and network soaks | WalletCore |
 | [WinnowFuzz](../Tools/Fuzz/README.md) | Bounded hostile-input parsing and invariants | WalletCore and NativeSecp256k1 through WinnowFuzzCore |
 | [winnow-fixture](../Tools/Fixture/README.md) | Test-bank preparation | TestSupport |
 
-There is no VaultKit and no shared-account record. An import bundle that
-carries shared-account records from the shared-account Winnow is refused
-rather than restored without those funds.
+There is no VaultKit. A MuSig2 account is a `MuSig2AccountRecord` in the
+sealed per-wallet `musig2.json`, its scripts watched in the same filter scan as
+the wallet's and its coins kept with spent tombstones for reorgs. Import
+bundles carry these records under `vaults`, the key the shared-account Winnow
+used, so its backups of MuSig2 accounts restore. A bundle carrying a threshold
+or script-path account is refused rather than restored without those funds.
 
 WalletCore is a SwiftPM library product. It shares the app's source revision
 and version tags; there is no separate library release train. The package has

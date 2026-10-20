@@ -17,6 +17,10 @@ also hold field and scalar arithmetic to the fuzz core's independent
 [reference implementation](../../Tools/Fuzz/Sources/WinnowFuzzCore/ReferenceSecp256k1.swift)
 on operands built from structured limbs (all ones, the top bit, the limbs of p
 and n), which reach carries and reductions that random values do not.
+the timing suite is opt-in and asserts nothing.
+`NativeSecp256k1ArithmeticTests` checks the public scalar and point arithmetic
+MuSig2 uses; `MuSig2Tests` runs the BIP327 vectors and the session-safety
+refusals on it, and `BIP390Tests` the published `musig()` descriptor vectors.
 The test target keeps its primitive-focused name; production has one WalletCore target.
 
 Run `swift test --filter BitcoinCoreTests` from the repository root.

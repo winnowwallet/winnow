@@ -31,6 +31,15 @@ Every Ledger entry point is in that Advanced-mode section, the model refuses
 Ledger actions in Simple mode, and iOS asks for Bluetooth only when pairing
 starts. Accounts live in the sealed per-wallet `multisig.json`
 ([MultisigStore](MultisigStore.swift)), scanned with the wallet's own filters.
+
+Advanced mode's Wallet tab also lists MuSig2 accounts
+([MuSig2Views.swift](MuSig2Views.swift)), never shown in Simple mode. Add takes
+a pasted descriptor, Account shows the receive address, coins and descriptor,
+and one PSBT screen creates or combines a spend and runs round 1, round 2 and
+the broadcast. Each round asks for device authentication. Secret nonces stay
+in that screen's memory and are scrubbed when it closes, the app backgrounds or
+the exchange restarts. [MuSig2Store](MuSig2Store.swift) keeps the accounts in a
+sealed `musig2.json` per wallet, scanned with the same filters.
 Removing a shortcut preserves
 past labels and fresh-address counters in the existing
 people.json store. Receive shares the wallet’s payment card.

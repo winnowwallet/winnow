@@ -24,10 +24,16 @@ signing and finalization. New accounts write the internal key as an xpub on
 the NUMS point, which BIP388 signers such as a Ledger can register; accounts
 with the bare NUMS key still load. A record may carry the registration of its
 [Ledger signer](../Ledger/README.md), checked against the account whenever the
-record is read. Import bundles carry these accounts under `vaults`;
-a bundle carrying any other kind of account is refused rather than restored
-without it. [Account tests](../../../Tests/WalletCoreTests/MultisigAccountTests.swift)
+record is read. [Account tests](../../../Tests/WalletCoreTests/MultisigAccountTests.swift)
 cover each rule.
+
+`MuSig2Account` is the raw n-of-n account: its descriptor shape, participant
+checks, spend review (known coins, own change, a fee of at most a tenth, all
+outputs committed), PSBT creation and both MuSig2 rounds.
+[Its tests](../../../Tests/WalletCoreTests/MuSig2AccountTests.swift) cover each
+rule. Import bundles carry both kinds of account under `vaults`, told apart by
+the descriptor; a bundle carrying any other kind of account is refused rather
+than restored without it.
 
 An embedding application can restore its reserved address ranges with
 `Wallet.advanceCursors(nextReceiveIndex:nextChangeIndex:)`. Each cursor is the

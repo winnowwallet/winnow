@@ -7,8 +7,9 @@ import XCTest
 /// wallet, discovers a node-funded payment, signs and relays a payment, and
 /// notices its confirmation; then a 2-of-3 script-path multisig account with
 /// two Bitcoin Core wallets as the other signers receives and spends, and
-/// spends its change again on the recovery path (`MultisigJourney`).
-/// Screenshots come from that same successful flow.
+/// spends its change again on the recovery path (`MultisigJourney`); then a
+/// 2-of-2 MuSig2 account with Bitcoin Core as the other signer receives and
+/// spends (`MuSig2Journey`). Screenshots come from that same successful flow.
 /// Detailed wallet rules live in AppTests and WalletCore tests.
 @MainActor
 final class WinnowAppUITests: XCTestCase {
@@ -123,6 +124,7 @@ final class WinnowAppUITests: XCTestCase {
         Screenshots.capture(app, "09-home-after-send", testCase: self)
         print("SIGNET_ORDINARY_SECONDS=\(Date().timeIntervalSince(journeyStarted))")
         try await multisigJourney(in: app, control: control)
+        try await muSig2Journey(in: app, control: control)
     }
 
     nonisolated static func fundAndConfirm(_ address: String) async throws -> String {
