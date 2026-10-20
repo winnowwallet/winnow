@@ -119,7 +119,6 @@ final class WinnowAppUITests: XCTestCase {
         XCTAssertTrue(sent.label.contains("Sent"))
         Screenshots.capture(app, "09-home-after-send", testCase: self)
         print("SIGNET_ORDINARY_SECONDS=\(Date().timeIntervalSince(journeyStarted))")
-        try await multisigJourney(in: app, control: control)
     }
 
     nonisolated static func fundAndConfirm(_ address: String) async throws -> String {

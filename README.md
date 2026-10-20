@@ -64,7 +64,7 @@ asset catalogs are documented by their owner, outside the bundle.
 - User experience: [app decisions](AppTests/README.md), [integration journey](UITests/README.md).
 - Rules and interoperability: [Bitcoin primitives](Tests/BitcoinCoreTests/README.md), [wallet rules](Tests/WalletCoreTests/README.md), [network cases](Tests/WalletCoreTests/Network/README.md).
 - Shared fixtures: [TestSupport](Tests/Support/README.md), [real nodes](Tests/Support/Node/README.md), [controlled peers](Tests/Support/P2P/README.md).
-- Reference data: [Bitcoin vectors](Tests/BitcoinCoreTests/Vectors/README.md), [MuSig2 vectors](Tests/BitcoinCoreTests/Vectors/bip327/README.md), [native secp256k1 fixtures](Tests/BitcoinCoreTests/Vectors/native-secp256k1/README.md), [wallet/network vectors](Tests/WalletCoreTests/Vectors/README.md).
+- Reference data: [Bitcoin vectors](Tests/BitcoinCoreTests/Vectors/README.md), [native secp256k1 fixtures](Tests/BitcoinCoreTests/Vectors/native-secp256k1/README.md), [wallet/network vectors](Tests/WalletCoreTests/Vectors/README.md).
 - Development tools: [tool tests](Tests/ToolsTests/README.md), [filter regressions](Tests/ToolsTests/Cases/filter/README.md), [PSBT regressions](Tests/ToolsTests/Cases/psbt/README.md).
 
 ### Debugging and fuzzing
