@@ -2,9 +2,9 @@ import Foundation
 import Testing
 import TestSupport
 
-/// The BIP340 vectors (test-vectors.csv) are exercised against the repo's own
-/// Schnorr paths by `SighashBIP341Tests.witnessSignatures` and
-/// `MuSig2Tests.sigAgg`; this only keeps the shipped resource from rotting.
+/// The BIP340 vectors (test-vectors.csv) are exercised row by row against
+/// the native signer and verifier by `NativeSecp256k1SchnorrTests`; this
+/// only keeps the shipped resource from rotting.
 @Suite("BIP340")
 struct BIP340Tests {
     @Test("the shipped test-vectors.csv still parses with every row present")

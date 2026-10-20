@@ -110,10 +110,10 @@ struct BIP341Tests {
     }
 }
 
-/// The BIP341 "nothing up my sleeve" internal key used for k-of-n vault
-/// descriptors: H = lift_x(SHA256(uncompressed G)), the example NUMS point
-/// from the BIP (0x50929b74…ace803ac0, the same construction as Bitcoin
-/// Core's taproot tests and secp256k1-zkp's rangeproof H).
+/// The BIP341 "nothing up my sleeve" internal key, H = lift_x(SHA256(uncompressed
+/// G)): the example NUMS point from the BIP (0x50929b74…ace803ac0, the same
+/// construction as Bitcoin Core's taproot tests and secp256k1-zkp's rangeproof
+/// H). Incoming script-path spends name it in their control blocks.
 @Suite("BIP341 NUMS internal key")
 struct NUMSKeyTests {
     @Test("matches the BIP341 example point and is x-only liftable")
@@ -126,25 +126,4 @@ struct NUMSKeyTests {
         _ = try Taproot.tweakedOutputKey(internalKey: expected, merkleRoot: Data(repeating: 0xAB, count: 32))
     }
 
-    @Test("a vault output commits to the NUMS key and a multi_a leaf")
-    func vaultConstruction() throws {
-        // tr(NUMS, multi_a(2, K1, K2, K3)) — the vault descriptor shape.
-        let keys = [Data(hex: "22ca50390e660f601036dd7502bb973bdcd104b5dcb8f2e74de8edc6c292b03a")!,
-                    Data(hex: "141481bf1181ed61aa025f1fe708f68cb018c2c9d6eb719ccd94b3f6ff615308")!,
-                    Data(hex: "cfc18f02cc004640f2116fdd1f6ca2022e39be25df75e27c80bde842e6b6f938")!]
-        let script = try Multisig.script(threshold: 2, xonlyKeys: keys, sorted: false)
-        let tree = Taproot.Tree.leaf(script: script)
-        let scriptPubKey = try Taproot.scriptPubKey(internalKey: Taproot.unspendableInternalKey,
-                                                    merkleRoot: Taproot.merkleRoot(of: tree))
-        let control = try Taproot.controlBlock(internalKey: Taproot.unspendableInternalKey,
-                                               tree: tree, leafIndex: 0)
-        #expect(control.internalKey == Taproot.unspendableInternalKey)
-        #expect(control.path.isEmpty) // single-leaf tree
-        #expect(Taproot.verify(controlBlock: control, script: script,
-                               merkleRoot: Taproot.merkleRoot(of: tree)))
-        // The descriptor engine produces the same output for the equivalent text form.
-        let descriptor = try Descriptor(
-            "tr(\(Taproot.unspendableInternalKey.hex),multi_a(2,\(keys.map(\.hex).joined(separator: ","))))")
-        #expect(try descriptor.derived(index: 0).first?.scriptPubKey == scriptPubKey)
-    }
 }

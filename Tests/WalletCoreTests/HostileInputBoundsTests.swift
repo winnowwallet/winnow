@@ -62,9 +62,9 @@ struct HostileInputBoundsTests {
     @Test("a card past the byte ceiling is not a card")
     func oversizedCardRefused() throws {
         let card = PersonCard(network: .signet, name: String(repeating: "n", count: WinnowCardCoding.maximumBytes),
-                              payTo: nil, signerKey: nil)
+                              payTo: nil)
         #expect(throws: PersonCardError.notACard) { try PersonCard.decode(try card.serialized()) }
-        let small = PersonCard(network: .signet, name: "Ada", payTo: nil, signerKey: nil)
+        let small = PersonCard(network: .signet, name: "Ada", payTo: nil)
         #expect(try PersonCard.decode(try small.serialized()).name == "Ada")
     }
 
@@ -82,7 +82,7 @@ struct HostileInputBoundsTests {
     @Test("a card's over-long name is dropped rather than stored")
     func cardNameNormalized() throws {
         let long = PersonCard(network: .signet, name: String(repeating: "a", count: DisplayName.maximumLength + 1),
-                              payTo: nil, signerKey: nil)
+                              payTo: nil)
         #expect(try PersonPaste.parse(long.serialized(), network: .signet).name == nil)
     }
 

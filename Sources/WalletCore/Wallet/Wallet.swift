@@ -690,7 +690,7 @@ public actor Wallet {
         let descriptor = try Descriptor(state.descriptor)
         _ = try Self.origin(of: descriptor) // validates the wallet descriptor shape
         // The account key is recoverable from the descriptor's xpub.
-        guard case let .tr(.single(key), nil) = descriptor.expression,
+        guard case let .tr(key) = descriptor.expression,
               case let .extended(accountKey, _) = key.base
         else { throw WalletError.invalidDescriptor(state.descriptor) }
         return try Wallet(network: network, descriptor: descriptor, accountKey: accountKey.neutered,
@@ -700,15 +700,15 @@ public actor Wallet {
     /// Builds the canonical multipath tr() descriptor for an account key.
     static func makeDescriptor(accountKey: HDKey, origin: Descriptor.KeyOrigin,
                                network: BitcoinNetwork) -> Descriptor {
-        Descriptor(expression: .tr(.single(Descriptor.SingleKey(
+        Descriptor(expression: .tr(Descriptor.SingleKey(
             origin: origin,
             base: .extended(accountKey.neutered, network: hdNetwork(for: network)),
-            derivation: Descriptor.Derivation([.multipath([0, 1]), .wildcard(hardened: false)]))), nil))
+            derivation: Descriptor.Derivation([.multipath([0, 1]), .wildcard(hardened: false)]))))
     }
 
     /// Validates the wallet descriptor shape and returns its key origin.
     static func origin(of descriptor: Descriptor) throws -> Descriptor.KeyOrigin {
-        guard case let .tr(.single(key), nil) = descriptor.expression,
+        guard case let .tr(key) = descriptor.expression,
               let origin = key.origin,
               key.derivation.elements == [.multipath([0, 1]), .wildcard(hardened: false)]
         else { throw WalletError.invalidDescriptor("expected tr([fp/86'/c'/a']xpub/<0;1>/*)") }
@@ -1538,9 +1538,8 @@ public actor Wallet {
         }
         var psbt = try PSBT(unsignedTx: transaction, inputs: inputInfo, outputs: outputInfo)
         // One KeyStore read and one seed derivation for the whole operation,
-        // handed down to each input the way the vault entries take `master`
-        // (`Vault.partialSign`), rather than a PBKDF2 run per input. The key
-        // still lives no longer than this call.
+        // handed down to each input rather than a PBKDF2 run per input. The
+        // key still lives no longer than this call.
         let master = try masterKey()
         for (index, utxo) in selected.enumerated() {
             // BIP86 key-path spend: the output key is the account key tweaked
@@ -1568,7 +1567,7 @@ public actor Wallet {
     }
 
     private static func originUnchecked(of descriptor: Descriptor) -> Descriptor.KeyOrigin {
-        guard case let .tr(.single(key), nil) = descriptor.expression, let origin = key.origin else {
+        guard case let .tr(key) = descriptor.expression, let origin = key.origin else {
             preconditionFailure("wallet descriptor always carries origin info")
         }
         return origin

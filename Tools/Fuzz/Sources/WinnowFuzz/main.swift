@@ -79,14 +79,13 @@ private func binaryCorpus(for target: FuzzTarget) -> [Data] {
         return [Data(), Data([0x70, 0x73, 0x62, 0x74, 0xFF]), Data(hex:
             "70736274ff01fb040200000001020402000000010401000105010000")!]
     case .descriptor:
-        // Extended keys so mutation can reach the multipath, tree, multisig
-        // and musig grammar, not just a raw key inside tr().
+        // Extended keys so mutation can reach the origin, multipath and
+        // wildcard grammar, not just a raw key inside tr().
         let account = "xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL"
         let other = "xpub68NZiKmJWnxxS6aaHmn81bvJeTESw724CRDs6HbuccFQN9Ku14VQrADWgqbhhTHBaohPX4CjNLf9fq9MYo6oDaPPLPxSb7gwQN3ih19Zm4Y"
         return [Data(), Data("tr(\(generatorXOnly.hex))".utf8), Data("rawtr(\(generatorXOnly.hex))".utf8),
                 Data("tr([deadbeef/86'/0'/0']\(account)/<0;1>/*)".utf8),
-                Data("tr(\(account)/<0;1>/*,{pk(\(other)/0/*),sortedmulti_a(2,\(account)/*,\(other)/0/0/*)})".utf8),
-                Data("tr(musig(\(account),\(other))/0/*)".utf8)]
+                Data("tr(\(other)/0/*)".utf8)]
     case .transaction:
         return [Data(), minimalTransaction]
     case .block:

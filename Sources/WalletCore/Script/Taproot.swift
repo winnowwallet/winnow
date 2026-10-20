@@ -169,8 +169,8 @@ public enum Taproot {
     /// 0x50929b74…ace803ac0 (the same construction as the secp256k1-zkp
     /// rangeproof H and Bitcoin Core's taproot tests). Its discrete log is
     /// unknown, so no party can key-path spend a tr(H, TREE) output — spending
-    /// is only possible through the script tree. Used as the internal key of
-    /// k-of-n vault descriptors.
+    /// is only possible through the script tree. Incoming script-path spends
+    /// name it in their control blocks.
     public static let unspendableInternalKey: Data =
         // G in uncompressed SEC form, hashed to derive the x coordinate; the
         // BIP341 tests check that lift_x of the result succeeds.

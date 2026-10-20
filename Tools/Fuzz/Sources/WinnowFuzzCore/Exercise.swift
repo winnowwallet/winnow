@@ -182,7 +182,6 @@ public func exercise(_ target: FuzzTarget, data: Data, rng: inout SplitMix64) th
         let text = String(decoding: data, as: UTF8.self)
         for network in [BitcoinNetwork.mainnet, .signet] {
             _ = try? PersonPaste.parse(text, network: network)
-            _ = try? SharedSavingsCard.decode(text, network: network)
         }
         if let card = try? PersonCard.decode(text) {
             try require(try PersonCard.decode(card.serialized()) == card,

@@ -22,11 +22,9 @@ let package = Package(
             name: "NativeSecp256k1",
             exclude: ["README.md"]
         ),
-        // P256K remains only for the vault code (MuSig2 point arithmetic);
-        // the single-key path uses NativeSecp256k1.
         .target(
             name: "WalletCore",
-            dependencies: ["NativeSecp256k1", .product(name: "P256K", package: "swift-secp256k1")],
+            dependencies: ["NativeSecp256k1"],
             exclude: [
                 "Crypto/README.md",
                 "Descriptors/README.md",

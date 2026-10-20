@@ -4,14 +4,13 @@ import TestSupport
 @testable import WalletCore
 
 /// People: the pay-to keys a fresh address is derived from, the cards people
-/// exchange, what a paste turns into, and how a shared-savings vault finds its
-/// co-owners and counts their approvals. Offline, signet-format fixtures.
-@Suite("People and shared savings")
+/// exchange, and what a paste turns into. Offline, signet-format fixtures.
+@Suite("People")
 struct PeopleTests {
-    static func masters() throws -> [HDKey] { try TestVaults.masters() }
+    static func masters() throws -> [HDKey] { try TestKeys.masters() }
 
-    static func signer(_ master: HDKey) throws -> String {
-        try TestVaults.keyExpression(master: master)
+    static func keyExpression(_ master: HDKey) throws -> String {
+        try TestKeys.keyExpression(master: master)
     }
 
     static func account(_ master: HDKey) throws -> HDKey {
@@ -26,7 +25,7 @@ struct PeopleTests {
         let account = try Self.account(master)
         let tpub = account.neutered.serialized(network: .testnet)
 
-        let multipath = try PersonPayTo.descriptor("tr(\(Self.signer(master)))", network: .signet)
+        let multipath = try PersonPayTo.descriptor("tr(\(Self.keyExpression(master)))", network: .signet)
         let receiveOnly = try PersonPayTo.descriptor("tr(\(tpub)/0/*)", network: .signet)
         #expect(multipath.derivesFreshAddresses)
         #expect(receiveOnly.derivesFreshAddresses)
@@ -44,10 +43,17 @@ struct PeopleTests {
         #expect(throws: PersonPayToError.unsupportedDerivation) {
             _ = try PersonPayTo.descriptor("tr(\(tpub)/1/*)", network: .signet)
         }
-        let keys = try Self.masters().map { try Self.signer($0) }
-        let savings = try Vault.multiADescriptor(threshold: 2, cosigners: keys).serialized()
+        // Only a tweaked single key pays a person: a raw output key is refused
+        // by shape, and a script tree or a musig() aggregate no longer parses.
         #expect(throws: PersonPayToError.notSingleKey) {
-            _ = try PersonPayTo.descriptor(savings, network: .signet)
+            _ = try PersonPayTo.descriptor("rawtr(\(Self.keyExpression(master)))", network: .signet)
+        }
+        let keys = try Self.masters().map { try Self.keyExpression($0) }
+        #expect(throws: PersonPayToError.malformed) {
+            _ = try PersonPayTo.descriptor("tr(\(keys[0]),sortedmulti_a(2,\(keys[1]),\(keys[2])))", network: .signet)
+        }
+        #expect(throws: PersonPayToError.malformed) {
+            _ = try PersonPayTo.descriptor("tr(musig(\(keys[0]),\(keys[1]))/<0;1>/*)", network: .signet)
         }
         #expect(throws: PersonPayToError.malformed) {
             _ = try PersonPayTo.descriptor("tr(nonsense)", network: .signet)
@@ -58,7 +64,7 @@ struct PeopleTests {
     func freshAddressesFollowTheReceiveChain() throws {
         let master = try Self.masters()[1]
         let account = try Self.account(master)
-        let payTo = try PersonPayTo.descriptor("tr(\(Self.signer(master)))", network: .signet)
+        let payTo = try PersonPayTo.descriptor("tr(\(Self.keyExpression(master)))", network: .signet)
         for index: UInt32 in [0, 1, 7] {
             let child = try account.child(at: 0).child(at: index)
             let expected = try BIP86.address(internalKey: Data(child.publicKey.dropFirst()), hrp: "tb")
@@ -78,7 +84,7 @@ struct PeopleTests {
     @Test("pay-to survives JSON as a tagged value")
     func payToCodable() throws {
         let master = try Self.masters()[2]
-        let payTo = try PersonPayTo.descriptor("tr(\(Self.signer(master)))", network: .signet)
+        let payTo = try PersonPayTo.descriptor("tr(\(Self.keyExpression(master)))", network: .signet)
         let encoded = try JSONEncoder().encode([payTo, .address("tb1qexample")])
         let json = String(decoding: encoded, as: UTF8.self)
         #expect(json.contains("\"kind\":\"descriptor\"") && json.contains("\"kind\":\"address\""))
@@ -91,19 +97,25 @@ struct PeopleTests {
 
     // MARK: - Cards and paste
 
-    @Test("a card round-trips and a paste of it yields both keys")
+    @Test("a card round-trips and a paste of it yields the pay-to key")
     func cardRoundTrip() throws {
         let master = try Self.masters()[0]
-        let signer = try Self.signer(master)
-        let payTo = try PersonPayTo.descriptor("tr(\(signer))", network: .signet)
-        let card = PersonCard(network: .signet, name: "Alice", payTo: payTo.text, signerKey: signer)
+        let key = try Self.keyExpression(master)
+        let payTo = try PersonPayTo.descriptor("tr(\(key))", network: .signet)
+        let card = PersonCard(network: .signet, name: "Alice", payTo: payTo.text)
         let text = try card.serialized()
         #expect(text.hasPrefix("{"))
         #expect(text.contains("/<0;1>/*"), "slashes are written as-is so the key reads as pasted")
         #expect(try PersonCard.decode(text) == card)
 
         let imported = try PersonPaste.parse(text, network: .signet)
-        #expect(imported == PersonImport(name: "Alice", payTo: payTo, signerKey: signer, source: .card))
+        #expect(imported == PersonImport(name: "Alice", payTo: payTo, source: .card))
+
+        // A card from a Winnow that also carried a signer key still decodes;
+        // the field it no longer understands is ignored, not refused.
+        let withSignerKey = text.replacingOccurrences(of: "\"winnow\":", with: "\"signerKey\":\"\(key)\",\"winnow\":")
+        #expect(withSignerKey != text)
+        #expect(try PersonCard.decode(withSignerKey) == card)
 
         #expect(throws: PersonCardError.wrongNetwork(card: "signet", wallet: .mainnet)) {
             _ = try PersonPaste.parse(text, network: .mainnet)
@@ -122,167 +134,41 @@ struct PeopleTests {
         let account = try Self.account(master)
         let tpub = account.neutered.serialized(network: .testnet)
         let fingerprint = String(format: "%08x", master.fingerprint)
-        let full = try Self.signer(master)
+        let full = try Self.keyExpression(master)
         let bareWithOrigin = "[\(fingerprint)/86'/1'/0']\(tpub)"
         let payTo = try PersonPayTo.descriptor("tr(\(full))", network: .signet)
 
         #expect(try PersonPaste.parse(full, network: .signet)
-            == PersonImport(name: nil, payTo: payTo, signerKey: full, source: .keyExpression))
+            == PersonImport(name: nil, payTo: payTo, source: .keyExpression))
         #expect(try PersonPaste.parse(bareWithOrigin, network: .signet)
-            == PersonImport(name: nil, payTo: payTo, signerKey: full, source: .keyExpression))
+            == PersonImport(name: nil, payTo: payTo, source: .keyExpression))
 
+        // An account key with no origin gets the receive/change shape too.
         let bare = try PersonPaste.parse(tpub, network: .signet)
-        #expect(bare.signerKey == nil, "no origin, so it cannot co-own savings")
-        #expect(bare.payTo == (try PersonPayTo.descriptor("tr(\(tpub)/0/*)", network: .signet)))
+        #expect(bare.payTo == (try PersonPayTo.descriptor("tr(\(tpub)/<0;1>/*)", network: .signet)))
+        #expect(bare.source == .keyExpression)
 
         let descriptor = try PersonPaste.parse("tr(\(full))", network: .signet)
-        #expect(descriptor == PersonImport(name: nil, payTo: payTo, signerKey: full, source: .descriptor))
+        #expect(descriptor == PersonImport(name: nil, payTo: payTo, source: .descriptor))
 
         let address = try payTo.address(index: 0, network: .signet)
         #expect(try PersonPaste.parse(" \(address)\n", network: .signet)
-            == PersonImport(name: nil, payTo: .address(address), signerKey: nil, source: .address))
+            == PersonImport(name: nil, payTo: .address(address), source: .address))
 
         #expect(throws: PersonPasteError.empty) { _ = try PersonPaste.parse("  ", network: .signet) }
         #expect(throws: PersonPasteError.unrecognised) { _ = try PersonPaste.parse("hello there", network: .signet) }
-        #expect(throws: VaultCosignerKeyError.privateKey) {
+        #expect(throws: PersonPayToError.privateKey) {
             _ = try PersonPaste.parse("[\(fingerprint)/86'/1'/0']\(account.serialized(network: .testnet))/<0;1>/*",
                                       network: .signet)
+        }
+        #expect(throws: PersonPayToError.wrongNetwork(expected: .mainnet)) {
+            _ = try PersonPaste.parse(full, network: .mainnet)
         }
         #expect(throws: PersonPasteError.unrecognised) {
             _ = try PersonPaste.parse("sp1qqexample", network: .signet)
         }
-    }
-
-    @Test("the same signer under a relabelled origin is one identity")
-    func signerIdentityIgnoresLabels() throws {
-        let apostrophe = VaultAdmissionTests.scriptPath(
-            "6738736c/48'/0'/0'/100'", VaultAdmissionTests.keyA)
-        let letterH = VaultAdmissionTests.scriptPath(
-            "6738736C/48h/0h/0h/100h", VaultAdmissionTests.keyA)
-        let other = VaultAdmissionTests.scriptPath(
-            "b2b1f0cf/44'/0'/0'/100'", VaultAdmissionTests.keyB)
-        #expect(try PersonKeys.signerIdentity(apostrophe, network: .mainnet)
-            == PersonKeys.signerIdentity(letterH, network: .mainnet))
-        #expect(try PersonKeys.signerIdentity(apostrophe, network: .mainnet)
-            != PersonKeys.signerIdentity(other, network: .mainnet))
-    }
-
-    // MARK: - Shared savings
-
-    @Test("a signer key's fingerprint is eight hex characters, stable, and different per key")
-    func signerFingerprints() throws {
-        let masters = try Self.masters()
-        let alice = try PersonKeys.signerFingerprint(Self.signer(masters[0]), network: .signet)
-        let bob = try PersonKeys.signerFingerprint(Self.signer(masters[1]), network: .signet)
-        #expect(alice != bob)
-        #expect(alice.count == 9 && alice.dropFirst(4).first == " ")
-        #expect(alice.filter(\.isHexDigit).count == 8)
-        #expect(alice == PersonKeys.fingerprint(ofIdentity: try PersonKeys.signerIdentity(Self.signer(masters[0]),
-                                                                                          network: .signet)))
-    }
-
-    @Test("a savings vault finds its co-owners by key, whatever the order")
-    func savingsSignersMatchPeople() throws {
-        let masters = try Self.masters()
-        let keys = try masters.map { try Self.signer($0) }
-        let forward = try Vault(descriptor: Vault.multiADescriptor(threshold: 2, cosigners: keys), network: .signet)
-        let shuffled = try Vault(descriptor: Vault.multiADescriptor(threshold: 2, cosigners: [keys[2], keys[0], keys[1]]),
-                                 network: .signet)
-        #expect(try forward.scriptPubKey(index: 0) == shuffled.scriptPubKey(index: 0),
-                "sortedmulti_a pays the same script whichever order the keys were listed in")
-        #expect(forward.threshold == 2 && forward.signerCount == 3 && forward.isScriptPath)
-
-        let identities = try keys.map { try PersonKeys.signerIdentity($0, network: .signet) }
-        #expect(Set(try forward.signerKeys()) == Set(identities))
-        #expect(Set(try shuffled.signerKeys()) == Set(identities))
-        #expect(forward.cosignerExpressions == keys)
-        #expect(shuffled.cosignerExpressions == [keys[2], keys[0], keys[1]])
-
-        let card = SharedSavingsCard(network: .signet, name: "Savings with Alice, Bob",
-                                     descriptor: forward.descriptor.serialized())
-        let decoded = try SharedSavingsCard.decode(try card.serialized(), network: .signet)
-        #expect(decoded.card == card)
-        #expect(decoded.vault.descriptor == forward.descriptor)
-        #expect(throws: PersonCardError.wrongNetwork(card: "signet", wallet: .mainnet)) {
-            _ = try SharedSavingsCard.decode(try card.serialized(), network: .mainnet)
+        #expect(throws: PersonPasteError.unrecognised) {
+            _ = try PersonPaste.parse("0260b2003c386519fc9eadf2b5cf124dd8eea4c4e68d5e154050a9346ea98ce600", network: .signet)
         }
-    }
-
-    @Test("a vault refuses signer keys that belong to another network")
-    func signerKeysMustMatchTheNetwork() throws {
-        // Signet account keys. The builder path refused them for a mainnet
-        // vault; the boundary every restore and card import crosses did not,
-        // so a card carrying tpub keys under "network": "mainnet" was filed
-        // as a mainnet vault whose keys sit at 86'/1'.
-        let keys = try Self.masters().map { try Self.signer($0) }
-        let descriptor = try Vault.multiADescriptor(threshold: 2, cosigners: keys)
-        _ = try Vault(descriptor: descriptor, network: .signet)
-        #expect(throws: VaultError.self) { _ = try Vault(descriptor: descriptor, network: .mainnet) }
-    }
-
-    @Test("approvals are counted from script signatures on every input")
-    func signersOfASpend() throws {
-        let masters = try Self.masters()
-        let keys = try masters.map { try Self.signer($0) }
-        let vault = try Vault(descriptor: Vault.multiADescriptor(threshold: 2, cosigners: keys), network: .signet)
-        let utxo = try TestVaults.funding(vault: vault, amount: 100_000)
-        let destination = Data([0x51, 0x20] + repeatElement(0x77, count: 32))
-        var psbt = try vault.createSpend(utxos: [utxo], payments: [Payment(amount: 40_000, scriptPubKey: destination)],
-                                         changeIndex: 0, feeRateSatPerVByte: 2, chainTip: 200, randomness: { 0.5 })
-        #expect(try vault.signers(of: psbt, knownUTXOs: [utxo]).isEmpty)
-
-        let identities = try keys.map { try PersonKeys.signerIdentity($0, network: .signet) }
-        let signerKeys = try vault.signerKeys()
-        try vault.partialSign(&psbt, master: masters[1], knownUTXOs: [utxo],
-                              ownedOutputCoordinates: [.init(choice: 1, index: 0)], chainTip: 200)
-        let afterOne = try vault.signers(of: psbt, knownUTXOs: [utxo])
-        #expect(afterOne == [signerKeys.firstIndex(of: identities[1])!])
-
-        try vault.partialSign(&psbt, master: masters[2], knownUTXOs: [utxo],
-                              ownedOutputCoordinates: [.init(choice: 1, index: 0)], chainTip: 200)
-        #expect(try vault.signers(of: psbt, knownUTXOs: [utxo]).count == 2)
-
-        // A signature entry that merely names a cosigner's key is not that
-        // cosigner's approval: only a signature that verifies is counted, so a
-        // forged reply cannot make the screen say "approved" for a key that
-        // never signed. Before this, presence alone counted — three here.
-        var forged = psbt
-        let leafHash = try #require(forged.inputs[0].tapLeafScripts.first?.leafHash)
-        let unsigned = Data(signerKeys[signerKeys.firstIndex(of: identities[0])!].dropFirst())
-        forged.inputs[0].tapScriptSignatures[PSBT.TapScriptSignatureID(publicKey: unsigned, leafHash: leafHash)]
-            = Data(repeating: 0xAA, count: 64)
-        #expect(try vault.signers(of: forged, knownUTXOs: [utxo]).count == 2)
-
-        let request = ApprovalRequest(network: .signet, vault: "abcd1234", name: "Savings", psbt: psbt)
-        let envelope = try request.serialized()
-        let decoded = try ApprovalRequest.decode(envelope, network: .signet)
-        #expect(decoded == request)
-        #expect(try decoded.decodedPSBT() == psbt)
-        let bare = try ApprovalRequest.decode(psbt.base64, network: .signet)
-        #expect(bare.vault == nil && bare.name == nil)
-        #expect(try bare.decodedPSBT() == psbt)
-        #expect(throws: PersonCardError.wrongNetwork(card: "signet", wallet: .mainnet)) {
-            _ = try ApprovalRequest.decode(envelope, network: .mainnet)
-        }
-        #expect(throws: (any Error).self) { _ = try ApprovalRequest.decode("not a psbt", network: .signet) }
-        #expect(throws: VaultError.self) {
-            _ = try vault.signers(of: psbt, knownUTXOs: [])
-        }
-    }
-
-    @Test("outputs are labelled savings, person, you, or unknown, in that order")
-    func paymentLabels() {
-        let alice = Data([0x51, 0x20] + repeatElement(0xAA, count: 32))
-        let mine = Data([0x51, 0x20] + repeatElement(0xBB, count: 32))
-        let labeler = PaymentLabeler(savingsName: "Savings with Alice",
-                                     personScripts: [alice: "Alice", mine: "Alice too"],
-                                     ownScripts: [mine])
-        #expect(labeler.label(script: alice, isVaultOwned: true) == .savings("Savings with Alice"))
-        #expect(labeler.label(script: alice, isVaultOwned: false) == .person("Alice"))
-        #expect(labeler.label(script: mine, isVaultOwned: false) == .person("Alice too"),
-                "a person's script wins over the wallet's own: it was chosen for them")
-        #expect(labeler.label(script: Data([0x51, 0x20, 0x01]), isVaultOwned: false) == .unknown)
-        let onlyMine = PaymentLabeler(savingsName: "s", personScripts: [:], ownScripts: [mine])
-        #expect(onlyMine.label(script: mine, isVaultOwned: false) == .you)
     }
 }

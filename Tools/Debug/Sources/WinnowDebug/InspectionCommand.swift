@@ -26,8 +26,7 @@ enum InspectionCommand {
                 "transaction": transaction(try psbt.unsignedTransaction()),
                 "signing": psbt.inputs.map { input in
                     ["hasWitnessUTXO": input.witnessUTXO != nil,
-                     "tapKeySig": input.tapKeySignature != nil,
-                     "tapScriptSigs": input.tapScriptSignatures.count] as [String: Any]
+                     "tapKeySig": input.tapKeySignature != nil] as [String: Any]
                 },
             ]
         case "descriptor" where arguments.count <= 3:
