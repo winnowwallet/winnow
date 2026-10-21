@@ -81,8 +81,10 @@ def main() -> None:
     package_path = root / "Package.swift"
     project_path = root / "project.yml"
     resolved_path = root / "Package.resolved"
-    resolved = json.loads(resolved_path.read_text())
-    pins = sorted(resolved["pins"], key=lambda pin: pin["identity"])
+    # SwiftPM writes no lockfile for a package without dependencies: an absent
+    # file is an empty pin set, and the SBOM then lists the root package alone.
+    resolved = json.loads(resolved_path.read_text()) if resolved_path.exists() else {"pins": []}
+    pins = sorted(resolved.get("pins", []), key=lambda pin: pin["identity"])
 
     root_id = "SPDXRef-Package-winnow"
     packages: list[dict[str, Any]] = [
@@ -180,7 +182,7 @@ def main() -> None:
                 "buildType": "https://github.com/winnowwallet/winnow/build-types/swift-package-and-xcode/v1",
                 "externalParameters": {
                     "configuration": "release",
-                    "packageLock": "Package.resolved",
+                    "packageLock": "Package.resolved" if resolved_path.exists() else None,
                 },
                 "internalParameters": {},
                 "resolvedDependencies": materials,

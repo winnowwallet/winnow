@@ -1,0 +1,228 @@
+import Foundation
+import Testing
+import TestSupport
+@testable import WalletCore
+
+/// Multisig accounts with a timelocked recovery leaf: descriptors checked
+/// against Bitcoin Core, the leaf scripts and BIP68 rule, spends on each
+/// path, and what admission and review refuse.
+@Suite("Timelocked multisig")
+struct TimelockedMultisigTests {
+    struct CoreVectors: Decodable {
+        struct Case: Decodable {
+            var name: String
+            var descriptor: String
+            var checksum: String
+            var addresses: [String: [String]]
+        }
+
+        var source: String
+        var cases: [Case]
+    }
+
+    let destination = Data([0x51, 0x20] + repeatElement(0x77, count: 32))
+    let owned = [MultisigAccount.OutputCoordinate(choice: 1, index: 0)]
+
+    // MARK: - Bitcoin Core and scripts
+
+    @Test("descriptors with a recovery leaf match Bitcoin Core's checksums and addresses")
+    func coreVectors() throws {
+        let vectors = try Vectors.decode(CoreVectors.self, "core-timelocked-multisig.json", in: .module)
+        #expect(vectors.cases.count == 4)
+        for vector in vectors.cases {
+            let descriptor = try Descriptor(vector.descriptor)
+            #expect(descriptor.serialized() == vector.descriptor + "#" + vector.checksum, "\(vector.name)")
+            for choice in 0 ... 1 {
+                let expected = try #require(vector.addresses[String(choice)])
+                for (index, address) in expected.enumerated() {
+                    let derived = try descriptor.derived(index: UInt32(index), bitcoinNetwork: .regtest)[choice]
+                    #expect(derived.address == address, "\(vector.name) \(choice)/\(index)")
+                }
+            }
+        }
+    }
+
+    @Test("timelocked leaves parse back to their keys, threshold and lock; look-alikes do not")
+    func leafPolicies() throws {
+        let keys = (1 ... 3).map { Data(repeating: UInt8($0), count: 32) }
+        for blocks: UInt32 in [1, 16, 17, 144, 4320, 65535, 0x7FFF_FFFF] {
+            let multi = try Multisig.timelockedScript(threshold: 2, xonlyKeys: keys, blocks: blocks)
+            #expect(Multisig.parsePolicy(multi) == LeafPolicy(threshold: 2, keys: keys, relativeLock: blocks))
+            #expect(Multisig.parse(multi) == nil)
+            let single = try Multisig.timelockedScript(xonlyKey: keys[0], blocks: blocks)
+            #expect(Multisig.parsePolicy(single) == LeafPolicy(threshold: 1, keys: [keys[0]], relativeLock: blocks))
+        }
+        #expect(throws: MultisigError.invalidTimelock) { _ = try Multisig.timelockedScript(xonlyKey: keys[0], blocks: 0) }
+        // A non-minimal lock push and a trailing opcode are not this module's leaves.
+        var nonMinimal = try Multisig.timelockedScript(xonlyKey: keys[0], blocks: 5).bytes
+        nonMinimal.replaceSubrange(34 ..< 35, with: [0x01, 0x05])
+        #expect(Multisig.parsePolicy(Script(nonMinimal)) == nil)
+        let trailing = try Multisig.timelockedScript(xonlyKey: keys[0], blocks: 5).bytes + [Script.Op.checkSig]
+        #expect(Multisig.parsePolicy(Script(trailing)) == nil)
+
+        #expect(RelativeLock.isSatisfied(blocks: 10, sequence: 10, txVersion: 2))
+        #expect(RelativeLock.isSatisfied(blocks: 10, sequence: 11, txVersion: 2))
+        #expect(!RelativeLock.isSatisfied(blocks: 10, sequence: 9, txVersion: 2))
+        #expect(!RelativeLock.isSatisfied(blocks: 10, sequence: 10, txVersion: 1))
+        #expect(!RelativeLock.isSatisfied(blocks: 10, sequence: 0xFFFF_FFFD, txVersion: 2))
+        #expect(!RelativeLock.isSatisfied(blocks: 10, sequence: 10 | (1 << 22), txVersion: 2))
+    }
+
+    // MARK: - Spends
+
+    static func funding(_ account: MultisigAccount, amount: Int64, index: UInt32 = 0, height: UInt32) throws -> WalletUTXO {
+        try WalletUTXO(txid: Data(repeating: 0x5B + UInt8(index), count: 32), vout: 0, amount: amount,
+                       scriptPubKey: account.scriptPubKey(index: index), chain: .receive, index: index, height: height)
+    }
+
+    func spend(_ account: MultisigAccount, _ utxo: WalletUTXO, tip: UInt32,
+               path: MultisigAccount.SpendPath) throws -> PSBT {
+        try account.createSpend(utxos: [utxo], payments: [Payment(amount: 40_000, scriptPubKey: destination)],
+                                changeIndex: 0, feeRateSatPerVByte: 2, chainTip: tip, path: path, randomness: { 0.5 })
+    }
+
+    static func witnessSize(_ witness: [Data]) -> Int {
+        func compact(_ value: Int) -> Int { value < 0xFD ? 1 : 3 }
+        return compact(witness.count) + witness.reduce(0) { $0 + compact($1.count) + $1.count }
+    }
+
+    @Test("2-of-3 now, or any 1 of the same 3 once a coin is 10 blocks old")
+    func fewerSigners() throws {
+        let masters = try TestKeys.masters()
+        let descriptor = try MultisigAccount.descriptor(
+            threshold: 2, signers: try masters.map { try TestKeys.keyExpression(master: $0) },
+            recovery: .fewerSigners(threshold: 1, blocks: 10), network: .signet)
+        let account = try MultisigAccount(descriptor: descriptor, network: .signet)
+        let recovery = try #require(account.recovery)
+        #expect(recovery.threshold == 1 && recovery.blocks == 10 && recovery.keys.count == 3)
+        #expect(try MultisigAccount(descriptor.serialized(), network: .signet).address(index: 2) == account.address(index: 2))
+
+        let coin = try Self.funding(account, amount: 100_000, height: 100)
+        // The signers' path: two of three, at once.
+        var now = try spend(account, coin, tip: 101, path: .signers)
+        #expect(now.inputs[0].tapLeafScripts.count == 2)
+        // The change's tree lists the right leaf first, the bytes Core's walletprocesspsbt writes.
+        let changeTree = try #require(now.outputs.compactMap { $0.tapTree }.first)
+        let changeLeaves = try account.leaves(choice: 1, index: 0).map { $0.script.bytes }
+        #expect(changeTree.map { $0.script } == changeLeaves.reversed())
+        #expect(changeTree.allSatisfy { $0.depth == 1 && $0.leafVersion == 0xC0 })
+        try account.sign(&now, signingKey: masters[0], knownUTXOs: [coin], ownedOutputCoordinates: owned, chainTip: 101)
+        #expect(throws: (any Error).self) { var copy = now; _ = try copy.finalize() }
+        try account.sign(&now, signingKey: masters[2], knownUTXOs: [coin], ownedOutputCoordinates: owned, chainTip: 101)
+        #expect(try account.approvals(of: now, knownUTXOs: [coin]) == [0, 2])
+        #expect(try account.approvals(of: now, knownUTXOs: [coin], path: .recovery).isEmpty)
+        let fast = try account.finalizeSpend(&now, knownUTXOs: [coin], ownedOutputCoordinates: owned, chainTip: 101)
+        #expect(fast.inputs[0].sequence == TransactionBuilder.defaultSequence)
+        #expect(fast.inputs[0].witness.count == 5)
+        #expect(Self.witnessSize(fast.inputs[0].witness) <= (try account.witnessBytesPerInput(path: .signers)))
+
+        // The recovery path: refused while the coin is young, then one key.
+        #expect(throws: MultisigAccountError.self) { _ = try spend(account, coin, tip: 108, path: .recovery) }
+        var later = try spend(account, coin, tip: 109, path: .recovery)
+        #expect(try account.reviewSpend(later, knownUTXOs: [coin], ownedOutputCoordinates: owned, chainTip: 109).path
+            == .recovery)
+        #expect(throws: MultisigAccountError.self) {
+            _ = try account.reviewSpend(later, knownUTXOs: [coin], ownedOutputCoordinates: owned, chainTip: 108)
+        }
+        try account.sign(&later, signingKey: masters[1], knownUTXOs: [coin], ownedOutputCoordinates: owned, chainTip: 109)
+        #expect(try account.approvals(of: later, knownUTXOs: [coin], path: .recovery) == [1])
+        let slow = try account.finalizeSpend(&later, knownUTXOs: [coin], ownedOutputCoordinates: owned, chainTip: 109)
+        #expect(slow.inputs[0].sequence == 10)
+        let leaves = try account.leaves(choice: 0, index: 0)
+        let recoveryScript = try #require(leaves.first { $0.isRecovery }).script.bytes
+        #expect(slow.inputs[0].witness[slow.inputs[0].witness.count - 2] == recoveryScript)
+        #expect(Self.witnessSize(slow.inputs[0].witness) <= (try account.witnessBytesPerInput(path: .recovery)))
+    }
+
+    @Test("2-of-2 with a separate recovery key after 144 blocks")
+    func separateKey() throws {
+        let masters = try TestKeys.masters()
+        let recoveryMaster = try TestKeys.master(entropyByte: 0xD4)
+        let descriptor = try MultisigAccount.descriptor(
+            threshold: 2, signers: try masters.prefix(2).map { try TestKeys.keyExpression(master: $0) },
+            recovery: .separateKeys(threshold: 1, keys: [try TestKeys.keyExpression(master: recoveryMaster)], blocks: 144),
+            network: .signet)
+        #expect(descriptor.serialized().contains("and_v(v:pk("))
+        let account = try MultisigAccount(descriptor: descriptor, network: .signet)
+        #expect(account.hasSigner(for: recoveryMaster))
+        let coin = try Self.funding(account, amount: 80_000, height: 500)
+
+        // On the signers' path the recovery key signs nothing.
+        var now = try spend(account, coin, tip: 600, path: .signers)
+        #expect(throws: (any Error).self) {
+            try account.sign(&now, signingKey: recoveryMaster, knownUTXOs: [coin], ownedOutputCoordinates: owned,
+                             chainTip: 600)
+        }
+        // After 144 blocks it spends alone.
+        var later = try spend(account, coin, tip: 643, path: .recovery)
+        try account.sign(&later, signingKey: recoveryMaster, knownUTXOs: [coin], ownedOutputCoordinates: owned,
+                         chainTip: 643)
+        let transaction = try account.finalizeSpend(&later, knownUTXOs: [coin], ownedOutputCoordinates: owned,
+                                                    chainTip: 643)
+        #expect(transaction.inputs[0].sequence == 144)
+        #expect(transaction.inputs[0].witness.count == 3) // signature, leaf script, control block
+    }
+
+    @Test("review refuses mixed paths and a missing leaf")
+    func reviewRefusals() throws {
+        let masters = try TestKeys.masters()
+        let account = try MultisigAccount(descriptor: MultisigAccount.descriptor(
+            threshold: 2, signers: try masters.map { try TestKeys.keyExpression(master: $0) },
+            recovery: .fewerSigners(threshold: 1, blocks: 10), network: .signet), network: .signet)
+        let first = try Self.funding(account, amount: 60_000, index: 0, height: 100)
+        let second = try Self.funding(account, amount: 60_000, index: 1, height: 100)
+        let mixed = try account.createSpend(utxos: [first, second],
+                                            payments: [Payment(amount: 100_000, scriptPubKey: destination)],
+                                            changeIndex: 0, feeRateSatPerVByte: 2, chainTip: 200, path: .recovery,
+                                            randomness: { 0.5 })
+        // The second input back on the signers' sequence.
+        var rebuilt = mixed
+        rebuilt.inputs[1].pairs.removeAll { $0.type == PSBT.InType.sequence }
+        rebuilt.inputs[1].pairs.append(PSBT.KeyValue(type: PSBT.InType.sequence,
+                                                     value: Data([0xFD, 0xFF, 0xFF, 0xFF])))
+        #expect(throws: MultisigAccountError.self) {
+            _ = try account.reviewSpend(rebuilt, knownUTXOs: [first, second], ownedOutputCoordinates: owned,
+                                        chainTip: 200)
+        }
+        var stripped = try spend(account, first, tip: 200, path: .signers)
+        stripped.inputs[0].tapLeafScripts = Array(stripped.inputs[0].tapLeafScripts.prefix(1))
+        #expect(throws: MultisigAccountError.self) {
+            _ = try account.reviewSpend(stripped, knownUTXOs: [first], ownedOutputCoordinates: owned, chainTip: 200)
+        }
+    }
+
+    @Test("admission refuses look-alike recovery leaves")
+    func admissionRefusals() throws {
+        let masters = try TestKeys.masters()
+        let signers = try masters.map { try TestKeys.keyExpression(master: $0) }
+        let bare = try masters.map { try TestKeys.bareKeyExpression(master: $0) }
+        let other = try TestKeys.keyExpression(master: TestKeys.master(entropyByte: 0xD4))
+        let primary = "sortedmulti_a(2,\(signers.joined(separator: ",")))"
+        let nums = Taproot.unspendableInternalKey.hex
+        let refused = [
+            "and_v(v:pk(\(other)),older(65536))", // longer than BIP68's 16 bits
+            "and_v(v:pk(\(other)),older(4194314))", // the time-based flag
+            "and_v(v:pk(\(signers[0])),older(10))", // a signer on its first path again
+            "and_v(v:pk(\(other.dropLast(8))/<2;3>/*),older(10))", // a stranger on the reused path
+            "and_v(v:multi_a(1,\(bare[0])/<2;3>/*,\(bare[0])/<2;3>/*),older(10))", // a repeated recovery key
+            "multi_a(1,\(other))", // a second leaf without a lock
+        ]
+        _ = try MultisigAccount("tr(\(nums),{\(primary),and_v(v:pk(\(other)),older(10))})", network: .signet)
+        for leaf in refused {
+            #expect(throws: (any Error).self, "accepted \(leaf.prefix(40))") {
+                _ = try MultisigAccount("tr(\(nums),{\(primary),\(leaf)})", network: .signet)
+            }
+        }
+        // A timelocked leaf alone has no signers' path, and older(0) does not parse.
+        #expect(throws: (any Error).self) {
+            _ = try MultisigAccount("tr(\(nums),and_v(v:pk(\(other)),older(10)))", network: .signet)
+        }
+        #expect(throws: DescriptorError.invalidTimelock) {
+            _ = try Descriptor("tr(\(nums),{\(primary),and_v(v:pk(\(other)),older(0))})")
+        }
+        #expect(throws: (any Error).self) {
+            _ = try MultisigAccount.descriptor(threshold: 2, signers: signers,
+                                               recovery: .fewerSigners(threshold: 4, blocks: 10), network: .signet)
+        }
+    }
+}

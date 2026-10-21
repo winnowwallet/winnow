@@ -5,7 +5,9 @@ import XCTest
 
 /// One real wallet round trip on a disposable signet: the app creates its
 /// wallet, discovers a node-funded payment, signs and relays a payment, and
-/// notices its confirmation. Screenshots come from that same successful flow.
+/// notices its confirmation; then a 2-of-2 script-path multisig account with
+/// Bitcoin Core as the other signer receives and spends (`MultisigJourney`).
+/// Screenshots come from that same successful flow.
 /// Detailed wallet rules live in AppTests and WalletCore tests.
 @MainActor
 final class WinnowAppUITests: XCTestCase {
