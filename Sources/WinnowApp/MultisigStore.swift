@@ -223,10 +223,11 @@ actor MultisigStore {
             } else if let pending = record.allUtxos.firstIndex(where: {
                 $0.spent != nil && $0.spent?.height == nil && $0.outpoint == outpoint
             }) {
-                // Tombstoned when a spend was broadcast, now confirmed: the
-                // only moment its height can be learned. Confirmed by another
-                // transaction (another signer's spend, or a replacement), the
-                // broadcast spend can never confirm.
+                // Tombstoned when a spend was broadcast, or put back in
+                // flight by a rollback, now confirmed: the only moment its
+                // height can be learned. Confirmed by another transaction
+                // (another signer's spend, or a replacement), the spend it
+                // named can never confirm.
                 if let loser = record.allUtxos[pending].spent?.spentBy, loser != txid {
                     losers.append(loser)
                 }
@@ -279,7 +280,8 @@ actor MultisigStore {
                 throw MultisigStorageError.invalidState("transaction output index is out of range")
             }
             if let existing = record.allUtxos.firstIndex(where: { $0.txid == txid && $0.vout == UInt32(vout) }) {
-                // A re-applied block, or our own pending change confirming.
+                // A re-applied block, our own pending change confirming, or
+                // a coin a rollback kept for a spend in flight.
                 record.allUtxos[existing].height = height
             } else {
                 record.allUtxos.append(WalletUTXO(
@@ -371,22 +373,50 @@ actor MultisigStore {
                           scriptPubKey: changeScript, chain: .change, index: changeIndex, height: 0)
     }
 
-    /// Rewinds coins to a fork height, matching `Wallet.rollBack`: coins from
-    /// fallen blocks leave, spends from fallen blocks are undone, and a spend
-    /// with no height (still in flight) keeps its inputs reserved. Address
-    /// frontiers are untouched.
+    /// Rewinds coins to a fork height, matching `Wallet.rollBack`: spends
+    /// from fallen blocks go back in flight, and coins from fallen blocks
+    /// leave unless a spend holds them. Like the wallet's, a pure function of
+    /// the fork height, so a repeat changes nothing. Address frontiers are
+    /// untouched.
     func rollBack(to forkHeight: UInt32) throws {
         var candidate = records
         for index in candidate.indices {
-            candidate[index].allUtxos.removeAll { $0.height > forkHeight }
-            for position in candidate[index].allUtxos.indices {
-                guard let height = candidate[index].allUtxos[position].spent?.height, height > forkHeight
-                else { continue }
-                candidate[index].allUtxos[position].spent = nil
-            }
+            Self.rependSpends(above: forkHeight, in: &candidate[index].allUtxos)
+            Self.rewindCoins(above: forkHeight, in: &candidate[index].allUtxos)
         }
         guard candidate != records else { return }
         try mutate { $0 = candidate }
+    }
+
+    /// A spend whose block fell is back in every mempool that saw it, so its
+    /// inputs stay reserved for it, as `Wallet.rollBack` keeps the wallet's
+    /// (#157). Released, they would go into a new spend the network rejects.
+    /// `applySpends` heights the reservation again when the spend confirms,
+    /// and undoes the spend when a conflict confirms instead.
+    private static func rependSpends(above forkHeight: UInt32, in coins: inout [WalletUTXO]) {
+        for position in coins.indices {
+            guard let marker = coins[position].spent, let height = marker.height, height > forkHeight
+            else { continue }
+            coins[position].spent = WalletUTXO.SpentMarker(spentBy: marker.spentBy, height: nil)
+        }
+    }
+
+    /// Coins confirmed above the fork leave, since the rescan re-finds
+    /// whichever still exist. That includes a fallen spend's change, as the
+    /// wallet drops its own: kept at height 0, it would be offered to a new
+    /// spend chained on a parent that is in no block, which a conflict on the
+    /// new branch can beat and which this phone may not be relaying at all
+    /// (another signer's spend). A coin a spend holds stays, at height 0, as
+    /// the wallet keeps it. Dropped, the rescan would admit it again unspent
+    /// while that spend is in flight, and `applyOutputs` re-heights it instead.
+    private static func rewindCoins(above forkHeight: UInt32, in coins: inout [WalletUTXO]) {
+        coins.removeAll { coin in
+            let reserved = coin.spent != nil && coin.spent?.height == nil
+            return coin.height > forkHeight && !reserved
+        }
+        for position in coins.indices where coins[position].height > forkHeight {
+            coins[position].height = 0
+        }
     }
 
     // MARK: - Validation and persistence

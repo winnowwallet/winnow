@@ -136,7 +136,8 @@ final class MultisigStoreTests: XCTestCase {
         XCTAssertEqual(current.balance, 19_000)
         XCTAssertEqual(current.nextReceiveIndex, 3, "a reorg never costs an address gap")
 
-        // The spend confirms; a reorg below it undoes it.
+        // The spend confirms; a reorg below it puts it back in flight, so its
+        // input stays reserved and its change leaves with the block.
         try await store.apply(match: block(at: 103, [spend]), network: .signet)
         current = try await fetch(store, added.id)
         XCTAssertEqual(current.allUtxos.first { $0.txid == funding.txid }?.spent?.height, 103)
@@ -145,12 +146,105 @@ final class MultisigStoreTests: XCTestCase {
         XCTAssertNotNil(confirmedBackup, "a confirmed spend can be backed up")
         try await store.rollBack(to: 102)
         current = try await fetch(store, added.id)
-        XCTAssertEqual(current.balance, 60_000)
+        XCTAssertEqual(current.allUtxos.first { $0.txid == funding.txid }?.spent,
+                       WalletUTXO.SpentMarker(spentBy: spend.txid, height: nil))
+        XCTAssertEqual(current.balance, 0)
 
         let restarted = MultisigStore(keys: keys)
         await restarted.configure(storageURL: url, network: .signet)
         let reloaded = await restarted.all
         XCTAssertEqual(reloaded, [current])
+    }
+
+    /// A reorg takes away the block that confirmed an account spend, but
+    /// every node that saw the spend puts it back in its mempool. Its inputs
+    /// stay reserved for it, as `Wallet.rollBack` keeps the wallet's (#157):
+    /// released, they would go into a new spend the network rejects. Its
+    /// change leaves with the block, and returns when the spend confirms
+    /// again.
+    func testARollbackKeepsTheInputsOfAFallenSpendReserved() async throws {
+        let account = try account()
+        let store = MultisigStore(keys: InMemoryStoreKeyVault())
+        await store.configure(storageURL: tempFileURL("multisig.json"), network: .signet)
+        let added = try await store.add(name: "Shared", account: account, createdAtHeight: 100)
+        let funding = payment(to: try account.scriptPubKey(index: 0), amount: 60_000, from: foreign(0x51))
+        let other = payment(to: try account.scriptPubKey(index: 1), amount: 5_000, from: foreign(0x52))
+        try await store.apply(match: block(at: 101, [funding, other]), network: .signet)
+        let fundingCoin = Transaction.Outpoint(txid: funding.txid, vout: 0)
+
+        let change = try account.scriptPubKey(index: 0, choice: AddressChain.change.rawValue)
+        let spend = payment(to: Data([0x51, 0x20] + repeatElement(0x77, count: 32)), amount: 40_000,
+                            from: fundingCoin, change: .init(value: 19_000, scriptPubKey: change))
+        try await store.recordSpend(id: added.id, transaction: spend, changeIndex: 0)
+        try await store.apply(match: block(at: 103, [spend]), network: .signet)
+        var current = try await fetch(store, added.id)
+        XCTAssertEqual(current.balance, 24_000)
+
+        try await store.rollBack(to: 102)
+        current = try await fetch(store, added.id)
+        XCTAssertEqual(current.allUtxos.first { $0.outpoint == fundingCoin }?.spent,
+                       WalletUTXO.SpentMarker(spentBy: spend.txid, height: nil), "in flight again")
+        XCTAssertEqual(current.utxos.map(\.outpoint), [.init(txid: other.txid, vout: 0)],
+                       "only the coin no spend holds can go into a new one")
+        XCTAssertEqual(current.balance, 5_000, "the change left with its block")
+        let backupWhileInFlight = try? await store.backupRecords()
+        XCTAssertNil(backupWhileInFlight, "a backup would restore the reserved coin as spendable")
+        try await store.rollBack(to: 102)
+        let redone = try await fetch(store, added.id)
+        XCTAssertEqual(redone, current, "a rollback redone after a crash changes nothing")
+
+        // The spend confirms on the new branch: the reservation takes its
+        // height, and the change is back.
+        let discarded = try await store.apply(match: block(at: 104, [spend]), network: .signet)
+        XCTAssertEqual(discarded, [])
+        current = try await fetch(store, added.id)
+        XCTAssertEqual(current.allUtxos.first { $0.outpoint == fundingCoin }?.spent,
+                       WalletUTXO.SpentMarker(spentBy: spend.txid, height: 104))
+        XCTAssertEqual(current.balance, 24_000)
+    }
+
+    /// The fallen spend's input can itself sit above the fork: change from an
+    /// earlier spend in a fallen block. The row stays, at height 0, so the
+    /// rescan re-heights it rather than admitting it again unspent while the
+    /// later spend is back in mempools, which is what `Wallet.rollBack` does
+    /// with a reserved coin above the fork.
+    func testARollbackKeepsAReservedCoinFromAFallenBlock() async throws {
+        let account = try account()
+        let store = MultisigStore(keys: InMemoryStoreKeyVault())
+        await store.configure(storageURL: tempFileURL("multisig.json"), network: .signet)
+        let added = try await store.add(name: "Shared", account: account, createdAtHeight: 100)
+        let funding = payment(to: try account.scriptPubKey(index: 0), amount: 60_000, from: foreign(0x61))
+        try await store.apply(match: block(at: 101, [funding]), network: .signet)
+
+        // Another signer's spend with change to the account, then a spend of
+        // that change, each confirmed above the fork.
+        let elsewhere = Data([0x51, 0x20] + repeatElement(0x77, count: 32))
+        let change = try account.scriptPubKey(index: 0, choice: AddressChain.change.rawValue)
+        let first = payment(to: elsewhere, amount: 40_000, from: .init(txid: funding.txid, vout: 0),
+                            change: .init(value: 19_000, scriptPubKey: change))
+        let changeCoin = Transaction.Outpoint(txid: first.txid, vout: 1)
+        let second = payment(to: elsewhere, amount: 18_000, from: changeCoin)
+        try await store.apply(match: block(at: 103, [first]), network: .signet)
+        try await store.apply(match: block(at: 104, [second]), network: .signet)
+
+        try await store.rollBack(to: 102)
+        var current = try await fetch(store, added.id)
+        let kept = try XCTUnwrap(current.allUtxos.first { $0.outpoint == changeCoin }, "the reserved row stays")
+        XCTAssertEqual(kept.height, 0, "not in a block yet")
+        XCTAssertEqual(kept.spent, WalletUTXO.SpentMarker(spentBy: second.txid, height: nil))
+        XCTAssertEqual(current.balance, 0)
+
+        // The rescan finds the first spend again: its change is re-heighted,
+        // not admitted a second time, and stays reserved for the second.
+        try await store.apply(match: block(at: 103, [first]), network: .signet)
+        current = try await fetch(store, added.id)
+        XCTAssertEqual(current.allUtxos.filter { $0.outpoint == changeCoin }.map(\.height), [103])
+        XCTAssertEqual(current.balance, 0, "the change is still the second spend's")
+        try await store.apply(match: block(at: 104, [second]), network: .signet)
+        current = try await fetch(store, added.id)
+        XCTAssertEqual(current.allUtxos.first { $0.outpoint == changeCoin }?.spent,
+                       WalletUTXO.SpentMarker(spentBy: second.txid, height: 104))
+        XCTAssertFalse(current.allUtxos.contains { $0.height == 0 || ($0.spent != nil && $0.spent?.height == nil) })
     }
 
     /// A zero-value output is consensus-valid, and anyone who knows one
@@ -179,8 +273,9 @@ final class MultisigStoreTests: XCTestCase {
     /// Another signer's spend of a coin ours also spends confirms instead of
     /// ours. Ours can never confirm now: its change never existed, the
     /// inputs the winner left are the account's again, and a spend of that
-    /// change loses with it. A reorg below the winner gives the coins back,
-    /// and ours can still confirm on the new branch.
+    /// change loses with it. A reorg below the winner puts it back in flight,
+    /// holding the coin it took; if ours confirms on the new branch instead,
+    /// the winner is the one undone.
     func testALosingInFlightSpendReleasesItsCoinsAndDropsItsChange() async throws {
         let account = try account()
         let store = MultisigStore(keys: InMemoryStoreKeyVault())
@@ -223,12 +318,16 @@ final class MultisigStoreTests: XCTestCase {
         let backup = try? await store.backupRecords()
         XCTAssertNotNil(backup, "nothing is left in flight")
 
-        // A reorg below the winner gives both coins back...
+        // A reorg below the winner: it is back in mempools, so the coin it
+        // took stays reserved for it and its change leaves with the block...
         try await store.rollBack(to: 101)
         current = try await fetch(store, added.id)
-        XCTAssertEqual(current.balance, 90_000)
-        // ...and on the new branch ours confirms after all.
-        try await store.apply(match: block(at: 102, [ours]), network: .signet)
+        XCTAssertEqual(current.allUtxos.first { $0.outpoint == firstCoin }?.spent,
+                       WalletUTXO.SpentMarker(spentBy: theirs.txid, height: nil))
+        XCTAssertEqual(current.balance, 30_000)
+        // ...and on the new branch ours confirms after all, beating it.
+        let beaten = try await store.apply(match: block(at: 102, [ours]), network: .signet)
+        XCTAssertEqual(beaten, [theirs.txid])
         current = try await fetch(store, added.id)
         XCTAssertEqual(current.utxos.map(\.outpoint), [.init(txid: ours.txid, vout: 1)])
         XCTAssertEqual(current.balance, 19_000)

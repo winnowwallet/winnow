@@ -1016,8 +1016,9 @@ final class AppModel {
         try await wallet?.rollBack(to: forkHeight)
         try await multisigStore.rollBack(to: forkHeight)
         // Reactivates any own send whose confirming block fell (#157): the
-        // wallet just re-reserved its inputs, and this makes sure the network
-        // hears the transaction again instead of only our bookkeeping.
+        // wallet and the account store just re-reserved its inputs, and this
+        // makes sure the network hears the transaction again instead of only
+        // our bookkeeping.
         try await stack?.broadcaster.rollBack(to: forkHeight)
     }
 
