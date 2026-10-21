@@ -22,6 +22,11 @@ actual locked-device behavior still needs [device evidence](../docs/security/REA
 isolation, atomic persistence, address rotation and relaunch, bounded metadata,
 and exact output matching without creating a sender contact.
 
+`MultisigStoreTests` checks the sealed `multisig.json`: backups that wait for
+confirmations and refuse a changed coin, payments, spends and reorg rollback
+driven by the filter scan, and tampered, unsealed or oversized files left
+untouched and refused.
+
 `CloudBackupTests` checks automatic defaults, persistent opt-out, failed uploads, cancellation and wallet/account
 changes with in-memory cloud and key stores. It does not establish actual iCloud
 or iCloud Keychain synchronization; see [cloud backup validation](../CloudKit/README.md#validation).

@@ -1,9 +1,9 @@
 # Winnow
 
 Winnow is a Bitcoin wallet for iPhone and iPad, also available on Apple silicon
-Mac as an iPad app. It receives and sends bitcoin and saves recipients. This is
-the single-key build: every payment is signed by this phone's key, and the curve
-arithmetic behind that signature is Winnow's own Swift.
+Mac as an iPad app. It receives and sends bitcoin and saves recipients. This
+build signs with this phone's key, alone or as one signer of a k-of-n multisig
+account, and the curve arithmetic behind every signature is Winnow's own Swift.
 
 [App Store](https://apps.apple.com/app/id6801502501) ·
 [TestFlight](https://testflight.apple.com/join/83djpNE7) ·
@@ -20,9 +20,12 @@ Advanced mode adds Wallet, Send and Settings tabs, with signet, manual peers,
 fee controls and recovery words. Switching modes keeps your wallet and
 settings. Use signet and test funds when trying a development build.
 
-This build has no shared accounts: no MuSig2, no threshold savings and no
-cosigner cards. A backup carrying shared-account records from the
-shared-account Winnow is refused rather than restored without those funds.
+Advanced mode adds raw k-of-n multisig accounts: a
+`tr(NUMS, sortedmulti_a(k, …))` descriptor in, addresses and PSBTs out, signed
+by any k signers in any order with no rounds between them. There are no MuSig2
+accounts, cosigner cards or shared-savings screens. A backup carrying a MuSig2
+account from the shared-account Winnow is refused rather than restored without
+those funds.
 Key derivation, the Taproot tweak and BIP340 signing run in
 [NativeSecp256k1](Sources/NativeSecp256k1/README.md), an in-tree Swift module
 that is variable-time and does not zeroize secrets. The package has no

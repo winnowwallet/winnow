@@ -43,13 +43,13 @@ struct PeopleTests {
         #expect(throws: PersonPayToError.unsupportedDerivation) {
             _ = try PersonPayTo.descriptor("tr(\(tpub)/1/*)", network: .signet)
         }
-        // Only a tweaked single key pays a person: a raw output key is refused
-        // by shape, and a script tree or a musig() aggregate no longer parses.
+        // Only a tweaked single key pays a person: a raw output key and a
+        // script tree are refused by shape, and a musig() aggregate does not parse.
         #expect(throws: PersonPayToError.notSingleKey) {
             _ = try PersonPayTo.descriptor("rawtr(\(Self.keyExpression(master)))", network: .signet)
         }
         let keys = try Self.masters().map { try Self.keyExpression($0) }
-        #expect(throws: PersonPayToError.malformed) {
+        #expect(throws: PersonPayToError.notSingleKey) {
             _ = try PersonPayTo.descriptor("tr(\(keys[0]),sortedmulti_a(2,\(keys[1]),\(keys[2])))", network: .signet)
         }
         #expect(throws: PersonPayToError.malformed) {

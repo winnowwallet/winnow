@@ -35,7 +35,7 @@ configuration and under Xcode.
 | `TestScripts.swift` | `TestScripts.p2trDestination`, `TestScripts.bip86FirstMainnetAddress` |
 | `TestKeys.swift` | `TestKeys.master(entropyByte:)`, `masters()`, and the `keyExpression`/`bareKeyExpression` text that people and label tests paste |
 | `P2P/` | `SyntheticChain`/`makeSyntheticChain`, `minedHeader`, `makeTestParams`, `makeFakeSegwitTx`, `ResumeOnce`, `LoopbackNode`, `LoopbackHTTPServer` |
-| `Node/` | `BitcoinCLI`, `HostProcess`, `SignetMiner`, `SignetFixture`: the custom-signet node used by the UI journey |
+| `Node/` | `BitcoinCLI`, `CoreSigner`, `HostProcess`, `SignetMiner`, `SignetFixture`: the custom-signet node and Core signer used by the UI journey |
 
 Helpers that only one target can use stay in that target: `blockOutputScripts`
 in `BitcoinCoreTests/TestHelpers.swift` and anything that

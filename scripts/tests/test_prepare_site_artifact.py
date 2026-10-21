@@ -17,7 +17,7 @@ site = importlib.util.module_from_spec(spec)
 loader.exec_module(site)
 
 # Historical checkpoint fixture, validated against capture names independently.
-CHECKPOINTS = ['01-onboarding', '03-receive', '56-home-beginner', '06-send-review', '08-send-confirmed', '09-home-after-send']
+CHECKPOINTS = ['01-onboarding', '03-receive', '56-home-beginner', '06-send-review', '08-send-confirmed', '09-home-after-send', '26-savings-share', '27-savings-funded', '14-approval-waiting', '15-approval-sent', '28-savings-confirmed']
 
 class SiteArtifactTests(unittest.TestCase):
     def setUp(self):
@@ -210,5 +210,5 @@ class NormalizeOnlyTests(unittest.TestCase):
             site.main(['--normalize-journey',str(journey),'--media-output',str(output),
                        '--source-sha','a'*40,'--run-url',self.evidence['run_url']])
             encoder.assert_called_once()
-            self.assertEqual(len(list((output/'screenshots').glob('*.png'))),6)
+            self.assertEqual(len(list((output/'screenshots').glob('*.png'))),11)
             self.assertEqual(site.validate_media(output,self.names)['source_sha'],'a'*40)

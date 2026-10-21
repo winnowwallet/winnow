@@ -12,9 +12,13 @@ The automated UI journey currently covers iPhone only.
 
 Wallet is the one account and transaction list. Payment details save or rename a
 recipient; Send holds the saved-recipient picker and the amount. The reviewed
-proposal is signed with this phone's key after the owner authenticates; there is
-no shared account, approval screen or PSBT exchange with other signers. Advanced
-mode keeps coins and the raw descriptor under Technical details.
+proposal is signed with this phone's key after the owner authenticates.
+Advanced mode keeps coins and the raw descriptor under Technical details, and
+its Wallet tab adds a Multisig section: add a k-of-n account by pasting its
+descriptor, receive into it, and create or paste a PSBT that this phone signs,
+combines with other signers' copies, and broadcasts once enough signatures
+verify. Accounts live in the sealed per-wallet `multisig.json`
+([MultisigStore](MultisigStore.swift)), scanned with the wallet's own filters.
 Removing a shortcut preserves
 past labels and fresh-address counters in the existing
 people.json store. Receive shares the wallet’s payment card.

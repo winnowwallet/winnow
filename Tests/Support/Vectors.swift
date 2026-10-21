@@ -88,3 +88,39 @@ extension Vectors {
         }
     }
 }
+
+/// The valid descriptors (each with its expected scriptPubKeys) and the
+/// invalid ones of a BIP whose "Test Vectors" section is written the BIP387
+/// / BIP390 way: `* <tt>descriptor</tt>` bullets with `** <tt>script</tt>`
+/// sub-bullets, then an "Invalid descriptors" list.
+public struct DescriptorVectors {
+    public var valid: [(descriptor: String, scripts: [String])] = []
+    public var invalid: [String] = []
+}
+
+extension Vectors {
+    /// The descriptor vector blocks of a BIP387/BIP390-style mediawiki doc.
+    public static func descriptorVectors(_ name: String, in bundle: Bundle) throws -> DescriptorVectors {
+        let text = try string(name, in: bundle)
+        var vectors = DescriptorVectors()
+        var section = 0 // 0 = before, 1 = valid, 2 = invalid
+        for line in text.components(separatedBy: .newlines) {
+            if line.hasPrefix("==Test Vectors==") { section = 1; continue }
+            if line.hasPrefix("Invalid descriptors") { section = 2; continue }
+            if line.hasPrefix("==Backwards Compatibility==") { section = 0 }
+            let tags = ttTags(in: line)
+            guard !tags.isEmpty else { continue }
+            switch section {
+            case 1 where line.hasPrefix("* <tt>"):
+                vectors.valid.append((tags[0], []))
+            case 1 where line.hasPrefix("** <tt>"):
+                vectors.valid[vectors.valid.count - 1].scripts.append(tags[0])
+            case 2 where line.hasPrefix("* "):
+                vectors.invalid.append(tags.last!)
+            default:
+                break
+            }
+        }
+        return vectors
+    }
+}

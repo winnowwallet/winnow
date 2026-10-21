@@ -3,8 +3,10 @@
 # Taproot scripts and commitments
 
 Script encoding, Taproot leaf and branch hashes, output-key tweaks and
-control blocks. The wallet's own outputs are plain BIP86 key-path outputs;
-the tree and control-block code reads the script-path spends of incoming
+control blocks, plus the BIP387 `multi_a` leaf builder and parser. The
+wallet's own outputs are plain BIP86 key-path outputs; multisig accounts spend
+through a single `multi_a` leaf under the NUMS internal key, and the same
+tree and control-block code reads the script-path spends of incoming
 transactions, so received payments can be labelled by the address that
 funded them.
 

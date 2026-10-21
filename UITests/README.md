@@ -6,7 +6,13 @@
 journey, recorded continuously on iPhone: create a wallet in Simple mode,
 receive test coins, review and send a payment, and see its receipt confirm on
 a real signet node. [WinnowAppUITests.swift](WinnowAppUITests.swift) owns the
-payment and the fixture readiness checks. The journey is one test result.
+payment and the fixture readiness checks. It then runs
+[MultisigJourney.swift](MultisigJourney.swift): a 2-of-2 script-path multisig
+account between the phone and Bitcoin Core, whose first address must equal
+Core's `deriveaddresses`. The phone funds it, creates the PSBT and signs
+first; Core adds its own script-path signature through `walletprocesspsbt`;
+the phone finalizes the BIP387 witness and broadcasts, and Core must accept
+and mine it. The journey is one test result.
 
 Two smaller classes share the bundle.
 [PeerGatewaySettingsUITests.swift](PeerGatewaySettingsUITests.swift) checks the
@@ -52,11 +58,14 @@ and its source provenance; checkpoint screenshots
 remain secondary artifacts. Assertions, the log, and the result bundle
 establish whether the run passed.
 
-The source contains 6 captures, attached to the result bundle and copied to
+The source contains 11 captures, attached to the result bundle and copied to
 `WINNOW_SCREENSHOT_DIR`: `01-onboarding`, `03-receive`, `56-home-beginner`,
-`06-send-review`, `08-send-confirmed`, `09-home-after-send`. They are taken at
-screens the journey already visits. CI normalizes the continuous video after
-successful tests and retains all 6 checkpoints in wallet evidence. The public
+`06-send-review`, `08-send-confirmed`, `09-home-after-send`, then the multisig
+leg's `26-savings-share`, `27-savings-funded`, `14-approval-waiting`,
+`15-approval-sent` and `28-savings-confirmed`, the names the shared-account
+Winnow used for its threshold leg. They are taken at screens the journey
+already visits. CI normalizes the continuous video after successful tests and
+retains all 11 checkpoints in wallet evidence. The public
 website, which still presents the sixteen-checkpoint journey of the
 shared-account Winnow, is maintained in winnowwallet/website,
 where [video provenance](https://github.com/winnowwallet/website/blob/main/docs/videos/README.md)
@@ -67,7 +76,8 @@ source and run in journey-provenance.json.
 `SIGNET_BANK_PREPARATION_SECONDS` measures host bank preparation, logged in
 `bank-setup.log` in CI or `fixture-prepare.log` in standalone runs.
 `SIGNET_SETUP_SECONDS` measures XCTest's fast chain and
-bank readiness checks; `SIGNET_ORDINARY_SECONDS` measures the payment and
+bank readiness checks; `SIGNET_MULTISIG_SECONDS` measures the multisig leg;
+`SIGNET_ORDINARY_SECONDS` measures the payment and
 `SIGNET_JOURNEY_SECONDS` the complete app journey. Xcode reports overall test
 execution separately; compilation is outside that test duration.
 Fresh CI starts a new fixture and mines the bank's initial 101 blocks;

@@ -2,18 +2,19 @@
 
 # Native secp256k1
 
-A pure-Swift implementation of the secp256k1 operations the single-key BIP86
-wallet needs: scalar arithmetic modulo the group order, field arithmetic
+A pure-Swift implementation of the secp256k1 operations the wallet's BIP86
+keys and Taproot multisig accounts need: scalar arithmetic modulo the group order, field arithmetic
 modulo the curve prime, point addition and scalar multiplication, x-only and
 compressed key encodings, BIP32-style key tweaks, BIP340 signing and
 verification, and the BIP340 tagged hash. It depends only on Foundation and
 CryptoKit (for SHA-256).
 
 WalletCore's key derivation, Taproot tweaks, signer and PSBT finalizer are the
-consumers. MuSig2, script-path multisig, ECDSA and ECDH are out of scope: the
-module implements exactly the operations the ordinary receive and send path
-calls, with the same inputs, outputs and failure cases as the libsecp256k1
-wrapper it replaces.
+consumers. A script-path multisig signature is an ordinary BIP340 signature
+with an untweaked key over the script-path sighash, so multisig accounts need
+nothing more from this module. MuSig2, ECDSA and ECDH are out of scope: the
+module implements exactly the operations those paths call, with the same
+inputs, outputs and failure cases as the libsecp256k1 wrapper it replaces.
 
 ## Limits
 

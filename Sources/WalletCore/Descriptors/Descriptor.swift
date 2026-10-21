@@ -20,6 +20,14 @@ public enum DescriptorError: Error, Equatable {
     case invalidKey
     case invalidPath
     case derivationFailed
+    /// A `multi_a`/`sortedmulti_a` threshold that is missing or outside
+    /// 1...n, or more keys than BIP387 allows.
+    case invalidThreshold
+    /// An expression used where it is not defined, such as a leaf at the top
+    /// level or a script-tree query on a descriptor without a tree.
+    case invalidContext
+    /// A script tree nested deeper than BIP341's 128 levels (SEC-010).
+    case treeTooDeep
 }
 
 extension HDKey.Network: Equatable {
@@ -28,10 +36,11 @@ extension HDKey.Network: Equatable {
 }
 
 /// Output descriptor parse/serialize/derive engine (BIP380 general operation
-/// and checksum, BIP386 `tr()`, BIP389 multipath). Single-key Taproot only:
-/// the supported expressions are `tr(KEY)` and `rawtr(KEY)`, where KEY is one
-/// key with an optional origin and derivation suffix. Script trees, multisig
-/// leaves and `musig()` aggregation are not part of this wallet.
+/// and checksum, BIP386 `tr()`, BIP387 `multi_a`/`sortedmulti_a`, BIP389
+/// multipath). The supported expressions are `tr(KEY)`, `rawtr(KEY)` and
+/// `tr(KEY,TREE)`, where KEY is one key with an optional origin and derivation
+/// suffix and TREE holds `pk`, `multi_a` and `sortedmulti_a` leaves for
+/// script-path spending. `musig()` aggregation is not part of this build.
 public struct Descriptor: Sendable, Equatable {
     /// BIP388-style key origin information: `[fingerprint/path]`.
     public struct KeyOrigin: Sendable, Equatable {
@@ -100,8 +109,25 @@ public struct Descriptor: Sendable, Equatable {
     public enum ScriptExpression: Sendable, Equatable {
         /// `tr(KEY)`: P2TR output with KEY as the internal key, BIP86-tweaked.
         case tr(SingleKey)
+        /// `tr(KEY,TREE)`: P2TR output whose internal key commits to a script
+        /// tree (BIP341). A separate case so every single-key caller, which
+        /// matches `.tr`, keeps refusing descriptors with a tree.
+        case trTree(SingleKey, ScriptTree)
         /// `rawtr(KEY)`: P2TR output with KEY used directly as the output key (no tweak).
         case rawtr(SingleKey)
+    }
+
+    /// A tapscript leaf (BIP386/BIP387); valid only inside a `tr()` tree.
+    public enum LeafExpression: Sendable, Equatable {
+        case pk(SingleKey)
+        case multiA(threshold: Int, keys: [SingleKey])
+        case sortedMultiA(threshold: Int, keys: [SingleKey])
+    }
+
+    /// BIP386 TREE expression: a leaf or `{TREE,TREE}`.
+    public indirect enum ScriptTree: Sendable, Equatable {
+        case leaf(LeafExpression)
+        case branch(ScriptTree, ScriptTree)
     }
 
     /// A derived output: P2TR scriptPubKey and its bech32m address.
@@ -132,6 +158,7 @@ public struct Descriptor: Sendable, Equatable {
         let expression = try parser.parseTopLevel()
         guard parser.atEnd else { throw DescriptorError.unexpectedCharacter(parser.peek()!) }
         self.expression = expression
+        try validate()
     }
 
     /// Canonical serialization with a freshly computed BIP380 checksum.
@@ -140,15 +167,47 @@ public struct Descriptor: Sendable, Equatable {
         return body + "#" + DescriptorChecksum.create(body)
     }
 
-    /// The one key expression of the descriptor.
+    /// The top-level key: the only key of `tr(KEY)` and `rawtr(KEY)`, the
+    /// internal key of `tr(KEY,TREE)`.
     public var key: SingleKey {
         switch expression {
-        case let .tr(key), let .rawtr(key): key
+        case let .tr(key), let .rawtr(key), let .trTree(key, _): key
         }
     }
 
-    /// Whether the key expression contains a `/*` wildcard.
-    public var isRanged: Bool { key.derivation.isRanged }
+    /// Every key expression in the descriptor: the top-level key, then the
+    /// leaf keys left to right.
+    public var allKeys: [SingleKey] {
+        guard case let .trTree(internalKey, tree) = expression else { return [key] }
+        var keys = [internalKey]
+        Self.collectKeys(tree, into: &keys)
+        return keys
+    }
+
+    private static func collectKeys(_ tree: ScriptTree, into keys: inout [SingleKey]) {
+        switch tree {
+        case let .leaf(.pk(key)): keys.append(key)
+        case let .leaf(.multiA(_, leafKeys)), let .leaf(.sortedMultiA(_, leafKeys)): keys.append(contentsOf: leafKeys)
+        case let .branch(left, right):
+            collectKeys(left, into: &keys)
+            collectKeys(right, into: &keys)
+        }
+    }
+
+    /// Whether any key expression contains a `/*` wildcard.
+    public var isRanged: Bool { allKeys.contains { $0.derivation.isRanged } }
+
+    /// BIP389 multipath choices shared by every key (1 when none has one).
+    public var multipathCount: Int { allKeys.map(\.derivation.multipathCount).max() ?? 1 }
+
+    /// Structural rules beyond the grammar: every multipath element in the
+    /// descriptor must offer the same number of choices (BIP389).
+    private func validate() throws {
+        let counts = allKeys.map(\.derivation.multipathCount).filter { $0 > 1 }
+        if let first = counts.first, counts.contains(where: { $0 != first }) {
+            throw DescriptorError.invalidPath
+        }
+    }
 
     /// Derives the output(s) at `index` (ignored when the descriptor has no
     /// wildcard). Returns one output per BIP389 multipath choice — receive and
@@ -156,7 +215,7 @@ public struct Descriptor: Sendable, Equatable {
     /// prefix is the Bitcoin network's, not the key network's: regtest keys
     /// are testnet keys, but a regtest address is `bcrt1…`, never `tb1…`.
     public func derived(index: UInt32, bitcoinNetwork: BitcoinNetwork) throws -> [DerivedOutput] {
-        try (0 ..< key.derivation.multipathCount).map { choice in
+        try (0 ..< multipathCount).map { choice in
             let scriptPubKey = try resolve(expression, index: index, choice: choice)
             let program = scriptPubKey.suffix(32)
             let address = try SegwitAddress.encode(hrp: AddressDecoder.hrp(for: bitcoinNetwork), version: 1, program: program)
@@ -170,6 +229,21 @@ public struct Descriptor: Sendable, Equatable {
         try derived(index: index, bitcoinNetwork: network == .mainnet ? .mainnet : .signet)
     }
 
+    /// The `tr(KEY,TREE)` expression resolved at (`index`, multipath
+    /// `choice`): the x-only internal key and the tree with every leaf key
+    /// resolved, from which spenders build leaf scripts and control blocks.
+    public func resolvedTaproot(index: UInt32, choice: Int = 0) throws -> (internalKey: Data, tree: Taproot.Tree) {
+        guard case let .trTree(internalKey, tree) = expression else { throw DescriptorError.invalidContext }
+        return (xonly(try resolve(internalKey, index: index, choice: choice)),
+                try resolve(tree, index: index, choice: choice))
+    }
+
+    /// A key expression's 33-byte compressed public key at (`index`,
+    /// multipath `choice`), for example one signer of a `multi_a` leaf.
+    public func publicKey(of key: SingleKey, index: UInt32, choice: Int = 0) throws -> Data {
+        try resolve(key, index: index, choice: choice)
+    }
+
     // MARK: - Derivation
 
     /// Resolves a top-level expression to a scriptPubKey at (index, multipath choice).
@@ -178,9 +252,42 @@ public struct Descriptor: Sendable, Equatable {
         case let .tr(internalKey):
             let internalKeyBytes = xonly(try resolve(internalKey, index: index, choice: choice))
             return try Taproot.scriptPubKey(internalKey: internalKeyBytes, merkleRoot: nil)
+        case let .trTree(internalKey, tree):
+            let internalKeyBytes = xonly(try resolve(internalKey, index: index, choice: choice))
+            let merkleRoot = Taproot.merkleRoot(of: try resolve(tree, index: index, choice: choice))
+            return try Taproot.scriptPubKey(internalKey: internalKeyBytes, merkleRoot: merkleRoot)
         case let .rawtr(key):
             let outputKey = xonly(try resolve(key, index: index, choice: choice))
             return Data([0x51, 0x20]) + outputKey
+        }
+    }
+
+    /// Resolves a script tree to tapscript leaves at (index, multipath choice).
+    private func resolve(_ tree: ScriptTree, index: UInt32, choice: Int) throws -> Taproot.Tree {
+        switch tree {
+        case let .leaf(leaf):
+            return .leaf(script: try script(of: leaf, index: index, choice: choice))
+        case let .branch(left, right):
+            return try .branch(resolve(left, index: index, choice: choice),
+                               resolve(right, index: index, choice: choice))
+        }
+    }
+
+    private func script(of leaf: LeafExpression, index: UInt32, choice: Int) throws -> Script {
+        let keys: (([SingleKey]) throws -> [Data]) = { keys in
+            try keys.map { self.xonly(try self.resolve($0, index: index, choice: choice)) }
+        }
+        switch leaf {
+        case let .pk(key):
+            let xonlyKey = xonly(try resolve(key, index: index, choice: choice))
+            return Script.build {
+                $0.appendPush(xonlyKey)
+                $0.appendOpcode(Script.Op.checkSig)
+            }
+        case let .multiA(threshold, leafKeys):
+            return try Multisig.script(threshold: threshold, xonlyKeys: keys(leafKeys), sorted: false)
+        case let .sortedMultiA(threshold, leafKeys):
+            return try Multisig.script(threshold: threshold, xonlyKeys: keys(leafKeys), sorted: true)
         }
     }
 
@@ -300,14 +407,19 @@ struct Parser {
 
     // MARK: Grammar
 
-    /// `tr(KEY)` or `rawtr(KEY)`. A tree after the key, a `musig()` expression
-    /// or any other script is a parse error, not a descriptor this wallet holds.
+    /// `tr(KEY)`, `tr(KEY,TREE)` or `rawtr(KEY)`. A `musig()` expression or
+    /// any other script is a parse error, not a descriptor this wallet holds.
     mutating func parseTopLevel() throws -> Descriptor.ScriptExpression {
         let name = takeWhile { $0.isLetter || $0 == "_" }
         try expect("(")
         switch name {
         case "tr":
             let key = try parseKeyExpression()
+            if consume(",") {
+                let tree = try parseTree()
+                try expect(")")
+                return .trTree(key, tree)
+            }
             try expect(")")
             return .tr(key)
         case "rawtr":
@@ -322,6 +434,55 @@ struct Parser {
     /// The most steps a key origin may name: the largest `HDKey.depth`, since
     /// a key at depth 255 has no child a byte can count.
     static let maximumOriginSteps = Int(UInt8.max)
+
+    /// BIP341 allows at most 128 levels in a taproot tree: a control block
+    /// carries up to 128 sibling hashes, so anything deeper can never be spent.
+    ///
+    /// The bound does more than reject invalid trees. This parser is
+    /// recursive descent, and without a depth limit a hostile descriptor
+    /// exhausts the stack and terminates the process (SEC-010). Stack
+    /// exhaustion is not a Swift error, so no handler downstream can catch
+    /// it; a descriptor from a restored account record would take the app
+    /// down at launch. This is the only place it can be stopped.
+    static let maximumTreeDepth = 128
+
+    /// A BIP386 tree: `{TREE,TREE}` or one `pk`, `multi_a` or
+    /// `sortedmulti_a` leaf.
+    mutating func parseTree(depth: Int = 0) throws -> Descriptor.ScriptTree {
+        guard depth <= Self.maximumTreeDepth else { throw DescriptorError.treeTooDeep }
+        if consume("{") {
+            let left = try parseTree(depth: depth + 1)
+            try expect(",")
+            let right = try parseTree(depth: depth + 1)
+            try expect("}")
+            return .branch(left, right)
+        }
+        let name = takeWhile { $0.isLetter || $0 == "_" }
+        try expect("(")
+        switch name {
+        case "pk":
+            let key = try parseKeyExpression()
+            try expect(")")
+            return .leaf(.pk(key))
+        case "multi_a", "sortedmulti_a":
+            let thresholdText = takeWhile(\.isNumber)
+            guard !thresholdText.isEmpty, let threshold = Int(thresholdText) else {
+                throw DescriptorError.invalidThreshold
+            }
+            var keys: [Descriptor.SingleKey] = []
+            while consume(",") {
+                guard keys.count < Multisig.maxKeys else { throw DescriptorError.invalidThreshold }
+                keys.append(try parseKeyExpression())
+            }
+            try expect(")")
+            guard threshold >= 1, threshold <= keys.count else { throw DescriptorError.invalidThreshold }
+            return .leaf(name == "multi_a"
+                ? .multiA(threshold: threshold, keys: keys)
+                : .sortedMultiA(threshold: threshold, keys: keys))
+        default:
+            throw DescriptorError.unknownExpression(name)
+        }
+    }
 
     mutating func parseKeyExpression() throws -> Descriptor.SingleKey {
         let origin = try parseOrigin()
@@ -444,8 +605,23 @@ enum Serializer {
         switch expression {
         case let .tr(key):
             "tr(\(serialize(key)))"
+        case let .trTree(key, tree):
+            "tr(\(serialize(key)),\(serialize(tree)))"
         case let .rawtr(key):
             "rawtr(\(serialize(key)))"
+        }
+    }
+
+    static func serialize(_ tree: Descriptor.ScriptTree) -> String {
+        switch tree {
+        case let .leaf(.pk(key)):
+            "pk(\(serialize(key)))"
+        case let .leaf(.multiA(threshold, keys)):
+            "multi_a(\(threshold),\(keys.map(serialize).joined(separator: ",")))"
+        case let .leaf(.sortedMultiA(threshold, keys)):
+            "sortedmulti_a(\(threshold),\(keys.map(serialize).joined(separator: ",")))"
+        case let .branch(left, right):
+            "{\(serialize(left)),\(serialize(right))}"
         }
     }
 

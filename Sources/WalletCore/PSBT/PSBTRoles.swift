@@ -170,6 +170,117 @@ extension PSBT {
         inputs[index].tapKeySignature = witness[0]
     }
 
+    // MARK: - Script-path (multi_a) roles
+
+    /// Creator-side helper: attaches the BIP371 script-path fields for a
+    /// multisig input — PSBT_IN_TAP_INTERNAL_KEY (from the control block),
+    /// PSBT_IN_TAP_LEAF_SCRIPT, and per-leaf-key PSBT_IN_TAP_BIP32_DERIVATION
+    /// entries carrying the tapleaf hash.
+    public mutating func attachScriptPath(input index: Int, controlBlock: Taproot.ControlBlock,
+                                          leafScript: Script, leafVersion: UInt8 = Taproot.leafVersion,
+                                          keyOrigins: [Data: KeyOrigin] = [:]) throws {
+        guard inputs.indices.contains(index) else { throw PSBTError.missingField("input \(index)") }
+        inputs[index].tapInternalKey = controlBlock.internalKey
+        let leaf = TapLeafScript(controlBlock: controlBlock, script: leafScript.bytes, leafVersion: leafVersion)
+        inputs[index].tapLeafScripts = [leaf]
+        guard !keyOrigins.isEmpty else { return }
+        var origins = inputs[index].tapBIP32Derivation
+        for (key, origin) in keyOrigins {
+            var origin = origin
+            origin.leafHashes = [leaf.leafHash]
+            origins[key] = origin
+        }
+        inputs[index].tapBIP32Derivation = origins
+    }
+
+    /// Signer role for multi_a leaves (BIP371/BIP387): for every 32-byte
+    /// secret whose x-only key appears in the input's leaf script, adds a
+    /// PSBT_IN_TAP_SCRIPT_SIG. Plain x-only keys sign with NO taproot tweak.
+    /// Each signature is self-verified before being attached; throws when no
+    /// provided key matches a leaf key.
+    public mutating func signScriptPath(input index: Int, privateKeys: [Data],
+                                        auxiliaryRand: Data? = nil) throws {
+        let (leaf, leafKeys, hashType) = try leafSigningContext(input: index)
+        let tx = try unsignedTransaction()
+        let spentOutputs = try spentOutputs()
+
+        var signatures = inputs[index].tapScriptSignatures
+        var signed = 0
+        for secret in privateKeys {
+            guard let attached = try selfVerifiedLeafSignature(
+                for: secret, input: index, leaf: leaf, leafKeys: leafKeys,
+                tx: tx, spentOutputs: spentOutputs, hashType: hashType,
+                auxiliaryRand: auxiliaryRand) else { continue } // not ours — skip
+            signatures[attached.id] = attached.signature
+            signed += 1
+        }
+        guard signed > 0 else { throw PSBTError.missingField("input \(index) matching leaf key") }
+        inputs[index].tapScriptSignatures = signatures
+    }
+
+    /// The leaf keys whose script-path signatures on `input` verify against
+    /// the recomputed sighash — the finalizer's own test, exposed so a
+    /// progress display counts approvals the way the finalizer will, rather
+    /// than by the presence of a signature entry.
+    public func verifiedScriptPathSigners(input index: Int, tx: Transaction,
+                                          spentOutputs: [SighashBIP341.SpentOutput]) throws -> Set<Data> {
+        let (leaf, leafKeys, _) = try leafSigningContext(input: index)
+        return Set(validScriptPathSignatures(input: index, leaf: leaf, tx: tx,
+                                             spentOutputs: spentOutputs, leafKeys: leafKeys).keys)
+    }
+
+    /// The signable leaf and its contract for one input: a leaf script that
+    /// parses as multisig, and an output-committing sighash type — a signer
+    /// signs only those, so a PSBT creator cannot collect NONE/SINGLE
+    /// partials and then rewrite the outputs.
+    private func leafSigningContext(input index: Int) throws
+        -> (leaf: TapLeafScript, leafKeys: [Data], hashType: SighashBIP341.HashType) {
+        guard inputs.indices.contains(index) else { throw PSBTError.missingField("input \(index)") }
+        guard let leaf = inputs[index].tapLeafScripts.first else {
+            throw PSBTError.missingField("input \(index) tap leaf script")
+        }
+        guard let (_, leafKeys) = Multisig.parse(Script(leaf.script)) else {
+            throw PSBTError.malformed("input \(index) leaf script")
+        }
+        let rawType = inputs[index].sighashType ?? 0
+        guard rawType <= UInt32(UInt8.max) else { throw PSBTError.malformed("sighash type \(rawType)") }
+        let hashType = SighashBIP341.HashType(rawValue: UInt8(rawType))
+        guard hashType.commitsToAllOutputs else {
+            throw PSBTError.malformed("refusing non-DEFAULT/ALL sighash type \(rawType)")
+        }
+        return (leaf, leafKeys, hashType)
+    }
+
+    /// One leaf signature for one secret — or nil when the key is not a
+    /// leaf key. The signature is checked against the leaf key with BIP340
+    /// verification before it is ever attached.
+    private func selfVerifiedLeafSignature(
+        for secret: Data, input index: Int, leaf: TapLeafScript, leafKeys: [Data],
+        tx: Transaction, spentOutputs: [SighashBIP341.SpentOutput],
+        hashType: SighashBIP341.HashType, auxiliaryRand: Data?)
+        throws -> (id: TapScriptSignatureID, signature: Data)? {
+        guard let key = try? Secp256k1.PrivateKey(secret) else {
+            throw PSBTError.malformed("invalid private key")
+        }
+        let xonly = key.xOnlyKey.x
+        guard leafKeys.contains(xonly) else { return nil }
+        let signature = try Signer.scriptPathSignature(tx: tx, inputIndex: index,
+                                                       spentOutputs: spentOutputs,
+                                                       leafScript: Script(leaf.script),
+                                                       leafVersion: leaf.leafVersion,
+                                                       hashType: hashType, privateKey: secret,
+                                                       auxiliaryRand: auxiliaryRand)
+        let sighash = try SighashBIP341.sighash(tx: tx, inputIndex: index, spentOutputs: spentOutputs,
+                                                hashType: hashType,
+                                                scriptPath: .init(leafScript: Script(leaf.script),
+                                                                  leafVersion: leaf.leafVersion))
+        guard Secp256k1.Schnorr.verify(signature: Data(signature.prefix(64)), message: sighash,
+                                       publicKey: xonly) else {
+            throw PSBTError.malformed("self-produced signature failed verification")
+        }
+        return (TapScriptSignatureID(publicKey: xonly, leafHash: leaf.leafHash), signature)
+    }
+
     // MARK: - Combiner
 
     /// Combiner role (BIP370/BIP174): merges several partial PSBTs of the
@@ -221,8 +332,12 @@ extension PSBT {
 
     /// Finalizer role: moves each input's signature data into
     /// PSBT_IN_FINAL_SCRIPTWITNESS and clears the in-progress fields (BIP174:
-    /// finalizers remove partial data). Every input takes its single
-    /// PSBT_IN_TAP_KEY_SIG, verified against the declared P2TR output first.
+    /// finalizers remove partial data). Key-path inputs take the single
+    /// PSBT_IN_TAP_KEY_SIG, verified against the declared P2TR output first;
+    /// script-path inputs build the BIP387 multi_a witness from
+    /// PSBT_IN_TAP_SCRIPT_SIG entries (each verified against the script-path
+    /// sighash — a wrong-key or corrupt partial is discarded), requiring at
+    /// least the leaf's threshold of valid signatures.
     public mutating func finalize() throws {
         let tx = try unsignedTransaction()
         let spentOutputs = try spentOutputs()
@@ -231,6 +346,17 @@ extension PSBT {
             if let signature = inputs[index].tapKeySignature {
                 witnesses.append(try validatedKeyPathWitness(
                     input: index, signature: signature, tx: tx, spentOutputs: spentOutputs))
+            } else if !inputs[index].tapLeafScripts.isEmpty {
+                var witness: [Data]?
+                for leaf in inputs[index].tapLeafScripts {
+                    witness = try finalizedScriptPathWitness(input: index, leaf: leaf,
+                                                             tx: tx, spentOutputs: spentOutputs)
+                    if witness != nil { break }
+                }
+                guard let witness else {
+                    throw PSBTError.missingField("input \(index) tap script sigs below threshold")
+                }
+                witnesses.append(witness)
             } else {
                 throw PSBTError.missingField("input \(index) tap key sig")
             }
@@ -241,8 +367,79 @@ extension PSBT {
             inputs[index].finalScriptWitness = witnesses[index]
             inputs[index].pairs.removeAll {
                 $0.type == InType.tapKeySignature || $0.type == InType.sighashType
+                    || $0.type == InType.tapScriptSignature || $0.type == InType.tapLeafScript
             }
         }
+    }
+
+    /// The BIP387 witness for one multi_a leaf, or nil when fewer valid
+    /// signatures than the threshold are attached. Signatures whose hash type
+    /// byte (or absence of one) does not match, or that fail BIP340
+    /// verification, are discarded rather than trusted.
+    private func finalizedScriptPathWitness(input index: Int, leaf: TapLeafScript,
+                                            tx: Transaction,
+                                            spentOutputs: [SighashBIP341.SpentOutput]) throws -> [Data]? {
+        guard leaf.leafVersion == leaf.controlBlock.leafVersion else { return nil }
+        let spentScript = spentOutputs[index].scriptPubKey
+        guard spentScript.count == 34, spentScript[spentScript.startIndex] == 0x51,
+              spentScript[spentScript.index(after: spentScript.startIndex)] == 0x20
+        else { throw PSBTError.malformed("input \(index) witness utxo is not P2TR") }
+        guard Self.leafCommitsToOutput(leaf, spentScript: spentScript) else { return nil }
+
+        guard let (threshold, leafKeys) = Multisig.parse(Script(leaf.script)) else { return nil }
+        let valid = validScriptPathSignatures(input: index, leaf: leaf, tx: tx,
+                                              spentOutputs: spentOutputs, leafKeys: leafKeys)
+        guard valid.count >= threshold else { return nil }
+        return try Signer.multisigWitness(signatures: valid, leafScript: Script(leaf.script),
+                                          controlBlock: leaf.controlBlock)
+    }
+
+    /// BIP341's commitment walk: the leaf hash up its merkle path to a
+    /// tweaked output key that must equal the spent P2TR output, parity
+    /// included — the check that stops a stranger's control block from
+    /// dressing another script as this output's.
+    private static func leafCommitsToOutput(_ leaf: TapLeafScript, spentScript: Data) -> Bool {
+        var merkleRoot = leaf.leafHash
+        for sibling in leaf.controlBlock.path {
+            guard sibling.count == 32 else { return false }
+            merkleRoot = Taproot.branchHash(merkleRoot, sibling)
+        }
+        guard let committed = try? Taproot.tweakedOutputKey(
+            internalKey: leaf.controlBlock.internalKey, merkleRoot: merkleRoot)
+        else { return false }
+        return committed.key == spentScript.suffix(32)
+            && committed.parity == leaf.controlBlock.outputKeyParity
+    }
+
+    /// The cryptographically valid script-path signatures for one leaf,
+    /// keyed by signer: each must name a leaf key, commit to all outputs,
+    /// and verify against the recomputed sighash — anything else is skipped,
+    /// never fatal, because a combiner may carry a stranger's noise.
+    private func validScriptPathSignatures(input index: Int, leaf: TapLeafScript,
+                                           tx: Transaction,
+                                           spentOutputs: [SighashBIP341.SpentOutput],
+                                           leafKeys: [Data]) -> [Data: Data] {
+        var valid: [Data: Data] = [:]
+        for (id, signature) in inputs[index].tapScriptSignatures where id.leafHash == leaf.leafHash {
+            guard leafKeys.contains(id.publicKey) else { continue }
+            // A 64-byte item implies SIGHASH_DEFAULT; 65 bytes append the type.
+            let hashType: SighashBIP341.HashType
+            switch signature.count {
+            case 64: hashType = .default
+            case 65: hashType = SighashBIP341.HashType(rawValue: signature.last!)
+            default: continue
+            }
+            guard hashType.commitsToAllOutputs, hashType != .default || signature.count == 64,
+                  let sighash = try? SighashBIP341.sighash(tx: tx, inputIndex: index,
+                                                           spentOutputs: spentOutputs, hashType: hashType,
+                                                           scriptPath: .init(leafScript: Script(leaf.script),
+                                                                             leafVersion: leaf.leafVersion)),
+                  Secp256k1.Schnorr.verify(signature: Data(signature.prefix(64)), message: sighash,
+                                           publicKey: id.publicKey)
+            else { continue }
+            valid[id.publicKey] = signature
+        }
+        return valid
     }
 
     /// Validates an imported key-path signature against the PSBT's declared

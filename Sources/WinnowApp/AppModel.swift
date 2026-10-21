@@ -296,6 +296,21 @@ final class AppModel {
     /// The wallet's own watched scripts, cached so a payment's outputs can be
     /// labelled "pays you" without an actor hop.
     private(set) var ownWatchScripts: Set<Data> = []
+    /// Multisig accounts (Advanced mode only), mirrored from the store.
+    private(set) var multisigAccounts: [MultisigAccountRecord] = [] {
+        didSet {
+            guard multisigAccounts != oldValue else { return }
+            ownedMultisigScripts = Set(multisigAccounts.flatMap { record in
+                let account = try? MultisigAccount(record.descriptor, network: network)
+                let count = max(record.nextReceiveIndex, record.nextChangeIndex) + Wallet.gapLimit
+                return (try? account?.watchScripts(upTo: count)) ?? []
+            })
+        }
+    }
+    /// Set when `multisig.json` could not be read. Shown on the multisig
+    /// screens; the store refuses mutations meanwhile. Never blocks boot.
+    private(set) var multisigStorageNotice: String?
+    private var ownedMultisigScripts: Set<Data> = []
     private(set) var wallet: Wallet?
     private(set) var stack: SyncStack?
     /// Copies of the wallet's id/descriptor for synchronous access (the Wallet
@@ -321,6 +336,7 @@ final class AppModel {
     /// and when the app leaves the screen.
     let keychainAuthentication = KeychainAuthentication()
     let peopleStore: PeopleStore
+    let multisigStore: MultisigStore
     let cloudBackups: CloudBackupController
     private let allowsCloudBackup: Bool
     private var cloudPreparationTask: Task<Void, Never>?
@@ -448,10 +464,11 @@ final class AppModel {
             service: keychainService,
             protection: e2e == nil ? .userPresence : .deviceOnly,
             authentication: keychainAuthentication)
-        // The people file's seal key sits under the same service, so the E2E
-        // wipe covers it along with the wallet secret.
+        // The people and multisig files' seal keys sit under the same
+        // service, so the E2E wipe covers them along with the wallet secret.
         let storeKeys = storeKeys ?? KeychainStoreKeyVault(service: keychainService)
         peopleStore = PeopleStore(keys: storeKeys)
+        multisigStore = MultisigStore(keys: storeKeys)
         let defaults = e2e?.defaults ?? defaults
         self.defaults = defaults
         let initialGatewaySettings: PeerGatewaySettings
@@ -535,6 +552,7 @@ final class AppModel {
             UIPasteboard.general.string = clipboard
         }
         await configurePeople()
+        await configureMultisig()
         guard let walletURL = walletURL() else {
             stage = .storageDamaged(
                 "Winnow could not access its protected local storage. No wallet files or keys were changed.")
@@ -971,8 +989,8 @@ final class AppModel {
     /// Rolls the wallet back to a fork height, recording the target before
     /// touching anything.
     ///
-    /// The three stores persist independently -- wallet JSON, filters.json,
-    /// broadcast.json -- so a crash mid-rollback leaves them
+    /// The four stores persist independently -- wallet JSON, multisig.json,
+    /// filters.json, broadcast.json -- so a crash mid-rollback leaves them
     /// disagreeing. Because a rollback is a pure function of the height, it is
     /// idempotent, and that turns recovery into a redo rather than a repair:
     /// write the target first, roll each store back, clear the target once the
@@ -994,6 +1012,7 @@ final class AppModel {
         try Data(String(forkHeight).utf8).write(
             to: marker, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         try await wallet?.rollBack(to: forkHeight)
+        try await multisigStore.rollBack(to: forkHeight)
         // Reactivates any own send whose confirming block fell (#157): the
         // wallet just re-reserved its inputs, and this makes sure the network
         // hears the transaction again instead of only our bookkeeping.
@@ -1016,6 +1035,7 @@ final class AppModel {
               let forkHeight = UInt32(text.trimmingCharacters(in: .whitespacesAndNewlines))
         else { return }
         try await wallet?.rollBack(to: forkHeight)
+        try await multisigStore.rollBack(to: forkHeight)
         // The same stores `rollBackStores` rewinds, plus the filter frontier.
         // Without this, a crash between the marker and the broadcaster's
         // rewind leaves an own send whose block fell parked forever, so the
@@ -1096,8 +1116,13 @@ final class AppModel {
         status.syncing = true
         defer { status.syncing = false }
         do {
-            let scripts = try await wallet.watchScripts()
+            // One filter stream for the wallet and its multisig accounts: an
+            // account is just more watched scripts.
+            var scripts = try await wallet.watchScripts()
+            scripts.append(contentsOf: try await multisigStore.watchScripts(network: network))
             let broadcaster = stack.broadcaster
+            let multisigStore = multisigStore
+            let network = network
             try await filters.sync(watchScripts: scripts, maxBlocks: backgroundRunning ? 2_000 : nil,
                                    onReorg: { [weak self] forkHeight in
                 guard let self else { return }
@@ -1107,6 +1132,7 @@ final class AppModel {
                 for discarded in walletEffect.discardedReplacements {
                     try await broadcaster.cancel(discarded)
                 }
+                try await multisigStore.apply(match: match, network: network)
                 let pending = await broadcaster.pendingTxids
                 for tx in match.block.transactions where pending.contains(tx.txid) {
                     // The height rides along so the entry becomes a held
@@ -1225,6 +1251,7 @@ final class AppModel {
         status = snapshot
         people = await peopleStore.all
         senderByTxid = await peopleStore.senderLabels
+        multisigAccounts = await multisigStore.all
         configureReceiveAddressLabels()
         journalSnapshotIfChanged()
         scheduleCloudBackup()
@@ -1314,6 +1341,9 @@ final class AppModel {
     private func importWallet(bundle: ImportBundle, authenticate: Bool,
                               afterCommit: (@MainActor (String) async throws -> Void)? = nil) async throws -> ImportReport? {
         guard bundle.network == network.rawValue else { throw AppError.wrongNetwork(bundle.network) }
+        // Before anything is written: a bundle whose multisig accounts cannot
+        // be restored must not replace the wallet half-way.
+        try MultisigStore.validate(bundle.vaults ?? [], network: network)
         if authenticate, bundle.mnemonic != nil {
             try await authenticateSensitiveAction(
                 reason: "Import this wallet's recovery phrase")
@@ -1336,6 +1366,8 @@ final class AppModel {
         // the same FilterSync/HeaderChain race — crossed getheaders/getcfilter
         // responses on the shared peer). The loop starts on the way out.
         try await adopt(wallet: wallet, startSync: false)
+        try await multisigStore.restore(bundle.vaults ?? [])
+        multisigAccounts = await multisigStore.all
         defer { if isActive { startSyncLoop() } }
         if let afterCommit { try await afterCommit(wallet.id) }
         else { await prepareImportedCloudBackup(bundle) }
@@ -1351,7 +1383,13 @@ final class AppModel {
         }
         // A verification failure (e.g. a peer serving a bad filter) is a real
         // error for the user, not the "no peers yet" soft path.
-        let report = try await wallet.verifyImport(bundle, using: filters)
+        let restoredStore = multisigStore
+        let restoredNetwork = network
+        let report = try await wallet.verifyImport(
+            bundle, using: filters,
+            additionalScripts: restoredStore.watchScripts(network: network)) { match in
+                try await restoredStore.apply(match: match, network: restoredNetwork)
+            }
         await refresh()
         e2e?.journal("import.verified", fields: [
             "scannedFromHeight": String(report.scannedFromHeight),
@@ -1384,7 +1422,9 @@ final class AppModel {
         if let filters = stack?.filters {
             try await persistScanFrontier(of: filters, to: wallet)
         }
-        let bundle = try await wallet.exportBundle(includeMnemonic: includeMnemonic)
+        var bundle = try await wallet.exportBundle(includeMnemonic: includeMnemonic)
+        let accounts = try await multisigStore.backupRecords()
+        bundle.vaults = accounts.isEmpty ? nil : accounts
         let serialized = try bundle.serialized()
         e2e?.journal("wallet.exported", fields: [
             "bundleVersion": String(bundle.version),
@@ -1415,11 +1455,12 @@ final class AppModel {
         // the user's, not one wallet's view of the chain, and holds only
         // public keys.
         if let dir = storageDirectory() {
-            for name in ["filters.json", "broadcast.json", "vaults.json", "receive-labels.json", "cloud-backup.json"] {
+            for name in ["filters.json", "broadcast.json", "vaults.json", "multisig.json", "receive-labels.json", "cloud-backup.json"] {
                 try? FileManager.default.removeItem(at: dir.appending(path: name))
             }
         }
         await configurePeople()
+        await configureMultisig()
         receiveLabelStore = nil
         self.wallet = wallet
         walletID = await wallet.id
@@ -1547,7 +1588,7 @@ final class AppModel {
         // that is one wallet's view must not survive into the next one.
         // people.json stays, on purpose: see `adopt(wallet:)`.
         if let dir = storageDirectory() {
-            for name in ["wallet.json", "filters.json", "broadcast.json", "vaults.json", "receive-labels.json", "cloud-backup.json"] {
+            for name in ["wallet.json", "filters.json", "broadcast.json", "vaults.json", "multisig.json", "receive-labels.json", "cloud-backup.json"] {
                 try? FileManager.default.removeItem(at: dir.appending(path: name))
             }
         }
@@ -1560,6 +1601,7 @@ final class AppModel {
         status = Status()
         syncPhase = .idle
         await configurePeople()
+        await configureMultisig()
         stage = .onboarding
         e2e?.journal("wallet.destroyed", fields: ["walletID": walletID])
 
@@ -2062,6 +2104,208 @@ final class AppModel {
         return multipathSuffix ? base + "/<0;1>/*" : base
     }
 
+    // MARK: - Multisig accounts (Advanced mode)
+
+    enum MultisigActionError: LocalizedError, Equatable {
+        case notASigner
+        case accountHoldsCoins
+        /// Broadcast, but the account's coins could not be updated: the spent
+        /// coins must not be offered to the next spend.
+        case spendNotRecorded(txid: Data, reason: String)
+
+        var errorDescription: String? {
+            switch self {
+            case .notASigner:
+                "No signer of this descriptor is this wallet's key. Put this phone's key in the sortedmulti_a() list."
+            case .accountHoldsCoins:
+                "This account still holds coins or a pending payment. Spend them first: a removed account is not scanned, and adding it again does not find coins it already had."
+            case let .spendNotRecorded(txid, reason):
+                "Sent as \(txid.displayHex), but the account could not be updated: \(reason) Do not spend from it again until it syncs."
+            }
+        }
+    }
+
+    /// This wallet's signer key for a multisig descriptor: the BIP86 account
+    /// xpub with its origin and the `/<0;1>/*` suffix every signer carries.
+    func multisigKeyExpression() throws -> String {
+        try ownKeyExpression(multipathSuffix: true)
+    }
+
+    /// A pasted descriptor checked for this phone: the supported account
+    /// shape, this network, and one signer that is this wallet's key.
+    func multisigAccount(validating text: String) throws -> MultisigAccount {
+        let account = try MultisigAccount(text.trimmingCharacters(in: .whitespacesAndNewlines), network: network)
+        guard let walletDescriptor, case let .tr(key) = walletDescriptor.expression,
+              case let .extended(accountKey, _) = key.base, account.includes(accountKey: accountKey)
+        else { throw MultisigActionError.notASigner }
+        return account
+    }
+
+    func multisigAccount(for record: MultisigAccountRecord) throws -> MultisigAccount {
+        try MultisigAccount(record.descriptor, network: network)
+    }
+
+    /// Files the account and starts watching it from the next block scanned:
+    /// scanning is forward-only, so coins it held before are not found.
+    @discardableResult
+    func addMultisigAccount(name: String, descriptor text: String) async throws -> MultisigAccountRecord {
+        let account = try multisigAccount(validating: text)
+        var height: UInt32 = 0
+        if let filters = stack?.filters {
+            height = await filters.nextScanHeight
+        } else if let wallet {
+            height = await wallet.nextScanHeight
+        }
+        let record = try await multisigStore.add(name: DisplayName.normalized(name) ?? "", account: account,
+                                                 createdAtHeight: height)
+        multisigAccounts = await multisigStore.all
+        e2e?.journal("multisig.accountAdded", fields: [
+            "id": record.id, "descriptor": record.descriptor, "height": String(height),
+            "firstAddress": (try? account.address(index: 0)) ?? "",
+        ])
+        return record
+    }
+
+    /// Only an empty account can go: its coins would vanish from view, and
+    /// the forward-only scan would not find them again.
+    func removeMultisigAccount(id: String) async throws {
+        guard let record = multisigAccounts.first(where: { $0.id == id }) else { return }
+        guard record.allUtxos.allSatisfy({ $0.spent?.height != nil }) else {
+            throw MultisigActionError.accountHoldsCoins
+        }
+        try await multisigStore.remove(id: id)
+        multisigAccounts = await multisigStore.all
+    }
+
+    func newMultisigReceiveAddress(id: String) async throws {
+        try await multisigStore.advanceReceiveIndex(id: id)
+        multisigAccounts = await multisigStore.all
+    }
+
+    /// The descriptor coordinates a spend may pay back into: every coin's
+    /// own, plus the next receive and change slots. Rebuilt from trusted
+    /// local state each time; PSBT metadata never decides ownership.
+    func multisigOwnedCoordinates(for record: MultisigAccountRecord) -> [MultisigAccount.OutputCoordinate] {
+        record.utxos.map { MultisigAccount.OutputCoordinate(choice: $0.chain.rawValue, index: $0.index) } + [
+            MultisigAccount.OutputCoordinate(choice: AddressChain.receive.rawValue, index: record.nextReceiveIndex),
+            MultisigAccount.OutputCoordinate(choice: AddressChain.change.rawValue, index: record.nextChangeIndex),
+        ]
+    }
+
+    /// Proves a PSBT is an exact, safe spend of the account's known coins.
+    func reviewMultisigSpend(_ psbt: PSBT, record: MultisigAccountRecord) throws -> MultisigAccount.SpendReview {
+        try multisigAccount(for: record).reviewSpend(psbt, knownUTXOs: record.utxos,
+                                                     ownedOutputCoordinates: multisigOwnedCoordinates(for: record),
+                                                     chainTip: status.tipHeight)
+    }
+
+    /// The positions of this wallet's own key among the account's signers.
+    func multisigOwnSignerPositions(_ record: MultisigAccountRecord) -> Set<Int> {
+        guard let walletDescriptor, case let .tr(key) = walletDescriptor.expression,
+              case let .extended(accountKey, _) = key.base,
+              let account = try? multisigAccount(for: record) else { return [] }
+        return Set(account.signers.indices.filter { position in
+            guard case let .extended(base, _) = account.signers[position].base else { return false }
+            return base.publicKey == accountKey.publicKey
+        })
+    }
+
+    /// The signers (by position) whose signatures verify on every input.
+    func multisigApprovals(_ psbt: PSBT, record: MultisigAccountRecord) -> Set<Int> {
+        (try? multisigAccount(for: record).approvals(of: psbt, knownUTXOs: record.utxos)) ?? []
+    }
+
+    /// The creator role: one payment, change to the next change address.
+    func createMultisigSpend(record: MultisigAccountRecord, address: String, amount: Int64,
+                             feeRateSatPerVByte: Double) async throws -> PSBT {
+        let payment = try Payment(amount: amount, address: address.trimmingCharacters(in: .whitespacesAndNewlines),
+                                  network: network)
+        let psbt = try multisigAccount(for: record).createSpend(
+            utxos: record.utxos, payments: [payment], changeIndex: record.nextChangeIndex,
+            feeRateSatPerVByte: feeRateSatPerVByte, chainTip: await chainTipHeight)
+        journalPSBT(stage: "multisig-created", psbt: psbt)
+        return psbt
+    }
+
+    /// After device authentication, this wallet's script-path signature on
+    /// every input. Signers sign independently, in any order.
+    func signMultisigSpend(_ psbt: PSBT, record: MultisigAccountRecord) async throws -> PSBT {
+        let account = try multisigAccount(for: record)
+        let key = try await multisigSigningKey(reason: "Sign this multisig payment")
+        var signed = psbt
+        try account.sign(&signed, signingKey: key, knownUTXOs: record.utxos,
+                         ownedOutputCoordinates: multisigOwnedCoordinates(for: record), chainTip: status.tipHeight)
+        journalPSBT(stage: "multisig-signed", psbt: signed)
+        return signed
+    }
+
+    /// Merges another signer's copy of the same PSBT (BIP174 combiner).
+    func combineMultisigSpend(_ psbt: PSBT, with other: PSBT, record: MultisigAccountRecord) throws -> PSBT {
+        let combined = try psbt.combined(with: [other])
+        _ = try reviewMultisigSpend(combined, record: record)
+        return combined
+    }
+
+    /// Finalizes once enough signatures verify, broadcasts, then moves the
+    /// spent coins to in-flight and the change to pending, under the same
+    /// gate as a wallet send.
+    func broadcastMultisigSpend(_ psbt: PSBT, record: MultisigAccountRecord) async throws -> Data {
+        try await exclusively(.spending) {
+            let account = try multisigAccount(for: record)
+            var working = psbt
+            let transaction = try account.finalizeSpend(&working, knownUTXOs: record.utxos,
+                                                        ownedOutputCoordinates: multisigOwnedCoordinates(for: record),
+                                                        chainTip: status.tipHeight)
+            let txid = try await broadcast(transaction,
+                                           feeRateSatPerVByte: Self.feeRate(of: transaction, spending: record.utxos))
+            let changeScript = try account.scriptPubKey(index: record.nextChangeIndex,
+                                                        choice: AddressChain.change.rawValue)
+            let hasChange = transaction.outputs.contains { $0.scriptPubKey == changeScript }
+            do {
+                try await multisigStore.recordSpend(id: record.id, transaction: transaction,
+                                                    changeIndex: hasChange ? record.nextChangeIndex : nil)
+            } catch {
+                multisigAccounts = await multisigStore.all
+                throw MultisigActionError.spendNotRecorded(txid: txid, reason: error.localizedDescription)
+            }
+            multisigAccounts = await multisigStore.all
+            e2e?.journal("multisig.spendBroadcast", fields: ["id": record.id, "txid": txid.displayHex])
+            return txid
+        }
+    }
+
+    /// The fee rate of a spend of known coins, for the relay-floor gate a
+    /// wallet send passes; nil when an input is not one of them.
+    static func feeRate(of transaction: WalletCore.Transaction, spending coins: [WalletUTXO]) -> Double? {
+        var inputs: Int64 = 0
+        for input in transaction.inputs {
+            guard let coin = coins.first(where: { $0.outpoint == input.previousOutput }) else { return nil }
+            inputs += coin.amount
+        }
+        let fee = inputs - transaction.outputs.reduce(0) { $0 + $1.value }
+        let vsize = TransactionBuilder.vsize(of: transaction)
+        guard fee > 0, vsize > 0 else { return nil }
+        return Double(fee) / Double(vsize)
+    }
+
+    /// The wallet's account key for one signature, after the same device
+    /// check as a send.
+    private func multisigSigningKey(reason: String) async throws -> HDKey {
+        guard let wallet else { throw AppError.noWallet }
+        try await authenticateSensitiveAction(reason: reason)
+        defer { keychainAuthentication.revoke() }
+        try Task.checkCancellation()
+        return try await wallet.multisigSigningKey()
+    }
+
+    /// Records only the public PSBT exchanged with other signers (E2E mode).
+    func journalPSBT(stage: String, psbt: PSBT) {
+        e2e?.journal("psbt.generated", fields: [
+            "stage": stage, "base64": psbt.base64,
+            "inputCount": String(psbt.inputs.count), "outputCount": String(psbt.outputs.count),
+        ])
+    }
+
     // MARK: - People
 
     /// Reads the address book file for the current network. Damage is a
@@ -2184,7 +2428,7 @@ final class AppModel {
     }
 
     func paymentRecipients(_ entry: HistoryEntry) -> [PaymentRecipient] {
-        Self.paymentRecipients(entry, owned: ownWatchScripts,
+        Self.paymentRecipients(entry, owned: ownWatchScripts.union(ownedMultisigScripts),
                                people: recipientByScript, network: network)
     }
 
@@ -2338,6 +2582,7 @@ final class AppModel {
         defaults.set(newNetwork.rawValue, forKey: DefaultsKey.network)
         loadNetworkScopedSettings()
         await configurePeople()
+        await configureMultisig()
         guard let walletURL = walletURL() else {
             stage = .storageDamaged(
                 "Winnow could not access its protected local storage. No wallet files or keys were changed.")
@@ -2621,6 +2866,22 @@ final class AppModel {
 
     private func walletURL() -> URL? {
         storageDirectory()?.appending(path: "wallet.json")
+    }
+
+    private func multisigURL() -> URL? {
+        storageDirectory()?.appending(path: "multisig.json")
+    }
+
+    /// Reads this wallet's multisig accounts. Damage is a notice, not a
+    /// stage: the wallet keeps working, and the accounts' coins stay on chain.
+    func configureMultisig() async {
+        switch await multisigStore.configure(storageURL: multisigURL(), network: network) {
+        case let .damaged(message):
+            multisigStorageNotice = message
+        case .missing, .loaded:
+            multisigStorageNotice = nil
+        }
+        multisigAccounts = await multisigStore.all
     }
 
     private func peopleURL() -> URL? {

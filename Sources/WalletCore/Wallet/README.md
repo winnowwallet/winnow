@@ -9,8 +9,14 @@ GUI should not carry a second wallet implementation. The
 
 [AppModel](../../WinnowApp/AppModel.swift) coordinates these rules with
 WalletCore networking, [key storage](../Keys/README.md), and
-[signing](../Transactions/README.md). An import bundle written by a Winnow
-that held shared accounts is refused rather than restored without them.
+[signing](../Transactions/README.md). `MultisigAccount` holds the rules for a
+raw k-of-n `tr(NUMS, sortedmulti_a(k, …))` account: the shape and signer checks
+from the shared-account Winnow's audit (SEC-009, SEC-019, SEC-020), spend
+creation, the review every signer repeats before signing (SEC-004),
+signing and finalization. Import bundles carry these accounts under `vaults`;
+a bundle carrying any other kind of account is refused rather than restored
+without it. [Account tests](../../../Tests/WalletCoreTests/MultisigAccountTests.swift)
+cover each rule.
 
 An embedding application can restore its reserved address ranges with
 `Wallet.advanceCursors(nextReceiveIndex:nextChangeIndex:)`. Each cursor is the

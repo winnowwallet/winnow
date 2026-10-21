@@ -43,16 +43,20 @@ Status vocabulary:
 - **Blocked release:** an acceptance requirement for a mainnet beta remains
   open; this does not assert that an exploitable vulnerability is known.
 
-**Single-key build.** This tree has no shared accounts: the vault, MuSig2 and
-script-path code and the suites that evidenced it (`VaultFlowTests`,
+**Native build.** The shared-account Winnow's vault and MuSig2 code was
+removed with the suites that evidenced it (`VaultFlowTests`,
 `VaultCosignerIdentityTests`, `VaultDraftIdentityTests`,
 `VaultSignerIndependenceTests`, `MuSig2SessionSafetyTests`,
-`VaultThresholdTests`, `VaultInteropDiffTests`, `PSBTConversionDiffTests`)
-were removed with it, and `ImportBundle` refuses a backup that carries vault
-records. S4 and S8 therefore have no subject in this build; their rows, and
-the vault clauses of S2, S3, S6, S7 and S9, record the evidence as it stood
-in the shared-account Winnow. S3's remaining subject is the descriptor
-vectors and the people store's key checks.
+`VaultThresholdTests`, `VaultInteropDiffTests`, `PSBTConversionDiffTests`).
+Raw k-of-n script-path multisig accounts were then ported back onto the
+native curve module (`MultisigAccount`), with their admission rules
+(SEC-009, SEC-019, SEC-020) and spend review (SEC-004) evidenced by
+`MultisigAccountTests`, the BIP387 and BIP341 script-path vectors, and the UI
+journey's 2-of-2 spend that Bitcoin Core co-signs, accepts and mines. S4 has
+no subject in this build, and `ImportBundle` refuses a backup carrying a
+MuSig2 record. S8's remaining subject is that script-path account; its row
+and the vault clauses of S2, S3, S6, S7 and S9 below still record the evidence
+as it stood in the shared-account Winnow, including tests not ported here.
 
 | ID | Invariant | Recorded deterministic evidence | Recorded negative/manual evidence and gaps | Historical status |
 |---|---|---|---|---|

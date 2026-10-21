@@ -83,9 +83,14 @@ private func binaryCorpus(for target: FuzzTarget) -> [Data] {
         // wildcard grammar, not just a raw key inside tr().
         let account = "xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL"
         let other = "xpub68NZiKmJWnxxS6aaHmn81bvJeTESw724CRDs6HbuccFQN9Ku14VQrADWgqbhhTHBaohPX4CjNLf9fq9MYo6oDaPPLPxSb7gwQN3ih19Zm4Y"
+        // The multisig seeds reach the tree grammar, its depth bound and the
+        // multi_a threshold checks.
+        let nums = Taproot.unspendableInternalKey.hex
         return [Data(), Data("tr(\(generatorXOnly.hex))".utf8), Data("rawtr(\(generatorXOnly.hex))".utf8),
                 Data("tr([deadbeef/86'/0'/0']\(account)/<0;1>/*)".utf8),
-                Data("tr(\(other)/0/*)".utf8)]
+                Data("tr(\(other)/0/*)".utf8),
+                Data("tr(\(nums),sortedmulti_a(2,[deadbeef/86'/0'/0']\(account)/<0;1>/*,[cafef00d/86'/0'/0']\(other)/<0;1>/*))".utf8),
+                Data("tr(\(nums),{pk(\(account)/0/*),multi_a(1,\(other)/1/*,\(account)/1/*)})".utf8)]
     case .transaction:
         return [Data(), minimalTransaction]
     case .block:

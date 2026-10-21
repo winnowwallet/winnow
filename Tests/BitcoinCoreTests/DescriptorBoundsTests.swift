@@ -6,13 +6,28 @@ import TestSupport
 /// Bounds on hostile descriptor text (epic #100, invariants S7 and S10).
 ///
 /// Descriptors arrive from places the wallet does not control: a string pasted
-/// as a person's key, an imported bundle, and the wallet's own persisted
-/// state, which is parsed while the app is starting up. The single-key
-/// grammar has no recursion left to exhaust, so the remaining bounds are on
-/// the key origin and the account key's depth.
+/// as a person's key or a multisig account, an imported bundle, and persisted
+/// account records, which are parsed while the app is starting up.
+///
+/// The tree parser is recursive descent. Before the depth bound (SEC-010), a
+/// tap tree nested about a thousand levels deep exhausted the stack and
+/// terminated the process with a signal rather than an error. Stack
+/// exhaustion is not a Swift error, so no damaged-storage handling can
+/// intercept it, and a hostile record would take the app down at every launch.
 @Suite("Descriptor input bounds")
 struct DescriptorBoundsTests {
     static let key = "xpub6FC1fXFP1GXQpyRFfSE1vzzySqs3Vg63bzimYLeqtNUYbzA87kMNTcuy9ubr7MmavGRjW2FRYHP4WGKjwutbf1ghgkUW9H7e3ceaPLRcVwa"
+    static let nums = Taproot.unspendableInternalKey.hex
+
+    /// `{{{pk,pk},pk},pk}` nested `depth` levels: `depth` opening braces,
+    /// the innermost `pk`, then `depth` closing `,pk}`. Built in one pass so
+    /// the 50,000-level fixture below is linear in `depth`, not quadratic.
+    static func nested(depth: Int) -> String {
+        let leaf = "pk(\(key))"
+        let inner = String(repeating: "{", count: depth) + leaf
+            + String(repeating: ",\(leaf)}", count: depth)
+        return "tr(\(nums),\(inner))"
+    }
 
     /// `tr([fp/0/0/...]KEY/<0;1>/*)` with `steps` origin steps: the wallet's
     /// own descriptor shape, so `Wallet.origin(of:)` and an import bundle both
@@ -21,12 +36,51 @@ struct DescriptorBoundsTests {
         "tr([73c5da0a\(String(repeating: "/0", count: steps))]\(key)/<0;1>/*)"
     }
 
-    /// Nesting braces are no longer grammar: they fail as a parse error at
-    /// the first brace rather than recursing, however many there are.
-    @Test("braces are refused at the first character, at any depth", arguments: [1, 64, 50_000])
-    func bracesRefused(_ depth: Int) {
-        let text = "tr(\(Self.key)/<0;1>/*,\(String(repeating: "{", count: depth))pk(\(Self.key)))"
-        #expect(throws: DescriptorError.unexpectedCharacter(",")) { _ = try Descriptor(text) }
+    /// A tree at the BIP341 maximum is legitimate and must still parse.
+    /// Without this control, the refusals below could be explained by the
+    /// parser rejecting all nesting.
+    @Test("a tree at the BIP341 maximum depth parses")
+    func maximumDepthAccepted() throws {
+        let descriptor = try Descriptor(Self.nested(depth: 128))
+        #expect(descriptor.serialized().hasPrefix("tr("))
+    }
+
+    /// One level past the consensus maximum is refused: a deeper tree can
+    /// never produce a valid control block.
+    @Test("a tree one level past the maximum is refused")
+    func justOverMaximumRefused() {
+        #expect(throws: DescriptorError.treeTooDeep) { _ = try Descriptor(Self.nested(depth: 129)) }
+    }
+
+    /// The depth that used to terminate the process now returns an error.
+    @Test("a tree deep enough to exhaust the stack is refused, not fatal")
+    func stackExhaustingDepthRefused() {
+        #expect(throws: DescriptorError.treeTooDeep) { _ = try Descriptor(Self.nested(depth: 1_000)) }
+    }
+
+    /// Far beyond any plausible input, to show the bound is checked before
+    /// recursion rather than after it.
+    @Test("an absurdly deep tree is refused promptly", arguments: [5_000, 50_000])
+    func absurdDepthRefused(_ depth: Int) {
+        #expect(throws: DescriptorError.treeTooDeep) { _ = try Descriptor(Self.nested(depth: depth)) }
+    }
+
+    /// Unbalanced nesting fails as a parse error rather than running off the end.
+    @Test("unbalanced nesting is refused")
+    func unbalancedNestingRefused() {
+        #expect(throws: (any Error).self) {
+            _ = try Descriptor("tr(\(Self.nums),\(String(repeating: "{", count: 64))pk(\(Self.key)))")
+        }
+    }
+
+    /// A `multi_a` leaf names at most 999 keys (BIP387); the parser stops
+    /// counting there instead of collecting an unbounded list first.
+    @Test("a multi_a leaf with more than 999 keys is refused")
+    func tooManyLeafKeysRefused() {
+        let keys = Array(repeating: Self.key, count: 1_000).joined(separator: ",")
+        #expect(throws: DescriptorError.invalidThreshold) {
+            _ = try Descriptor("tr(\(Self.nums),multi_a(1,\(keys)))")
+        }
     }
 
     /// A key origin can name at most as many steps as a BIP32 key can be deep.

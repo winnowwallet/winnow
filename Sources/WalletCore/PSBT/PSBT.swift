@@ -67,6 +67,8 @@ public struct PSBT: Equatable, Sendable {
         public static let outputIndex: UInt8 = 0x0F
         public static let sequence: UInt8 = 0x10
         public static let tapKeySignature: UInt8 = 0x13
+        public static let tapScriptSignature: UInt8 = 0x14
+        public static let tapLeafScript: UInt8 = 0x15
         public static let tapBIP32Derivation: UInt8 = 0x16
         public static let tapInternalKey: UInt8 = 0x17
     }
@@ -76,6 +78,7 @@ public struct PSBT: Equatable, Sendable {
         public static let amount: UInt8 = 0x03
         public static let script: UInt8 = 0x04
         public static let tapInternalKey: UInt8 = 0x05
+        public static let tapTree: UInt8 = 0x06
         public static let tapBIP32Derivation: UInt8 = 0x07
     }
 
@@ -110,6 +113,37 @@ public struct PSBT: Equatable, Sendable {
             self.leafHashes = leafHashes
             self.masterFingerprint = masterFingerprint
             self.path = path
+        }
+    }
+
+    /// Identifies a PSBT_IN_TAP_SCRIPT_SIG entry: the x-only key that signed
+    /// and the tapleaf hash of the script it signs for (BIP371).
+    public struct TapScriptSignatureID: Hashable, Sendable {
+        public var publicKey: Data // 32-byte x-only
+        public var leafHash: Data
+
+        public init(publicKey: Data, leafHash: Data) {
+            self.publicKey = publicKey
+            self.leafHash = leafHash
+        }
+    }
+
+    /// A PSBT_IN_TAP_LEAF_SCRIPT entry (BIP371): the leaf script and its
+    /// version, keyed (in the map) by the control block proving the leaf.
+    public struct TapLeafScript: Equatable, Sendable {
+        public var controlBlock: Taproot.ControlBlock
+        public var script: Data
+        public var leafVersion: UInt8
+
+        public init(controlBlock: Taproot.ControlBlock, script: Data, leafVersion: UInt8) {
+            self.controlBlock = controlBlock
+            self.script = script
+            self.leafVersion = leafVersion
+        }
+
+        /// H_TapLeaf for this leaf (BIP341).
+        public var leafHash: Data {
+            Taproot.leafHash(version: leafVersion, script: Script(script))
         }
     }
 
@@ -295,6 +329,53 @@ public struct PSBT: Equatable, Sendable {
                 set(KeyValue(type: InType.finalScriptWitness, value: value))
             }
         }
+
+        /// PSBT_IN_TAP_LEAF_SCRIPT — keyed by the control block; the value is
+        /// the leaf script followed by its leaf version byte (BIP371).
+        public var tapLeafScripts: [TapLeafScript] {
+            get {
+                pairs.compactMap { pair in
+                    guard pair.type == InType.tapLeafScript,
+                          let controlBlock = try? Taproot.ControlBlock(serialized: Data(pair.keyData)),
+                          pair.value.count >= 1
+                    else { return nil }
+                    return TapLeafScript(controlBlock: controlBlock,
+                                         script: pair.value.dropLast(),
+                                         leafVersion: pair.value.last!)
+                }
+            }
+            set {
+                pairs.removeAll { $0.type == InType.tapLeafScript }
+                for leaf in newValue.sorted(by: { $0.controlBlock.serialized.lexicographicallyPrecedes($1.controlBlock.serialized) }) {
+                    var value = leaf.script
+                    value.appendUInt8(leaf.leafVersion)
+                    set(KeyValue(type: InType.tapLeafScript, keyData: leaf.controlBlock.serialized, value: value))
+                }
+            }
+        }
+
+        /// PSBT_IN_TAP_SCRIPT_SIG — keyed by x-only pubkey ‖ tapleaf hash;
+        /// the 64-byte (65 with sighash byte) script-path signature (BIP371).
+        public var tapScriptSignatures: [TapScriptSignatureID: Data] {
+            get {
+                var result: [TapScriptSignatureID: Data] = [:]
+                for pair in pairs where pair.type == InType.tapScriptSignature {
+                    let keyData = Data(pair.keyData)
+                    guard keyData.count == 64 else { continue }
+                    result[TapScriptSignatureID(publicKey: keyData.prefix(32),
+                                                leafHash: keyData.suffix(32))] = pair.value
+                }
+                return result
+            }
+            set {
+                pairs.removeAll { $0.type == InType.tapScriptSignature }
+                for (id, signature) in newValue.sorted(by: { ($0.key.publicKey + $0.key.leafHash)
+                    .lexicographicallyPrecedes($1.key.publicKey + $1.key.leafHash) }) {
+                    set(KeyValue(type: InType.tapScriptSignature,
+                                 keyData: id.publicKey + id.leafHash, value: signature))
+                }
+            }
+        }
     }
 
     public struct Output: Equatable, Sendable {
@@ -394,6 +475,38 @@ public struct PSBT: Equatable, Sendable {
                     for step in origin.path { value.appendUInt32(step) }
                     set(KeyValue(type: OutType.tapBIP32Derivation, keyData: pubkey, value: value))
                 }
+            }
+        }
+
+        /// PSBT_OUT_TAP_TREE — the output's script tree as a sequence of
+        /// depth ‖ leaf version ‖ compactSize length ‖ script tuples (BIP371),
+        /// letting recipients verify the output commits to the account's leaves.
+        public var tapTree: [(depth: UInt8, leafVersion: UInt8, script: Data)]? {
+            get {
+                guard let value = pair(type: OutType.tapTree)?.value else { return nil }
+                var reader = ByteReader(value)
+                var tuples: [(UInt8, UInt8, Data)] = []
+                while reader.remaining > 0 {
+                    guard let depth = try? reader.readUInt8(),
+                          let leafVersion = try? reader.readUInt8(),
+                          let script = try? reader.readVarData()
+                    else { return nil }
+                    tuples.append((depth, leafVersion, script))
+                }
+                return tuples
+            }
+            set {
+                guard let newValue else {
+                    pairs.removeAll { $0.type == OutType.tapTree }
+                    return
+                }
+                var value = Data()
+                for tuple in newValue {
+                    value.appendUInt8(tuple.depth)
+                    value.appendUInt8(tuple.leafVersion)
+                    value.appendVarData(tuple.script)
+                }
+                set(KeyValue(type: OutType.tapTree, value: value))
             }
         }
     }
@@ -667,7 +780,7 @@ public struct PSBT: Equatable, Sendable {
                     try requireSingleton(pair, length: 8, name: "output amount")
                 case OutType.tapInternalKey:
                     try requireSingleton(pair, length: 32, name: "output Taproot internal key")
-                case OutType.script:
+                case OutType.script, OutType.tapTree:
                     try requireSingleton(pair, name: "output field \(pair.type)")
                 default:
                     break
