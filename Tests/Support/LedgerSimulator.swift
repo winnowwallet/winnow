@@ -286,6 +286,7 @@ public actor LedgerSimulator: LedgerTransport {
             var text = template
             for index in keys.indices.reversed() {
                 text = text.replacingOccurrences(of: "@\(index)/**", with: keys[index] + "/<0;1>/*")
+                    .replacingOccurrences(of: "@\(index)/<", with: keys[index] + "/<")
             }
             return try Descriptor(text)
         }

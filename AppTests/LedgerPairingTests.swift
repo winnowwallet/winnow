@@ -128,6 +128,83 @@ final class LedgerPairingTests: XCTestCase {
         }
     }
 
+    func testBuilderMakesTwoOfThreeWithAnotherWinnowALedgerAndRecovery() async throws {
+        let model = try await readyModel(advanced: true)
+        let masters = try TestKeys.masters()
+        let simulator = LedgerSimulator(master: masters[1])
+        model.ledgerConnector = SimulatorConnector(simulator: simulator)
+        let otherWinnow = try TestKeys.keyExpression(master: masters[2])
+
+        let record = try await model.createMultisigAccount(
+            name: "Family 2-of-3", threshold: 2, otherKeys: [" \(otherWinnow) "], includeLedger: true,
+            recovery: .fewerSigners(threshold: 1, blocks: 4320))
+        let account = try model.multisigAccount(for: record)
+        XCTAssertEqual(account.threshold, 2)
+        XCTAssertEqual(account.signers.count, 3)
+        XCTAssertEqual(account.recovery?.blocks, 4320)
+        XCTAssertEqual(account.recovery?.threshold, 1)
+        XCTAssertNotNil(record.ledger)
+        let names = await simulator.registeredNames
+        XCTAssertEqual(names, ["Family 2-of-3"])
+        // The other Winnow joins with the same descriptor: its key is a signer.
+        let joined = try MultisigAccount(record.descriptor, network: .signet)
+        XCTAssertTrue(joined.includes(accountKey: try masters[2].derived(path: "m/86'/1'/0'").neutered))
+        XCTAssertEqual(try joined.address(index: 0), try account.address(index: 0))
+
+        // Without the Ledger, phone and another Winnow with a separate recovery key.
+        let recoveryKey = try TestKeys.keyExpression(master: TestKeys.master(entropyByte: 0xD4))
+        let pair = try await model.createMultisigAccount(
+            name: "Two phones", threshold: 2, otherKeys: [otherWinnow], includeLedger: false,
+            recovery: .separateKeys(threshold: 1, keys: [recoveryKey], blocks: 144))
+        XCTAssertNil(pair.ledger)
+        XCTAssertEqual(try model.multisigAccount(for: pair).recovery?.keys.count, 1)
+        XCTAssertEqual(model.multisigAccounts.count, 2)
+    }
+
+    func testRecoveryPathRefusesCoinsThatAreTooYoung() async throws {
+        let model = try await readyModel(advanced: true)
+        let record = try await model.createMultisigAccount(
+            name: "Two phones", threshold: 2, otherKeys: [try TestKeys.keyExpression(master: TestKeys.masters()[2])],
+            includeLedger: false, recovery: .fewerSigners(threshold: 1, blocks: 1000))
+        let account = try model.multisigAccount(for: record)
+        let height = record.createdAtHeight + 1
+        let coinbase = Transaction(version: 1, inputs: [coinbaseInput()],
+                                   outputs: [.init(value: 50, scriptPubKey: Data([0x51]))], locktime: height)
+        let funding = Transaction(
+            version: 2,
+            inputs: [.init(previousOutput: Transaction.Outpoint(txid: Data(repeating: 0x34, count: 32), vout: 0),
+                           scriptSig: Data(), sequence: 0xFFFF_FFFD)],
+            outputs: [.init(value: 60_000, scriptPubKey: try account.scriptPubKey(index: 0))], locktime: 0)
+        try await model.multisigStore.apply(match: fakeMatch(height: height, transactions: [coinbase, funding]),
+                                            network: .signet)
+        await model.refresh()
+        let funded = try XCTUnwrap(model.multisigAccounts.first { $0.id == record.id })
+        let destination = try Descriptor("tr(\(try TestKeys.keyExpression(master: TestKeys.masters()[0])))")
+            .derived(index: 5, bitcoinNetwork: .signet)[0].address
+        do {
+            _ = try await model.createMultisigSpend(record: funded, address: destination, amount: 20_000,
+                                                    feeRateSatPerVByte: 2, path: .recovery)
+            XCTFail("a coin younger than the recovery delay was offered to the recovery path")
+        } catch {
+            guard case MultisigAccountError.invalidSpend = error else { return XCTFail("unexpected \(error)") }
+        }
+        // The signers' path spends it at once.
+        _ = try await model.createMultisigSpend(record: funded, address: destination, amount: 20_000,
+                                                feeRateSatPerVByte: 2)
+    }
+
+    func testBuilderIsAdvancedModeOnly() async throws {
+        let model = try await readyModel(advanced: false)
+        do {
+            _ = try await model.createMultisigAccount(
+                name: "Two phones", threshold: 2, otherKeys: [try TestKeys.keyExpression(master: TestKeys.masters()[2])],
+                includeLedger: false, recovery: nil)
+            XCTFail("built a multisig account in Simple mode")
+        } catch {
+            XCTAssertEqual(error as? AppModel.LedgerActionError, .advancedModeOnly)
+        }
+    }
+
     func testStoreRefusesARegistrationForAnotherAccount() async throws {
         let model = try await readyModel(advanced: true)
         model.ledgerConnector = SimulatorConnector(simulator: LedgerSimulator(master: try TestKeys.masters()[1]))

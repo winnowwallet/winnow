@@ -42,6 +42,7 @@ struct LedgerTests {
         var text = template
         for index in keys.indices.reversed() {
             text = text.replacingOccurrences(of: "@\(index)/**", with: keys[index] + "/<0;1>/*")
+                .replacingOccurrences(of: "@\(index)/<", with: keys[index] + "/<")
         }
         return try Descriptor(text)
     }
@@ -255,6 +256,49 @@ struct LedgerTests {
         }
         record.ledger = nil
         try record.checkLedgerRegistration(for: pairing.account)
+    }
+
+    @Test("two Winnows and a Ledger: 2-of-3 now, the Ledger alone after 10 blocks")
+    func twoOfThreeWithRecovery() async throws {
+        let masters = try TestKeys.masters()
+        let simulator = LedgerSimulator(master: masters[1])
+        let client = LedgerBitcoinClient(transport: simulator)
+        let (ledgerKey, fingerprint) = try await LedgerMultisig.signerExpression(client: client, network: .signet)
+        let descriptor = try MultisigAccount.descriptor(
+            threshold: 2,
+            signers: [try TestKeys.keyExpression(master: masters[0]), try TestKeys.keyExpression(master: masters[2]),
+                      ledgerKey],
+            recovery: .fewerSigners(threshold: 1, blocks: 10), network: .signet)
+        let account = try MultisigAccount(descriptor: descriptor, network: .signet)
+        let policy = try LedgerWalletPolicy(name: "Family 2-of-3", account: account)
+        #expect(policy.template
+            == "tr(@0/**,{sortedmulti_a(2,@1/**,@2/**,@3/**),and_v(v:multi_a(1,@1/<2;3>/*,@2/<2;3>/*,@3/<2;3>/*),older(10))})")
+        #expect(policy.keys.count == 4)
+        let registration = try await LedgerMultisig.register(account, name: "Family 2-of-3", fingerprint: fingerprint,
+                                                             client: client)
+        _ = try await LedgerMultisig.displayAddress(account, registration: registration, choice: 1, index: 3,
+                                                    client: client)
+
+        let coin = try WalletUTXO(txid: Data(repeating: 0x61, count: 32), vout: 0, amount: 90_000,
+                                  scriptPubKey: account.scriptPubKey(index: 0), chain: .receive, index: 0, height: 100)
+        let owned = [MultisigAccount.OutputCoordinate(choice: 1, index: 0)]
+        let payment = Payment(amount: 50_000, scriptPubKey: Data([0x51, 0x20] + repeatElement(0x77, count: 32)))
+        // Now: one Winnow and the Ledger.
+        var now = try account.createSpend(utxos: [coin], payments: [payment], changeIndex: 0, feeRateSatPerVByte: 2,
+                                          chainTip: 101, randomness: { 0.5 })
+        try account.sign(&now, signingKey: masters[0], knownUTXOs: [coin], ownedOutputCoordinates: owned, chainTip: 101)
+        try await LedgerMultisig.sign(&now, account: account, registration: registration, client: client)
+        #expect(try account.approvals(of: now, knownUTXOs: [coin]) == [0, 2])
+        _ = try account.finalizeSpend(&now, knownUTXOs: [coin], ownedOutputCoordinates: owned, chainTip: 101)
+
+        // After the delay: the Ledger alone.
+        var later = try account.createSpend(utxos: [coin], payments: [payment], changeIndex: 0, feeRateSatPerVByte: 2,
+                                            chainTip: 109, path: .recovery, randomness: { 0.5 })
+        try await LedgerMultisig.sign(&later, account: account, registration: registration, client: client)
+        #expect(try account.approvals(of: later, knownUTXOs: [coin], path: .recovery) == [2])
+        let transaction = try account.finalizeSpend(&later, knownUTXOs: [coin], ownedOutputCoordinates: owned,
+                                                    chainTip: 109)
+        #expect(transaction.inputs[0].sequence == 10)
     }
 
     @Test("the Ledger may sign first; the phone's signature completes the spend")

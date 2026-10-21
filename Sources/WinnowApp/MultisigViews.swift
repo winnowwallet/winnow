@@ -6,6 +6,7 @@ import SwiftUI
 /// between signers. Nothing here appears in Simple mode.
 enum MultisigRoute: Hashable {
     case add
+    case build
     case pairLedger
     case account(String)
     case psbt(String)
@@ -29,14 +30,16 @@ struct MultisigSection: View {
                 }
                 .accessibilityIdentifier("multisigAccount-\(record.id)")
             }
-            NavigationLink(value: MultisigRoute.add) { Text("Add multisig account") }
+            NavigationLink(value: MultisigRoute.build) { Text("New multisig account") }
+                .accessibilityIdentifier("multisigBuildButton")
+            NavigationLink(value: MultisigRoute.add) { Text("Join with a descriptor") }
                 .accessibilityIdentifier("multisigAddButton")
             NavigationLink(value: MultisigRoute.pairLedger) { Text("Pair a Ledger (2-of-2)") }
                 .accessibilityIdentifier("multisigPairLedgerButton")
         } header: {
             Text("Multisig")
         } footer: {
-            Text("k-of-n Taproot accounts with other signers: tr(NUMS, sortedmulti_a(k, …)) descriptors and PSBTs, nothing more. Any k signers can spend. A paired Ledger signs over Bluetooth after showing the payment on its screen.")
+            Text("k-of-n Taproot accounts with other Winnows, a Ledger or any signer, shared as a descriptor and spent with PSBTs. Any k signers spend at once; an optional recovery path lets fewer signers, or a separate key, spend a coin that has not moved for a set number of blocks.")
         }
     }
 
@@ -44,6 +47,7 @@ struct MultisigSection: View {
     static func destination(_ route: MultisigRoute) -> some View {
         switch route {
         case .add: MultisigAddView()
+        case .build: MultisigBuildView()
         case .pairLedger: LedgerPairView()
         case let .account(id): MultisigAccountView(recordID: id)
         case let .psbt(id): MultisigPSBTView(recordID: id)
@@ -215,6 +219,10 @@ struct MultisigAccountView: View {
                     MultisigValueRow(title: "Balance", value: satsText(record.balance), identifier: "multisigBalance")
                     MultisigValueRow(title: "Policy", value: "\(account.threshold) of \(account.signers.count)",
                                      identifier: "multisigPolicy")
+                    if let recovery = account.recovery {
+                        MultisigValueRow(title: "Recovery", value: Self.recoveryText(recovery, account: account),
+                                         identifier: "multisigRecovery")
+                    }
                     if let ledger = record.ledger {
                         MultisigValueRow(title: "Ledger", value: String(format: "%08x", ledger.masterFingerprint),
                                          identifier: "multisigLedgerFingerprint")
@@ -225,7 +233,7 @@ struct MultisigAccountView: View {
                     NavigationLink(value: MultisigRoute.psbt(record.id)) { Text("New or pasted PSBT") }
                         .accessibilityIdentifier("multisigPSBTButton")
                 }
-                coinsSection(record)
+                coinsSection(record, account)
                 Section("Descriptor") {
                     CopyableTextBlock(text: record.descriptor)
                 }
@@ -248,6 +256,21 @@ struct MultisigAccountView: View {
         } message: {
             Text("Only an empty account can be removed. The other signers keep theirs.")
         }
+    }
+
+    /// "after 4320 blocks: any 1 of the signers", or "… the recovery key".
+    static func recoveryText(_ recovery: MultisigAccount.Recovery, account: MultisigAccount) -> String {
+        let signerKeys = Set(account.signers.compactMap { signer -> Data? in
+            guard case let .extended(key, _) = signer.base else { return nil }
+            return key.publicKey
+        })
+        let reused = recovery.keys.allSatisfy { key in
+            guard case let .extended(xpub, _) = key.base else { return false }
+            return signerKeys.contains(xpub.publicKey)
+        }
+        let who = reused ? "any \(recovery.threshold) of the signers"
+            : recovery.keys.count == 1 ? "the recovery key" : "\(recovery.threshold) of \(recovery.keys.count) recovery keys"
+        return "after \(recovery.blocks) blocks: \(who)"
     }
 
     @ViewBuilder
@@ -278,7 +301,7 @@ struct MultisigAccountView: View {
     }
 
     @ViewBuilder
-    private func coinsSection(_ record: MultisigAccountRecord) -> some View {
+    private func coinsSection(_ record: MultisigAccountRecord, _ account: MultisigAccount) -> some View {
         Section("Coins") {
             if record.utxos.isEmpty {
                 Text("No coins yet.").foregroundStyle(.secondary)
@@ -290,6 +313,11 @@ struct MultisigAccountView: View {
                     Text("\(coin.txid.displayHex.prefix(16))…:\(coin.vout) · \(coin.chain == .change ? "change" : "receive") \(coin.index) · \(coin.height == 0 ? "pending" : "block \(coin.height)")")
                         .font(.system(.caption2, design: .monospaced))
                         .foregroundStyle(.secondary)
+                    if let unlock = account.recoveryUnlockHeight(of: coin) {
+                        Text("recovery path from block \(unlock)")
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.orange)
+                    }
                 }
             }
         }
@@ -332,14 +360,25 @@ struct MultisigPSBTView: View {
     @State private var broadcastTxid: Data?
     @State private var operationEpoch = SensitivePresentationEpoch()
     @State private var operationTask: Task<Void, Never>?
+    /// The path a new PSBT is created on.
+    @State private var path: MultisigAccount.SpendPath = .signers
+    /// The path the PSBT in hand uses, from its review.
+    private var activePath: MultisigAccount.SpendPath { review?.path ?? path }
 
     private var record: MultisigAccountRecord? { model.multisigAccounts.first { $0.id == recordID } }
     private var account: MultisigAccount? { record.flatMap { try? model.multisigAccount(for: $0) } }
-    private var ownPositions: Set<Int> { record.map { model.multisigOwnSignerPositions($0) } ?? [] }
-    /// The paired Ledger's signer position, when the account has one.
+    private var ownPositions: Set<Int> { record.map { model.multisigOwnSignerPositions($0, path: activePath) } ?? [] }
+    /// The keys and threshold of the path in use.
+    private var pathKeys: [Descriptor.SingleKey] {
+        activePath == .recovery ? (account?.recovery?.keys ?? []) : (account?.signers ?? [])
+    }
+    private var pathThreshold: Int {
+        activePath == .recovery ? (account?.recovery?.threshold ?? 0) : (account?.threshold ?? 0)
+    }
+    /// The paired Ledger's position among the path's keys, when it has one.
     private var ledgerPosition: Int? {
-        guard let ledger = record?.ledger, let account else { return nil }
-        return account.signers.firstIndex {
+        guard let ledger = record?.ledger else { return nil }
+        return pathKeys.firstIndex {
             $0.origin?.fingerprint == ledger.masterFingerprint && $0.origin?.path == ledger.keyPath
         }
     }
@@ -401,6 +440,14 @@ struct MultisigPSBTView: View {
 
     private var createSection: some View {
         Section {
+            if account?.recovery != nil {
+                Picker("Spend with", selection: $path) {
+                    Text("Signers now").tag(MultisigAccount.SpendPath.signers)
+                    Text("Recovery path").tag(MultisigAccount.SpendPath.recovery)
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("multisigPathPicker")
+            }
             TextField("Address", text: $address)
                 .font(.system(.callout, design: .monospaced))
                 .autocorrectionDisabled()
@@ -419,7 +466,9 @@ struct MultisigPSBTView: View {
         } header: {
             Text("New payment")
         } footer: {
-            Text("Change returns to this account's next change address. The fee may be at most a tenth of the coins spent.")
+            Text(path == .recovery
+                ? "Only coins that have not moved for the recovery delay can be spent this way. Change returns to this account's next change address."
+                : "Change returns to this account's next change address. The fee may be at most a tenth of the coins spent.")
         }
     }
 
@@ -463,9 +512,9 @@ struct MultisigPSBTView: View {
                 }
                 LabeledContent("Inputs", value: satsText(review.inputTotal))
                 MultisigValueRow(title: "Fee", value: satsText(review.fee), identifier: "multisigFee")
-                if let account {
-                    MultisigValueRow(title: "Signatures", value: "\(approvals.count) of \(account.threshold)",
-                                     identifier: "multisigSignatureCount")
+                if account != nil {
+                    MultisigValueRow(title: activePath == .recovery ? "Recovery signatures" : "Signatures",
+                                     value: "\(approvals.count) of \(pathThreshold)", identifier: "multisigSignatureCount")
                 }
             } else {
                 Label("Winnow cannot safely review this PSBT", systemImage: "exclamationmark.triangle.fill")
@@ -484,25 +533,26 @@ struct MultisigPSBTView: View {
 
     @ViewBuilder
     private var actionsSection: some View {
-        if let account {
+        if account != nil {
+            let threshold = pathThreshold
             let signedHere = !ownPositions.isEmpty && ownPositions.isSubset(of: approvals)
             Section {
                 Button("Add this phone's signature") { sign() }
                     .accessibilityIdentifier("multisigSignButton")
-                    .disabled(busy || review == nil || signedHere || approvals.count >= account.threshold)
+                    .disabled(busy || review == nil || ownPositions.isEmpty || signedHere || approvals.count >= threshold)
                 if let ledgerPosition {
                     Button("Sign with Ledger") { signWithLedger() }
                         .accessibilityIdentifier("multisigLedgerSignButton")
                         .disabled(busy || review == nil || approvals.contains(ledgerPosition)
-                            || approvals.count >= account.threshold)
+                            || approvals.count >= threshold)
                 }
                 Button(busy ? "Working…" : "Finalize and broadcast") { broadcast() }
                     .accessibilityIdentifier("multisigBroadcastButton")
-                    .disabled(busy || review == nil || approvals.count < account.threshold)
+                    .disabled(busy || review == nil || approvals.count < threshold)
             } header: {
-                Text("Signing")
+                Text(activePath == .recovery ? "Signing · recovery path" : "Signing")
             } footer: {
-                Text(nextStep(threshold: account.threshold, signedHere: signedHere))
+                Text(nextStep(threshold: threshold, signedHere: signedHere))
                     .accessibilityIdentifier("multisigNextStep")
             }
         }
@@ -531,7 +581,7 @@ struct MultisigPSBTView: View {
             defer { busy = false }
             do {
                 install(try await model.createMultisigSpend(record: record, address: address, amount: amount,
-                                                            feeRateSatPerVByte: rate))
+                                                            feeRateSatPerVByte: rate, path: path))
             } catch {
                 self.error = error.localizedDescription
             }
@@ -572,9 +622,10 @@ struct MultisigPSBTView: View {
             return
         }
         do {
-            review = try model.reviewMultisigSpend(working, record: record)
+            let reviewed = try model.reviewMultisigSpend(working, record: record)
+            review = reviewed
             reviewError = nil
-            approvals = model.multisigApprovals(working, record: record)
+            approvals = model.multisigApprovals(working, record: record, path: reviewed.path)
         } catch {
             review = nil
             reviewError = error.localizedDescription

@@ -193,6 +193,25 @@ extension PSBT {
         inputs[index].tapBIP32Derivation = origins
     }
 
+    /// Creator-side helper for a tree of leaves: the internal key, one
+    /// PSBT_IN_TAP_LEAF_SCRIPT per leaf, and the given origins, whose leaf
+    /// hashes the caller sets to the leaves each key appears in.
+    public mutating func attachScriptPaths(input index: Int,
+                                           leaves: [(controlBlock: Taproot.ControlBlock, script: Script,
+                                                     leafVersion: UInt8)],
+                                           keyOrigins: [Data: KeyOrigin]) throws {
+        guard inputs.indices.contains(index), let first = leaves.first else {
+            throw PSBTError.missingField("input \(index)")
+        }
+        inputs[index].tapInternalKey = first.controlBlock.internalKey
+        inputs[index].tapLeafScripts = leaves.map {
+            TapLeafScript(controlBlock: $0.controlBlock, script: $0.script.bytes, leafVersion: $0.leafVersion)
+        }
+        var origins = inputs[index].tapBIP32Derivation
+        for (key, origin) in keyOrigins { origins[key] = origin }
+        inputs[index].tapBIP32Derivation = origins
+    }
+
     /// Signer role for multi_a leaves (BIP371/BIP387): for every 32-byte
     /// secret whose x-only key appears in the input's leaf script, adds a
     /// PSBT_IN_TAP_SCRIPT_SIG. Plain x-only keys sign with NO taproot tweak.
@@ -200,22 +219,34 @@ extension PSBT {
     /// provided key matches a leaf key.
     public mutating func signScriptPath(input index: Int, privateKeys: [Data],
                                         auxiliaryRand: Data? = nil) throws {
-        let (leaf, leafKeys, hashType) = try leafSigningContext(input: index)
         let tx = try unsignedTransaction()
         let spentOutputs = try spentOutputs()
-
         var signatures = inputs[index].tapScriptSignatures
         var signed = 0
-        for secret in privateKeys {
-            guard let attached = try selfVerifiedLeafSignature(
-                for: secret, input: index, leaf: leaf, leafKeys: leafKeys,
-                tx: tx, spentOutputs: spentOutputs, hashType: hashType,
-                auxiliaryRand: auxiliaryRand) else { continue } // not ours — skip
-            signatures[attached.id] = attached.signature
-            signed += 1
+        // Every leaf the key is in whose timelock, if any, this input's
+        // sequence already meets: a signature on a leaf the transaction
+        // cannot use is never made.
+        for context in try leafSigningContexts(input: index)
+        where Self.lockIsMet(context.policy, input: index, tx: tx) {
+            for secret in privateKeys {
+                guard let attached = try selfVerifiedLeafSignature(
+                    for: secret, input: index, leaf: context.leaf, leafKeys: context.policy.keys,
+                    tx: tx, spentOutputs: spentOutputs, hashType: context.hashType,
+                    auxiliaryRand: auxiliaryRand) else { continue } // not ours — skip
+                signatures[attached.id] = attached.signature
+                signed += 1
+            }
         }
         guard signed > 0 else { throw PSBTError.missingField("input \(index) matching leaf key") }
         inputs[index].tapScriptSignatures = signatures
+    }
+
+    /// Whether the leaf's relative timelock, if it has one, is met by the
+    /// input's sequence in this transaction (BIP68/BIP112).
+    static func lockIsMet(_ policy: LeafPolicy, input index: Int, tx: Transaction) -> Bool {
+        guard let blocks = policy.relativeLock else { return true }
+        guard tx.inputs.indices.contains(index) else { return false }
+        return RelativeLock.isSatisfied(blocks: blocks, sequence: tx.inputs[index].sequence, txVersion: tx.version)
     }
 
     /// The leaf keys whose script-path signatures on `input` verify against
@@ -224,31 +255,45 @@ extension PSBT {
     /// than by the presence of a signature entry.
     public func verifiedScriptPathSigners(input index: Int, tx: Transaction,
                                           spentOutputs: [SighashBIP341.SpentOutput]) throws -> Set<Data> {
-        let (leaf, leafKeys, _) = try leafSigningContext(input: index)
-        return Set(validScriptPathSignatures(input: index, leaf: leaf, tx: tx,
-                                             spentOutputs: spentOutputs, leafKeys: leafKeys).keys)
+        var verified: Set<Data> = []
+        for context in try leafSigningContexts(input: index) {
+            verified.formUnion(validScriptPathSignatures(input: index, leaf: context.leaf, tx: tx,
+                                                         spentOutputs: spentOutputs,
+                                                         leafKeys: context.policy.keys).keys)
+        }
+        return verified
+    }
+
+    /// The same, for one leaf only: which of its keys signed it validly.
+    public func verifiedScriptPathSigners(input index: Int, leafHash: Data, tx: Transaction,
+                                          spentOutputs: [SighashBIP341.SpentOutput]) throws -> Set<Data> {
+        guard let context = try leafSigningContexts(input: index).first(where: { $0.leaf.leafHash == leafHash }) else {
+            return []
+        }
+        return Set(validScriptPathSignatures(input: index, leaf: context.leaf, tx: tx, spentOutputs: spentOutputs,
+                                             leafKeys: context.policy.keys).keys)
     }
 
     /// The signable leaf and its contract for one input: a leaf script that
     /// parses as multisig, and an output-committing sighash type — a signer
     /// signs only those, so a PSBT creator cannot collect NONE/SINGLE
     /// partials and then rewrite the outputs.
-    private func leafSigningContext(input index: Int) throws
-        -> (leaf: TapLeafScript, leafKeys: [Data], hashType: SighashBIP341.HashType) {
+    private func leafSigningContexts(input index: Int) throws
+        -> [(leaf: TapLeafScript, policy: LeafPolicy, hashType: SighashBIP341.HashType)] {
         guard inputs.indices.contains(index) else { throw PSBTError.missingField("input \(index)") }
-        guard let leaf = inputs[index].tapLeafScripts.first else {
-            throw PSBTError.missingField("input \(index) tap leaf script")
-        }
-        guard let (_, leafKeys) = Multisig.parse(Script(leaf.script)) else {
-            throw PSBTError.malformed("input \(index) leaf script")
-        }
+        let leaves = inputs[index].tapLeafScripts
+        guard !leaves.isEmpty else { throw PSBTError.missingField("input \(index) tap leaf script") }
         let rawType = inputs[index].sighashType ?? 0
         guard rawType <= UInt32(UInt8.max) else { throw PSBTError.malformed("sighash type \(rawType)") }
         let hashType = SighashBIP341.HashType(rawValue: UInt8(rawType))
         guard hashType.commitsToAllOutputs else {
             throw PSBTError.malformed("refusing non-DEFAULT/ALL sighash type \(rawType)")
         }
-        return (leaf, leafKeys, hashType)
+        let contexts = leaves.compactMap { leaf in
+            Multisig.parsePolicy(Script(leaf.script)).map { (leaf: leaf, policy: $0, hashType: hashType) }
+        }
+        guard !contexts.isEmpty else { throw PSBTError.malformed("input \(index) leaf script") }
+        return contexts
     }
 
     /// One leaf signature for one secret — or nil when the key is not a
@@ -348,7 +393,10 @@ extension PSBT {
                     input: index, signature: signature, tx: tx, spentOutputs: spentOutputs))
             } else if !inputs[index].tapLeafScripts.isEmpty {
                 var witness: [Data]?
-                for leaf in inputs[index].tapLeafScripts {
+                // A leaf without a timelock first: it spends without waiting.
+                let all = inputs[index].tapLeafScripts
+                let isLocked = { (leaf: TapLeafScript) in Multisig.parsePolicy(Script(leaf.script))?.relativeLock != nil }
+                for leaf in all.filter({ !isLocked($0) }) + all.filter(isLocked) {
                     witness = try finalizedScriptPathWitness(input: index, leaf: leaf,
                                                              tx: tx, spentOutputs: spentOutputs)
                     if witness != nil { break }
@@ -386,10 +434,11 @@ extension PSBT {
         else { throw PSBTError.malformed("input \(index) witness utxo is not P2TR") }
         guard Self.leafCommitsToOutput(leaf, spentScript: spentScript) else { return nil }
 
-        guard let (threshold, leafKeys) = Multisig.parse(Script(leaf.script)) else { return nil }
+        guard let policy = Multisig.parsePolicy(Script(leaf.script)),
+              Self.lockIsMet(policy, input: index, tx: tx) else { return nil }
         let valid = validScriptPathSignatures(input: index, leaf: leaf, tx: tx,
-                                              spentOutputs: spentOutputs, leafKeys: leafKeys)
-        guard valid.count >= threshold else { return nil }
+                                              spentOutputs: spentOutputs, leafKeys: policy.keys)
+        guard valid.count >= policy.threshold else { return nil }
         return try Signer.multisigWitness(signatures: valid, leafScript: Script(leaf.script),
                                           controlBlock: leaf.controlBlock)
     }

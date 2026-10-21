@@ -10,7 +10,12 @@ GUI should not carry a second wallet implementation. The
 [AppModel](../../WinnowApp/AppModel.swift) coordinates these rules with
 WalletCore networking, [key storage](../Keys/README.md), and
 [signing](../Transactions/README.md). `MultisigAccount` holds the rules for a
-raw k-of-n `tr(NUMS, sortedmulti_a(k, …))` account: the shape and signer checks
+raw k-of-n `tr(NUMS, sortedmulti_a(k, …))` account, optionally with a second,
+timelocked recovery leaf `and_v(v:pk(K),older(N))` or
+`and_v(v:multi_a(m,…),older(N))` for N of 1 to 65535 blocks, whose keys are
+either the same signers on their `/<2;3>/*` path or other keys on `/<0;1>/*`.
+Spends choose the path by input sequence; a recovery spend selects only coins
+at least N blocks deep. The account holds the shape and signer checks
 from the shared-account Winnow's audit (SEC-009, SEC-019, SEC-020), spend
 creation, the review every signer repeats before signing (SEC-004),
 signing and finalization. New accounts write the internal key as an xpub on

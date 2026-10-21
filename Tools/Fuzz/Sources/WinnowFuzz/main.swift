@@ -90,7 +90,10 @@ private func binaryCorpus(for target: FuzzTarget) -> [Data] {
                 Data("tr([deadbeef/86'/0'/0']\(account)/<0;1>/*)".utf8),
                 Data("tr(\(other)/0/*)".utf8),
                 Data("tr(\(nums),sortedmulti_a(2,[deadbeef/86'/0'/0']\(account)/<0;1>/*,[cafef00d/86'/0'/0']\(other)/<0;1>/*))".utf8),
-                Data("tr(\(nums),{pk(\(account)/0/*),multi_a(1,\(other)/1/*,\(account)/1/*)})".utf8)]
+                Data("tr(\(nums),{pk(\(account)/0/*),multi_a(1,\(other)/1/*,\(account)/1/*)})".utf8),
+                // A recovery leaf reaches the and_v / older grammar.
+                Data("tr(\(nums),{sortedmulti_a(2,\(account)/<0;1>/*,\(other)/<0;1>/*),and_v(v:multi_a(1,\(account)/<2;3>/*,\(other)/<2;3>/*),older(144))})".utf8),
+                Data("tr(\(nums),{sortedmulti_a(1,\(account)/0/*,\(other)/0/*),and_v(v:pk(\(other)/1/*),older(65535))})".utf8)]
     case .transaction:
         return [Data(), minimalTransaction]
     case .block:

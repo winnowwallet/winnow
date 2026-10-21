@@ -60,7 +60,12 @@ evidenced by `LedgerTests` against Ledger's published policy-id and address
 vectors and a device simulator: its registration must return the policy's own
 id and derive the phone's first address, a shown address must equal the
 phone's, and its signatures are kept only after they verify. No test runs a
-real Ledger; that check is manual, on a Nano X over signet. S4 has
+real Ledger; that check is manual, on a Nano X over signet. A timelocked
+recovery leaf is admitted only beside the signers' leaf, with a lock of 1 to
+65535 blocks, distinct keys, and a reused signer only on its `/<2;3>/*` path
+(`TimelockedMultisigTests`, checked against Bitcoin Core's descriptor answers);
+the UI journey spends on it after the delay and Core accepts the CSV-locked
+witness. S4 has
 no subject in this build, and `ImportBundle` refuses a backup carrying a
 MuSig2 record. S8's remaining subject is that script-path account; its row
 and the vault clauses of S2, S3, S6, S7 and S9 below still record the evidence

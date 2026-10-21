@@ -27,7 +27,10 @@ what each Bluetooth state means while connecting, and how notifications reach
 the step in flight. `LedgerPairingTests` drive the app model against the Ledger simulator:
 Ledger actions refused in Simple mode, pairing and re-pairing, the address
 shown on the device, a spend the phone and the Ledger both sign, a refusal on
-the device, and a forged registration refused by the store.
+the device, a forged registration refused by the store, and the account
+builder: two Winnows and a Ledger in a 2-of-3 with a recovery path, a separate
+recovery key, young coins refused on the recovery path, and nothing in Simple
+mode.
 
 `MultisigStoreTests` checks the sealed `multisig.json`: backups that wait for
 confirmations and refuse a changed coin, payments, spends and reorg rollback

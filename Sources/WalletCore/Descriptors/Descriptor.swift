@@ -28,6 +28,8 @@ public enum DescriptorError: Error, Equatable {
     case invalidContext
     /// A script tree nested deeper than BIP341's 128 levels (SEC-010).
     case treeTooDeep
+    /// An `older(N)` outside miniscript's 1...2^31 − 1.
+    case invalidTimelock
 }
 
 extension HDKey.Network: Equatable {
@@ -122,6 +124,30 @@ public struct Descriptor: Sendable, Equatable {
         case pk(SingleKey)
         case multiA(threshold: Int, keys: [SingleKey])
         case sortedMultiA(threshold: Int, keys: [SingleKey])
+        /// The miniscript `and_v(v:pk(KEY),older(N))` or
+        /// `and_v(v:multi_a(k,KEY,…),older(N))`: these keys may spend only
+        /// once the coin is N blocks old (BIP68/BIP112).
+        case timelocked(TimelockedKeys, blocks: UInt32)
+    }
+
+    /// The keys a timelocked leaf requires.
+    public enum TimelockedKeys: Sendable, Equatable {
+        case pk(SingleKey)
+        case multiA(threshold: Int, keys: [SingleKey])
+
+        public var keys: [SingleKey] {
+            switch self {
+            case let .pk(key): [key]
+            case let .multiA(_, keys): keys
+            }
+        }
+
+        public var threshold: Int {
+            switch self {
+            case .pk: 1
+            case let .multiA(threshold, _): threshold
+            }
+        }
     }
 
     /// BIP386 TREE expression: a leaf or `{TREE,TREE}`.
@@ -188,6 +214,7 @@ public struct Descriptor: Sendable, Equatable {
         switch tree {
         case let .leaf(.pk(key)): keys.append(key)
         case let .leaf(.multiA(_, leafKeys)), let .leaf(.sortedMultiA(_, leafKeys)): keys.append(contentsOf: leafKeys)
+        case let .leaf(.timelocked(condition, _)): keys.append(contentsOf: condition.keys)
         case let .branch(left, right):
             collectKeys(left, into: &keys)
             collectKeys(right, into: &keys)
@@ -288,6 +315,11 @@ public struct Descriptor: Sendable, Equatable {
             return try Multisig.script(threshold: threshold, xonlyKeys: keys(leafKeys), sorted: false)
         case let .sortedMultiA(threshold, leafKeys):
             return try Multisig.script(threshold: threshold, xonlyKeys: keys(leafKeys), sorted: true)
+        case let .timelocked(.pk(key), blocks):
+            return try Multisig.timelockedScript(xonlyKey: xonly(try resolve(key, index: index, choice: choice)),
+                                                 blocks: blocks)
+        case let .timelocked(.multiA(threshold, leafKeys), blocks):
+            return try Multisig.timelockedScript(threshold: threshold, xonlyKeys: keys(leafKeys), blocks: blocks)
         }
     }
 
@@ -465,23 +497,60 @@ struct Parser {
             try expect(")")
             return .leaf(.pk(key))
         case "multi_a", "sortedmulti_a":
-            let thresholdText = takeWhile(\.isNumber)
-            guard !thresholdText.isEmpty, let threshold = Int(thresholdText) else {
-                throw DescriptorError.invalidThreshold
-            }
-            var keys: [Descriptor.SingleKey] = []
-            while consume(",") {
-                guard keys.count < Multisig.maxKeys else { throw DescriptorError.invalidThreshold }
-                keys.append(try parseKeyExpression())
-            }
-            try expect(")")
-            guard threshold >= 1, threshold <= keys.count else { throw DescriptorError.invalidThreshold }
+            let (threshold, keys) = try parseMultiArguments()
             return .leaf(name == "multi_a"
                 ? .multiA(threshold: threshold, keys: keys)
                 : .sortedMultiA(threshold: threshold, keys: keys))
+        case "and_v":
+            return .leaf(try parseTimelockedLeaf())
         default:
             throw DescriptorError.unknownExpression(name)
         }
+    }
+
+    /// `k,KEY,…)` after `multi_a(` or `sortedmulti_a(`.
+    mutating func parseMultiArguments() throws -> (threshold: Int, keys: [Descriptor.SingleKey]) {
+        let thresholdText = takeWhile(\.isNumber)
+        guard !thresholdText.isEmpty, let threshold = Int(thresholdText) else {
+            throw DescriptorError.invalidThreshold
+        }
+        var keys: [Descriptor.SingleKey] = []
+        while consume(",") {
+            guard keys.count < Multisig.maxKeys else { throw DescriptorError.invalidThreshold }
+            keys.append(try parseKeyExpression())
+        }
+        try expect(")")
+        guard threshold >= 1, threshold <= keys.count else { throw DescriptorError.invalidThreshold }
+        return (threshold, keys)
+    }
+
+    /// `v:pk(KEY),older(N))` or `v:multi_a(k,KEY,…),older(N))` after
+    /// `and_v(`: the only miniscript this wallet reads. `sortedmulti_a` is a
+    /// descriptor form, not a miniscript fragment, so it cannot appear here.
+    mutating func parseTimelockedLeaf() throws -> Descriptor.LeafExpression {
+        guard consume("v:") else { throw DescriptorError.unknownExpression("and_v") }
+        let inner = takeWhile { $0.isLetter || $0 == "_" }
+        try expect("(")
+        let keys: Descriptor.TimelockedKeys
+        switch inner {
+        case "pk":
+            keys = .pk(try parseKeyExpression())
+            try expect(")")
+        case "multi_a":
+            let (threshold, multiKeys) = try parseMultiArguments()
+            keys = .multiA(threshold: threshold, keys: multiKeys)
+        default:
+            throw DescriptorError.unknownExpression("and_v(v:\(inner)")
+        }
+        try expect(",")
+        guard consume("older(") else { throw DescriptorError.unknownExpression("and_v") }
+        let digits = takeWhile(\.isNumber)
+        guard !digits.isEmpty, digits.count <= 10, let blocks = UInt32(digits), blocks >= 1, blocks < 0x8000_0000 else {
+            throw DescriptorError.invalidTimelock
+        }
+        try expect(")")
+        try expect(")")
+        return .timelocked(keys, blocks: blocks)
     }
 
     mutating func parseKeyExpression() throws -> Descriptor.SingleKey {
@@ -620,6 +689,10 @@ enum Serializer {
             "multi_a(\(threshold),\(keys.map(serialize).joined(separator: ",")))"
         case let .leaf(.sortedMultiA(threshold, keys)):
             "sortedmulti_a(\(threshold),\(keys.map(serialize).joined(separator: ",")))"
+        case let .leaf(.timelocked(.pk(key), blocks)):
+            "and_v(v:pk(\(serialize(key))),older(\(blocks)))"
+        case let .leaf(.timelocked(.multiA(threshold, keys), blocks)):
+            "and_v(v:multi_a(\(threshold),\(keys.map(serialize).joined(separator: ","))),older(\(blocks)))"
         case let .branch(left, right):
             "{\(serialize(left)),\(serialize(right))}"
         }

@@ -22,8 +22,12 @@ settings. Use signet and test funds when trying a development build.
 
 Advanced mode adds raw k-of-n multisig accounts: a
 `tr(NUMS, sortedmulti_a(k, …))` descriptor in, addresses and PSBTs out, signed
-by any k signers in any order with no rounds between them. A Ledger (Bitcoin
-app 2.1 or later) can be the second signer of a 2-of-2: Winnow pairs with it
+by any k signers in any order with no rounds between them. "New multisig
+account" builds one from this phone, other Winnows' keys and a Ledger, for
+example a 2-of-3 of two phones and a Ledger, with an optional recovery path: a
+coin that has not moved for a chosen number of blocks can then be spent by
+fewer of the same signers, or by a separate recovery key. A Ledger (Bitcoin
+app 2.1 or later, 2.2 for a recovery path) can be a signer: Winnow pairs with it
 over Bluetooth, registers the account on it, and asks it to sign after it shows
 the payment on its own screen ([Ledger signer](Sources/WalletCore/Ledger/README.md)).
 There are no MuSig2 accounts, cosigner cards or shared-savings screens. A backup carrying a MuSig2

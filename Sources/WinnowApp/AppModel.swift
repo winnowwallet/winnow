@@ -2119,7 +2119,7 @@ final class AppModel {
         var errorDescription: String? {
             switch self {
             case .notASigner:
-                "No signer of this descriptor is this wallet's key. Put this phone's key in the sortedmulti_a() list."
+                "No key of this descriptor is this wallet's key. Put this phone's key among the signers or the recovery keys."
             case .accountHoldsCoins:
                 "This account still holds coins or a pending payment. Spend them first: a removed account is not scanned, and adding it again does not find coins it already had."
             case let .spendNotRecorded(txid, reason):
@@ -2203,29 +2203,33 @@ final class AppModel {
     }
 
     /// The positions of this wallet's own key among the account's signers.
-    func multisigOwnSignerPositions(_ record: MultisigAccountRecord) -> Set<Int> {
+    func multisigOwnSignerPositions(_ record: MultisigAccountRecord,
+                                    path: MultisigAccount.SpendPath = .signers) -> Set<Int> {
         guard let walletDescriptor, case let .tr(key) = walletDescriptor.expression,
               case let .extended(accountKey, _) = key.base,
               let account = try? multisigAccount(for: record) else { return [] }
-        return Set(account.signers.indices.filter { position in
-            guard case let .extended(base, _) = account.signers[position].base else { return false }
+        let keys = path == .recovery ? (account.recovery?.keys ?? []) : account.signers
+        return Set(keys.indices.filter { position in
+            guard case let .extended(base, _) = keys[position].base else { return false }
             return base.publicKey == accountKey.publicKey
         })
     }
 
-    /// The signers (by position) whose signatures verify on every input.
-    func multisigApprovals(_ psbt: PSBT, record: MultisigAccountRecord) -> Set<Int> {
-        (try? multisigAccount(for: record).approvals(of: psbt, knownUTXOs: record.utxos)) ?? []
+    /// The keys of `path` (by position) whose signatures verify on every input.
+    func multisigApprovals(_ psbt: PSBT, record: MultisigAccountRecord,
+                           path: MultisigAccount.SpendPath = .signers) -> Set<Int> {
+        (try? multisigAccount(for: record).approvals(of: psbt, knownUTXOs: record.utxos, path: path)) ?? []
     }
 
-    /// The creator role: one payment, change to the next change address.
+    /// The creator role: one payment, change to the next change address, on
+    /// the signers' path or, once coins are old enough, the recovery path.
     func createMultisigSpend(record: MultisigAccountRecord, address: String, amount: Int64,
-                             feeRateSatPerVByte: Double) async throws -> PSBT {
+                             feeRateSatPerVByte: Double, path: MultisigAccount.SpendPath = .signers) async throws -> PSBT {
         let payment = try Payment(amount: amount, address: address.trimmingCharacters(in: .whitespacesAndNewlines),
                                   network: network)
         let psbt = try multisigAccount(for: record).createSpend(
             utxos: record.utxos, payments: [payment], changeIndex: record.nextChangeIndex,
-            feeRateSatPerVByte: feeRateSatPerVByte, chainTip: await chainTipHeight)
+            feeRateSatPerVByte: feeRateSatPerVByte, chainTip: await chainTipHeight, path: path)
         journalPSBT(stage: "multisig-created", psbt: psbt)
         return psbt
     }
@@ -2319,7 +2323,7 @@ final class AppModel {
         var errorDescription: String? {
             switch self {
             case .advancedModeOnly:
-                "Ledger signing is part of Advanced mode. Turn on Advanced mode to use it."
+                "Multisig accounts and Ledger signing are part of Advanced mode. Turn on Advanced mode to use them."
             case .invalidName:
                 "Use a name of 1 to 64 plain letters, digits and punctuation: the Ledger shows it on its screen."
             case .notPaired:
@@ -2334,28 +2338,43 @@ final class AppModel {
     /// Ledger's screen; the Ledger must derive the phone's first address.
     @discardableResult
     func pairLedger(name: String) async throws -> MultisigAccountRecord {
+        try await createMultisigAccount(name: name, threshold: 2, otherKeys: [], includeLedger: true, recovery: nil)
+    }
+
+    /// The account builder: this phone's key, the other signers' pasted key
+    /// expressions (other Winnows, any signer's `[fp/path]xpub…/<0;1>/*`),
+    /// and optionally a Ledger's key read over Bluetooth, any `threshold` of
+    /// them, with an optional timelocked recovery path. The descriptor is
+    /// then shared with the other signers, who add it by pasting. A Ledger
+    /// among the signers registers the account on its own screen.
+    @discardableResult
+    func createMultisigAccount(name: String, threshold: Int, otherKeys: [String], includeLedger: Bool,
+                               recovery: MultisigAccount.RecoveryPlan?) async throws -> MultisigAccountRecord {
         guard advancedMode else { throw LedgerActionError.advancedModeOnly }
-        guard let name = DisplayName.normalized(name), LedgerWalletPolicy.isValidName(name) else {
+        guard let name = DisplayName.normalized(name), !includeLedger || LedgerWalletPolicy.isValidName(name) else {
             throw LedgerActionError.invalidName
+        }
+        let pasted = otherKeys.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        guard includeLedger else {
+            let descriptor = try MultisigAccount.descriptor(threshold: threshold, signers: [multisigKeyExpression()] + pasted,
+                                                            recovery: recovery, network: network)
+            _ = try multisigAccount(validating: descriptor.serialized())
+            return try await existingOrNewMultisigAccount(name: name, descriptor: descriptor)
         }
         let session = try await ledgerConnector.connect()
         do {
             let client = LedgerBitcoinClient(transport: session)
             let (ledgerKey, fingerprint) = try await LedgerMultisig.signerExpression(client: client, network: network)
-            let descriptor = try MultisigAccount.descriptor(threshold: 2, signers: [multisigKeyExpression(), ledgerKey],
-                                                            network: network)
+            let descriptor = try MultisigAccount.descriptor(threshold: threshold,
+                                                            signers: [multisigKeyExpression()] + pasted + [ledgerKey],
+                                                            recovery: recovery, network: network)
             let account = try multisigAccount(validating: descriptor.serialized())
             let registration = try await LedgerMultisig.register(account, name: name, fingerprint: fingerprint,
                                                                  client: client)
             await session.close()
             // Pairing the same Ledger again yields the same account: refile
             // its registration rather than adding a second copy.
-            let record: MultisigAccountRecord
-            if let existing = multisigAccounts.first(where: { $0.id == account.id }) {
-                record = existing
-            } else {
-                record = try await addMultisigAccount(name: name, descriptor: descriptor.serialized())
-            }
+            let record = try await existingOrNewMultisigAccount(name: name, descriptor: descriptor)
             try await multisigStore.setLedger(id: record.id, registration: registration)
             multisigAccounts = await multisigStore.all
             e2e?.journal("multisig.ledgerPaired", fields: ["id": record.id])
@@ -2364,6 +2383,13 @@ final class AppModel {
             await session.close()
             throw error
         }
+    }
+
+    /// The account already on this phone with this descriptor, or a new one.
+    private func existingOrNewMultisigAccount(name: String, descriptor: Descriptor) async throws -> MultisigAccountRecord {
+        let id = String(descriptor.serialized().suffix(8))
+        if let existing = multisigAccounts.first(where: { $0.id == id }) { return existing }
+        return try await addMultisigAccount(name: name, descriptor: descriptor.serialized())
     }
 
     /// Shows the address at `index` on the Ledger, which must be the one this

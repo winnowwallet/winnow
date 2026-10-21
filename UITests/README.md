@@ -76,7 +76,8 @@ source and run in journey-provenance.json.
 `SIGNET_BANK_PREPARATION_SECONDS` measures host bank preparation, logged in
 `bank-setup.log` in CI or `fixture-prepare.log` in standalone runs.
 `SIGNET_SETUP_SECONDS` measures XCTest's fast chain and
-bank readiness checks; `SIGNET_MULTISIG_SECONDS` measures the multisig leg;
+bank readiness checks; `SIGNET_MULTISIG_SECONDS` measures the multisig leg and
+`SIGNET_RECOVERY_SECONDS` its recovery-path spend after the delay;
 `SIGNET_ORDINARY_SECONDS` measures the payment and
 `SIGNET_JOURNEY_SECONDS` the complete app journey. Xcode reports overall test
 execution separately; compilation is outside that test duration.

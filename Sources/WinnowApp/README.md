@@ -14,7 +14,12 @@ Wallet is the one account and transaction list. Payment details save or rename a
 recipient; Send holds the saved-recipient picker and the amount. The reviewed
 proposal is signed with this phone's key after the owner authenticates.
 Advanced mode keeps coins and the raw descriptor under Technical details, and
-its Wallet tab adds a Multisig section: add a k-of-n account by pasting its
+its Wallet tab adds a Multisig section. "New multisig account"
+([MultisigBuildView](MultisigBuildView.swift)) builds a k-of-n account from
+this phone's key, other signers' pasted keys and optionally a Ledger's, with an
+optional timelocked recovery path, and shows the descriptor for the others to
+join with; the PSBT screen then offers the signers' path or, for coins old
+enough, the recovery path. Or join a k-of-n account by pasting its
 descriptor, receive into it, and create or paste a PSBT that this phone signs,
 combines with other signers' copies, and broadcasts once enough signatures
 verify. "Pair a Ledger" makes a 2-of-2 with a Ledger instead: the Ledger's

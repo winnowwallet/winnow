@@ -31,26 +31,52 @@ public struct LedgerWalletPolicy: Equatable, Sendable {
         self.keys = keys
     }
 
-    /// The account's descriptor as a policy: the internal key is `@0`, the
-    /// signers follow in descriptor order, and each key's `/<0;1>/*` becomes
-    /// `/**`. The template therefore derives exactly the account's addresses.
+    /// The account's descriptor as a policy: the internal key is `@0`, each
+    /// distinct key after it gets the next placeholder in descriptor order,
+    /// `/<0;1>/*` becomes `/**` and a reused signer's `/<2;3>/*` stays as it
+    /// is. The template therefore derives exactly the account's addresses.
     public init(name: String, account: MultisigAccount) throws {
-        guard case let .trTree(internalKey, _) = account.descriptor.expression,
+        guard case let .trTree(internalKey, tree) = account.descriptor.expression,
               case .extended = internalKey.base else {
             throw LedgerError.mismatch("only accounts whose internal key is an extended key can be registered")
         }
-        let placeholders = (1 ... account.signers.count).map { "@\($0)/**" }.joined(separator: ",")
-        let leaf = account.isSorted ? "sortedmulti_a" : "multi_a"
-        let template = "tr(@0/**,\(leaf)(\(account.threshold),\(placeholders)))"
-        let keys = try ([internalKey] + account.signers).map(Self.keyInformation)
-        try self.init(name: name, template: template, keys: keys)
+        var keys = [try Self.keyInformation(internalKey)]
+        func placeholder(_ key: Descriptor.SingleKey) throws -> String {
+            let information = try Self.keyInformation(key)
+            let index = keys.firstIndex(of: information) ?? {
+                keys.append(information)
+                return keys.count - 1
+            }()
+            return key.derivation.elements == MultisigAccount.signerSuffix ? "@\(index)/**" : "@\(index)/<2;3>/*"
+        }
+        func leaf(_ expression: Descriptor.LeafExpression) throws -> String {
+            switch expression {
+            case let .sortedMultiA(threshold, leafKeys):
+                return "sortedmulti_a(\(threshold),\(try leafKeys.map(placeholder).joined(separator: ",")))"
+            case let .multiA(threshold, leafKeys):
+                return "multi_a(\(threshold),\(try leafKeys.map(placeholder).joined(separator: ",")))"
+            case let .timelocked(.pk(key), blocks):
+                return "and_v(v:pk(\(try placeholder(key))),older(\(blocks)))"
+            case let .timelocked(.multiA(threshold, leafKeys), blocks):
+                return "and_v(v:multi_a(\(threshold),\(try leafKeys.map(placeholder).joined(separator: ","))),older(\(blocks)))"
+            case .pk:
+                throw LedgerError.mismatch("a plain pk() leaf is not an account leaf")
+            }
+        }
+        let body: String
+        switch tree {
+        case let .leaf(only): body = try leaf(only)
+        case let .branch(.leaf(left), .leaf(right)): body = "{\(try leaf(left)),\(try leaf(right))}"
+        default: throw LedgerError.mismatch("only one- and two-leaf accounts can be registered")
+        }
+        try self.init(name: name, template: "tr(@0/**,\(body))", keys: keys)
     }
 
     /// `[fingerprint/86'/1'/0']tpub…` with the derivation suffix removed.
     static func keyInformation(_ key: Descriptor.SingleKey) throws -> String {
         guard case let .extended(xpub, network) = key.base, xpub.privateKey == nil,
-              key.derivation.elements == MultisigAccount.signerSuffix else {
-            throw LedgerError.mismatch("every policy key must be an extended public key under /<0;1>/*")
+              [MultisigAccount.signerSuffix, MultisigAccount.recoverySuffix].contains(key.derivation.elements) else {
+            throw LedgerError.mismatch("every policy key must be an extended public key under /<0;1>/* or /<2;3>/*")
         }
         var text = ""
         if let origin = key.origin {

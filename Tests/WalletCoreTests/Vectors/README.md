@@ -31,6 +31,14 @@ case whose template is a `tr()` the descriptor engine supports, including a
 `tomllib` and kept the fields unchanged. [LedgerTests](../LedgerTests.swift)
 recomputes each policy id and address.
 
+`core-timelocked-multisig.json` holds Bitcoin Core 31.1's answers for four
+multipath descriptors with a timelocked recovery leaf (a separate key, the same
+signers on `/<2;3>/*`, a three-block lock and the maximum lock with the recovery
+leaf first): `getdescriptorinfo` checksums and `deriveaddresses` for both
+choices at indices 0 to 2, recorded once on a throwaway regtest node over
+public test keys from Ledger's vectors. [TimelockedMultisigTests](../TimelockedMultisigTests.swift)
+recomputes each.
+
 `difficulty-boundaries.json` holds the period-start, previous, and adjustment
 headers for mainnet heights 32,256 and 901,152. Retrieved on 2026-09-09 through
 [Blockstream's block API](https://github.com/Blockstream/esplora/blob/master/API.md#blocks):

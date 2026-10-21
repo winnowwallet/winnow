@@ -18,7 +18,10 @@ talks to any `LedgerTransport` (Bluetooth in the app, a simulator in tests).
   answers only from data it committed to.
 - `LedgerWalletPolicy` turns an account into a BIP388 wallet policy, template
   `tr(@0/**,sortedmulti_a(2,@1/**,@2/**))` and its key list, with the
-  version-2 serialization and policy id.
+  version-2 serialization and policy id. An account with a recovery path adds
+  its second leaf, a reused signer keeping one placeholder on `/<2;3>/*`:
+  `tr(@0/**,{sortedmulti_a(2,@1/**,@2/**,@3/**),and_v(v:multi_a(1,@1/<2;3>/*,@2/<2;3>/*,@3/<2;3>/*),older(N))})`.
+  Miniscript leaves need the Bitcoin app 2.2 or later.
 - `LedgerBitcoinClient` sends the app's commands: master fingerprint,
   extended public key, register a policy, get or show an address, and sign a
   PSBTv2, whose yielded script-path signatures it decodes.

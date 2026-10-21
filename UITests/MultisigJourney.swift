@@ -4,14 +4,18 @@ import WalletCore
 import XCTest
 
 /// A 2-of-2 script-path multisig account between the phone and Bitcoin Core,
+/// with a recovery leaf letting either one spend a coin 3 blocks old,
 /// through the raw Advanced screens: the phone files the descriptor,
 /// receives into it, creates the PSBT and signs first; Core adds its own
 /// script-path signature with its own libsecp256k1; the phone finalizes and
 /// broadcasts. Core must accept and mine the BIP387 witness the phone's
-/// Swift code assembled.
+/// Swift code assembled. Then, past the delay, the phone alone spends the
+/// change on the recovery path and Core must accept the CSV-locked witness.
 extension WinnowAppUITests {
     nonisolated static let multisigFunding: Int64 = 5_000_000
     nonisolated static let multisigPayment: Int64 = 1_000_000
+    nonisolated static let multisigRecoveryPayment: Int64 = 500_000
+    nonisolated static let multisigRecoveryBlocks: UInt32 = 3
 
     func multisigJourney(in app: XCUIApplication, control: URL) async throws {
         let started = Date()
@@ -27,8 +31,9 @@ extension WinnowAppUITests {
         app.typeInto("multisigNameField", "Phone and Core")
         let keyText = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH '[' AND label CONTAINS ']tpub'")).firstMatch
         XCTAssertTrue(keyText.appears(within: 20), "the Add screen shows no key expression")
-        let descriptor = try MultisigAccount.descriptor(threshold: 2, signers: [keyText.label, core.signerExpression],
-                                                        network: .signet)
+        let descriptor = try MultisigAccount.descriptor(
+            threshold: 2, signers: [keyText.label, core.signerExpression],
+            recovery: .fewerSigners(threshold: 1, blocks: Self.multisigRecoveryBlocks), network: .signet)
         let account = try MultisigAccount(descriptor: descriptor, network: .signet)
         try multisigClipboard(descriptor.serialized(), at: control)
         multisigTap(app, "multisigDescriptorPasteButton")
@@ -83,7 +88,11 @@ extension WinnowAppUITests {
 
         // Core signs its copy with its own key; the phone combines it.
         let signed = try core.process(phoneSigned)
-        XCTAssertEqual(signed.inputs[0].tapScriptSignatures.count, 2, "Core did not sign the script path")
+        let signersLeaf = try XCTUnwrap(signed.inputs[0].tapLeafScripts.first {
+            Multisig.parsePolicy(Script($0.script))?.relativeLock == nil
+        }).leafHash
+        XCTAssertEqual(signed.inputs[0].tapScriptSignatures.keys.filter { $0.leafHash == signersLeaf }.count, 2,
+                       "Core did not sign the signers' leaf")
         XCTAssertEqual(try signed.unsignedTransaction(), unsigned)
         try multisigPaste(app, signed.base64V0(), control: control)
         XCTAssertTrue(poll(timeout: 20, interval: 0.2, "both signatures verify") { count.label == "2 of 2" })
@@ -115,6 +124,59 @@ extension WinnowAppUITests {
         expectMultisigBalance(app, Self.multisigFunding - Self.multisigPayment - fee)
         Screenshots.capture(app, "28-savings-confirmed", testCase: self)
         print("SIGNET_MULTISIG_SECONDS=\(Date().timeIntervalSince(started))")
+        try await multisigRecoveryLeg(app, change: (txid, change.vout, change.height))
+    }
+
+    /// Past the delay, the phone alone spends the change on the recovery path.
+    private func multisigRecoveryLeg(_ app: XCUIApplication, change: (txid: String, vout: Int, height: Int)) async throws {
+        let started = Date()
+        // The next block may spend a coin once it is `blocks` deep.
+        let target = change.height + Int(Self.multisigRecoveryBlocks) - 1
+        while try XCTUnwrap(BitcoinCLI.runJSON(["getblockcount"]) as? Int) < target {
+            try await Self.mineBlock()
+        }
+        let destination = try BitcoinCLI.newAddress(wallet: Self.bankWallet)
+        multisigTap(app, "multisigPSBTButton")
+        let recovery = app.segmentedControls["multisigPathPicker"].buttons["Recovery path"]
+        XCTAssertTrue(scrollUntilExists(app, recovery, up: true), "the spend screen offers no recovery path")
+        recovery.tap()
+        app.typeInto("multisigAddressField", destination)
+        app.typeInto("multisigAmountField", String(Self.multisigRecoveryPayment))
+        // The phone may not have seen the last block yet: create until the coin unlocks.
+        let feeText = app.staticTexts["multisigFee"]
+        XCTAssertTrue(poll(timeout: 90, interval: 3, "the recovery spend is created") {
+            if feeText.exists { return true }
+            let create = app.buttons["multisigCreateButton"]
+            if create.exists, create.isEnabled { create.tap() }
+            return feeText.waitForExistence(timeout: 2)
+        })
+        let count = app.staticTexts["multisigSignatureCount"]
+        XCTAssertTrue(scrollUntilExists(app, count, up: true))
+        XCTAssertEqual(count.label, "0 of 1")
+        multisigTap(app, "multisigSignButton", up: true)
+        XCTAssertTrue(poll(timeout: 20, interval: 0.2, "the phone's recovery signature") { count.label == "1 of 1" })
+
+        let before = Set(try BitcoinCLI.mempoolTxids())
+        multisigTap(app, "multisigBroadcastButton")
+        XCTAssertTrue(app.staticTexts["multisigPaymentSent"].appears(within: 30))
+        var accepted: String?
+        XCTAssertTrue(poll(timeout: 30, interval: 0.2, "Core accepts the recovery spend") {
+            accepted = (try? Set(BitcoinCLI.mempoolTxids()))?.subtracting(before).first
+            return accepted != nil
+        })
+        let txid = try XCTUnwrap(accepted)
+        let transaction = try BitcoinCLI.runObject(["getrawtransaction", txid, "true"])
+        let input = try XCTUnwrap((transaction["vin"] as? [[String: Any]])?.first)
+        XCTAssertEqual(try BitcoinCLI.string(input, "txid"), change.txid)
+        XCTAssertEqual(try BitcoinCLI.int(input, "vout"), change.vout)
+        XCTAssertEqual(try BitcoinCLI.int(input, "sequence"), Int(Self.multisigRecoveryBlocks))
+        let witness = try XCTUnwrap(input["txinwitness"] as? [String])
+        XCTAssertEqual(witness.count, 4, "one signature, one empty slot, the recovery leaf and its control block")
+        XCTAssertEqual(witness.prefix(2).map(\.count).sorted(), [0, 128])
+        XCTAssertEqual(witness.last?.count, 130, "a control block carrying the signers' leaf hash")
+        try await Self.mineBlock()
+        XCTAssertGreaterThan(try BitcoinCLI.int(BitcoinCLI.runObject(["getrawtransaction", txid, "true"]), "confirmations"), 0)
+        print("SIGNET_RECOVERY_SECONDS=\(Date().timeIntervalSince(started))")
     }
 
     nonisolated static var bankWallet: String { SignetFixture.bank }
@@ -130,7 +192,8 @@ extension WinnowAppUITests {
     /// Core's own derivation of the account address at (choice, 0).
     private func coreAddress(_ account: MultisigAccount, choice: Int) throws -> String {
         let body = String(account.descriptor.serialized().split(separator: "#")[0])
-        let single = try Descriptor(body.replacingOccurrences(of: "/<0;1>/*", with: "/\(choice)/*")).serialized()
+        let single = try Descriptor(body.replacingOccurrences(of: "/<0;1>/*", with: "/\(choice)/*")
+            .replacingOccurrences(of: "/<2;3>/*", with: "/\(2 + choice)/*")).serialized()
         let derived = try XCTUnwrap(BitcoinCLI.runJSON(["deriveaddresses", single, "[0,0]"]) as? [String])
         return try XCTUnwrap(derived.first)
     }
@@ -150,7 +213,7 @@ extension WinnowAppUITests {
         let witness = try XCTUnwrap(input["txinwitness"] as? [String])
         XCTAssertEqual(witness.count, 4, "two signatures, the leaf script and the control block")
         XCTAssertEqual(witness.prefix(2).map(\.count), [128, 128], "two 64-byte script-path signatures")
-        XCTAssertEqual(witness.last?.count, 66, "a 33-byte single-leaf control block")
+        XCTAssertEqual(witness.last?.count, 130, "a 65-byte control block carrying the recovery leaf's hash")
 
         let destinationScript = try AddressDecoder.scriptPubKey(for: destination, network: .signet)
         let changeScript = try account.scriptPubKey(index: 0, choice: AddressChain.change.rawValue)
