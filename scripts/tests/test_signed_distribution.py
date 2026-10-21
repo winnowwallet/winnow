@@ -20,11 +20,13 @@ class SignedAppTests(unittest.TestCase):
         self.app = Path(self.tmp.name) / 'WinnowApp.app'
         self.app.mkdir()
         self.info = {'CFBundleShortVersionString': '0.7.9', 'CFBundleVersion': '37',
-                     'CFBundleIdentifier': 'com.btcswift.app', 'CFBundleExecutable': 'WinnowApp'}
+                     'CFBundleIdentifier': 'com.btcswift.app', 'CFBundleExecutable': 'WinnowApp',
+                     'com.apple.developer.nfc.readersession.iso7816.select-identifiers': ['5361746F4368697000']}
         self.entitlements = {'application-identifier': '2858MX5336.com.btcswift.app',
                              'com.apple.developer.team-identifier': '2858MX5336',
                              'com.apple.developer.icloud-container-identifiers': ['iCloud.com.btcswift.app'],
-                             'com.apple.developer.icloud-services': ['CloudKit'], 'get-task-allow': True}
+                             'com.apple.developer.icloud-services': ['CloudKit'],
+                             'com.apple.developer.nfc.readersession.formats': ['TAG'], 'get-task-allow': True}
         env = patch.dict(os.environ, TESTFLIGHT_MARKETING_VERSION='0.7.9', TESTFLIGHT_BUILD_NUMBER='37')
         env.start()
         self.addCleanup(env.stop)
@@ -60,6 +62,15 @@ class SignedAppTests(unittest.TestCase):
         self.entitlements['get-task-allow'] = False
         with self.assertRaises(AssertionError):
             self.verify()
+
+    def test_satochip_reading_is_required(self):
+        for remove in (lambda: self.entitlements.pop('com.apple.developer.nfc.readersession.formats'),
+                       lambda: self.info.pop('com.apple.developer.nfc.readersession.iso7816.select-identifiers')):
+            with self.subTest():
+                self.setUp()
+                remove()
+                with self.assertRaises(AssertionError):
+                    self.verify()
 
     def test_wrong_release_identity_is_rejected(self):
         for field in ('CFBundleShortVersionString', 'CFBundleVersion', 'CFBundleIdentifier'):

@@ -40,6 +40,13 @@ the broadcast. Each round asks for device authentication. Secret nonces stay
 in that screen's memory and are scrubbed when it closes, the app backgrounds or
 the exchange restarts. [MuSig2Store](MuSig2Store.swift) keeps the accounts in a
 sealed `musig2.json` per wallet, scanned with the same filters.
+A Satochip card can be one signer ([AppModel+Satochip.swift](AppModel+Satochip.swift)):
+Add reads its key with a tap and builds the 2-of-2 descriptor, and the PSBT
+screen gains a tap for the card's nonce, a paste of the checker's approvals
+and a tap for its partial signature, each after its PIN. Core NFC reads the
+card ([SatochipReader.swift](SatochipReader.swift)); E2E builds can read one
+served on 127.0.0.1 by the UI test runner instead. The checker and the card
+setup are in [Tools/Checker](../../Tools/Checker/README.md).
 Removing a shortcut preserves
 past labels and fresh-address counters in the existing
 people.json store. Receive shares the wallet’s payment card.

@@ -130,6 +130,32 @@ public enum Satochip {
     }
 }
 
+extension Satochip.SatochipError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .invalidSigningContext: "The card's signing request is malformed."
+        case .invalidTwoFactorKey: "A 2FA secret is 20 bytes."
+        case let .unsupportedVersion(major, minor):
+            "This Satochip runs protocol \(major).\(minor); Winnow needs 0.16."
+        case .notSetUp: "This Satochip has not been set up."
+        case .notSeeded: "This Satochip holds no seed."
+        case .featureDisabled: "This Satochip has the feature Winnow needs turned off."
+        case .pinRequired: "The card needs its PIN."
+        case let .wrongPIN(triesLeft): "Wrong PIN. \(triesLeft) tries left before the card blocks it."
+        case .pinBlocked: "The card's PIN is blocked. Unblock it with the PUK."
+        case .secureChannelLost: "The card left the field. Tap again."
+        case .approvalRequired: "The card has 2FA on: paste the checker's approvals first."
+        case .approvalRefused: "The card refused the approvals: they are not for this payment."
+        case .nonceUnavailable: "The card no longer holds this nonce. Start the exchange again."
+        case .nonceKeyMismatch: "The card's nonce belongs to another key. Start the exchange again."
+        case .keyNotDerived: "The card has no key ready. Tap again."
+        case .commandTooLong: "A card command is too long."
+        case let .malformedResponse(what): "The card sent an unexpected answer (\(what))."
+        case let .cardStatus(word): "The card refused the command (status \(String(format: "%04X", word)))."
+        }
+    }
+}
+
 /// Carries command APDUs to a Satochip and returns its responses: Core NFC on
 /// the phone, the applet simulator over a bridge, or an emulated card in tests.
 public protocol SatochipTransport: Sendable {

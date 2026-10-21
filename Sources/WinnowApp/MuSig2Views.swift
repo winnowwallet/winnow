@@ -100,6 +100,11 @@ struct MuSig2AddView: View {
     @State private var name = ""
     @State private var error: String?
     @State private var saving = false
+    /// The card's key, read with a tap; saved with the account when the
+    /// descriptor names it.
+    @State private var satochipKey: Satochip.ParticipantKey?
+    @State private var askingPIN = false
+    @State private var readingCard = false
 
     private var keyExpression: String? { try? model.muSig2KeyExpression() }
 
@@ -134,6 +139,23 @@ struct MuSig2AddView: View {
                 Text("One musig() participant must be this key. Every participant is an extended public key with its origin and no suffix of its own; the descriptor ends in /<0;1>/*.")
             }
 
+            Section {
+                if let satochipKey {
+                    MuSig2LiteralRow(text: satochipKey.keyExpression(network: model.hdKeyNetwork),
+                                     copyIdentifier: "musig2SatochipKeyCopy")
+                        .accessibilityIdentifier("musig2SatochipKey")
+                }
+                Button(readingCard ? "Reading…" : (satochipKey == nil ? "Read Satochip key" : "Read again")) {
+                    askingPIN = true
+                }
+                .accessibilityIdentifier("musig2SatochipReadButton")
+                .disabled(readingCard)
+            } header: {
+                Text("Satochip card")
+            } footer: {
+                Text("Optional. Tap the card to make a 2-of-2 between this phone and it. Set the card up and turn on its 2FA with the checker first.")
+            }
+
             Section("Descriptor") {
                 TextField("tr(musig(…)/<0;1>/*)", text: $descriptor, axis: .vertical)
                     .font(.system(.caption, design: .monospaced))
@@ -146,6 +168,13 @@ struct MuSig2AddView: View {
                 switch validation {
                 case let .success(account):
                     LabeledContent("Participants", value: String(account.participants.count))
+                    if satochipKey != nil {
+                        Text(satochipRegistration == nil ? "The Satochip read above is not in this descriptor."
+                            : "One participant is the Satochip read above.")
+                            .font(.footnote)
+                            .foregroundStyle(satochipRegistration == nil ? Color.orange : Color.secondary)
+                            .accessibilityIdentifier("musig2SatochipInDescriptor")
+                    }
                     if let address = try? account.address(index: 0) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("First address").font(.caption).foregroundStyle(.secondary)
@@ -167,6 +196,9 @@ struct MuSig2AddView: View {
             }
         }
         .navigationTitle("Add MuSig2 account")
+        .sheet(isPresented: $askingPIN) {
+            SatochipPINSheet(purpose: "Read the card's key") { pin in readCard(pin: pin) }
+        }
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button(saving ? "Saving…" : "Save") { save() }
@@ -177,13 +209,37 @@ struct MuSig2AddView: View {
         }
     }
 
+    private func readCard(pin: String) {
+        readingCard = true
+        error = nil
+        Task {
+            defer { readingCard = false }
+            do {
+                let key = try await model.readSatochipKey(pin: pin)
+                satochipKey = key
+                if descriptor.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    descriptor = try model.muSig2Descriptor(withSatochip: key)
+                }
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    /// The card's registration when the descriptor names its key.
+    private var satochipRegistration: SatochipRegistration? {
+        guard let satochipKey, let account = try? validation?.get() else { return nil }
+        let registration = SatochipRegistration(satochipKey)
+        return registration.belongs(to: account) ? registration : nil
+    }
+
     private func save() {
         saving = true
         error = nil
         Task {
             defer { saving = false }
             do {
-                try await model.addMuSig2Account(name: name, descriptor: descriptor)
+                try await model.addMuSig2Account(name: name, descriptor: descriptor, satochip: satochipRegistration)
                 dismiss()
             } catch {
                 self.error = error.localizedDescription
@@ -209,6 +265,10 @@ struct MuSig2AccountView: View {
                 Section {
                     MuSig2ValueRow(title: "Balance", value: satsText(record.balance), identifier: "musig2Balance")
                     LabeledContent("Signers", value: "\(account.participants.count) of \(account.participants.count)")
+                    if let card = record.satochip {
+                        LabeledContent("Satochip", value: String(format: "%08x", card.masterFingerprint))
+                            .accessibilityIdentifier("musig2AccountSatochip")
+                    }
                 }
                 receiveSection(record, account)
                 Section("Spend") {
@@ -324,6 +384,19 @@ struct MuSig2PSBTView: View {
     @State private var signedThisSession = false
     @State private var operationEpoch = SensitivePresentationEpoch()
     @State private var operationTask: Task<Void, Never>?
+    /// The card's round-1 nonces (public nonce and its encrypted secret
+    /// nonce) for this exchange. The card accepts each once.
+    @State private var cardNonces: [Int: Satochip.CardNonce] = [:]
+    @State private var cardSigned = false
+    @State private var approvals: Satochip.Approvals?
+    @State private var approvalsError: String?
+    @State private var cardAction: CardAction?
+
+    /// What the next card tap does; the PIN sheet asks for it.
+    enum CardAction: String, Identifiable {
+        case nonce, sign
+        var id: String { rawValue }
+    }
 
     private var record: MuSig2AccountRecord? { model.muSig2Accounts.first { $0.id == recordID } }
     private var participantCount: Int? {
@@ -381,6 +454,14 @@ struct MuSig2PSBTView: View {
             if feeRateText.isEmpty { feeRateText = String(format: "%.1f", rate) }
         }
         .task(id: trustedState) { refreshReview() }
+        .sheet(item: $cardAction) { action in
+            SatochipPINSheet(purpose: action == .nonce ? "Add the card's nonce" : "Sign with the card") { pin in
+                switch action {
+                case .nonce: attachCardNonces(pin: pin)
+                case .sign: signWithCard(pin: pin)
+                }
+            }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { clearSensitiveState() }
         }
@@ -480,6 +561,25 @@ struct MuSig2PSBTView: View {
                     .accessibilityIdentifier("musigNonceButton")
                     .disabled(busy || review == nil || nonceSessionStarted
                         || minNonces >= participantCount || minPartials > 0)
+                if record?.satochip != nil {
+                    Button("Tap card for nonce") { cardAction = .nonce }
+                        .accessibilityIdentifier("musig2CardNonceButton")
+                        .disabled(busy || review == nil || !cardNonces.isEmpty
+                            || minNonces >= participantCount || minPartials > 0)
+                    Button(approvals == nil ? "Paste approvals" : "Approvals for \(approvals!.byInput.count) input(s)") {
+                        pasteApprovals()
+                    }
+                    .accessibilityIdentifier("musig2ApprovalsPasteButton")
+                    .disabled(busy || cardSigned)
+                    if let approvalsError {
+                        Text(approvalsError).font(.footnote).foregroundStyle(.red)
+                            .accessibilityIdentifier("musig2ApprovalsError")
+                    }
+                    Button("Tap card to sign") { cardAction = .sign }
+                        .accessibilityIdentifier("musig2CardSignButton")
+                        .disabled(busy || review == nil || cardNonces.isEmpty || cardSigned
+                            || minNonces < participantCount)
+                }
                 Button("Add partial signature") { sign() }
                     .accessibilityIdentifier("musigSignButton")
                     .disabled(busy || review == nil || !nonceSessionStarted || signedThisSession
@@ -503,6 +603,18 @@ struct MuSig2PSBTView: View {
 
     private func nextStep(required: Int) -> String {
         if minPartials >= required { return "Every partial signature is here. Finalize and broadcast." }
+        if record?.satochip != nil {
+            if minNonces < required, cardNonces.isEmpty, nonceSessionStarted || minNonces == 0 {
+                return nonceSessionStarted ? "Tap the card for its nonce. Keep this screen open."
+                    : "Round 1: add this phone's nonce, then tap the card for its nonce."
+            }
+            if minNonces >= required, !cardSigned {
+                return approvals == nil
+                    ? "Copy the PSBT below to the checker, approve it there, then paste the approvals and tap the card to sign."
+                    : "Tap the card to sign, then add this phone's partial signature."
+            }
+            if cardSigned, !signedThisSession { return "The card signed. Add this phone's partial signature." }
+        }
         if signedThisSession { return "Share the PSBT below with the other signers, then combine their partial signatures here." }
         if nonceSessionStarted, minNonces >= required {
             return "Every nonce is here. Check the payment, then add this phone's partial signature. Keep this screen open."
@@ -596,6 +708,43 @@ struct MuSig2PSBTView: View {
         }
     }
 
+    private func attachCardNonces(pin: String) {
+        guard let working, let record else { return }
+        run { token in
+            let result = try await model.attachSatochipNonces(working, record: record, pin: pin)
+            guard accepts(token) else { return }
+            cardNonces = result.nonces
+            install(result.psbt)
+        }
+    }
+
+    private func pasteApprovals() {
+        approvalsError = nil
+        do {
+            let parsed = try Satochip.Approvals(text: model.pasteboardText() ?? "")
+            if let working, parsed.txid != (try working.unsignedTransaction().txid.displayHex) {
+                throw AppModel.MuSig2ActionError.approvalsForAnotherPayment
+            }
+            approvals = parsed
+        } catch {
+            approvals = nil
+            approvalsError = error.localizedDescription
+        }
+    }
+
+    private func signWithCard(pin: String) {
+        guard let working, let record else { return }
+        let nonces = cardNonces
+        let approvals = approvals
+        run { token in
+            let signed = try await model.signWithSatochip(working, record: record, pin: pin, nonces: nonces,
+                                                          approvals: approvals)
+            guard accepts(token) else { return }
+            cardSigned = true
+            install(signed)
+        }
+    }
+
     private func broadcast() {
         guard let working, let record else { return }
         run { token in
@@ -644,7 +793,16 @@ struct MuSig2PSBTView: View {
         AppModel.scrub(&secretNonces)
         nonceSessionStarted = false
         signedThisSession = false
+        clearCardState()
         install(proposal)
+    }
+
+    private func clearCardState() {
+        cardNonces = [:]
+        cardSigned = false
+        approvals = nil
+        approvalsError = nil
+        cardAction = nil
     }
 
     private func clearSensitiveState() {
@@ -655,10 +813,53 @@ struct MuSig2PSBTView: View {
         AppModel.scrub(&secretNonces)
         nonceSessionStarted = false
         signedThisSession = false
+        clearCardState()
         working = nil
         output = nil
         pasted = ""
         review = nil
         reviewError = nil
+    }
+}
+
+
+/// Asks for the card's PIN for one tap. The PIN goes to the card through its
+/// secure channel and is not kept.
+struct SatochipPINSheet: View {
+    let purpose: String
+    let onSubmit: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var pin = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    SecureField("Card PIN", text: $pin)
+                        .textContentType(.oneTimeCode)
+                        .accessibilityIdentifier("satochipPINField")
+                } footer: {
+                    Text("After Continue, hold the Satochip near the top of the iPhone until it is done. Wrong PINs count against the card's limit.")
+                }
+            }
+            .navigationTitle(purpose)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Continue") {
+                        let entered = pin
+                        pin = ""
+                        dismiss()
+                        onSubmit(entered)
+                    }
+                    .accessibilityIdentifier("satochipPINContinue")
+                    .disabled(!(4 ... 16).contains(pin.utf8.count))
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 }

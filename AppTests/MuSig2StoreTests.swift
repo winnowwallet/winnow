@@ -433,4 +433,43 @@ final class MuSig2StoreTests: XCTestCase {
         let all = await store.all
         XCTAssertEqual(all.count, 1)
     }
+
+    /// A card registration is kept with its account, survives a reload, and
+    /// must name one of the account's participants with that participant's origin.
+    func testSatochipRegistrationMustBeAParticipant() async throws {
+        let masters = try TestKeys.masters()
+        let account = try account()
+        let card = try masters[1].derived(path: "m/86'/1'/0'")
+        let path = [86 + HDKey.hardenedOffset, 1 + HDKey.hardenedOffset, HDKey.hardenedOffset]
+        let registration = SatochipRegistration(accountKey: card.publicKey, masterFingerprint: masters[1].fingerprint,
+                                                path: path)
+        let url = tempFileURL("musig2.json")
+        let keys = InMemoryStoreKeyVault()
+        let store = MuSig2Store(keys: keys)
+        await store.configure(storageURL: url, network: .signet)
+
+        let foreign = SatochipRegistration(accountKey: try masters[2].derived(path: "m/86'/1'/0'").publicKey,
+                                           masterFingerprint: masters[2].fingerprint, path: path)
+        let relabelled = SatochipRegistration(accountKey: card.publicKey, masterFingerprint: 0xDEAD_BEEF, path: path)
+        for bad in [foreign, relabelled] {
+            do {
+                try await store.add(name: "Card", account: account, createdAtHeight: 1, satochip: bad)
+                XCTFail("a Satochip that is not this participant was registered")
+            } catch MuSig2StorageError.invalidState {}
+        }
+        let added = try await store.add(name: "Card", account: account, createdAtHeight: 1, satochip: registration)
+        XCTAssertEqual(added.satochip, registration)
+
+        let restarted = MuSig2Store(keys: keys)
+        await restarted.configure(storageURL: url, network: .signet)
+        let reloaded = await restarted.record(id: account.id)
+        XCTAssertEqual(reloaded?.satochip, registration)
+
+        // A record from before cards (no "satochip" key) still reads.
+        var plain = try JSONSerialization.jsonObject(with: JSONEncoder().encode(record(account, coins: []))) as! [String: Any]
+        plain.removeValue(forKey: "satochip")
+        let decoded = try JSONDecoder().decode(MuSig2AccountRecord.self,
+                                               from: JSONSerialization.data(withJSONObject: plain))
+        XCTAssertNil(decoded.satochip)
+    }
 }
