@@ -13,3 +13,12 @@ the APDU flow and its sources are in
 `SatochipMuSig2.swift` encodes the 66-byte signing context the card's Sign
 command takes and the checker's 22-byte approval of it. The BIP327 half lives
 in [MuSig2.swift](../Descriptors/MuSig2.swift) as `partialSignParameters`.
+
+`Satochip.swift` holds the status words and the card status. The secure
+channel (`SatochipSecureChannel.swift`) is ECDH on x coordinates, keys from
+HMAC-SHA1, AES-128-CBC from CommonCrypto and a MAC on commands only; it does
+not check the card's ECDSA signatures. `SatochipSession.swift` is one tap:
+select, channel, PIN, derivation, then nonces or signatures, over any
+`SatochipTransport` (Core NFC in the app, the applet simulator, or
+TestSupport's `SatochipEmulator`). A session never resends into a new
+channel: the card would have lost what it staged.

@@ -75,12 +75,22 @@ public enum Secp256k1 {
             self.point = point
         }
 
+        /// 65 bytes: 0x04, x and y, both below p and on the curve. Smartcards
+        /// exchange points this way (a Satochip's secure channel does).
+        public init(uncompressed bytes: Data) throws {
+            guard let point = Curve.parse(uncompressed: bytes) else { throw Secp256k1Error.invalidPublicKey }
+            self.point = point
+        }
+
         init(point: AffinePoint) {
             self.point = point
         }
 
         /// The 33-byte SEC compressed encoding with the real parity prefix.
         public var compressed: Data { point.compressed }
+
+        /// The 65-byte SEC uncompressed encoding, 0x04 ‖ x ‖ y.
+        public var uncompressed: Data { point.uncompressed }
 
         /// The x coordinate with the point's own parity.
         public var xOnlyKey: XOnlyKey { XOnlyKey(point: point) }

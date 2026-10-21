@@ -35,6 +35,7 @@ configuration and under Xcode.
 | `TestScripts.swift` | `TestScripts.p2trDestination`, `TestScripts.bip86FirstMainnetAddress` |
 | `LedgerSimulator.swift` | A software Ledger Bitcoin app holding a test seed: the device side of the app's interrupt protocol, written from its documentation, checking every proof and preimage the client serves and signing script-path inputs for its own key. It shows the phone's client is consistent, not that a real device agrees |
 | `TestKeys.swift` | `TestKeys.master(entropyByte:)`, `masters()`, and the `keyExpression`/`bareKeyExpression` text that people and label tests paste |
+| `SatochipEmulator.swift` | `SatochipEmulator`: a model of the Satochip applet (protocol 0.16) behind `SatochipTransport`, with the applet's check order and status words; `reset()` is the card leaving the field |
 | `P2P/` | `SyntheticChain`/`makeSyntheticChain`, `minedHeader`, `makeTestParams`, `makeFakeSegwitTx`, `ResumeOnce`, `LoopbackNode`, `LoopbackHTTPServer` |
 | `Node/` | `BitcoinCLI`, `CoreSigner`, `HostProcess`, `SignetMiner`, `SignetFixture`: the custom-signet node and Core as a multisig signer and MuSig2 co-signer, used by the UI journey |
 

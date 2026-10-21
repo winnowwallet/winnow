@@ -1,21 +1,6 @@
 import CryptoKit
 import Foundation
 
-/// A Satochip card (applet protocol 0.16) as a BIP327 cosigner. The card runs
-/// only NonceGen and Sign and never sees the message: the host hands it the
-/// session values ready-made. With 2FA enabled the card signs only when those
-/// values carry an approval made with a key the card holds, so a separate
-/// checker that recomputes them from the PSBT decides what the card signs.
-/// See docs/satochip-musig2.md.
-public enum Satochip {
-    public enum SatochipError: Error, Equatable {
-        /// A signing context is exactly 66 bytes.
-        case invalidSigningContext
-        /// The 2FA secret is exactly 20 bytes (an HMAC-SHA1 key).
-        case invalidTwoFactorKey
-    }
-}
-
 extension Satochip {
     /// The Musig2SignHash (0x7F) OP_FINALIZE data:
     /// b ‖ e·a mod n ‖ R_odd ‖ ggacc_is_one, the flags 0x00 or 0x01 only.
