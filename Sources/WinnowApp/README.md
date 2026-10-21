@@ -17,7 +17,14 @@ Advanced mode keeps coins and the raw descriptor under Technical details, and
 its Wallet tab adds a Multisig section: add a k-of-n account by pasting its
 descriptor, receive into it, and create or paste a PSBT that this phone signs,
 combines with other signers' copies, and broadcasts once enough signatures
-verify. Accounts live in the sealed per-wallet `multisig.json`
+verify. "Pair a Ledger" makes a 2-of-2 with a Ledger instead: the Ledger's
+key comes from its Bitcoin app, the user approves the account on the Ledger,
+"Verify on Ledger" shows a receive address on its screen, and "Sign with
+Ledger" asks it for the second signature
+([LedgerViews](LedgerViews.swift), [LedgerBluetooth](LedgerBluetooth.swift)).
+Every Ledger entry point is in that Advanced-mode section, the model refuses
+Ledger actions in Simple mode, and iOS asks for Bluetooth only when pairing
+starts. Accounts live in the sealed per-wallet `multisig.json`
 ([MultisigStore](MultisigStore.swift)), scanned with the wallet's own filters.
 Removing a shortcut preserves
 past labels and fresh-address counters in the existing

@@ -337,6 +337,9 @@ final class AppModel {
     let keychainAuthentication = KeychainAuthentication()
     let peopleStore: PeopleStore
     let multisigStore: MultisigStore
+    /// How a Ledger signer is reached: Bluetooth on a phone, the simulator in
+    /// app tests.
+    var ledgerConnector: any LedgerConnector = LedgerBluetoothConnector()
     let cloudBackups: CloudBackupController
     private let allowsCloudBackup: Bool
     private var cloudPreparationTask: Task<Void, Never>?
@@ -2304,6 +2307,103 @@ final class AppModel {
             "stage": stage, "base64": psbt.base64,
             "inputCount": String(psbt.inputs.count), "outputCount": String(psbt.outputs.count),
         ])
+    }
+
+    // MARK: - Ledger signer (Advanced mode)
+
+    enum LedgerActionError: LocalizedError, Equatable {
+        case advancedModeOnly
+        case invalidName
+        case notPaired
+
+        var errorDescription: String? {
+            switch self {
+            case .advancedModeOnly:
+                "Ledger signing is part of Advanced mode. Turn on Advanced mode to use it."
+            case .invalidName:
+                "Use a name of 1 to 64 plain letters, digits and punctuation: the Ledger shows it on its screen."
+            case .notPaired:
+                "No Ledger is paired with this account."
+            }
+        }
+    }
+
+    /// Pairs the Ledger as the second signer of a new 2-of-2:
+    /// `tr(NUMS, sortedmulti_a(2, this phone, the Ledger))`. The Ledger's
+    /// key comes from its BIP87 account; the user approves the account on the
+    /// Ledger's screen; the Ledger must derive the phone's first address.
+    @discardableResult
+    func pairLedger(name: String) async throws -> MultisigAccountRecord {
+        guard advancedMode else { throw LedgerActionError.advancedModeOnly }
+        guard let name = DisplayName.normalized(name), LedgerWalletPolicy.isValidName(name) else {
+            throw LedgerActionError.invalidName
+        }
+        let session = try await ledgerConnector.connect()
+        do {
+            let client = LedgerBitcoinClient(transport: session)
+            let (ledgerKey, fingerprint) = try await LedgerMultisig.signerExpression(client: client, network: network)
+            let descriptor = try MultisigAccount.descriptor(threshold: 2, signers: [multisigKeyExpression(), ledgerKey],
+                                                            network: network)
+            let account = try multisigAccount(validating: descriptor.serialized())
+            let registration = try await LedgerMultisig.register(account, name: name, fingerprint: fingerprint,
+                                                                 client: client)
+            await session.close()
+            // Pairing the same Ledger again yields the same account: refile
+            // its registration rather than adding a second copy.
+            let record: MultisigAccountRecord
+            if let existing = multisigAccounts.first(where: { $0.id == account.id }) {
+                record = existing
+            } else {
+                record = try await addMultisigAccount(name: name, descriptor: descriptor.serialized())
+            }
+            try await multisigStore.setLedger(id: record.id, registration: registration)
+            multisigAccounts = await multisigStore.all
+            e2e?.journal("multisig.ledgerPaired", fields: ["id": record.id])
+            return multisigAccounts.first { $0.id == record.id } ?? record
+        } catch {
+            await session.close()
+            throw error
+        }
+    }
+
+    /// Shows the address at `index` on the Ledger, which must be the one this
+    /// phone derives.
+    func verifyLedgerAddress(record: MultisigAccountRecord, index: UInt32) async throws -> String {
+        guard advancedMode else { throw LedgerActionError.advancedModeOnly }
+        guard let registration = record.ledger else { throw LedgerActionError.notPaired }
+        let account = try multisigAccount(for: record)
+        let session = try await ledgerConnector.connect()
+        do {
+            let shown = try await LedgerMultisig.displayAddress(account, registration: registration, index: index,
+                                                                client: LedgerBitcoinClient(transport: session))
+            await session.close()
+            return shown
+        } catch {
+            await session.close()
+            throw error
+        }
+    }
+
+    /// The phone reviews the spend first; the Ledger then shows it on its own
+    /// screen and adds a signature this phone keeps only once it verifies.
+    func signMultisigSpendWithLedger(_ psbt: PSBT, record: MultisigAccountRecord) async throws -> PSBT {
+        guard advancedMode else { throw LedgerActionError.advancedModeOnly }
+        guard let registration = record.ledger else { throw LedgerActionError.notPaired }
+        let account = try multisigAccount(for: record)
+        _ = try reviewMultisigSpend(psbt, record: record)
+        let session = try await ledgerConnector.connect()
+        do {
+            var signed = psbt
+            try await LedgerMultisig.sign(&signed, account: account, registration: registration,
+                                          client: LedgerBitcoinClient(transport: session))
+            await session.close()
+            _ = try reviewMultisigSpend(signed, record: record)
+            journalPSBT(stage: "multisig-ledger-signed", psbt: signed)
+            return signed
+        } catch {
+            await session.close()
+            throw error
+        }
     }
 
     // MARK: - People

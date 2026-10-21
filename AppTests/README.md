@@ -22,6 +22,13 @@ actual locked-device behavior still needs [device evidence](../docs/security/REA
 isolation, atomic persistence, address rotation and relaunch, bounded metadata,
 and exact output matching without creating a sender contact.
 
+`LedgerBluetoothTests` check the Bluetooth transport's decisions without a radio:
+what each Bluetooth state means while connecting, and how notifications reach
+the step in flight. `LedgerPairingTests` drive the app model against the Ledger simulator:
+Ledger actions refused in Simple mode, pairing and re-pairing, the address
+shown on the device, a spend the phone and the Ledger both sign, a refusal on
+the device, and a forged registration refused by the store.
+
 `MultisigStoreTests` checks the sealed `multisig.json`: backups that wait for
 confirmations and refuse a changed coin, payments, spends and reorg rollback
 driven by the filter scan, and tampered, unsealed or oversized files left

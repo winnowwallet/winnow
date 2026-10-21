@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import NativeSecp256k1
 import Testing
@@ -49,14 +50,14 @@ struct MultisigAccountTests {
         let utxo = try Self.funding(account, amount: 100_000)
         let created = try spend(account, utxo)
         let input = created.inputs[0]
-        #expect(input.tapInternalKey == Taproot.unspendableInternalKey)
+        #expect(input.tapInternalKey == (try account.descriptor.resolvedTaproot(index: 0, choice: 0)).internalKey)
         #expect(input.tapLeafScripts.count == 1)
         #expect(input.tapScriptSignatures.isEmpty)
         #expect(input.tapBIP32Derivation.count == 3)
         #expect(input.tapBIP32Derivation.values.allSatisfy { $0.leafHashes.count == 1 })
         let change = created.outputs.first { $0.script == (try? account.scriptPubKey(index: 0, choice: 1)) }
         #expect(change?.tapTree?.count == 1)
-        #expect(change?.tapInternalKey == Taproot.unspendableInternalKey)
+        #expect(change?.tapInternalKey == (try account.descriptor.resolvedTaproot(index: 0, choice: 1)).internalKey)
         #expect(change?.tapBIP32Derivation.count == 3)
 
         let base64 = created.base64
@@ -261,6 +262,61 @@ struct MultisigAccountTests {
         }
         #expect(throws: MultisigAccountError.self) {
             _ = try MultisigAccount("tr(\(signers[0]),sortedmulti_a(2,\(signers[1]),\(signers[2])))", network: .signet)
+        }
+    }
+
+    @Test("new accounts name the internal key as Liana's unspendable xpub on H, which a Ledger can register")
+    func unspendableXpubInternalKey() throws {
+        let (account, _) = try Self.account()
+        guard case let .trTree(internalKey, _) = account.descriptor.expression,
+              case let .extended(xpub, keyNetwork) = internalKey.base else {
+            Issue.record("expected an extended internal key")
+            return
+        }
+        #expect(internalKey.origin == nil)
+        #expect(internalKey.derivation.elements == MultisigAccount.signerSuffix)
+        #expect(keyNetwork == .testnet)
+        #expect(xpub.publicKey == Data([0x02]) + Taproot.unspendableInternalKey)
+        #expect(xpub.depth == 0 && xpub.parentFingerprint == 0 && xpub.childIndex == 0)
+        var concatenated = Data()
+        for signer in account.signers {
+            guard case let .extended(key, _) = signer.base else { continue }
+            concatenated.append(key.publicKey)
+        }
+        #expect(xpub.chainCode == Data(SHA256.hash(data: concatenated)))
+        // Each address commits to a child of H, never H itself, and the
+        // descriptor round-trips through its text form.
+        let first = try account.descriptor.resolvedTaproot(index: 0, choice: 0).internalKey
+        #expect(first != Taproot.unspendableInternalKey)
+        #expect(first != (try account.descriptor.resolvedTaproot(index: 1, choice: 0)).internalKey)
+        let reparsed = try MultisigAccount(account.descriptor.serialized(), network: .signet)
+        #expect(try reparsed.address(index: 3, choice: 1) == account.address(index: 3, choice: 1))
+    }
+
+    @Test("look-alike internal xpubs are refused: a real key, an origin, another suffix, another network (SEC-020)")
+    func unspendableXpubLookAlikesRefused() throws {
+        let masters = try TestKeys.masters()
+        let signers = try masters.map { try TestKeys.keyExpression(master: $0) }
+        let leaf = "sortedmulti_a(2,\(signers.joined(separator: ",")))"
+        let chainCode = Data(repeating: 0x42, count: 32)
+        let nums = HDKey(depth: 0, parentFingerprint: 0, childIndex: 0, chainCode: chainCode, privateKey: nil,
+                         publicKey: Data([0x02]) + Taproot.unspendableInternalKey)
+        let held = try masters[0].derived(path: "m/86'/1'/0'")
+        let realKey = HDKey(depth: 0, parentFingerprint: 0, childIndex: 0, chainCode: chainCode, privateKey: nil,
+                            publicKey: held.publicKey)
+        // Positive control: any chain code on H is accepted.
+        _ = try MultisigAccount("tr(\(nums.serialized(network: .testnet))/<0;1>/*,\(leaf))", network: .signet)
+        let refused = [
+            "\(realKey.serialized(network: .testnet))/<0;1>/*",
+            "[00000000]\(nums.serialized(network: .testnet))/<0;1>/*",
+            "\(nums.serialized(network: .testnet))/0/*",
+            "\(nums.serialized(network: .testnet))",
+            "\(nums.serialized(network: .mainnet))/<0;1>/*",
+        ]
+        for internalKey in refused {
+            #expect(throws: MultisigAccountError.self, "accepted \(internalKey.prefix(12))") {
+                _ = try MultisigAccount("tr(\(internalKey),\(leaf))", network: .signet)
+            }
         }
     }
 

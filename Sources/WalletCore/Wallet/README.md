@@ -13,7 +13,11 @@ WalletCore networking, [key storage](../Keys/README.md), and
 raw k-of-n `tr(NUMS, sortedmulti_a(k, …))` account: the shape and signer checks
 from the shared-account Winnow's audit (SEC-009, SEC-019, SEC-020), spend
 creation, the review every signer repeats before signing (SEC-004),
-signing and finalization. Import bundles carry these accounts under `vaults`;
+signing and finalization. New accounts write the internal key as an xpub on
+the NUMS point, which BIP388 signers such as a Ledger can register; accounts
+with the bare NUMS key still load. A record may carry the registration of its
+[Ledger signer](../Ledger/README.md), checked against the account whenever the
+record is read. Import bundles carry these accounts under `vaults`;
 a bundle carrying any other kind of account is refused rather than restored
 without it. [Account tests](../../../Tests/WalletCoreTests/MultisigAccountTests.swift)
 cover each rule.

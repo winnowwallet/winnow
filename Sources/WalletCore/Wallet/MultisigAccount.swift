@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import NativeSecp256k1
 
@@ -41,10 +42,13 @@ public struct MultisigAccountRecord: Codable, Equatable, Identifiable, Sendable 
     public var nextReceiveIndex: UInt32 = 0
     public var nextChangeIndex: UInt32 = 0
     public var allUtxos: [WalletUTXO] = []
+    /// Present when a Ledger is one of the signers and has registered this
+    /// account; absent in records written before Ledger support.
+    public var ledger: LedgerRegistration?
 
     public init(id: String, name: String, descriptor: String, createdAtHeight: UInt32,
                 nextReceiveIndex: UInt32 = 0, nextChangeIndex: UInt32 = 0,
-                allUtxos: [WalletUTXO] = []) {
+                allUtxos: [WalletUTXO] = [], ledger: LedgerRegistration? = nil) {
         self.id = id
         self.name = name
         self.descriptor = descriptor
@@ -52,13 +56,25 @@ public struct MultisigAccountRecord: Codable, Equatable, Identifiable, Sendable 
         self.nextReceiveIndex = nextReceiveIndex
         self.nextChangeIndex = nextChangeIndex
         self.allUtxos = allUtxos
+        self.ledger = ledger
     }
 
     public var utxos: [WalletUTXO] { allUtxos.filter { !$0.isSpent } }
     public var balance: Int64 { utxos.reduce(0) { $0 + $1.amount } }
 
+    /// A stored Ledger registration must be this account's own policy and
+    /// name one of its signers; anything else is refused with the record.
+    public func checkLedgerRegistration(for account: MultisigAccount) throws {
+        guard let ledger else { return }
+        guard ledger.policyID.count == 32, ledger.hmac.count == 32,
+              LedgerMultisig.ledgerSigner(of: account, fingerprint: ledger.masterFingerprint, path: ledger.keyPath) != nil,
+              (try? LedgerWalletPolicy(name: ledger.policyName, account: account).id) == ledger.policyID else {
+            throw MultisigAccountError.invalidDescriptor("the stored Ledger registration does not belong to this account")
+        }
+    }
+
     private enum CodingKeys: String, CodingKey {
-        case id, name, descriptor, createdAtHeight, nextReceiveIndex, nextChangeIndex
+        case id, name, descriptor, createdAtHeight, nextReceiveIndex, nextChangeIndex, ledger
         case allUtxos = "utxos"
     }
 }
@@ -128,9 +144,7 @@ public struct MultisigAccount: Sendable {
         }
         // SEC-020: with a real internal key, whoever holds it spends alone,
         // whatever the threshold says.
-        guard internalKey.derivation.elements.isEmpty, internalKey.origin == nil,
-              case let .publicKey(raw) = internalKey.base,
-              (raw.count == 32 ? raw : Data(raw.dropFirst())) == Taproot.unspendableInternalKey else {
+        guard Self.isUnspendable(internalKey, network: network) else {
             throw MultisigAccountError.invalidDescriptor(
                 "the internal key can spend on its own, which would bypass the signers it lists")
         }
@@ -157,17 +171,62 @@ public struct MultisigAccount: Sendable {
 
     /// The canonical account descriptor: `tr(NUMS, sortedmulti_a(k, …))`
     /// over the given signer key expressions (`[fp/86'/1'/0']xpub…/<0;1>/*`),
-    /// validated as an account for `network`.
+    /// validated as an account for `network`. The internal key is written as
+    /// an extended key on the NUMS point (`unspendableKeyExpression`), so a
+    /// BIP388 signer such as a Ledger can register the account.
     public static func descriptor(threshold: Int, signers: [String], network: BitcoinNetwork) throws -> Descriptor {
-        let text = "tr(\(Taproot.unspendableInternalKey.hex),sortedmulti_a(\(threshold),\(signers.joined(separator: ","))))"
+        let leaf = "sortedmulti_a(\(threshold),\(signers.joined(separator: ",")))"
         let descriptor: Descriptor
         do {
-            descriptor = try Descriptor(text)
+            let draft = try Descriptor("tr(\(Taproot.unspendableInternalKey.hex),\(leaf))")
+            let internalKey = try unspendableKeyExpression(leafKeys: Array(draft.allKeys.dropFirst()), network: network)
+            descriptor = try Descriptor("tr(\(internalKey),\(leaf))")
+        } catch let error as MultisigAccountError {
+            throw error
         } catch {
             throw MultisigAccountError.invalidDescriptor("a signer key expression does not parse")
         }
         _ = try MultisigAccount(descriptor: descriptor, network: network)
         return descriptor
+    }
+
+    /// BIP388 wallet policies, and so Ledger's Bitcoin app, admit only
+    /// extended keys, never a bare public key. The internal key is therefore
+    /// an xpub on BIP341's NUMS point H, built as Liana builds it: chain code
+    /// SHA-256 of the leaf keys' compressed public keys in descriptor order,
+    /// depth 0, no origin, the shared `/<0;1>/*` suffix. Every child is
+    /// H + t·G for a public t, so no one knows its discrete logarithm.
+    static func unspendableKeyExpression(leafKeys: [Descriptor.SingleKey], network: BitcoinNetwork) throws -> String {
+        var concatenated = Data()
+        for key in leafKeys {
+            guard case let .extended(xpub, _) = key.base else {
+                throw MultisigAccountError.invalidDescriptor("every signer must be an extended public key carrying its origin")
+            }
+            concatenated.append(xpub.publicKey)
+        }
+        let nums = HDKey(depth: 0, parentFingerprint: 0, childIndex: 0, chainCode: Data(SHA256.hash(data: concatenated)),
+                         privateKey: nil, publicKey: Data([0x02]) + Taproot.unspendableInternalKey)
+        return nums.serialized(network: hdNetwork(for: network)) + "/<0;1>/*"
+    }
+
+    /// SEC-020: the internal key must be one nobody can sign for. Two forms
+    /// qualify: the bare NUMS key H (accounts made before Ledger support),
+    /// and an xpub with no origin whose key is H under the signers' suffix,
+    /// on this network. Any chain code is safe: children of H stay unknown
+    /// logarithms. Anything else is a key someone may hold.
+    static func isUnspendable(_ key: Descriptor.SingleKey, network: BitcoinNetwork) -> Bool {
+        guard key.origin == nil else { return false }
+        switch key.base {
+        case let .publicKey(raw):
+            return key.derivation.elements.isEmpty
+                && (raw.count == 32 ? raw : Data(raw.dropFirst())) == Taproot.unspendableInternalKey
+        case let .extended(xpub, keyNetwork):
+            return xpub.privateKey == nil && keyNetwork == hdNetwork(for: network)
+                && xpub.publicKey == Data([0x02]) + Taproot.unspendableInternalKey
+                && key.derivation.elements == signerSuffix
+        case .privateKey:
+            return false
+        }
     }
 
     /// The account's stable identifier: the descriptor's BIP380 checksum.

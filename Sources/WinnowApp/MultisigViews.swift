@@ -6,6 +6,7 @@ import SwiftUI
 /// between signers. Nothing here appears in Simple mode.
 enum MultisigRoute: Hashable {
     case add
+    case pairLedger
     case account(String)
     case psbt(String)
 }
@@ -30,10 +31,12 @@ struct MultisigSection: View {
             }
             NavigationLink(value: MultisigRoute.add) { Text("Add multisig account") }
                 .accessibilityIdentifier("multisigAddButton")
+            NavigationLink(value: MultisigRoute.pairLedger) { Text("Pair a Ledger (2-of-2)") }
+                .accessibilityIdentifier("multisigPairLedgerButton")
         } header: {
             Text("Multisig")
         } footer: {
-            Text("k-of-n Taproot accounts with other signers: tr(NUMS, sortedmulti_a(k, …)) descriptors and PSBTs, nothing more. Any k signers can spend.")
+            Text("k-of-n Taproot accounts with other signers: tr(NUMS, sortedmulti_a(k, …)) descriptors and PSBTs, nothing more. Any k signers can spend. A paired Ledger signs over Bluetooth after showing the payment on its screen.")
         }
     }
 
@@ -41,6 +44,7 @@ struct MultisigSection: View {
     static func destination(_ route: MultisigRoute) -> some View {
         switch route {
         case .add: MultisigAddView()
+        case .pairLedger: LedgerPairView()
         case let .account(id): MultisigAccountView(recordID: id)
         case let .psbt(id): MultisigPSBTView(recordID: id)
         }
@@ -211,6 +215,10 @@ struct MultisigAccountView: View {
                     MultisigValueRow(title: "Balance", value: satsText(record.balance), identifier: "multisigBalance")
                     MultisigValueRow(title: "Policy", value: "\(account.threshold) of \(account.signers.count)",
                                      identifier: "multisigPolicy")
+                    if let ledger = record.ledger {
+                        MultisigValueRow(title: "Ledger", value: String(format: "%08x", ledger.masterFingerprint),
+                                         identifier: "multisigLedgerFingerprint")
+                    }
                 }
                 receiveSection(record, account)
                 Section("Spend") {
@@ -250,6 +258,9 @@ struct MultisigAccountView: View {
                     .frame(maxWidth: 220)
                     .frame(maxWidth: .infinity)
                 MultisigLiteralRow(text: address, copyIdentifier: "multisigReceiveAddressCopy")
+            }
+            if record.ledger != nil {
+                LedgerVerifyAddressButton(record: record, index: record.nextReceiveIndex)
             }
             Button("New address") {
                 Task {
@@ -325,6 +336,13 @@ struct MultisigPSBTView: View {
     private var record: MultisigAccountRecord? { model.multisigAccounts.first { $0.id == recordID } }
     private var account: MultisigAccount? { record.flatMap { try? model.multisigAccount(for: $0) } }
     private var ownPositions: Set<Int> { record.map { model.multisigOwnSignerPositions($0) } ?? [] }
+    /// The paired Ledger's signer position, when the account has one.
+    private var ledgerPosition: Int? {
+        guard let ledger = record?.ledger, let account else { return nil }
+        return account.signers.firstIndex {
+            $0.origin?.fingerprint == ledger.masterFingerprint && $0.origin?.path == ledger.keyPath
+        }
+    }
 
     /// Rechecks the proposal whenever the account's coins or frontiers move.
     private struct TrustedState: Equatable {
@@ -472,6 +490,12 @@ struct MultisigPSBTView: View {
                 Button("Add this phone's signature") { sign() }
                     .accessibilityIdentifier("multisigSignButton")
                     .disabled(busy || review == nil || signedHere || approvals.count >= account.threshold)
+                if let ledgerPosition {
+                    Button("Sign with Ledger") { signWithLedger() }
+                        .accessibilityIdentifier("multisigLedgerSignButton")
+                        .disabled(busy || review == nil || approvals.contains(ledgerPosition)
+                            || approvals.count >= account.threshold)
+                }
                 Button(busy ? "Working…" : "Finalize and broadcast") { broadcast() }
                     .accessibilityIdentifier("multisigBroadcastButton")
                     .disabled(busy || review == nil || approvals.count < account.threshold)
@@ -486,6 +510,11 @@ struct MultisigPSBTView: View {
 
     private func nextStep(threshold: Int, signedHere: Bool) -> String {
         if approvals.count >= threshold { return "Enough signatures verify. Finalize and broadcast." }
+        if let ledgerPosition, !approvals.contains(ledgerPosition) {
+            return signedHere
+                ? "Sign with the Ledger: check the payment on its screen before approving."
+                : "Add this phone's signature and the Ledger's, in either order. Check the payment on the Ledger's screen."
+        }
         if signedHere {
             return "Share the PSBT below with the other signers, then combine their signed copies here."
         }
@@ -557,6 +586,15 @@ struct MultisigPSBTView: View {
         guard let working, let record else { return }
         run { token in
             let signed = try await model.signMultisigSpend(working, record: record)
+            guard accepts(token) else { return }
+            install(signed)
+        }
+    }
+
+    private func signWithLedger() {
+        guard let working, let record else { return }
+        run { token in
+            let signed = try await model.signMultisigSpendWithLedger(working, record: record)
             guard accepts(token) else { return }
             install(signed)
         }
