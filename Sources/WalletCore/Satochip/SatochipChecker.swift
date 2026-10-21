@@ -128,16 +128,7 @@ extension Satochip {
             }
             let outputScripts = Set(psbt.outputs.compactMap(\.script))
             wanted.formUnion(outputScripts)
-            var found: [Data: MuSig2Account.OutputCoordinate] = [:]
-            search: for index in 0 ..< searchLimit {
-                for choice in 0 ... 1 {
-                    let script = try account.scriptPubKey(index: index, choice: choice)
-                    if wanted.contains(script), found[script] == nil {
-                        found[script] = MuSig2Account.OutputCoordinate(choice: choice, index: index)
-                        if found.count == wanted.count { break search }
-                    }
-                }
-            }
+            let found = try coordinates(of: wanted)
             var coins: [WalletUTXO] = []
             for (index, input) in psbt.inputs.enumerated() {
                 guard let spent = input.witnessUTXO, let coordinate = found[spent.scriptPubKey],
@@ -149,6 +140,22 @@ extension Satochip {
             }
             let owned = outputScripts.compactMap { found[$0] }
             return (coins, owned)
+        }
+
+        /// The account coordinates of `scripts`, searched over the first
+        /// `searchLimit` addresses of both chains; scripts not found are absent.
+        private func coordinates(of scripts: Set<Data>) throws -> [Data: MuSig2Account.OutputCoordinate] {
+            var found: [Data: MuSig2Account.OutputCoordinate] = [:]
+            for index in 0 ..< searchLimit {
+                for choice in 0 ... 1 {
+                    let script = try account.scriptPubKey(index: index, choice: choice)
+                    if scripts.contains(script), found[script] == nil {
+                        found[script] = MuSig2Account.OutputCoordinate(choice: choice, index: index)
+                    }
+                }
+                if found.count == scripts.count { break }
+            }
+            return found
         }
     }
 }

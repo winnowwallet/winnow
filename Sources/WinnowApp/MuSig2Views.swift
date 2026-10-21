@@ -600,20 +600,24 @@ struct MuSig2PSBTView: View {
         }
     }
 
+    /// The next step when the account has a Satochip, nil when the phone's own steps apply.
+    private func cardNextStep(required: Int) -> String? {
+        guard record?.satochip != nil else { return nil }
+        if minNonces < required, cardNonces.isEmpty, nonceSessionStarted || minNonces == 0 {
+            return nonceSessionStarted ? "Tap the card for its nonce. Keep this screen open."
+                : "Round 1: add this phone's nonce, then tap the card for its nonce."
+        }
+        if minNonces >= required, !cardSigned {
+            return approvals == nil
+                ? "Copy the PSBT below to the checker, approve it there, then paste the approvals and tap the card to sign."
+                : "Tap the card to sign, then add this phone's partial signature."
+        }
+        return cardSigned && !signedThisSession ? "The card signed. Add this phone's partial signature." : nil
+    }
+
     private func nextStep(required: Int) -> String {
         if minPartials >= required { return "Every partial signature is here. Finalize and broadcast." }
-        if record?.satochip != nil {
-            if minNonces < required, cardNonces.isEmpty, nonceSessionStarted || minNonces == 0 {
-                return nonceSessionStarted ? "Tap the card for its nonce. Keep this screen open."
-                    : "Round 1: add this phone's nonce, then tap the card for its nonce."
-            }
-            if minNonces >= required, !cardSigned {
-                return approvals == nil
-                    ? "Copy the PSBT below to the checker, approve it there, then paste the approvals and tap the card to sign."
-                    : "Tap the card to sign, then add this phone's partial signature."
-            }
-            if cardSigned, !signedThisSession { return "The card signed. Add this phone's partial signature." }
-        }
+        if let step = cardNextStep(required: required) { return step }
         if signedThisSession { return "Share the PSBT below with the other signers, then combine their partial signatures here." }
         if nonceSessionStarted, minNonces >= required {
             return "Every nonce is here. Check the payment, then add this phone's partial signature. Keep this screen open."

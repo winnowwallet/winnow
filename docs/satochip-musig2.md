@@ -1,9 +1,30 @@
 # Satochip as a MuSig2 cosigner
 
-Design note, October 2026. Nothing here is implemented. It asks whether a
-Satochip card can be the first hardware cosigner for the raw MuSig2 accounts of
+Design note, October 2026. It asks whether a Satochip card can be the first
+hardware cosigner for the raw MuSig2 accounts of
 [PR #235](https://github.com/winnowwallet/winnow/pull/235)
 (`native-secp256k1-musig2`, dae4b74), and what building it would take.
+
+## Status
+
+Built on this branch, in the plan's order, with the two shortcuts the owner
+chose for the first build (pysatochip for the card setup, a Mac for the
+checker):
+
+| Step | Where | Evidence |
+| --- | --- | --- |
+| 1 Card-side signing math | `MuSig.partialSignParameters`, `Satochip.signingContext`, `twoFactorApproval` | BIP327 vectors; the card's formula rebuilds every valid partial signature; approval checked against Python |
+| 2 Satochip client | [Sources/WalletCore/Satochip](../Sources/WalletCore/Satochip/README.md) | NIST AES-CBC, channel keys checked against Python, full sessions against `SatochipEmulator` (TestSupport's model of the applet) |
+| 4 Card as a MuSig2 signer | `MuSig2Account` card requests and verified attaches; `SatochipRegistration` on the record | A phone-and-card spend to valid key-path witnesses; refusals for a bad partial and 17 inputs |
+| 5 Checker | `Satochip.Checker`, [`winnow-checker`](../Tools/Checker/README.md) and its setup runbook | Approvals for one payment do not sign another; the CLI prints approvals only after APPROVE |
+| 6 App | `AppModel+Satochip`, `SatochipReader` (Core NFC), the Add and PSBT screens, the NFC entitlement | App build without first-party warnings; store tests |
+| 7 UI journey | `test02SatochipCosigner` | Passed on the local signet: the node mined the phone-and-card spend |
+
+Not yet done: step 3, the real applet in a simulator, which needs a Java
+runtime and jCardSim downloaded; the physical card on an iPhone (step 8,
+waiting on hardware); Seedkeeper support inside Winnow (pysatochip covers
+setup for now); a checker app on a second iPhone. Every test above uses the
+Swift model of the applet, not the applet itself.
 
 The sources were read, not built or run:
 
@@ -518,12 +539,11 @@ run, and Seedkeeper (step 7) is the least known part.
 
 ## First step
 
-Step 1. Port `MuSig.partialSignParameters` from 3200521 onto PR #235's
-`MuSig2.swift`, and add the encoder for the 66 context bytes and the 2FA HMAC
-beside it, with the BIP327-vector test and an HMAC vector. It is pure WalletCore,
-needs no card or simulator, and every later step shares it: the card client, the
-checker, the fake card and the simulator test. Order the hardware (step 0) the
-same day.
+Step 1, now done (see Status): `MuSig.partialSignParameters` ported onto PR
+#235's `MuSig2.swift`, with the encoder for the 66 context bytes and the 2FA
+HMAC beside it. The next steps are the real applet in the simulator harness
+(step 3), so the Swift client is checked against Satochip's own code and not
+only against a model of it, and then the physical card.
 
 [a-cla]: https://github.com/Toporin/SatochipApplet/blob/v0.16-0.1/src/main/java/org/satochip/applet/Satochip.java#L135
 [a-bip327-fields]: https://github.com/Toporin/SatochipApplet/blob/v0.16-0.1/src/main/java/org/satochip/applet/Satochip.java#L434-L461

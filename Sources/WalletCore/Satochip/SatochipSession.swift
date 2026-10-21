@@ -176,23 +176,10 @@ extension Satochip {
         public mutating func generateNonce(aggregateKey: Data?, message: Data?,
                                            extraInput: Data? = nil) async throws -> CardNonce {
             guard derivedPath != nil else { throw SatochipError.keyNotDerived }
-            guard aggregateKey.map({ $0.count == 32 }) ?? true, message.map({ $0.count <= 32 }) ?? true,
-                  extraInput.map({ $0.count <= 32 }) ?? true
-            else { throw SatochipError.cardStatus(0x9C0F) }
-            var data = Data()
-            if let aggregateKey { data.append(32); data.append(aggregateKey) } else { data.append(0) }
-            if let message { data.append(UInt8(message.count)); data.append(message) } else { data.append(0xFF) }
-            if let extraInput { data.append(UInt8(extraInput.count)); data.append(extraInput) } else { data.append(0) }
-            let initial = try await send(0x7E, p1: 0xFF, p2: 0x01, data: data)
-            guard initial.count == 68 else { throw SatochipError.malformedResponse("nonce of \(initial.count) bytes") }
-            let publicNonce = Data(initial.prefix(66))
-            for start in [0, 33] {
-                let point = publicNonce.subdata(in: publicNonce.startIndex + start ..< publicNonce.startIndex + start + 33)
-                guard (try? Secp256k1.PublicKey(compressed: point)) != nil else {
-                    throw SatochipError.malformedResponse("public nonce")
-                }
-            }
-            let id = UInt16(initial[initial.startIndex + 66]) << 8 | UInt16(initial[initial.startIndex + 67])
+            let initial = try await send(0x7E, p1: 0xFF, p2: 0x01,
+                                         data: Self.nonceInput(aggregateKey: aggregateKey, message: message,
+                                                               extraInput: extraInput))
+            let (publicNonce, id) = try Self.parseNonce(initial)
             let blob = try await send(0x7E, p1: 0xFF, p2: 0x03)
             guard blob.count == 144 else { throw SatochipError.malformedResponse("secret nonce of \(blob.count) bytes") }
             return CardNonce(publicNonce: publicNonce, id: id, encryptedSecretNonce: blob)
@@ -218,6 +205,29 @@ extension Satochip {
             let partial = try await send(0x7F, p1: 0xFF, p2: 0x03, data: finalData)
             guard partial.count == 32 else { throw SatochipError.malformedResponse("partial signature") }
             return partial
+        }
+
+        /// NonceGen's OP_INIT data: [len | aggpk][len | msg, or 0xFF for none][len | extra].
+        static func nonceInput(aggregateKey: Data?, message: Data?, extraInput: Data?) throws -> Data {
+            guard aggregateKey.map({ $0.count == 32 }) ?? true, message.map({ $0.count <= 32 }) ?? true,
+                  extraInput.map({ $0.count <= 32 }) ?? true
+            else { throw SatochipError.cardStatus(0x9C0F) }
+            var data = Data([aggregateKey == nil ? 0 : 32]) + (aggregateKey ?? Data())
+            data.append(message.map { UInt8($0.count) } ?? 0xFF)
+            data.append(message ?? Data())
+            data.append(UInt8(extraInput?.count ?? 0))
+            data.append(extraInput ?? Data())
+            return data
+        }
+
+        /// [R1 | R2 | id]: the 66-byte BIP327 public nonce, both points valid, and its id.
+        static func parseNonce(_ initial: Data) throws -> (publicNonce: Data, id: UInt16) {
+            guard initial.count == 68 else { throw SatochipError.malformedResponse("nonce of \(initial.count) bytes") }
+            let bytes = Data(initial)
+            for start in [0, 33] where (try? Secp256k1.PublicKey(compressed: bytes.subdata(in: start ..< start + 33))) == nil {
+                throw SatochipError.malformedResponse("public nonce")
+            }
+            return (bytes.prefix(66), UInt16(bytes[66]) << 8 | UInt16(bytes[67]))
         }
 
         // MARK: - Transport
