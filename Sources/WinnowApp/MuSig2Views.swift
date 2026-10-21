@@ -143,7 +143,6 @@ struct MuSig2AddView: View {
                 if let satochipKey {
                     MuSig2LiteralRow(text: satochipKey.keyExpression(network: model.hdKeyNetwork),
                                      copyIdentifier: "musig2SatochipKeyCopy")
-                        .accessibilityIdentifier("musig2SatochipKey")
                 }
                 Button(readingCard ? "Reading…" : (satochipKey == nil ? "Read Satochip key" : "Read again")) {
                     askingPIN = true

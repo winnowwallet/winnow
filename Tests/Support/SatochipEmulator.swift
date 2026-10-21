@@ -63,7 +63,12 @@ public final class SatochipEmulator: SatochipTransport, @unchecked Sendable {
     }
 
     public func transmit(_ command: Data) async throws -> Satochip.Response {
-        try lock.withLock { try Satochip.Response(raw: process(command)) }
+        try Satochip.Response(raw: respond(to: command))
+    }
+
+    /// One command APDU in, the raw response (data and status word) out.
+    public func respond(to command: Data) -> Data {
+        lock.withLock { process(command) }
     }
 
     /// The card left the field or was reset: everything transient goes.
