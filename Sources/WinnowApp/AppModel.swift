@@ -302,8 +302,7 @@ final class AppModel {
             guard multisigAccounts != oldValue else { return }
             ownedMultisigScripts = Set(multisigAccounts.flatMap { record in
                 let account = try? MultisigAccount(record.descriptor, network: network)
-                let count = max(record.nextReceiveIndex, record.nextChangeIndex) + Wallet.gapLimit
-                return (try? account?.watchScripts(upTo: count)) ?? []
+                return (try? account?.watchScripts(upTo: MultisigStore.watchCount(for: record))) ?? []
             })
         }
     }
@@ -1135,7 +1134,9 @@ final class AppModel {
                 for discarded in walletEffect.discardedReplacements {
                     try await broadcaster.cancel(discarded)
                 }
-                try await multisigStore.apply(match: match, network: network)
+                for discarded in try await multisigStore.apply(match: match, network: network) {
+                    try await broadcaster.cancel(discarded)
+                }
                 let pending = await broadcaster.pendingTxids
                 for tx in match.block.transactions where pending.contains(tx.txid) {
                     // The height rides along so the entry becomes a held

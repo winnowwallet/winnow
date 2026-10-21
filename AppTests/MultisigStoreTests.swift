@@ -36,8 +36,17 @@ final class MultisigStoreTests: XCTestCase {
 
     private func payment(to script: Data, amount: Int64, from outpoint: Transaction.Outpoint,
                          change: Transaction.Output? = nil) -> Transaction {
-        Transaction(version: 2, inputs: [.init(previousOutput: outpoint, scriptSig: Data(), sequence: 0xFFFF_FFFD)],
-                    outputs: [.init(value: amount, scriptPubKey: script)] + (change.map { [$0] } ?? []), locktime: 0)
+        spend(of: [outpoint], [.init(value: amount, scriptPubKey: script)] + (change.map { [$0] } ?? []))
+    }
+
+    private func spend(of outpoints: [Transaction.Outpoint], _ outputs: [Transaction.Output]) -> Transaction {
+        Transaction(version: 2, inputs: outpoints.map { .init(previousOutput: $0, scriptSig: Data(), sequence: 0xFFFF_FFFD) },
+                    outputs: outputs, locktime: 0)
+    }
+
+    /// An outpoint of a transaction this store never saw.
+    private func foreign(_ byte: UInt8) -> Transaction.Outpoint {
+        .init(txid: Data(repeating: byte, count: 32), vout: 0)
     }
 
     func testBackupPreservesAccountsAndRejectsChangedOwnership() async throws {
@@ -91,7 +100,7 @@ final class MultisigStoreTests: XCTestCase {
         await store.configure(storageURL: url, network: .signet)
         let added = try await store.add(name: "Shared", account: account, createdAtHeight: 100)
         let initialScripts = try await store.watchScripts(network: .signet)
-        XCTAssertEqual(initialScripts.count, 6, "receive and change for indices 0, 1 and 2")
+        XCTAssertEqual(initialScripts.count, 2 * Int(Wallet.gapLimit), "receive and change up to the gap limit")
 
         let funding = payment(to: try account.scriptPubKey(index: 0), amount: 60_000,
                               from: .init(txid: Data(repeating: 0x11, count: 32), vout: 0))
@@ -142,6 +151,120 @@ final class MultisigStoreTests: XCTestCase {
         await restarted.configure(storageURL: url, network: .signet)
         let reloaded = await restarted.all
         XCTAssertEqual(reloaded, [current])
+    }
+
+    /// A zero-value output is consensus-valid, and anyone who knows one
+    /// account address can send it. It is not a coin; refusing its block
+    /// instead would fail that block on every later sync pass.
+    func testZeroValueOutputIsIgnoredAndTheScanMovesOn() async throws {
+        let account = try account()
+        let store = MultisigStore(keys: InMemoryStoreKeyVault())
+        await store.configure(storageURL: tempFileURL("multisig.json"), network: .signet)
+        let added = try await store.add(name: "Shared", account: account, createdAtHeight: 100)
+
+        let dust = spend(of: [foreign(0x21)], [.init(value: 0, scriptPubKey: try account.scriptPubKey(index: 1)),
+                                               .init(value: 5_000, scriptPubKey: try account.scriptPubKey(index: 0))])
+        try await store.apply(match: block(at: 101, [dust]), network: .signet)
+        var current = try await fetch(store, added.id)
+        XCTAssertEqual(current.allUtxos.map(\.amount), [5_000], "the zero-value output is not a coin")
+        XCTAssertEqual(current.nextReceiveIndex, 1, "and does not use up its address")
+
+        let later = payment(to: try account.scriptPubKey(index: 1), amount: 7_000, from: foreign(0x22))
+        try await store.apply(match: block(at: 102, [later]), network: .signet)
+        current = try await fetch(store, added.id)
+        XCTAssertEqual(current.balance, 12_000)
+        XCTAssertEqual(current.nextReceiveIndex, 2)
+    }
+
+    /// Another signer's spend of a coin ours also spends confirms instead of
+    /// ours. Ours can never confirm now: its change never existed, the
+    /// inputs the winner left are the account's again, and a spend of that
+    /// change loses with it. A reorg below the winner gives the coins back,
+    /// and ours can still confirm on the new branch.
+    func testALosingInFlightSpendReleasesItsCoinsAndDropsItsChange() async throws {
+        let account = try account()
+        let store = MultisigStore(keys: InMemoryStoreKeyVault())
+        await store.configure(storageURL: tempFileURL("multisig.json"), network: .signet)
+        let added = try await store.add(name: "Shared", account: account, createdAtHeight: 100)
+        let first = payment(to: try account.scriptPubKey(index: 0), amount: 60_000, from: foreign(0x31))
+        let second = payment(to: try account.scriptPubKey(index: 1), amount: 30_000, from: foreign(0x32))
+        try await store.apply(match: block(at: 101, [first, second]), network: .signet)
+        let firstCoin = Transaction.Outpoint(txid: first.txid, vout: 0)
+        let secondCoin = Transaction.Outpoint(txid: second.txid, vout: 0)
+
+        // Ours, broadcast from this phone: both coins in, change at index 0,
+        // then a spend of that change before either confirms.
+        let elsewhere = Data([0x51, 0x20] + repeatElement(0x77, count: 32))
+        let change = { (index: UInt32) in try account.scriptPubKey(index: index, choice: AddressChain.change.rawValue) }
+        let ours = spend(of: [firstCoin, secondCoin], [.init(value: 70_000, scriptPubKey: elsewhere),
+                                                      .init(value: 19_000, scriptPubKey: try change(0))])
+        try await store.recordSpend(id: added.id, transaction: ours, changeIndex: 0)
+        let chained = payment(to: elsewhere, amount: 10_000, from: .init(txid: ours.txid, vout: 1),
+                              change: .init(value: 8_000, scriptPubKey: try change(1)))
+        try await store.recordSpend(id: added.id, transaction: chained, changeIndex: 1)
+        var current = try await fetch(store, added.id)
+        XCTAssertEqual(current.balance, 8_000)
+
+        // Another signer spent the first coin alone, with change to the
+        // change address its own phone had next.
+        let theirs = payment(to: elsewhere, amount: 45_000, from: firstCoin,
+                             change: .init(value: 14_000, scriptPubKey: try change(0)))
+        let discarded = try await store.apply(match: block(at: 102, [theirs]), network: .signet)
+        XCTAssertEqual(discarded, [ours.txid, chained.txid], "the broadcaster stops relaying both")
+        current = try await fetch(store, added.id)
+        XCTAssertEqual(current.allUtxos.first { $0.outpoint == firstCoin }?.spent,
+                       WalletUTXO.SpentMarker(spentBy: theirs.txid, height: 102))
+        XCTAssertEqual(Set(current.utxos.map(\.outpoint)), [secondCoin, .init(txid: theirs.txid, vout: 1)])
+        XCTAssertEqual(current.balance, 44_000)
+        XCTAssertFalse(current.allUtxos.contains { $0.txid == ours.txid || $0.txid == chained.txid },
+                       "the losing spends' outputs never existed")
+        XCTAssertFalse(current.allUtxos.contains { $0.spent != nil && $0.spent?.height == nil },
+                       "nothing stays reserved for a spend that cannot confirm")
+        let backup = try? await store.backupRecords()
+        XCTAssertNotNil(backup, "nothing is left in flight")
+
+        // A reorg below the winner gives both coins back...
+        try await store.rollBack(to: 101)
+        current = try await fetch(store, added.id)
+        XCTAssertEqual(current.balance, 90_000)
+        // ...and on the new branch ours confirms after all.
+        try await store.apply(match: block(at: 102, [ours]), network: .signet)
+        current = try await fetch(store, added.id)
+        XCTAssertEqual(current.utxos.map(\.outpoint), [.init(txid: ours.txid, vout: 1)])
+        XCTAssertEqual(current.balance, 19_000)
+    }
+
+    /// Each signer's phone hands out its own addresses, so a payment can
+    /// land up to the gap limit past this phone's frontier. The store
+    /// watches as far as the wallet does, and the window moves with the
+    /// frontier.
+    func testLookaheadFindsPaymentsUpToTheGapLimitAhead() async throws {
+        let account = try account()
+        let store = MultisigStore(keys: InMemoryStoreKeyVault())
+        await store.configure(storageURL: nil, network: .signet)
+        let added = try await store.add(name: "Shared", account: account, createdAtHeight: 100)
+        let last = Wallet.gapLimit - 1
+        let watched = Set(try await store.watchScripts(network: .signet))
+        XCTAssertTrue(watched.contains(try account.scriptPubKey(index: last)))
+        XCTAssertTrue(watched.contains(try account.scriptPubKey(index: last, choice: AddressChain.change.rawValue)))
+        XCTAssertFalse(watched.contains(try account.scriptPubKey(index: Wallet.gapLimit)))
+
+        let far = payment(to: try account.scriptPubKey(index: last), amount: 9_000, from: foreign(0x41))
+        try await store.apply(match: block(at: 101, [far]), network: .signet)
+        var current = try await fetch(store, added.id)
+        XCTAssertEqual(current.balance, 9_000)
+        XCTAssertEqual(current.nextReceiveIndex, Wallet.gapLimit)
+
+        // The frontier moved, and the window with it.
+        let furthest = 2 * Wallet.gapLimit - 1
+        let receive = payment(to: try account.scriptPubKey(index: furthest), amount: 3_000, from: foreign(0x42))
+        let toChange = payment(to: try account.scriptPubKey(index: furthest, choice: AddressChain.change.rawValue),
+                               amount: 2_000, from: foreign(0x43))
+        try await store.apply(match: block(at: 102, [receive, toChange]), network: .signet)
+        current = try await fetch(store, added.id)
+        XCTAssertEqual(current.balance, 14_000)
+        XCTAssertEqual(current.nextReceiveIndex, 2 * Wallet.gapLimit)
+        XCTAssertEqual(current.nextChangeIndex, 2 * Wallet.gapLimit)
     }
 
     func testTamperedUnsealedAndOversizedFilesAreRefusedAndKept() async throws {

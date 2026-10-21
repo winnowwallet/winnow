@@ -36,16 +36,22 @@ enum MultisigStorageError: Error, Equatable, LocalizedError {
 actor MultisigStore {
     static let maximumAccounts = 100
     /// Prevents a forged persisted index from turning startup into billions of
-    /// child-key derivations.
-    static let maximumWatchCount: UInt32 = 10_000
-    static let maximumNextIndex = maximumWatchCount - 2
+    /// child-key derivations: a record watches at most this many indices
+    /// plus `Wallet.gapLimit`.
+    static let maximumNextIndex: UInt32 = 10_000 - 2
     /// A hundred accounts with ten thousand coins each is far under this.
     static let maximumFileBytes = 16 * 1_024 * 1_024
+
+    typealias OwnerMap = [Data: (choice: Int, index: UInt32)]
 
     private var records: [MultisigAccountRecord] = []
     private var storageURL: URL?
     private var network: BitcoinNetwork = .signet
     private var isDamaged = false
+    /// Each record's owner map, kept until its descriptor or watch count
+    /// changes: every matched block asks for it, and each entry costs a
+    /// derivation per signer plus a taproot tweak.
+    private var ownerMaps: [String: (descriptor: String, watchCount: UInt32, owner: OwnerMap)] = [:]
     private let writeData: @Sendable (Data, URL) throws -> Void
     /// Reads verify and writes seal, under a key the app container cannot
     /// reach. `validate` catches a harmful shape; only the seal catches a
@@ -67,6 +73,7 @@ actor MultisigStore {
         self.network = network
         isDamaged = false
         records = []
+        ownerMaps = [:]
         guard let storageURL, FileManager.default.fileExists(atPath: storageURL.path) else { return .missing }
         do {
             let file = try seal.read(try Self.boundedRead(storageURL), network: network)
@@ -129,6 +136,7 @@ actor MultisigStore {
     func remove(id: String) throws {
         guard !isDamaged else { throw MultisigStorageError.damaged }
         try mutate { $0.removeAll { $0.id == id } }
+        ownerMaps[id] = nil
     }
 
     /// Receive and change scripts of every account, for the combined scan.
@@ -143,19 +151,24 @@ actor MultisigStore {
 
     /// Consumes one matched block like `Wallet.apply`: payments to account
     /// scripts become coins (advancing the address frontiers), spends turn
-    /// coins into tombstones.
-    func apply(match: BlockMatch, network: BitcoinNetwork) throws {
+    /// coins into tombstones. Returns the in-flight spends a conflicting
+    /// transaction in this block beat, which can never confirm, so the
+    /// broadcaster stops relaying them.
+    @discardableResult
+    func apply(match: BlockMatch, network: BitcoinNetwork) throws -> [Data] {
         guard network == self.network else {
             throw MultisigStorageError.invalidState("the account network does not match the open wallet")
         }
         // A damaged store has no records, so nothing here can write over it.
         var candidate = records
         var changed = false
+        var discarded: [Data] = []
         for recordIndex in candidate.indices {
-            let owner = try Self.ownerMap(for: candidate[recordIndex], network: network)
+            let owner = try ownerMap(for: candidate[recordIndex])
             for (txIndex, tx) in match.block.transactions.enumerated() {
                 let txid = tx.txid
-                if Self.applySpends(of: tx, txid: txid, height: match.height, to: &candidate[recordIndex]) {
+                if Self.applySpends(of: tx, txid: txid, height: match.height, to: &candidate[recordIndex],
+                                    discarded: &discarded) {
                     changed = true
                 }
                 // A block's first transaction is its coinbase, and a coinbase
@@ -167,29 +180,40 @@ actor MultisigStore {
                 }
             }
         }
-        guard changed else { return }
+        guard changed else { return [] }
         try Self.validate(candidate, network: network)
         try mutate { $0 = candidate }
+        return discarded
     }
 
-    /// script → (choice, index) for every address the record watches.
-    private static func ownerMap(for record: MultisigAccountRecord, network: BitcoinNetwork)
-        throws -> [Data: (choice: Int, index: UInt32)] {
+    /// script → (choice, index) for every address the record watches, from
+    /// the cache while the record's descriptor and watch count are the ones
+    /// it was built for.
+    private func ownerMap(for record: MultisigAccountRecord) throws -> OwnerMap {
+        let watchCount = Self.watchCount(for: record)
+        if let cached = ownerMaps[record.id], cached.descriptor == record.descriptor,
+           cached.watchCount == watchCount {
+            return cached.owner
+        }
         let account = try MultisigAccount(record.descriptor, network: network)
-        var owner: [Data: (choice: Int, index: UInt32)] = [:]
-        for index in 0 ..< watchCount(for: record) {
+        var owner: OwnerMap = [:]
+        for index in 0 ..< watchCount {
             for choice in 0 ..< 2 {
                 owner[try account.scriptPubKey(index: index, choice: choice)] = (choice, index)
             }
         }
+        ownerMaps[record.id] = (record.descriptor, watchCount, owner)
         return owner
     }
 
     /// Tombstones the record's coins this transaction spends, and learns the
-    /// height of tombstones written while the spend was only in flight.
+    /// height of tombstones written while the spend was only in flight. A
+    /// tombstone naming another transaction means that in-flight spend lost
+    /// the race for the coin, so it is undone and added to `discarded`.
     private static func applySpends(of tx: Transaction, txid: Data, height: UInt32,
-                                    to record: inout MultisigAccountRecord) -> Bool {
+                                    to record: inout MultisigAccountRecord, discarded: inout [Data]) -> Bool {
         var changed = false
+        var losers: [Data] = []
         for input in tx.inputs {
             let outpoint = input.previousOutput
             if let live = record.allUtxos.firstIndex(where: { !$0.isSpent && $0.outpoint == outpoint }) {
@@ -199,23 +223,58 @@ actor MultisigStore {
             } else if let pending = record.allUtxos.firstIndex(where: {
                 $0.spent != nil && $0.spent?.height == nil && $0.outpoint == outpoint
             }) {
-                // Tombstoned when our own spend was broadcast, now confirmed:
-                // the only moment its height can be learned.
+                // Tombstoned when a spend was broadcast, now confirmed: the
+                // only moment its height can be learned. Confirmed by another
+                // transaction (another signer's spend, or a replacement), the
+                // broadcast spend can never confirm.
+                if let loser = record.allUtxos[pending].spent?.spentBy, loser != txid {
+                    losers.append(loser)
+                }
                 record.allUtxos[pending].spent = WalletUTXO.SpentMarker(spentBy: txid, height: height)
                 changed = true
             }
         }
+        // After every input, so a coin both spends took stays the winner's.
+        discarded += dropLosingSpends(losers, from: &record)
         return changed
+    }
+
+    /// Undoes in-flight spends a confirmed conflict beat, as
+    /// `Wallet.reconcilePendingConflict` does: their pending outputs are
+    /// removed, not tombstoned, since no rescan would find them again; the
+    /// inputs the winner did not take are released; and an in-flight spend
+    /// of one of those outputs loses with them. Returns every spend undone.
+    private static func dropLosingSpends(_ losers: [Data], from record: inout MultisigAccountRecord) -> [Data] {
+        var queue = losers
+        var dropped: [Data] = []
+        while !queue.isEmpty {
+            let loser = queue.removeFirst()
+            guard !dropped.contains(loser) else { continue }
+            dropped.append(loser)
+            let neverExisted = { (utxo: WalletUTXO) in utxo.txid == loser && utxo.height == 0 }
+            queue += record.allUtxos.filter(neverExisted).compactMap { utxo in
+                utxo.spent.flatMap { $0.height == nil ? $0.spentBy : nil }
+            }
+            record.allUtxos.removeAll(where: neverExisted)
+            let reservation = WalletUTXO.SpentMarker(spentBy: loser, height: nil)
+            for position in record.allUtxos.indices where record.allUtxos[position].spent == reservation {
+                record.allUtxos[position].spent = nil
+            }
+        }
+        return dropped
     }
 
     /// Admits every watched output as a coin (or re-heights one already
     /// known) and advances the address frontiers.
-    private static func applyOutputs(of tx: Transaction, txid: Data, owner: [Data: (choice: Int, index: UInt32)],
+    private static func applyOutputs(of tx: Transaction, txid: Data, owner: OwnerMap,
                                      height: UInt32, isCoinbase: Bool,
                                      to record: inout MultisigAccountRecord) throws -> Bool {
         var changed = false
         for (vout, output) in tx.outputs.enumerated() {
-            guard let (choice, index) = owner[output.scriptPubKey] else { continue }
+            // Zero-value outputs are consensus-valid and anyone who knows an
+            // account address can send one. They are not coins: admitting one
+            // fails `validate`, and the scan would retry this block forever.
+            guard output.value > 0, let (choice, index) = owner[output.scriptPubKey] else { continue }
             guard vout <= Int(UInt32.max) else {
                 throw MultisigStorageError.invalidState("transaction output index is out of range")
             }
@@ -332,9 +391,12 @@ actor MultisigStore {
 
     // MARK: - Validation and persistence
 
-    /// Indices 0 ..< max(used receive, used change, 1) + 2 of lookahead.
+    /// Indices 0 ..< max(used receive, used change) + `Wallet.gapLimit` on
+    /// both chains: the wallet's own lookahead. Every signer's phone hands
+    /// out addresses, so a payment can land that far past this phone's
+    /// frontier, and `AppModel` counts these scripts as the account's.
     static func watchCount(for record: MultisigAccountRecord) -> UInt32 {
-        max(record.nextReceiveIndex, record.nextChangeIndex, 1) + 2
+        max(record.nextReceiveIndex, record.nextChangeIndex) + Wallet.gapLimit
     }
 
     /// Every record re-derived: a canonical descriptor whose checksum is the
