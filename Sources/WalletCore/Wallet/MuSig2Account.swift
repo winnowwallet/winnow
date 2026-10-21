@@ -430,7 +430,7 @@ public struct MuSig2Account: Sendable {
     }
 
     /// The input's coordinates, from the known coin it spends.
-    private func coin(for psbt: PSBT, input: Int, knownUTXOs: [WalletUTXO]) throws -> WalletUTXO {
+    func coin(for psbt: PSBT, input: Int, knownUTXOs: [WalletUTXO]) throws -> WalletUTXO {
         guard psbt.inputs.indices.contains(input), let txid = psbt.inputs[input].previousTxid,
               let vout = psbt.inputs[input].outputIndex,
               let known = knownUTXOs.first(where: { $0.outpoint == Transaction.Outpoint(txid: txid, vout: vout) })
