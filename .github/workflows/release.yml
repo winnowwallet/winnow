@@ -223,13 +223,13 @@ jobs:
       - name: GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          # This branch ships internal TestFlight builds of the single-key
-          # Winnow: the release is marked pre-release so it never becomes
-          # "latest" and its body says what the build is and is not.
+          # This branch ships internal TestFlight builds of the native Winnow:
+          # the release is marked pre-release so it never becomes "latest"
+          # and its body says what the build is and is not.
           prerelease: true
-          name: "${{ github.ref_name }}: single-key build on native Swift secp256k1 (internal TestFlight)"
+          name: "${{ github.ref_name }}: native Swift secp256k1 with Taproot multisig and a Ledger signer (internal TestFlight)"
           body: |
-            Internal TestFlight build of the single-key Winnow: shared accounts removed, curve math in the in-tree Swift secp256k1 module. Not on the App Store. Do not install it over a Winnow that holds shared-account funds.
+            Internal TestFlight build: curve math in the in-tree Swift secp256k1 module, raw k-of-n Taproot multisig accounts in Advanced mode, and a Ledger as an optional second signer of a 2-of-2 over Bluetooth. No MuSig2 and no shared-account vaults. Not on the App Store. Do not install it over a Winnow that holds MuSig2 or vault funds.
           generate_release_notes: true
           files: |
             supply-chain/winnow.spdx.json
