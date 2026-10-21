@@ -1,0 +1,4 @@
+#!/bin/bash
+# Run the Satochip checker (Tools/Checker) built from this checkout.
+set -euo pipefail
+exec swift run --package-path "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" --quiet winnow-checker "$@"

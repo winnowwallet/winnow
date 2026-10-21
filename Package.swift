@@ -14,6 +14,7 @@ let package = Package(
         .executable(name: "winnow-debug", targets: ["WinnowDebug"]),
         .executable(name: "WinnowFuzz", targets: ["WinnowFuzz"]),
         .executable(name: "winnow-fixture", targets: ["WinnowFixture"]),
+        .executable(name: "winnow-checker", targets: ["WinnowChecker"]),
     ],
     targets: [
         // Pure-Swift secp256k1 for the single-key BIP86 path (variable-time;
@@ -49,6 +50,13 @@ let package = Package(
             dependencies: ["WalletCore"],
             path: "Tools/Debug/Sources/WinnowDebug",
             exclude: ["README.md"]
+        ),
+        // The Satochip checker for a trusted Mac: shows each spend from the
+        // PSBT alone and approves what the card may sign (Tools/Checker).
+        .executableTarget(
+            name: "WinnowChecker",
+            dependencies: ["WalletCore"],
+            path: "Tools/Checker/Sources/WinnowChecker"
         ),
         // The native-secp256k1 target checks the module's own algebra on
         // every input; byte agreement with libsecp256k1 is the vector suite's.
@@ -101,7 +109,7 @@ let package = Package(
         // library one and `swift test` links the tools once.
         .testTarget(
             name: "ToolsTests",
-            dependencies: ["WinnowDebug", "WinnowFuzzCore"],
+            dependencies: ["WinnowDebug", "WinnowFuzzCore", "WinnowChecker", "TestSupport"],
             exclude: ["README.md"],
             resources: [.copy("Cases")]
         ),

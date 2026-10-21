@@ -18,6 +18,7 @@ struct SatochipMuSig2AccountTests {
     let destination = Data([0x51, 0x20] + repeatElement(0x77, count: 32))
 
     struct Setup {
+        let descriptor: String
         let account: MuSig2Account
         let phone: HDKey
         let card: SatochipEmulator
@@ -34,8 +35,8 @@ struct SatochipMuSig2AccountTests {
         let cardKey = try await session.participantKey(path: cardPath)
         let descriptor = "tr(musig(\(try TestKeys.bareKeyExpression(master: phone)),"
             + "\(cardKey.keyExpression(network: .testnet)))/<0;1>/*)"
-        return Setup(account: try MuSig2Account(descriptor, network: .signet), phone: phone, card: card,
-                     cardKey: cardKey)
+        return Setup(descriptor: descriptor, account: try MuSig2Account(descriptor, network: .signet), phone: phone,
+                     card: card, cardKey: cardKey)
     }
 
     /// One tap: connect and derive the card's participant key.
