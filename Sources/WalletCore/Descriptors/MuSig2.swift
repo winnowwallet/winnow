@@ -240,33 +240,56 @@ extension MuSig {
         }
     }
 
+    /// The public half of BIP327 Sign, for a signer that keeps its key and
+    /// nonces outside this process (a Satochip card computes
+    /// k1 + b·k2 + (e·a)·d itself). Every value comes from public session
+    /// data; it says nothing about whether the payment was approved.
+    public struct PartialSignParameters: Equatable, Sendable {
+        /// b, the nonce coefficient.
+        public let nonceCoefficient: Data
+        /// e·a mod n: the challenge times the signer's key coefficient.
+        public let challengeTimesKeyCoefficient: Data
+        /// The session nonce R has odd y, so the signer negates k1 and k2.
+        public let negateNonces: Bool
+        /// g·gacc = −1, so the signer negates its secret key.
+        public let negateSecretKey: Bool
+    }
+
+    /// The `PartialSignParameters` of `publicKey` in `session`, including the
+    /// whole tweak and parity chain. No secret is needed.
+    public static func partialSignParameters(publicKey: Data, session: Session) throws -> PartialSignParameters {
+        let (context, b, noncePoint, challenge) = try session.values()
+        let coefficient = try session.coefficient(of: publicKey)
+        return PartialSignParameters(
+            nonceCoefficient: b,
+            challengeTimesKeyCoefficient: try scalarMultiply(challenge, coefficient),
+            negateNonces: noncePoint.first == 0x03,
+            // d = g · gacc · d′ with g = −1 when the tweaked aggregate key is odd-Y.
+            negateSecretKey: !context.hasEvenY != (context.parityAccumulator != scalarOne))
+    }
+
     /// BIP327 Sign: the 32-byte partial signature. The secret nonce is zeroed
     /// in place — reusing a secnonce across sessions leaks the secret key.
     public static func partialSign(secretNonce: inout Data, secretKey: Data, session: Session) throws -> Data {
         defer { secretNonce.replaceSubrange(secretNonce.startIndex..., with: Data(repeating: 0, count: secretNonce.count)) }
         guard secretNonce.count == 97 else { throw MuSig2Error.invalidNonce }
-        let (context, b, noncePoint, challenge) = try session.values()
         var k1 = secretNonce.prefix(32)
         var k2 = secretNonce.subdata(in: secretNonce.startIndex + 32 ..< secretNonce.startIndex + 64)
         guard Data(k1) != scalarZero, Data(k2) != scalarZero else { throw MuSig2Error.secnonceReused }
-        let nonceIsOdd = noncePoint.first == 0x03
-        if nonceIsOdd { // negate both nonce scalars (BIP327 Sign)
-            k1 = try scalarNegate(Data(k1))
-            k2 = try scalarNegate(Data(k2))
-        }
         let secret = secretKey
         guard secret.count == 32, secret != scalarZero, secret.lexicographicallyPrecedes(groupOrder) else {
             throw MuSig2Error.invalidSecretKey
         }
         let publicKey = try privateToPublic(secret)
         guard publicKey == secretNonce.suffix(33) else { throw MuSig2Error.secnonceMismatch }
-        let coefficient = try session.coefficient(of: publicKey)
-        // d = g · gacc · d′ with g = −1 when the tweaked aggregate key is odd-Y.
-        var effectiveSecret = secret
-        if !context.hasEvenY { effectiveSecret = try scalarNegate(effectiveSecret) }
-        if context.parityAccumulator != scalarOne { effectiveSecret = try scalarNegate(effectiveSecret) }
-        let signaturePart = try scalarMultiply(challenge, scalarMultiply(coefficient, effectiveSecret))
-        return try scalarAdd(Data(k1), scalarAdd(scalarMultiply(b, Data(k2)), signaturePart))
+        let parameters = try partialSignParameters(publicKey: publicKey, session: session)
+        if parameters.negateNonces { // negate both nonce scalars (BIP327 Sign)
+            k1 = try scalarNegate(Data(k1))
+            k2 = try scalarNegate(Data(k2))
+        }
+        let effectiveSecret = parameters.negateSecretKey ? try scalarNegate(secret) : secret
+        let signaturePart = try scalarMultiply(parameters.challengeTimesKeyCoefficient, effectiveSecret)
+        return try scalarAdd(Data(k1), scalarAdd(scalarMultiply(parameters.nonceCoefficient, Data(k2)), signaturePart))
     }
 
     /// BIP327 PartialSigVerify: s·G == R_s + e·a·g·gacc·P with R_s the
