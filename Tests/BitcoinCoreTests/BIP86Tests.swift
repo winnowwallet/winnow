@@ -1,5 +1,5 @@
 import Foundation
-import P256K
+import NativeSecp256k1
 import Testing
 import TestSupport
 @testable import WalletCore
@@ -123,8 +123,8 @@ struct BIP86Tests {
 
             // The tweaked private key must correspond to the tweaked output key.
             let tweakedSecret = try BIP86.tweakedPrivateKey(key.privateKey!)
-            let tweakedXonly = try P256K.Schnorr.PrivateKey(dataRepresentation: tweakedSecret).xonly
-            #expect(Data(tweakedXonly.bytes) == vector.outputKey, "\(vector.path)")
+            let tweakedXonly = try Secp256k1.PrivateKey(tweakedSecret).xOnlyKey.x
+            #expect(tweakedXonly == vector.outputKey, "\(vector.path)")
         }
     }
 }

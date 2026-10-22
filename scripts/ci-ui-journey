@@ -28,7 +28,6 @@ UI_XCODE_ARGS=(
   -destination "platform=iOS Simulator,id=$UI_SIMULATOR_ID"
   -derivedDataPath "$UI_DERIVED_DATA"
   -only-testing:WinnowAppUITests
-  -skipPackagePluginValidation -skipMacroValidation
 )
 if [[ "$UI_SKIP_BUILD" != true ]]; then
   xcodebuild build-for-testing "${UI_XCODE_ARGS[@]}" \
