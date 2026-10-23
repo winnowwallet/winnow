@@ -41,7 +41,15 @@ distinct known coin with that coin's amount and script, the account's
 internal key and exactly its leaves, under a hash type that commits to
 every output; the recovery path is taken exactly when the account has one
 and every input meets its lock, so a mix is the signers' path; and a
-recovery-path review spends only unlocked coins.
+recovery-path review spends only unlocked coins. Nothing else a PSBT says
+about an output, such as BIP371 metadata calling it change, changes what
+review returns. Conversely (`review_complete`), a spend that meets every
+stated rule is accepted, so review refuses only for a reason it names; a
+co-signer's BIP326 spend that mixes sequences is one of them.
+
+The proofs use the standard axioms only (`propext`, `Quot.sound`, and
+`Classical.choice` through `omega` and `simp`); `#print axioms` on any
+theorem shows it.
 
 ## What is assumed
 

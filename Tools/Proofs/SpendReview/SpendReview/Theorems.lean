@@ -1,10 +1,13 @@
 import SpendReview.Model
 
 /-!
-# What an accepted review guarantees
+# What an accepted review guarantees, and that review refuses only for a reason
 
 Proved about the model in `Model.lean`, by induction over the inputs and
-outputs, with Lean core tactics only (`simp`, `omega`, `split`, `cases`).
+outputs, with Lean core tactics only (`simp`, `omega`, `split`, `cases`):
+`review_ok` and its corollaries say what acceptance establishes,
+`review_ignores_output_metadata` that output metadata is never read, and
+`review_complete` that every spend meeting the rules is accepted.
 No `sorry`, `native_decide` or `bv_decide`, so the kernel checks every step.
 
 That the Swift computes the same function is not proved here: the
@@ -370,5 +373,201 @@ theorem every_signature_commits_to_all_outputs {a p known coords tip r} (h : rev
     ∀ x ∈ p.inputs, x.sighash.getD 0 = 0 ∨ x.sighash.getD 0 = 1 := by
   obtain ⟨coins, hall, -, -⟩ := (review_ok h).coins
   exact hall.left fun _ _ hs => hs.hashType
+
+/-! ## What review never reads -/
+
+theorem reviewOutputs_map {owned : List Script} (f : Output → Output)
+    (hamount : ∀ o, (f o).amount = o.amount) (hscript : ∀ o, (f o).script = o.script) :
+    ∀ (outs : List Output) (j : Nat) (total : Int),
+      reviewOutputs owned (outs.map f) j total = reviewOutputs owned outs j total
+  | [], _, _ => rfl
+  | o :: rest, j, total => by
+    simp only [List.map_cons]
+    unfold reviewOutputs
+    rw [hamount o, hscript o]
+    simp only [reviewOutputs_map f hamount hscript rest]
+
+/-- Nothing a PSBT says about an output beyond its amount and script, such
+as BIP371 metadata calling it the account's change, changes what review
+shows or decides (SEC-004). -/
+theorem review_ignores_output_metadata (f : Output → Output)
+    (hamount : ∀ o, (f o).amount = o.amount) (hscript : ∀ o, (f o).script = o.script)
+    (a : Account) (p : Psbt) (known : List Coin) (coords : List (Int × Nat)) (tip : Nat) :
+    review a { p with outputs := p.outputs.map f } known coords tip = review a p known coords tip := by
+  have hpath : spendPath a { p with outputs := p.outputs.map f } = spendPath a p := by
+    unfold spendPath
+    simp [List.any_map, Function.comp_def, hamount, hscript]
+  unfold review
+  simp only [List.map_eq_nil_iff, List.length_map, hpath, reviewOutputs_map f hamount hscript]
+
+/-! ## Review refuses only for a stated reason
+
+The converse of `review_ok`: a spend whose every input is a distinct
+known coin carrying the account's own fields, whose outputs are valid and
+whose fee is within the ceiling is accepted. An over-refusal like SEC-035
+(a co-signer's BIP326 spend refused for mixing sequences) contradicts it. -/
+
+/-- The path `spendPath` takes once the PSBT's fields are present. -/
+def Account.pathFor (a : Account) (p : Psbt) : Path :=
+  match a.recovery with
+  | none => .signers
+  | some b => if p.inputs.all (fun i => lockMet b i.seq p.txVersion) then .recovery else .signers
+
+theorem checkInput_complete {a : Account} {known : List Coin} {tip : Nat} {path : Path} {inp : Input} {k : Coin}
+    (i : Nat) (hs : Spends a known tip path inp k) : checkInput a tip k inp i = .ok () := by
+  have hmature : ¬(k.coinbase = true ∧ tip < k.height + coinbaseMaturity - 1) := by
+    intro ⟨hc, hlt⟩
+    have := hs.mature hc
+    omega
+  unfold checkInput derive
+  simp [hs.amount.1, hs.amount.2, hs.witness, hmature, hs.derived.1, hs.derived.2, hs.hashType, hs.internalKey,
+    List.isPerm_iff.mpr hs.leaves]
+
+theorem Forall2.sum_nonneg {a : Account} {known : List Coin} {tip : Nat} {path : Path} :
+    ∀ {inps : List Input} {coins : List Coin}, Forall2 (Spends a known tip path) inps coins →
+      0 ≤ (coins.map (·.amount)).sum
+  | _, _, .nil => by simp
+  | _, _, .cons hs rest => by
+    have := Forall2.sum_nonneg rest
+    have := hs.amount.1
+    simp only [List.map_cons, List.sum_cons]
+    omega
+
+theorem reviewInputs_complete {a : Account} {known : List Coin} {tip : Nat} {path : Path} :
+    ∀ {inps : List Input} {coins : List Coin} (i : Nat) (seen : List (Nat × Nat)) (total : Int),
+      Forall2 (Spends a known tip path) inps coins →
+      (coins.map fun k => (k.txid, k.vout)).Nodup →
+      (∀ k ∈ coins, (k.txid, k.vout) ∉ seen) →
+      total + (coins.map (·.amount)).sum ≤ maxMoney →
+      reviewInputs a known tip path inps i seen total = .ok (coins, total + (coins.map (·.amount)).sum)
+  | _, _, _, _, total, .nil, _, _, _ => by simp [reviewInputs]
+  | inp :: rest, k :: coins, i, seen, total, .cons hs hrest, hnodup, hfresh, hbound => by
+    obtain ⟨hnot, hnodup'⟩ := List.nodup_cons.mp hnodup
+    have hrestsum := Forall2.sum_nonneg hrest
+    have hunlocked : ¬(path = .recovery ∧ a.unlocked k tip = false) := by
+      intro ⟨hp, hu⟩
+      rw [hs.unlocked hp] at hu
+      cases hu
+    have hfresh' : ∀ k' ∈ coins, (k'.txid, k'.vout) ∉ (k.txid, k.vout) :: seen := by
+      intro k' hk' hmem
+      cases List.mem_cons.mp hmem with
+      | inl he => exact hnot (List.mem_map.mpr ⟨k', hk', he⟩)
+      | inr hin => exact hfresh k' (List.mem_cons_of_mem _ hk') hin
+    simp only [List.map_cons, List.sum_cons] at hbound ⊢
+    have hstep : ¬(maxMoney < total + k.amount) := by omega
+    have hrec := reviewInputs_complete (i + 1) ((k.txid, k.vout) :: seen) (total + k.amount) hrest hnodup' hfresh'
+      (by omega)
+    unfold reviewInputs
+    rw [hs.outpoint.1, hs.outpoint.2]
+    simp only [hfresh k List.mem_cons_self, hs.known,
+      checkInput_complete i hs, hunlocked, hstep, hrec]
+    simp only [ite_false, Except.ok.injEq, Prod.mk.injEq, true_and]
+    omega
+
+theorem deriveAll_complete : ∀ {cs : List (Int × Nat)}, (∀ c ∈ cs, c.2 < 2 ^ 31) →
+    deriveAll cs = .ok (cs.map fun c => Script.account c.1.toNat c.2)
+  | [], _ => rfl
+  | c :: cs, h => by
+    unfold deriveAll derive
+    simp [h c List.mem_cons_self, deriveAll_complete (fun c' hc' => h c' (List.mem_cons_of_mem _ hc'))]
+
+/-- An output review accepts on its own. -/
+def Output.valid (o : Output) : Prop :=
+  ∃ amount script, o.amount = some amount ∧ o.script = some script ∧ 0 < amount ∧ amount ≤ maxMoney ∧ script ≠ .empty
+
+def outputSum (outs : List Output) : Int := (outs.map fun o => o.amount.getD 0).sum
+
+theorem outputSum_nonneg : ∀ {outs : List Output}, (∀ o ∈ outs, o.valid) → 0 ≤ outputSum outs
+  | [], _ => by simp [outputSum]
+  | o :: rest, h => by
+    obtain ⟨amount, _, ha, -, hpos, -⟩ := h o List.mem_cons_self
+    have := outputSum_nonneg (fun o' ho' => h o' (List.mem_cons_of_mem _ ho'))
+    simp only [outputSum, List.map_cons, List.sum_cons, ha, Option.getD_some] at this ⊢
+    omega
+
+theorem reviewOutputs_complete {owned : List Script} :
+    ∀ {outs : List Output} (j : Nat) (total : Int), (∀ o ∈ outs, o.valid) → total + outputSum outs ≤ maxMoney →
+      ∃ shown, reviewOutputs owned outs j total = .ok (shown, total + outputSum outs)
+  | [], _, total, _, _ => ⟨[], by simp [reviewOutputs, outputSum]⟩
+  | o :: rest, j, total, h, hbound => by
+    obtain ⟨amount, script, ha, hs, hpos, hmax, hne⟩ := h o List.mem_cons_self
+    have hrestvalid : ∀ o' ∈ rest, o'.valid := fun o' ho' => h o' (List.mem_cons_of_mem _ ho')
+    have hrestsum := outputSum_nonneg hrestvalid
+    simp only [outputSum, List.map_cons, List.sum_cons, ha, Option.getD_some] at hbound hrestsum ⊢
+    have hbad : ¬(amount ≤ 0 ∨ maxMoney < amount ∨ script = .empty) := by
+      simp only [not_or]
+      exact ⟨by omega, by omega, hne⟩
+    have hstep : ¬(maxMoney < total + amount) := by omega
+    obtain ⟨shown, hrec⟩ := reviewOutputs_complete (owned := owned) (j + 1) (total + amount) hrestvalid
+      (by simp only [outputSum]; omega)
+    refine ⟨⟨amount, script, decide (script ∈ owned)⟩ :: shown, ?_⟩
+    unfold reviewOutputs
+    rw [ha, hs]
+    simp only [outputSum] at hrec
+    simp only [hbad, hstep, ite_false, hrec, Except.ok.injEq, Prod.mk.injEq, true_and]
+    omega
+
+theorem spendPath_complete {a : Account} {p : Psbt}
+    (hin : ∀ x ∈ p.inputs, x.txid.isSome ∧ x.vout.isSome) (hout : ∀ o ∈ p.outputs, o.valid) :
+    spendPath a p = .ok (a.pathFor p) := by
+  have h1 : p.inputs.any (fun i => i.txid.isNone || i.vout.isNone) = false := by
+    simp only [List.any_eq_false, Bool.or_eq_true, not_or]
+    intro x hx
+    obtain ⟨ht, hv⟩ := hin x hx
+    simp [Option.isNone_iff_eq_none, Option.isSome_iff_ne_none.mp ht, Option.isSome_iff_ne_none.mp hv]
+  have h2 : p.outputs.any (fun o => o.amount.isNone || o.script.isNone) = false := by
+    simp only [List.any_eq_false, Bool.or_eq_true, not_or]
+    intro o ho
+    obtain ⟨amount, script, ha, hs, -⟩ := hout o ho
+    simp [ha, hs]
+  unfold spendPath Account.pathFor
+  cases a.recovery with
+  | none => rfl
+  | some b =>
+    simp only [h1, h2, Bool.false_eq_true, ite_false]
+    split <;> rfl
+
+/-- Review accepts every spend that meets its stated rules. -/
+theorem review_complete {a : Account} {p : Psbt} {known : List Coin} {coords : List (Int × Nat)} {tip : Nat}
+    {coins : List Coin}
+    (hin : p.inputs ≠ []) (hout : p.outputs ≠ []) (hcount : p.outputs.length ≤ 1000)
+    (hversion : p.txVersion = 1 ∨ p.txVersion = 2)
+    (hspends : Forall2 (Spends a known tip (a.pathFor p)) p.inputs coins)
+    (hdistinct : (coins.map fun k => (k.txid, k.vout)).Nodup)
+    (hsupply : (coins.map (·.amount)).sum ≤ maxMoney)
+    (hvalid : ∀ o ∈ p.outputs, o.valid)
+    (hcandidates : (distinct (candidateCoordinates coords)).length ≤ 1024)
+    (hderivable : ∀ c ∈ coords, c.2 < 2 ^ 31)
+    (hconserve : outputSum p.outputs ≤ (coins.map (·.amount)).sum)
+    (hfee : (coins.map (·.amount)).sum - outputSum p.outputs ≤ (coins.map (·.amount)).sum / 10) :
+    ∃ r, review a p known coords tip = .ok r := by
+  have hfields : ∀ x ∈ p.inputs, x.txid.isSome ∧ x.vout.isSome :=
+    hspends.left fun x k hs => by simp [hs.outpoint.1, hs.outpoint.2]
+  have hinputs := reviewInputs_complete 0 [] 0 hspends hdistinct (by simp) (by simpa using hsupply)
+  have hderive := deriveAll_complete (cs := candidateCoordinates coords) fun c hc =>
+    hderivable c (List.mem_filter.mp hc).1
+  obtain ⟨shown, houtputs⟩ := reviewOutputs_complete (owned := (candidateCoordinates coords).map
+    fun c => Script.account c.1.toNat c.2) 0 0 hvalid (by have := outputSum_nonneg hvalid; omega)
+  unfold review
+  simp only [hin, hout, false_or, ite_false, Nat.not_lt.mpr hcount, hversion, not_true_eq_false,
+    spendPath_complete hfields hvalid, hinputs, Nat.not_lt.mpr hcandidates, hderive, houtputs]
+  simp only [Int.zero_add]
+  have hc : ¬((coins.map (·.amount)).sum < outputSum p.outputs) := by omega
+  have hf : ¬((coins.map (·.amount)).sum / 10 < (coins.map (·.amount)).sum - outputSum p.outputs) := by omega
+  simp only [hc, hf, ite_false]
+  exact ⟨_, rfl⟩
+
+/-- A co-signer's BIP326 spend mixes sequences that meet the recovery lock
+with ones that do not; with valid coins it is accepted, on the signers'
+path, whatever the coins' ages (SEC-035). -/
+theorem mixed_sequences_accepted {a : Account} {b : Nat} (hb : a.recovery = some b) {p : Psbt}
+    {x : Input} (hx : x ∈ p.inputs) (hlock : lockMet b x.seq p.txVersion = false) :
+    a.pathFor p = .signers := by
+  unfold Account.pathFor
+  rw [hb]
+  have : p.inputs.all (fun i => lockMet b i.seq p.txVersion) = false := by
+    simp only [List.all_eq_false]
+    exact ⟨x, hx, by simp [hlock]⟩
+  simp [this]
 
 end SpendReview

@@ -83,10 +83,14 @@ structure Input where
   leaves : List Leaf
   deriving DecidableEq, Repr, Inhabited
 
-/-- A PSBT output as review reads it. -/
+/-- A PSBT output. `amount` and `script` are what review reads;
+`claimsChange` is whether the PSBT also carries BIP371 metadata (an internal
+key and key origins) saying the output is the account's change, which
+review must ignore (SEC-004). -/
 structure Output where
   amount : Option Int
   script : Option Script
+  claimsChange : Bool := false
   deriving DecidableEq, Repr, Inhabited
 
 structure Psbt where

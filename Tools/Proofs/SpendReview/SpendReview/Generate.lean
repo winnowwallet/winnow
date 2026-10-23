@@ -140,7 +140,9 @@ def baseScenario : Gen Scenario := do
       if withChange ∧ p = 0 then pure (Script.account 1 changeIndex)
       else if ← chance 1 10 then pure (Script.account 0 (← below 5))
       else pure (Script.foreign (← between 1 6)))
-    outputs := outputs ++ [{ amount := some (parts.getD p 0), script := some script }]
+    -- createSpend describes its change; a stranger may describe anything.
+    let claims ← (do if withChange ∧ p = 0 then pure true else chance 1 8)
+    outputs := outputs ++ [{ amount := some (parts.getD p 0), script := some script, claimsChange := claims }]
   let shuffled ← shuffle outputs
   let mut coords : List (Int × Nat) := if ← chance 9 10 then [(1, changeIndex)] else []
   for _ in [0:← below 3] do
@@ -158,7 +160,7 @@ def mutate (s : Scenario) : Gen Scenario := do
   let i ← below s.psbt.inputs.length
   let j ← below s.psbt.outputs.length
   let b := s.blocks
-  match ← below 42 with
+  match ← below 43 with
   | 0 => return (s.updateInput i fun (x : Input) => { x with txid := none }).note "txid absent"
   | 1 => return (s.updateInput i fun (x : Input) => { x with vout := none }).note "vout absent"
   | 2 =>
@@ -279,7 +281,8 @@ def mutate (s : Scenario) : Gen Scenario := do
   | 39 => return (s.updateInput i fun (x : Input) => { x with sighash := none }).note "hash type absent"
   | 40 =>
     let a := maxMoney / 2 + 1
-    return { s with psbt := { s.psbt with outputs := s.psbt.outputs ++ [(⟨some a, some (.foreign 5)⟩ : Output), (⟨some a, some (.foreign 6)⟩ : Output)] } }.note "outputs past the supply"
+    return { s with psbt := { s.psbt with outputs := s.psbt.outputs ++ [(⟨some a, some (.foreign 5), true⟩ : Output), (⟨some a, some (.foreign 6), false⟩ : Output)] } }.note "outputs past the supply"
+  | 41 => return (s.updateOutput j fun (o : Output) => { o with claimsChange := !o.claimsChange }).note "change metadata toggled"
   | _ => return { s with tip := ← pick [0, 1, s.tip + 1000] }.note "tip moved"
 
 /-- Keeps every number inside the Swift type that carries it: heights, the
@@ -343,7 +346,8 @@ def Input.json (x : Input) : Gen String := do
 
 def Output.json (o : Output) : Gen String := do
   return jsonObject [("amount", ← optional toString o.amount),
-    ("script", match o.script with | some s => s.json | none => "null")]
+    ("script", match o.script with | some s => s.json | none => "null"),
+    ("claimsChange", toString o.claimsChange)]
 
 def Reason.json : Reason → String
   | .noInputs => jsonObject [("reason", jsonString "noInputs")]
@@ -409,7 +413,7 @@ def boundaryScenarios : Gen (List Scenario) := do
   let input : Input := { txid := some 1, vout := some 0, sequence := some 0xFFFF_FFFD, sighash := some 0,
                          witness := some (coin.amount, coin.script), internalKey := some (.internal 0 0),
                          leaves := base.account.expectedLeaves 0 0 }
-  let pay (n : Nat) : List Output := (List.range n).map fun k => ⟨some 9_000, some (.foreign (k % 6 + 1))⟩
+  let pay (n : Nat) : List Output := (List.range n).map fun k => ⟨some 9_000, some (.foreign (k % 6 + 1)), k % 7 = 0⟩
   let plain (outs : List Output) (coords : List (Int × Nat)) (note : String) : Scenario :=
     { account := base.account, known := [coin], coords, tip := base.tip,
       psbt := { txVersion := 2, inputs := [input], outputs := outs }, notes := [note] }

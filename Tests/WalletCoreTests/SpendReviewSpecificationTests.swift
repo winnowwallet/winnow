@@ -112,6 +112,7 @@ private struct Vector: Decodable {
     struct Output: Decodable {
         var amount: Field<Int64>
         var script: String?
+        var claimsChange: Bool
     }
 
     struct Shape: Decodable {
@@ -364,8 +365,23 @@ private final class Renderer {
             case .malformed: psbt.outputs[position].set(PSBT.KeyValue(type: PSBT.OutType.amount, value: Data([1, 2, 3, 4])))
             }
             psbt.outputs[position].script = try output.script.map(script)
+            if output.claimsChange { try claimChange(&psbt.outputs[position]) }
         }
         return psbt
+    }
+
+    /// The BIP371 metadata `createSpend` writes on its change, here for
+    /// change index 0 whatever the output pays: the internal key and every
+    /// signer's key origin. Review must ignore it (SEC-004).
+    func claimChange(_ output: inout PSBT.Output) throws {
+        output.tapInternalKey = try leaves("i1/0")[0].internalKey
+        var origins: [Data: PSBT.KeyOrigin] = [:]
+        for signer in account.signers {
+            guard let origin = signer.origin else { continue }
+            let xonly = Data(try account.descriptor.publicKey(of: signer, index: 0, choice: 1).dropFirst())
+            origins[xonly] = PSBT.KeyOrigin(leafHashes: [], masterFingerprint: origin.fingerprint, path: origin.path + [1, 0])
+        }
+        output.tapBIP32Derivation = origins
     }
 
     /// A 4-byte field: absent, the value, or three bytes its getter refuses.
