@@ -102,7 +102,7 @@ jobs:
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           result="$RUNNER_TEMP/winnow-ci/results"
-          xcodebuild -project WinnowApp.xcodeproj -scheme WinnowApp -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath "$result/release" -skipPackagePluginValidation -skipMacroValidation ARCHS=arm64 CODE_SIGNING_ALLOWED=NO build 2>&1 | tee "$result/app/release-build.log"
+          xcodebuild -project WinnowApp.xcodeproj -scheme WinnowApp -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath "$result/release" ARCHS=arm64 CODE_SIGNING_ALLOWED=NO build 2>&1 | tee "$result/app/release-build.log"
           scripts/check-dependencies --xcode "$result/release"
           scripts/check-swift-warnings "$result/app/release-build.log"
           scripts/verify-release-e2e-exclusion "$result/release/Build/Products/Release-iphonesimulator/WinnowApp.app"

@@ -15,9 +15,9 @@ public enum SighashError: Error, Equatable {
 /// with optional annex commitment. Implements the full common signature
 /// message, including the sha_prevouts / sha_amounts / sha_scriptpubkeys /
 /// sha_sequences / sha_outputs precomputed hashes. Key-path mode is verified
-/// against the official BIP341 wallet test vectors; script-path mode against
-/// vectors generated with Bitcoin Core's test framework
-/// (bip341-scriptpath-test-vectors.json).
+/// against the official BIP341 wallet test vectors and is the only mode this
+/// single-key build signs; the script-path extension stays in the message
+/// definition but has no signing caller and no vector suite here.
 public enum SighashBIP341 {
     /// The output spent by an input — the BIP341 sighash commits to amounts
     /// and scriptPubKeys of all spent outputs.

@@ -30,6 +30,9 @@ how `HeaderChainTests` replays real headers past the checkpoint on every
 CI run. Deriving the chainwork itself still needs the full file, so that part
 remains release-time only.
 
+The [native-secp256k1](native-secp256k1/README.md) subdirectory holds the
+independent oracle scripts that regenerate the curve-arithmetic fixtures.
+
 Offline checkpoint tests live in `Tests/ToolsTests/GenerateTests.swift`.
 Peer discovery uses manual peers, saved peers, the census list each release
 ships (`scripts/import-census`), and DNS seeds. No peer list is generated.

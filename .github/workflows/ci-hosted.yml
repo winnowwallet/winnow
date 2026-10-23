@@ -75,6 +75,7 @@ jobs:
           python3 -m unittest discover -s scripts/tests -p test_prepare_site_artifact.py
           python3 -m unittest discover -s scripts/tests -p test_appstore_status.py
           python3 -m unittest discover -s scripts/tests -p test_release_policy.py
+          python3 -m unittest discover -s scripts/tests -p test_supply_chain_metadata.py
 
       - name: Complexity budget and test gates
         if: steps.validate_media.outcome != 'success'
@@ -159,7 +160,6 @@ jobs:
             -configuration Debug \
             -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
             -derivedDataPath "$DERIVED_DATA" \
-            -skipPackagePluginValidation -skipMacroValidation \
             2>&1 | tee "$APP_RESULTS/debug-build.log"
 
       - name: App unit tests (required)
@@ -222,7 +222,6 @@ jobs:
             -configuration Release \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath "$CI_RESULTS/release" \
-            -skipPackagePluginValidation -skipMacroValidation \
             ARCHS=arm64 CODE_SIGNING_ALLOWED=NO build \
             2>&1 | tee "$APP_RESULTS/release-build.log"
           scripts/check-dependencies --xcode "$CI_RESULTS/release"

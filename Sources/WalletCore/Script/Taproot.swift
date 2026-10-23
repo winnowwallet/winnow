@@ -1,6 +1,6 @@
 import CryptoKit
 import Foundation
-import P256K
+import NativeSecp256k1
 
 public enum TaprootError: Error, Equatable {
     case invalidInternalKey
@@ -94,9 +94,8 @@ public enum Taproot {
     {
         guard internalKey.count == 32 else { throw TaprootError.invalidInternalKey }
         let t = tweak(internalKey: internalKey, merkleRoot: merkleRoot)
-        let key = P256K.Schnorr.XonlyKey(dataRepresentation: internalKey)
-        guard let tweaked = try? key.add([UInt8](t)) else { throw TaprootError.tweakFailed }
-        return (Data(tweaked.bytes), tweaked.parity)
+        guard let tweaked = try? Secp256k1.XOnlyKey(internalKey).adding(t) else { throw TaprootError.tweakFailed }
+        return (tweaked.x, tweaked.parity)
     }
 
     /// P2TR scriptPubKey: OP_1 <32-byte output key>.
@@ -170,16 +169,10 @@ public enum Taproot {
     /// 0x50929b74…ace803ac0 (the same construction as the secp256k1-zkp
     /// rangeproof H and Bitcoin Core's taproot tests). Its discrete log is
     /// unknown, so no party can key-path spend a tr(H, TREE) output — spending
-    /// is only possible through the script tree. Used as the internal key of
-    /// k-of-n vault descriptors.
-    public static let unspendableInternalKey: Data = {
-        // G in uncompressed SEC form (secret 1), hashed to derive the x coordinate.
-        let generator = try! P256K.Signing.PrivateKey(
-            dataRepresentation: Data(repeating: 0, count: 31) + Data([0x01]),
-            format: .uncompressed)
-        let x = Data(SHA256.hash(data: generator.publicKey.dataRepresentation))
-        // lift_x must succeed (the BIP341 example point is on the curve).
-        _ = P256K.Schnorr.XonlyKey(dataRepresentation: x)
-        return x
-    }()
+    /// is only possible through the script tree. Incoming script-path spends
+    /// name it in their control blocks.
+    public static let unspendableInternalKey: Data =
+        // G in uncompressed SEC form, hashed to derive the x coordinate; the
+        // BIP341 tests check that lift_x of the result succeeds.
+        Data(SHA256.hash(data: Secp256k1.generatorUncompressed))
 }
