@@ -2,8 +2,8 @@ import SwiftUI
 import WalletCore
 
 /// Builds a k-of-n account from this phone's key, the other signers' keys
-/// (other Winnows show theirs under "This phone's key" when joining) and
-/// optionally a Ledger's, with an optional timelocked recovery path. The
+/// (other Winnows show theirs under "This phone's key" when joining), with
+/// an optional timelocked recovery path. The
 /// finished descriptor is shown to share: every other signer adds the same
 /// account by pasting it under "Join with a descriptor".
 struct MultisigBuildView: View {
@@ -15,7 +15,6 @@ struct MultisigBuildView: View {
     @Environment(AppModel.self) private var model
     @State private var name = ""
     @State private var otherKeys: [String] = []
-    @State private var includeLedger = false
     @State private var threshold = 2
     @State private var withRecovery = false
     @State private var recoveryMode: RecoveryMode = .fewerSigners
@@ -31,7 +30,7 @@ struct MultisigBuildView: View {
         UInt32(min(days * 144, Int(MultisigAccount.maximumRecoveryBlocks)))
     }
 
-    private var signerCount: Int { 1 + otherKeys.count + (includeLedger ? 1 : 0) }
+    private var signerCount: Int { 1 + otherKeys.count }
 
     private var recoveryPlan: MultisigAccount.RecoveryPlan? {
         guard withRecovery else { return nil }
@@ -63,9 +62,7 @@ struct MultisigBuildView: View {
                         .disabled(creating || DisplayName.normalized(name) == nil || signerCount < 2
                             || (withRecovery && recoveryMode == .separateKey && recoveryKey.isEmpty))
                 } footer: {
-                    Text(includeLedger
-                        ? "Open the Bitcoin app on the Ledger (Bitcoin Test on signet), version 2.2.1 or later for a recovery path. It reads the Ledger's key, then asks you to approve the account on the Ledger."
-                        : "Winnow watches the account from the next block it scans.")
+                    Text("Winnow watches the account from the next block it scans.")
                 }
                 if let error {
                     Section { Text(error).font(.footnote).foregroundStyle(.red).accessibilityIdentifier("multisigBuildError") }
@@ -102,8 +99,6 @@ struct MultisigBuildView: View {
                 }
             }
             .accessibilityIdentifier("multisigBuildPasteKeyButton")
-            Toggle("Include a Ledger", isOn: $includeLedger)
-                .accessibilityIdentifier("multisigBuildLedgerToggle")
         } header: {
             Text("Signers · \(signerCount)")
         } footer: {
@@ -177,7 +172,7 @@ struct MultisigBuildView: View {
             defer { creating = false }
             do {
                 created = try await model.createMultisigAccount(name: name, threshold: threshold, otherKeys: otherKeys,
-                                                                includeLedger: includeLedger, recovery: recoveryPlan)
+                                                                recovery: recoveryPlan)
             } catch {
                 self.error = error.localizedDescription
             }

@@ -42,13 +42,10 @@ public struct MultisigAccountRecord: Codable, Equatable, Identifiable, Sendable 
     public var nextReceiveIndex: UInt32 = 0
     public var nextChangeIndex: UInt32 = 0
     public var allUtxos: [WalletUTXO] = []
-    /// Present when a Ledger is one of the signers and has registered this
-    /// account; absent in records written before Ledger support.
-    public var ledger: LedgerRegistration?
 
     public init(id: String, name: String, descriptor: String, createdAtHeight: UInt32,
                 nextReceiveIndex: UInt32 = 0, nextChangeIndex: UInt32 = 0,
-                allUtxos: [WalletUTXO] = [], ledger: LedgerRegistration? = nil) {
+                allUtxos: [WalletUTXO] = []) {
         self.id = id
         self.name = name
         self.descriptor = descriptor
@@ -56,25 +53,13 @@ public struct MultisigAccountRecord: Codable, Equatable, Identifiable, Sendable 
         self.nextReceiveIndex = nextReceiveIndex
         self.nextChangeIndex = nextChangeIndex
         self.allUtxos = allUtxos
-        self.ledger = ledger
     }
 
     public var utxos: [WalletUTXO] { allUtxos.filter { !$0.isSpent } }
     public var balance: Int64 { utxos.reduce(0) { $0 + $1.amount } }
 
-    /// A stored Ledger registration must be this account's own policy and
-    /// name one of its signers; anything else is refused with the record.
-    public func checkLedgerRegistration(for account: MultisigAccount) throws {
-        guard let ledger else { return }
-        guard ledger.policyID.count == 32, ledger.hmac.count == 32,
-              LedgerMultisig.ledgerSigner(of: account, fingerprint: ledger.masterFingerprint, path: ledger.keyPath) != nil,
-              (try? LedgerWalletPolicy(name: ledger.policyName, account: account).id) == ledger.policyID else {
-            throw MultisigAccountError.invalidDescriptor("the stored Ledger registration does not belong to this account")
-        }
-    }
-
     private enum CodingKeys: String, CodingKey {
-        case id, name, descriptor, createdAtHeight, nextReceiveIndex, nextChangeIndex, ledger
+        case id, name, descriptor, createdAtHeight, nextReceiveIndex, nextChangeIndex
         case allUtxos = "utxos"
     }
 }
@@ -228,7 +213,7 @@ public struct MultisigAccount: Sendable {
     /// therefore shared between the leaves, which BIP388 signers such as a
     /// Ledger also require, and a signer finds its key in both leaves by the
     /// same fingerprint and path. Joining with a relabelled signer is refused
-    /// in AppTests/LedgerPairingTests.testBuilderMakesTwoOfThreeWithAnotherWinnowALedgerAndRecovery;
+    /// in AppTests/MultisigAccountFlowTests.testBuilderMakesAccountWithAnotherWinnowAndRecovery;
     /// the other look-alikes are in TimelockedMultisigTests.admissionRefusals.
     private static func recovery(from leaf: Descriptor.LeafExpression, signers: [Descriptor.SingleKey],
                                  network: BitcoinNetwork) throws -> Recovery {
@@ -546,7 +531,7 @@ public struct MultisigAccount: Sendable {
     /// anti-fee-sniping, and a mix can only finish on the signers' leaf.
     /// Exercised by the journey's recovery leg (UITests/MultisigJourney.swift)
     /// and, for a mix across two phones,
-    /// AppTests/LedgerPairingTests.testTwoPhonesSignACoSignersSpendWithBIP326Sequences.
+    /// AppTests/MultisigAccountFlowTests.testTwoPhonesSignACoSignersSpendWithBIP326Sequences.
     func spendPath(of psbt: PSBT) throws -> SpendPath {
         guard let recovery else { return .signers }
         let tx = try psbt.unsignedTransaction()

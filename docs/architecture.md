@@ -3,8 +3,8 @@
 Winnow's app owns the user interaction and device integration. WalletCore
 provides its Bitcoin rules, on top of NativeSecp256k1, Winnow's own Swift
 secp256k1 module. Shared control is limited to two raw account kinds in
-Advanced mode: k-of-n script-path multisig accounts, optionally with a Ledger
-as one signer over Bluetooth, and n-of-n key-path MuSig2 accounts. The app and development
+Advanced mode: k-of-n script-path multisig accounts and n-of-n key-path MuSig2
+accounts. The app and development
 tools use the root [Package.swift](../Package.swift), which declares no
 dependencies, so there is no lockfile.
 

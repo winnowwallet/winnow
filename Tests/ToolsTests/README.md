@@ -15,8 +15,7 @@ Run `swift test --filter ToolsTests` from the repository root.
 [FuzzRegressionTests](FuzzRegressionTests.swift) discover only
 `Cases/<target>/*.bin`; READMEs are not replay inputs.
 [FuzzTargetTests](FuzzTargetTests.swift) run every fuzz target on small inputs,
-and the Ledger target on hostile device frames, client commands and yields, so
-the harness's own checks run under `swift test`.
+so the harness's own checks run under `swift test`.
 [ReferenceSecp256k1Tests](ReferenceSecp256k1Tests.swift) hold the fuzz
 target's second secp256k1 to BIP340's own vectors before it judges the
 native module. Real-network observations
