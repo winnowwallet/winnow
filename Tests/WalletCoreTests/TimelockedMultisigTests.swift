@@ -190,7 +190,7 @@ struct TimelockedMultisigTests {
 
     // The app tests cannot age coins against a chain tip, so this case stays
     // here; a mix of sequences is walked across two phones in
-    // AppTests/LedgerPairingTests.testTwoPhonesSignACoSignersSpendWithBIP326Sequences.
+    // AppTests/MultisigAccountFlowTests.testTwoPhonesSignACoSignersSpendWithBIP326Sequences.
     @Test("a co-signer's BIP326 sequences on old coins: either leaf could finish it, the signers still do")
     func bip326OldCoins() throws {
         let masters = try TestKeys.masters()

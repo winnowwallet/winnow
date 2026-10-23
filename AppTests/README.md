@@ -29,11 +29,14 @@ Ledger actions refused in Simple mode, pairing and re-pairing, the address
 shown on the device, a spend the phone and the Ledger both sign with the
 signing screen's counts and next step checked at each step, a device whose
 signatures name the wrong leaf, a refusal on the device, a forged registration
-refused by the store, and the account builder: two Winnows and a Ledger in a
-2-of-3 with a recovery path, joining refused when the recovery leaf relabels a
-signer, a separate recovery key, two phones signing a co-signer's spend with
-BIP326 sequences, young coins refused on the recovery path, and nothing in
-Simple mode.
+refused by the store, and the account builder with a Ledger among the signers:
+two Winnows and a Ledger in a 2-of-3 with a recovery path.
+
+`MultisigAccountFlowTests` drive the account builder and spend signing through
+the app model with no hardware signer: two Winnows in a 2-of-2 with a recovery
+path, joining refused when the recovery leaf relabels a signer, a separate
+recovery key, two phones signing a co-signer's spend with BIP326 sequences,
+young coins refused on the recovery path, and nothing in Simple mode.
 
 `MultisigStoreTests` checks the sealed `multisig.json`: backups that wait for
 confirmations and refuse a changed coin, payments, spends and reorg rollback

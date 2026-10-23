@@ -2222,7 +2222,7 @@ final class AppModel {
     /// phone and its paired Ledger still need to add. Exercised on screen by
     /// the signet journey (UITests/MultisigJourney.swift), and step by step by
     /// AppTests/LedgerPairingTests.testPairVerifyAndSpendWithBothSigners and
-    /// testTwoPhonesSignACoSignersSpendWithBIP326Sequences.
+    /// AppTests/MultisigAccountFlowTests.testTwoPhonesSignACoSignersSpendWithBIP326Sequences.
     func multisigSigningScreen(_ psbt: PSBT, record: MultisigAccountRecord) throws -> MultisigSigningScreen {
         let account = try multisigAccount(for: record)
         let review = try reviewMultisigSpend(psbt, record: record)

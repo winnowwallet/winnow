@@ -228,7 +228,7 @@ public struct MultisigAccount: Sendable {
     /// therefore shared between the leaves, which BIP388 signers such as a
     /// Ledger also require, and a signer finds its key in both leaves by the
     /// same fingerprint and path. Joining with a relabelled signer is refused
-    /// in AppTests/LedgerPairingTests.testBuilderMakesTwoOfThreeWithAnotherWinnowALedgerAndRecovery;
+    /// in AppTests/MultisigAccountFlowTests.testBuilderMakesAccountWithAnotherWinnowAndRecovery;
     /// the other look-alikes are in TimelockedMultisigTests.admissionRefusals.
     private static func recovery(from leaf: Descriptor.LeafExpression, signers: [Descriptor.SingleKey],
                                  network: BitcoinNetwork) throws -> Recovery {
@@ -546,7 +546,7 @@ public struct MultisigAccount: Sendable {
     /// anti-fee-sniping, and a mix can only finish on the signers' leaf.
     /// Exercised by the journey's recovery leg (UITests/MultisigJourney.swift)
     /// and, for a mix across two phones,
-    /// AppTests/LedgerPairingTests.testTwoPhonesSignACoSignersSpendWithBIP326Sequences.
+    /// AppTests/MultisigAccountFlowTests.testTwoPhonesSignACoSignersSpendWithBIP326Sequences.
     func spendPath(of psbt: PSBT) throws -> SpendPath {
         guard let recovery else { return .signers }
         let tx = try psbt.unsignedTransaction()
