@@ -14,10 +14,13 @@ consumers, and so is its BIP327 MuSig2: key aggregation, nonces, partial
 signatures and their aggregation. For MuSig2 the module also exposes plain
 arithmetic, `Secp256k1.ScalarModN` (zero allowed, unlike a private key) and
 point addition, negation and multiplication on `PublicKey`, each returning
-nil for the point at infinity. A script-path multisig signature is an
+nil for the point at infinity. `PublicKey` also reads and writes the 65-byte
+uncompressed encoding a Satochip card exchanges; WalletCore builds that card's
+secure-channel ECDH from point multiplication with a single-use key, so the
+module itself has no ECDH function. A script-path multisig signature is an
 ordinary BIP340 signature with an untweaked key over the script-path sighash,
-so multisig accounts need nothing more from this module. ECDSA and ECDH are
-out of scope.
+so multisig accounts need nothing more from this module. ECDSA is out of
+scope.
 
 ## Limits
 

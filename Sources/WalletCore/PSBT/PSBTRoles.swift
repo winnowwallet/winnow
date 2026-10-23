@@ -390,6 +390,23 @@ extension PSBT {
         inputs[index].musig2PartialSigs = partials
     }
 
+    /// Round 2 for a signer outside this process (a Satochip card): its
+    /// partial signature is attached only after it verifies against that
+    /// signer's own nonce and key in `session`.
+    public mutating func attachMuSig2PartialSignature(input index: Int, id: MuSig2KeyID, partialSignature: Data,
+                                                      session: MuSig.Session) throws {
+        guard inputs.indices.contains(index) else { throw PSBTError.missingField("input \(index)") }
+        guard let nonce = inputs[index].musig2PubNonces[id] else {
+            throw PSBTError.missingField("input \(index) musig2 nonce for \(id.participant.hex)")
+        }
+        guard try MuSig.partialVerify(partialSignature: partialSignature, publicNonce: nonce,
+                                      publicKey: id.participant, session: session)
+        else { throw PSBTError.malformed("invalid partial signature from \(id.participant.hex)") }
+        var partials = inputs[index].musig2PartialSigs
+        partials[id] = partialSignature
+        inputs[index].musig2PartialSigs = partials
+    }
+
     /// Aggregation (BIP327 PartialSigAgg): verifies every partial, combines
     /// them into the 64-byte BIP340 signature over the tweaked aggregate key
     /// and stores it as PSBT_IN_TAP_KEY_SIG, ready for `finalize()`.

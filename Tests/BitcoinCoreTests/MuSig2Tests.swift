@@ -148,6 +148,70 @@ struct MuSig2Tests {
         }
     }
 
+    @Test("external signer inputs pin the first BIP327 signing vector")
+    func externalSignerParameters() throws {
+        let vectors = try Self.vectors("sign_verify_vectors.json")
+        let row = (vectors["valid_test_cases"] as! [[String: Any]])[0]
+        let pubkeys = Self.hexList(vectors["pubkeys"]!)
+        let keys = (row["key_indices"] as! [Int]).map { pubkeys[$0] }
+        let session = MuSig.Session(
+            aggregateNonce: Self.hexList(vectors["aggnonces"]!)[row["aggnonce_index"] as! Int],
+            publicKeys: keys, message: Self.hexList(vectors["msgs"]!)[row["msg_index"] as! Int])
+        let parameters = try MuSig.partialSignParameters(publicKey: keys[row["signer_index"] as! Int], session: session)
+        #expect(parameters.nonceCoefficient == Self.hex("f6311d2583176bb178ec12973b760a2d733544d4c72b4b3a8c260f7679f7d9c6"))
+        #expect(parameters.challengeTimesKeyCoefficient == Self.hex("f696bb3be7fc4ee399c173813d0bddded1471cfe8acf5f729b1610d489eb3600"))
+        #expect(parameters.negateNonces)
+        #expect(!parameters.negateSecretKey)
+        #expect(throws: MuSig.MuSig2Error.unknownSigner) {
+            try MuSig.partialSignParameters(publicKey: Data(repeating: 0, count: 33), session: session)
+        }
+    }
+
+    /// The card computes k1 + b·k2 + (e·a)·d from the parameters alone
+    /// (Satochip.java Musig2SignHash); that must give BIP327's partial
+    /// signature on every valid vector, tweaked ones included.
+    @Test("the external signer's formula reproduces every valid partial signature")
+    func externalSignerFormula() throws {
+        func sign(_ secnonce: Data, _ secret: Data, _ publicKey: Data, _ session: MuSig.Session) throws -> Data {
+            let parameters = try MuSig.partialSignParameters(publicKey: publicKey, session: session)
+            var k1 = Data(secnonce.prefix(32))
+            var k2 = Data(secnonce.dropFirst(32).prefix(32))
+            if parameters.negateNonces {
+                k1 = try MuSig.scalarNegate(k1)
+                k2 = try MuSig.scalarNegate(k2)
+            }
+            let d = parameters.negateSecretKey ? try MuSig.scalarNegate(secret) : secret
+            return try MuSig.scalarAdd(k1, MuSig.scalarAdd(MuSig.scalarMultiply(parameters.nonceCoefficient, k2),
+                                                           MuSig.scalarMultiply(parameters.challengeTimesKeyCoefficient, d)))
+        }
+
+        let plain = try Self.vectors("sign_verify_vectors.json")
+        let plainKeys = Self.hexList(plain["pubkeys"]!)
+        for testCase in plain["valid_test_cases"] as! [[String: Any]] {
+            let keys = (testCase["key_indices"] as! [Int]).map { plainKeys[$0] }
+            let session = MuSig.Session(aggregateNonce: Self.hexList(plain["aggnonces"]!)[testCase["aggnonce_index"] as! Int],
+                                        publicKeys: keys,
+                                        message: Self.hexList(plain["msgs"]!)[testCase["msg_index"] as! Int])
+            let partial = try sign(Self.hexList(plain["secnonces"]!)[0], Self.hex(plain["sk"] as! String),
+                                   keys[testCase["signer_index"] as! Int], session)
+            #expect(partial == Self.hex(testCase["expected"] as! String))
+        }
+
+        let tweaked = try Self.vectors("tweak_vectors.json")
+        let tweakedKeys = Self.hexList(tweaked["pubkeys"]!)
+        let tweaks = Self.hexList(tweaked["tweaks"]!)
+        for testCase in tweaked["valid_test_cases"] as! [[String: Any]] {
+            let keys = (testCase["key_indices"] as! [Int]).map { tweakedKeys[$0] }
+            let session = MuSig.Session(aggregateNonce: Self.hex(tweaked["aggnonce"] as! String), publicKeys: keys,
+                                        tweaks: (testCase["tweak_indices"] as! [Int]).map { tweaks[$0] },
+                                        isXOnlyTweaks: testCase["is_xonly"] as! [Bool],
+                                        message: Self.hex(tweaked["msg"] as! String))
+            let partial = try sign(Self.hex(tweaked["secnonce"] as! String), Self.hex(tweaked["sk"] as! String),
+                                   keys[testCase["signer_index"] as! Int], session)
+            #expect(partial == Self.hex(testCase["expected"] as! String))
+        }
+    }
+
     @Test("signing with plain and x-only tweaks (the Taproot vault shape)")
     func tweaks() throws {
         let vectors = try Self.vectors("tweak_vectors.json")

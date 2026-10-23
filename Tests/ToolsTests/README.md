@@ -9,7 +9,9 @@ need tests because their output informs debugging and release decisions.
 It consumes the shared [debugging implementation](../../Tools/Debug/Sources/WinnowDebug/README.md)
 and [fuzz invariants](../../Tools/Fuzz/Sources/WinnowFuzzCore/README.md).
 [GenerateTests](GenerateTests.swift) exercise offline generation
-decisions; [OperatorCLITests](OperatorCLITests.swift) check command behavior.
+decisions; [OperatorCLITests](OperatorCLITests.swift) check command behavior;
+[CheckerCLITests](CheckerCLITests.swift) cover the [Satochip checker](../../Tools/Checker/README.md)'s
+registration and its APPROVE prompt.
 
 Run `swift test --filter ToolsTests` from the repository root.
 [FuzzRegressionTests](FuzzRegressionTests.swift) discover only

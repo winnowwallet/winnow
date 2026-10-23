@@ -22,11 +22,19 @@ targets:
           - iCloud.com.btcswift.app
         com.apple.developer.icloud-services:
           - CloudKit
+        # A Satochip card is read as an ISO 7816 tag (Advanced mode's MuSig2
+        # accounts with a card cosigner).
+        com.apple.developer.nfc.readersession.formats:
+          - TAG
     info:
       path: build/WinnowApp-Info.plist
       properties:
         LSMinimumSystemVersion: "14.0"
         NSLocalNetworkUsageDescription: "Winnow checks your Tailscale gateways and connects to Bitcoin nodes you configure."
+        NFCReaderUsageDescription: "Winnow reads your Satochip card when it signs a MuSig2 payment with it."
+        # Core NFC selects only applets listed here: the Satochip applet.
+        com.apple.developer.nfc.readersession.iso7816.select-identifiers:
+          - "5361746F4368697000"
         # Background chain checks (BackgroundSyncScheduler). iOS decides when
         # they run; each is one bounded scan with the foreground's routing.
         UIBackgroundModes: [fetch, processing]

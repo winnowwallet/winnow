@@ -5,6 +5,9 @@
 These tests protect balances, coin selection, fees, key storage, imports,
 transaction signing, MuSig2 accounts, people, and reorg recovery. They exercise the shared
 wallet rules used by the GUI instead of reproducing those rules in app tests.
+`SatochipTests` and `SatochipSessionTests` cover the Satochip cosigner client
+against `SatochipEmulator`, TestSupport's model of the card's applet; the
+real applet runs in the [simulator harness](../../Tools/Satochip/README.md).
 
 The same target includes [network tests](Network/README.md)
 and loads [reference vectors](Vectors/README.md) through

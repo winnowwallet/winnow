@@ -29,6 +29,19 @@ and broadcasts, and Core must accept the single 64-byte key-path signature,
 mine it and find the change. That makes Core's own libsecp256k1 MuSig2 the
 interop check on the phone's Swift implementation.
 
+`WinnowAppUITests.test02SatochipCosigner`
+([SatochipJourney.swift](SatochipJourney.swift)) runs the same kind of account
+with a Satochip card as the other signer. The card is TestSupport's
+`SatochipEmulator`, served to the app over 127.0.0.1 by `SatochipLineServer`
+in place of Core NFC (`WINNOW_E2E_SATOCHIP_PORT`), set up with a PIN, a seed
+and 2FA on. The phone reads the card's key and builds the descriptor, adds its
+nonce and taps the card for the card's; a card signature without the checker's
+approvals is refused; the test plays the checker with WalletCore's
+`Satochip.Checker` on the PSBT the screen shows and pastes its approvals; the
+card and then the phone sign, and the node must accept and mine the single
+key-path signature. It takes no screenshots, so the published checkpoints
+stay test01's. A physical card over NFC is not exercised here.
+
 Two smaller classes share the bundle.
 [PeerGatewaySettingsUITests.swift](PeerGatewaySettingsUITests.swift) checks the
 Advanced peer-network controls and their persistence across relaunch with a

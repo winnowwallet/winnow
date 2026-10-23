@@ -193,6 +193,34 @@ struct NativeSecp256k1KeyTests {
         }
     }
 
+    @Test("uncompressed points round-trip and off-curve or malformed ones are refused")
+    func uncompressedPoints() throws {
+        let generator = try Secp256k1.PublicKey(uncompressed: Secp256k1.generatorUncompressed)
+        #expect(generator.uncompressed == Secp256k1.generatorUncompressed)
+        let compressedGenerator = try Self.bytes("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+        #expect(generator.compressed == compressedGenerator)
+        var rng = SeededRandom(state: 0x0465)
+        for _ in 0 ..< 32 {
+            var secret = Data(capacity: 32)
+            for _ in 0 ..< 4 {
+                var word = rng.next().bigEndian
+                withUnsafeBytes(of: &word) { secret.append(contentsOf: $0) }
+            }
+            let key = try Secp256k1.PrivateKey(secret).publicKey
+            let parsed = try Secp256k1.PublicKey(uncompressed: key.uncompressed)
+            #expect(parsed == key)
+            #expect(parsed.compressed == key.compressed)
+        }
+        var offCurve = Secp256k1.generatorUncompressed
+        offCurve[offCurve.startIndex + 64] ^= 0x01
+        var wrongPrefix = Secp256k1.generatorUncompressed
+        wrongPrefix[wrongPrefix.startIndex] = 0x02
+        for junk in [offCurve, wrongPrefix, Secp256k1.generatorUncompressed.prefix(64),
+                     Data([0x04]) + Data(repeating: 0xFF, count: 64)] {
+            #expect(throws: Secp256k1Error.invalidPublicKey) { try Secp256k1.PublicKey(uncompressed: junk) }
+        }
+    }
+
     @Test("the BIP341 secret tweak matches the x-only public tweak")
     func secretAndPublicTweaksAgree() throws {
         var rng = SeededRandom(state: 0xB1B3)

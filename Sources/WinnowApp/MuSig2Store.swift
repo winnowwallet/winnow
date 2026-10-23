@@ -117,7 +117,8 @@ actor MuSig2Store {
     }
 
     @discardableResult
-    func add(name: String, account: MuSig2Account, createdAtHeight: UInt32) throws -> MuSig2AccountRecord {
+    func add(name: String, account: MuSig2Account, createdAtHeight: UInt32,
+             satochip: SatochipRegistration? = nil) throws -> MuSig2AccountRecord {
         guard !isDamaged else { throw MuSig2StorageError.damaged }
         guard DisplayName.normalized(name) == name, !name.isEmpty else {
             throw MuSig2StorageError.invalidState("an account needs a short, single-line name")
@@ -127,8 +128,11 @@ actor MuSig2Store {
         }
         guard !records.contains(where: { $0.id == account.id }) else { throw MuSig2StorageError.duplicate }
         guard records.count < Self.maximumAccounts else { throw MuSig2StorageError.tooMany }
+        if let satochip, !satochip.belongs(to: account) {
+            throw MuSig2StorageError.invalidState("the Satochip key is not a participant of this account")
+        }
         let record = MuSig2AccountRecord(id: account.id, name: name, descriptor: account.descriptor.serialized(),
-                                         createdAtHeight: createdAtHeight)
+                                         createdAtHeight: createdAtHeight, satochip: satochip)
         try mutate { $0.append(record) }
         return record
     }
@@ -450,6 +454,9 @@ actor MuSig2Store {
         }
         guard record.nextReceiveIndex <= maximumNextIndex, record.nextChangeIndex <= maximumNextIndex else {
             throw MuSig2StorageError.invalidState("account address index is out of range")
+        }
+        if let satochip = record.satochip, !satochip.belongs(to: account) {
+            throw MuSig2StorageError.invalidState("an account's Satochip is not one of its participants")
         }
         return account
     }

@@ -2526,6 +2526,14 @@ final class AppModel {
         case unknownAccount
         case notAParticipant
         case accountHoldsCoins
+        /// The account has no Satochip registered on this phone.
+        case noSatochip
+        /// The card in the field holds another key than the account's card.
+        case wrongSatochip
+        /// The pasted approvals name another payment's txid.
+        case approvalsForAnotherPayment
+        /// Round 2 for the card without its round-1 nonces from this screen.
+        case cardNonceMissing
         /// Broadcast, but the account's coins could not be updated: the spent
         /// coins must not be offered to the next spend.
         case spendNotRecorded(txid: Data, reason: String)
@@ -2537,6 +2545,11 @@ final class AppModel {
                 "No participant of this descriptor is this wallet's key. Put this phone's key in the musig() list."
             case .accountHoldsCoins:
                 "This account still holds coins or a pending payment. Spend them first: a removed account is not scanned, and adding it again does not find coins it already had."
+            case .noSatochip: "This account has no Satochip on this phone."
+            case .wrongSatochip: "That Satochip does not hold this account's key. Use the card the account was made with."
+            case .approvalsForAnotherPayment: "These approvals are for another payment. Approve this payment on the checker."
+            case .cardNonceMissing:
+                "This screen holds no nonce from the card for this payment. Start the exchange again."
             case let .spendNotRecorded(txid, reason):
                 "Sent as \(txid.displayHex), but the account could not be updated: \(reason) Do not spend from it again until it syncs."
             }
@@ -2566,7 +2579,8 @@ final class AppModel {
     /// Files the account and starts watching it from the next block scanned:
     /// scanning is forward-only, so coins it held before are not found.
     @discardableResult
-    func addMuSig2Account(name: String, descriptor text: String) async throws -> MuSig2AccountRecord {
+    func addMuSig2Account(name: String, descriptor text: String,
+                          satochip: SatochipRegistration? = nil) async throws -> MuSig2AccountRecord {
         let account = try muSig2Account(validating: text)
         var height: UInt32 = 0
         if let filters = stack?.filters {
@@ -2575,7 +2589,7 @@ final class AppModel {
             height = await wallet.nextScanHeight
         }
         let record = try await muSig2Store.add(name: DisplayName.normalized(name) ?? "", account: account,
-                                               createdAtHeight: height)
+                                               createdAtHeight: height, satochip: satochip)
         muSig2Accounts = await muSig2Store.all
         e2e?.journal("musig2.accountAdded", fields: [
             "id": record.id, "descriptor": record.descriptor, "height": String(height),

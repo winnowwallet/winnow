@@ -13,6 +13,9 @@ Developer guides in this repository:
 - [CloudKit backup](../CloudKit/README.md): encryption, Apple setup and
   validation still needed on devices.
 - [Security records](security/README.md): dated reports, claims and evidence.
+- [Satochip as a MuSig2 cosigner](satochip-musig2.md): design note, not
+  implemented: the card's v0.16 MuSig2 commands, the checker device and
+  Seedkeeper setup, gaps, and a build plan.
 
 The app bundles `mobile.html`, `read-side.html`, `write-side.html`,
 `import.html` and `site.css` for offline use. Changes here affect that app copy.

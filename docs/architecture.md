@@ -19,6 +19,7 @@ dependencies, so there is no lockfile.
 | [winnow-debug](../Tools/Debug/README.md) | Offline inspection, diagnostics, generators and network soaks | WalletCore |
 | [WinnowFuzz](../Tools/Fuzz/README.md) | Bounded hostile-input parsing and invariants | WalletCore and NativeSecp256k1 through WinnowFuzzCore |
 | [winnow-fixture](../Tools/Fixture/README.md) | Test-bank preparation | TestSupport |
+| [winnow-checker](../Tools/Checker/README.md) | The Satochip checker on a trusted Mac: shows each MuSig2 spend from the PSBT alone and approves what the card may sign | WalletCore |
 
 There is no VaultKit. A MuSig2 account is a `MuSig2AccountRecord` in the
 sealed per-wallet `musig2.json`, its scripts watched in the same filter scan as

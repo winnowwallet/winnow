@@ -19,6 +19,10 @@ def verify(app, distribution=False):
     assert entitlements['com.apple.developer.team-identifier'] == '2858MX5336', 'signing team mismatch'
     assert entitlements['com.apple.developer.icloud-container-identifiers'] == ['iCloud.com.btcswift.app']
     assert 'CloudKit' in entitlements['com.apple.developer.icloud-services']
+    # A MuSig2 account's Satochip card is read as an ISO 7816 tag.
+    assert entitlements.get('com.apple.developer.nfc.readersession.formats') == ['TAG'], 'NFC tag reading missing'
+    assert info.get('com.apple.developer.nfc.readersession.iso7816.select-identifiers') == ['5361746F4368697000'], \
+        'the Satochip applet is not selectable'
     environment = entitlements.get('com.apple.developer.icloud-container-environment')
     if distribution or entitlements.get('get-task-allow') is not True:
         assert environment == 'Production', 'distribution requires production iCloud'

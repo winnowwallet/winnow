@@ -13,6 +13,9 @@ struct AffinePoint: Equatable, Sendable {
 
     /// The 33-byte SEC compressed encoding.
     var compressed: Data { Data([hasOddY ? 0x03 : 0x02]) + x.bigEndian }
+
+    /// The 65-byte SEC uncompressed encoding, 0x04 ‖ x ‖ y.
+    var uncompressed: Data { Data([0x04]) + x.bigEndian + y.bigEndian }
 }
 
 /// A point in Jacobian coordinates (X : Y : Z) representing the affine point
@@ -118,6 +121,19 @@ enum Curve {
               let even = liftX(x)
         else { return nil }
         return bytes[0] == 0x03 ? even.negated : even
+    }
+
+    /// Parses a 65-byte SEC uncompressed point: prefix 0x04, both coordinates
+    /// below p, and y² = x³ + 7. Nil for anything else.
+    static func parse(uncompressed data: Data) -> AffinePoint? {
+        guard data.count == 65 else { return nil }
+        let bytes = Array(data)
+        guard bytes[0] == 0x04,
+              let x = FieldElement(bigEndian: Data(bytes[1 ..< 33])),
+              let y = FieldElement(bigEndian: Data(bytes[33...])),
+              y.squared() == x.squared() * x + .seven
+        else { return nil }
+        return AffinePoint(x: x, y: y)
     }
 
     /// k·P by left-to-right double-and-add. Variable-time in k. Infinity for

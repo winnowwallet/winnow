@@ -45,10 +45,13 @@ public struct MuSig2AccountRecord: Codable, Equatable, Identifiable, Sendable {
     public var nextReceiveIndex: UInt32 = 0
     public var nextChangeIndex: UInt32 = 0
     public var allUtxos: [WalletUTXO] = []
+    /// The participant that is a Satochip card this phone signs with, if any.
+    /// Optional, so records and backups without it read as before.
+    public var satochip: SatochipRegistration?
 
     public init(id: String, name: String, descriptor: String, createdAtHeight: UInt32,
                 nextReceiveIndex: UInt32 = 0, nextChangeIndex: UInt32 = 0,
-                allUtxos: [WalletUTXO] = []) {
+                allUtxos: [WalletUTXO] = [], satochip: SatochipRegistration? = nil) {
         self.id = id
         self.name = name
         self.descriptor = descriptor
@@ -56,14 +59,41 @@ public struct MuSig2AccountRecord: Codable, Equatable, Identifiable, Sendable {
         self.nextReceiveIndex = nextReceiveIndex
         self.nextChangeIndex = nextChangeIndex
         self.allUtxos = allUtxos
+        self.satochip = satochip
     }
 
     public var utxos: [WalletUTXO] { allUtxos.filter { !$0.isSpent } }
     public var balance: Int64 { utxos.reduce(0) { $0 + $1.amount } }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, descriptor, createdAtHeight, nextReceiveIndex, nextChangeIndex
+        case id, name, descriptor, createdAtHeight, nextReceiveIndex, nextChangeIndex, satochip
         case allUtxos = "utxos"
+    }
+}
+
+/// Which participant of a MuSig2 account a Satochip card holds: its account
+/// key and where the card derives it. The phone checks the card against it
+/// on every tap.
+public struct SatochipRegistration: Codable, Equatable, Sendable {
+    /// The participant's compressed account key.
+    public var accountKey: Data
+    public var masterFingerprint: UInt32
+    public var path: [UInt32]
+
+    public init(accountKey: Data, masterFingerprint: UInt32, path: [UInt32]) {
+        self.accountKey = accountKey
+        self.masterFingerprint = masterFingerprint
+        self.path = path
+    }
+
+    public init(_ key: Satochip.ParticipantKey) {
+        self.init(accountKey: key.accountKey.publicKey, masterFingerprint: key.masterFingerprint, path: key.path)
+    }
+
+    /// Whether `account` has this card as a participant, with the same origin.
+    public func belongs(to account: MuSig2Account) -> Bool {
+        guard let single = account.participant(forCardKey: accountKey), let origin = single.origin else { return false }
+        return origin.fingerprint == masterFingerprint && origin.path == path
     }
 }
 
@@ -430,7 +460,7 @@ public struct MuSig2Account: Sendable {
     }
 
     /// The input's coordinates, from the known coin it spends.
-    private func coin(for psbt: PSBT, input: Int, knownUTXOs: [WalletUTXO]) throws -> WalletUTXO {
+    func coin(for psbt: PSBT, input: Int, knownUTXOs: [WalletUTXO]) throws -> WalletUTXO {
         guard psbt.inputs.indices.contains(input), let txid = psbt.inputs[input].previousTxid,
               let vout = psbt.inputs[input].outputIndex,
               let known = knownUTXOs.first(where: { $0.outpoint == Transaction.Outpoint(txid: txid, vout: vout) })
