@@ -23,9 +23,8 @@ public enum FuzzTarget: String, CaseIterable, Sendable {
     case fundingSources = "funding-sources"
     case controlBlock = "control-block"
     case personPaste = "person-paste"
-    // The native secp256k1 module on one input: its own algebra must hold,
-    // and it must accept, reject and compute exactly as ReferenceSecp256k1,
-    // a second implementation that shares none of its algorithms.
+    // Both secp256k1 backends on one input: native Swift and libsecp256k1
+    // must accept, reject and compute identically.
     case nativeSecp256k1 = "native-secp256k1"
     // What a Ledger sends: Bluetooth frames, client commands answered from
     // committed data, and yielded signatures. A hostile device must not crash
