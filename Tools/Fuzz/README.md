@@ -5,10 +5,10 @@
 The harness covers sixteen surfaces: PSBT, descriptors, transactions,
 blocks, wire messages (including `addr`), framing, filters, addresses, import
 bundles, the census catalog, DNS-over-HTTPS answers, funding sources, Taproot
-control blocks, person cards and pastes, the native secp256k1 module on one
+control blocks, person cards and pastes, and the native secp256k1 module on one
 key, tweak, point, message and signature input (its own algebra, and
 byte-for-byte agreement with a second implementation that shares none of
-its algorithms), and what a Ledger sends: Bluetooth frames, client commands and yielded signatures. It
+its algorithms). It
 uses the local Bitcoin modules as a development target in the root package.
 Parsers in the app target (`PeopleStore`, `ReceiveAddressLabelStore`,
 `SealedStoreFile`) and WalletCore's internal `PersistedPeers` are out of its

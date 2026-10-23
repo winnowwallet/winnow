@@ -55,12 +55,7 @@ native curve module (`MultisigAccount`), with their admission rules
 journey's 2-of-2 spend that Bitcoin Core co-signs, accepts and mines. SEC-020
 admits two unspendable internal keys: the bare NUMS point, and an xpub with no
 origin on it, which BIP388 signers need (`MultisigAccountTests` refuses a real
-key, an origin, another suffix and another network). A Ledger signer is
-evidenced by `LedgerTests` against Ledger's published policy-id and address
-vectors and a device simulator: its registration must return the policy's own
-id and derive the phone's first address, a shown address must equal the
-phone's, and its signatures are kept only after they verify. No test runs a
-real Ledger; that check is manual, on a Nano X over signet. A timelocked
+key, an origin, another suffix and another network). A timelocked
 recovery leaf is admitted only beside the signers' leaf, with a lock of 1 to
 65535 blocks, distinct keys, and a reused signer only on its `/<2;3>/*` path
 (`TimelockedMultisigTests`, checked against Bitcoin Core's descriptor answers);

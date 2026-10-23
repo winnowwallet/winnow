@@ -30,7 +30,6 @@ let package = Package(
                 "Descriptors/README.md",
                 "Script/README.md",
                 "Keys/README.md",
-                "Ledger/README.md",
                 "Network/Broadcast/README.md",
                 "Network/Filters/README.md",
                 "Network/Headers/README.md",

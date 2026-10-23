@@ -7,7 +7,6 @@ import SwiftUI
 enum MultisigRoute: Hashable {
     case add
     case build
-    case pairLedger
     case account(String)
     case psbt(String)
 }
@@ -34,12 +33,10 @@ struct MultisigSection: View {
                 .accessibilityIdentifier("multisigBuildButton")
             NavigationLink(value: MultisigRoute.add) { Text("Join with a descriptor") }
                 .accessibilityIdentifier("multisigAddButton")
-            NavigationLink(value: MultisigRoute.pairLedger) { Text("Pair a Ledger (2-of-2)") }
-                .accessibilityIdentifier("multisigPairLedgerButton")
         } header: {
             Text("Multisig")
         } footer: {
-            Text("k-of-n Taproot accounts with other Winnows, a Ledger or any signer, shared as a descriptor and spent with PSBTs. Any k signers spend at once; an optional recovery path lets fewer signers, or a separate key, spend a coin that has not moved for a set number of blocks.")
+            Text("k-of-n Taproot accounts with other Winnows or any signer, shared as a descriptor and spent with PSBTs. Any k signers spend at once; an optional recovery path lets fewer signers, or a separate key, spend a coin that has not moved for a set number of blocks.")
         }
     }
 
@@ -48,7 +45,6 @@ struct MultisigSection: View {
         switch route {
         case .add: MultisigAddView()
         case .build: MultisigBuildView()
-        case .pairLedger: LedgerPairView()
         case let .account(id): MultisigAccountView(recordID: id)
         case let .psbt(id): MultisigPSBTView(recordID: id)
         }
@@ -223,10 +219,6 @@ struct MultisigAccountView: View {
                         MultisigValueRow(title: "Recovery", value: Self.recoveryText(recovery, account: account),
                                          identifier: "multisigRecovery")
                     }
-                    if let ledger = record.ledger {
-                        MultisigValueRow(title: "Ledger", value: String(format: "%08x", ledger.masterFingerprint),
-                                         identifier: "multisigLedgerFingerprint")
-                    }
                 }
                 receiveSection(record, account)
                 Section("Spend") {
@@ -281,9 +273,6 @@ struct MultisigAccountView: View {
                     .frame(maxWidth: 220)
                     .frame(maxWidth: .infinity)
                 MultisigLiteralRow(text: address, copyIdentifier: "multisigReceiveAddressCopy")
-            }
-            if record.ledger != nil {
-                LedgerVerifyAddressButton(record: record, index: record.nextReceiveIndex)
             }
             Button("New address") {
                 Task {
@@ -342,8 +331,8 @@ struct MultisigAccountView: View {
 /// signers' copies, and broadcast once enough signatures verify. Signers
 /// sign independently and in any order; there is no round state to lose.
 /// A PSBT as the signing screen shows it: its review, the verified signatures
-/// on every leaf that can finish it, and what this phone and its Ledger still
-/// need to add. `AppModel.multisigSigningScreen` builds it, so the app tests
+/// on every leaf that can finish it, and what this phone still needs to add.
+/// `AppModel.multisigSigningScreen` builds it, so the app tests
 /// read the same values the screen does.
 struct MultisigSigningScreen {
     var review: MultisigAccount.SpendReview
@@ -362,8 +351,7 @@ struct MultisigSigningScreen {
     }
 }
 
-/// What the leaves that can finish a PSBT still need from this phone and its
-/// paired Ledger.
+/// What the leaves that can finish a PSBT still need from this phone.
 struct MultisigSigningProgress: Equatable {
     /// Some leaf has its threshold of verified signatures.
     var complete = false
@@ -371,19 +359,12 @@ struct MultisigSigningProgress: Equatable {
     var phoneHolds = false
     /// One of those keys has not signed yet.
     var phoneUnsigned = false
-    var ledgerHolds = false
-    var ledgerUnsigned = false
 
     var signedHere: Bool { phoneHolds && !phoneUnsigned }
 
     /// The signing screen's footer.
     var nextStep: String {
         if complete { return "Enough signatures verify. Finalize and broadcast." }
-        if ledgerUnsigned {
-            return signedHere
-                ? "Sign with the Ledger: check the payment on its screen before approving."
-                : "Add this phone's signature and the Ledger's, in either order. Check the payment on the Ledger's screen."
-        }
         if signedHere {
             return "Share the PSBT below with the other signers, then combine their signed copies here."
         }
@@ -579,11 +560,6 @@ struct MultisigPSBTView: View {
                 Button("Add this phone's signature") { sign() }
                     .accessibilityIdentifier("multisigSignButton")
                     .disabled(busy || review == nil || !state.phoneUnsigned || state.complete)
-                if state.ledgerHolds {
-                    Button("Sign with Ledger") { signWithLedger() }
-                        .accessibilityIdentifier("multisigLedgerSignButton")
-                        .disabled(busy || review == nil || !state.ledgerUnsigned || state.complete)
-                }
                 Button(busy ? "Working…" : "Finalize and broadcast") { broadcast() }
                     .accessibilityIdentifier("multisigBroadcastButton")
                     .disabled(busy || review == nil || !state.complete)
@@ -658,15 +634,6 @@ struct MultisigPSBTView: View {
         guard let working, let record else { return }
         run { token in
             let signed = try await model.signMultisigSpend(working, record: record)
-            guard accepts(token) else { return }
-            install(signed)
-        }
-    }
-
-    private func signWithLedger() {
-        guard let working, let record else { return }
-        run { token in
-            let signed = try await model.signMultisigSpendWithLedger(working, record: record)
             guard accepts(token) else { return }
             install(signed)
         }
