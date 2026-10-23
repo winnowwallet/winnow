@@ -246,6 +246,26 @@ struct TimelockedMultisigTests {
         }
     }
 
+    @Test("review refuses, rather than traps on, a coin stored at the top of the height range")
+    func topOfHeightRange() throws {
+        let masters = try TestKeys.masters()
+        let account = try MultisigAccount(descriptor: MultisigAccount.descriptor(
+            threshold: 2, signers: try masters.map { try TestKeys.keyExpression(master: $0) },
+            recovery: .fewerSigners(threshold: 1, blocks: 10), network: .signet), network: .signet)
+        var coin = try Self.funding(account, amount: 60_000, height: .max - 4)
+        #expect(account.recoveryUnlockHeight(of: coin) == nil)
+        var psbt = try spend(account, coin, tip: 200, path: .signers)
+        psbt.inputs[0].sequence = 10
+        #expect(throws: MultisigAccountError.invalidSpend("input 1 unlocks for recovery only past the last block height")) {
+            _ = try account.reviewSpend(psbt, knownUTXOs: [coin], ownedOutputCoordinates: owned, chainTip: .max)
+        }
+        coin.isCoinbase = true
+        psbt.inputs[0].sequence = TransactionBuilder.defaultSequence
+        #expect(throws: MultisigAccountError.invalidSpend("input 1 spends a coinbase that matures in 95 blocks")) {
+            _ = try account.reviewSpend(psbt, knownUTXOs: [coin], ownedOutputCoordinates: owned, chainTip: .max)
+        }
+    }
+
     @Test("admission refuses look-alike recovery leaves")
     func admissionRefusals() throws {
         let masters = try TestKeys.masters()

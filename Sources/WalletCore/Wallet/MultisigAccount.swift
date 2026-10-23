@@ -489,10 +489,12 @@ public struct MultisigAccount: Sendable {
         return chainTip - coin.height + 1 >= recovery.blocks
     }
 
-    /// The first block in which `coin` can be spent on the recovery path.
+    /// The first block in which `coin` can be spent on the recovery path;
+    /// nil when it is unconfirmed or that block is past `UInt32.max`.
     public func recoveryUnlockHeight(of coin: WalletUTXO) -> UInt32? {
         guard let recovery, coin.height > 0 else { return nil }
-        return coin.height + recovery.blocks
+        let (unlock, overflow) = coin.height.addingReportingOverflow(recovery.blocks)
+        return overflow ? nil : unlock
     }
 
     // MARK: - Review
@@ -568,7 +570,8 @@ public struct MultisigAccount: Sendable {
             }
             try checkInput(input, inputIndex: inputIndex, utxo: known, chainTip: chainTip)
             if path == .recovery, !isUnlockedForRecovery(known, chainTip: chainTip) {
-                let unlock = recoveryUnlockHeight(of: known).map { "at block \($0)" } ?? "once it confirms"
+                let unlock = recoveryUnlockHeight(of: known).map { "at block \($0)" }
+                    ?? (known.height > 0 ? "past the last block height" : "once it confirms")
                 throw MultisigAccountError.invalidSpend("input \(inputIndex + 1) unlocks for recovery only \(unlock)")
             }
             let (sum, overflow) = total.addingReportingOverflow(known.amount)
@@ -586,10 +589,11 @@ public struct MultisigAccount: Sendable {
             throw MultisigAccountError.invalidSpend("input \(inputIndex + 1) has the wrong amount or locking script")
         }
         if known.isCoinbase {
-            let matureAt = known.height + Wallet.coinbaseMaturity - 1
-            guard chainTip >= matureAt else {
+            // In 64 bits: a stored height within 100 of the top must refuse, not trap.
+            let matureAt = UInt64(known.height) + UInt64(Wallet.coinbaseMaturity) - 1
+            guard UInt64(chainTip) >= matureAt else {
                 throw MultisigAccountError.invalidSpend(
-                    "input \(inputIndex + 1) spends a coinbase that matures in \(matureAt - chainTip) blocks")
+                    "input \(inputIndex + 1) spends a coinbase that matures in \(matureAt - UInt64(chainTip)) blocks")
             }
         }
         guard try scriptPubKey(index: known.index, choice: known.chain.rawValue) == known.scriptPubKey else {
