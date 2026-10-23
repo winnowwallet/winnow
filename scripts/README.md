@@ -53,6 +53,7 @@ and [native fixture](../Tools/Fixture/README.md) are the three Swift executables
 | Entry point | Inputs and purpose | Effects / caller |
 | --- | --- | --- |
 | [check-dependencies](check-dependencies) | Optional `--xcode DERIVED_DATA`; require the local package only: no manifest dependencies, no lockfile pins, no Xcode package checkouts. | Reads manifests/build state; CI and release. |
+| [check-generated-lean](check-generated-lean) | No arguments; rebuild the [Lean proofs](../Tools/Proofs/README.md), audit their axioms, regenerate the proved Swift and diff it against `Sources/NativeSecp256k1/Generated`. | Needs elan; fetches Mathlib's prebuilt files on first use. Manual, not in CI. |
 | [check-live-gateways](check-live-gateways) | No arguments; live discovery and Bitcoin handshakes through the tailnet gateways with peers from the shipped census list. | Manual, from a Mac on the live gateway tailnet; CI uses a separate controlled simulation. Sends no wallet data. See [peer gateways](../docs/peer-gateways.md). |
 | [check-live-gateways-ui](check-live-gateways-ui) | `<Xcode destination> <new evidence directory>`; live gateway journey on a device or simulator on the tailnet. | Manual; records `LiveGateways.xcresult` screenshots. Disposable mainnet wallet, nothing sent. |
 | [check-test-gates](check-test-gates) | No arguments; check environment gates, deliberate skips, and retired flags. | Source check in CI; does not execute tests. |

@@ -39,40 +39,24 @@ struct JacobianPoint: Sendable {
     var isInfinity: Bool { z.isZero }
 
     /// 2P by `dbl-2009-l` (2M + 5S). Infinity stays infinity because Z3 = 2·Y·Z.
+    /// The formula is in Generated/GeneratedCurve.swift, proved in Tools/Proofs
+    /// against the affine group law.
     func doubled() -> JacobianPoint {
-        let a = x.squared()
-        let b = y.squared()
-        let c = b.squared()
-        let xPlusB = (x + b).squared()
-        let d = (xPlusB - a - c).doubled()
-        let e = a.tripled()
-        let f = e.squared()
-        let x3 = f - d.doubled()
-        let y3 = e * (d - x3) - c.doubled().doubled().doubled()
-        let z3 = (y * z).doubled()
+        let (x3, y3, z3) = GeneratedCurve.double(x, y, z)
         return JacobianPoint(x: x3, y: y3, z: z3)
     }
 
     /// P + Q for an affine Q by `madd-2007-bl` (7M + 4S), with the three
-    /// cases the formula cannot express handled first: P at infinity, Q = P
-    /// (doubling) and Q = −P (infinity).
+    /// cases the formula cannot express handled here: P at infinity, Q = P
+    /// (doubling) and Q = −P (infinity). The formula, and the facts these
+    /// branches rely on (H = 0 exactly when the x coordinates agree, r = 0
+    /// exactly when the y coordinates do), are proved in Tools/Proofs.
     func adding(_ other: AffinePoint) -> JacobianPoint {
         guard !isInfinity else { return JacobianPoint(other) }
-        let z1z1 = z.squared()
-        let u2 = other.x * z1z1
-        let s2 = other.y * z * z1z1
-        let h = u2 - x
-        let r = (s2 - y).doubled()
+        let (x3, y3, z3, h, r) = GeneratedCurve.addMixed(x, y, z, other.x, other.y)
         if h.isZero {
             return r.isZero ? doubled() : .infinity
         }
-        let hh = h.squared()
-        let i = hh.doubled().doubled()
-        let j = h * i
-        let v = x * i
-        let x3 = r.squared() - j - v.doubled()
-        let y3 = r * (v - x3) - (y * j).doubled()
-        let z3 = (z + h).squared() - z1z1 - hh
         return JacobianPoint(x: x3, y: y3, z: z3)
     }
 
@@ -83,11 +67,6 @@ struct JacobianPoint: Sendable {
         let zInverse2 = zInverse.squared()
         return AffinePoint(x: x * zInverse2, y: y * zInverse2 * zInverse)
     }
-}
-
-extension FieldElement {
-    func doubled() -> FieldElement { self + self }
-    func tripled() -> FieldElement { self + self + self }
 }
 
 /// Group-level operations on secp256k1.
