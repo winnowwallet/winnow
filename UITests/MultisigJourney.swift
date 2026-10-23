@@ -52,7 +52,7 @@ extension WinnowAppUITests {
         try secondCore.importMultisigAccount(account)
 
         // Receive: the address on screen is Core's first address too.
-        openMultisigAccount(app, id: account.id)
+        multisigTap(app, "multisigAccount-\(account.id)", up: true)
         let shown = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'tb1p'")).firstMatch
         XCTAssertTrue(shown.appears(within: 20))
         XCTAssertEqual(shown.label, firstAddress)
@@ -296,23 +296,6 @@ extension WinnowAppUITests {
         // enabled; wait for usable geometry before the one tap.
         XCTAssertTrue(poll(timeout: 15, interval: 0.2, "\(identifier) enabled with an onscreen tap target") {
             button.exists && button.isEnabled && tapVisibleCenter(app, button)
-        })
-    }
-
-    /// Opens the account from the Wallet list and waits for its screen. The
-    /// sync card above the list shows a "Scanning filters" row while a new
-    /// account's first scan runs and drops it afterwards, moving the list by
-    /// about fifty points, so a tap aimed at a fresh frame can land on the
-    /// Multisig header beside the row and open nothing. The tap is repeated
-    /// until the account's balance row is up.
-    private func openMultisigAccount(_ app: XCUIApplication, id: String) {
-        multisigTap(app, "multisigAccount-\(id)", up: true)
-        let row = app.buttons["multisigAccount-\(id)"]
-        let balance = app.staticTexts["multisigBalance"]
-        XCTAssertTrue(poll(timeout: 40, interval: 0.2, "the account screen opens") {
-            if balance.waitForExistence(timeout: 3) { return true }
-            if row.exists, row.isEnabled { _ = tapVisibleCenter(app, row) }
-            return false
         })
     }
 }

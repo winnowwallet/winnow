@@ -72,9 +72,6 @@ struct HomeView: View {
                     }
                     LabeledContent("Peers", value: "\(model.status.peerCount)")
                     ChainCheckStatus()
-                    if model.status.syncing, model.syncStatusText == nil {
-                        BusyIndicator(text: "Scanning filters…")
-                    }
                     if let error = model.status.lastSyncError {
                         Text(error)
                             .font(.footnote)
@@ -87,11 +84,19 @@ struct HomeView: View {
                             .foregroundStyle(.orange)
                             .accessibilityIdentifier("relayStoreQuarantined")
                     }
-                    Button("Sync now") {
-                        Task { await model.syncNow() }
+                    // The scan indicator takes the button's place rather than
+                    // adding a row above it: a chain check starts every few
+                    // seconds, and an extra row moved everything below it
+                    // while a finger was on its way down.
+                    if model.status.syncing, model.syncStatusText == nil {
+                        BusyIndicator(text: "Scanning filters…")
+                    } else {
+                        Button("Sync now") {
+                            Task { await model.syncNow() }
+                        }
+                        .accessibilityIdentifier("syncNowButton")
+                        .disabled(model.status.syncing)
                     }
-                    .accessibilityIdentifier("syncNowButton")
-                    .disabled(model.status.syncing)
                 }
 
                 MultisigSection()
