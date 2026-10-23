@@ -18,14 +18,11 @@ and invalid inputs. These checks support the implementation; they do not replace
 an independent cryptographic review.
 
 `TaggedHash` keeps WalletCore's `String`/`Data` interface but delegates hashing to
-`TaggedSHA256` in the [native secp256k1 module](../../NativeSecp256k1/README.md),
-which builds the BIP340 construction on CryptoKit's SHA-256. Known-answer tests
-cover empty, binary, and UTF-8 inputs; BIP341 vector tests exercise its protocol
-callers.
+`P256K.SHA256.taggedHash` in the pinned secp256k1 dependency. Known-answer tests
+cover empty, binary, and UTF-8 inputs; BIP341 and MuSig vector tests exercise its
+protocol callers.
 
-Curve arithmetic (key derivation tweaks, Taproot output keys, BIP340 signing and
-verification) also comes from that native module, which is variable-time and
-checked against answers recorded from libsecp256k1. The signer signs a digest supplied by
-the caller. WalletCore still owns transaction signature-message construction in
-`SighashBIP341`, and script-tree/control-block construction in `Taproot`; these
-are not replaced by key-tweak or signature APIs.
+The upstream Schnorr signer signs a digest supplied by the caller. WalletCore
+still owns transaction signature-message construction in `SighashBIP341`, and
+script-tree/control-block construction in `Taproot`; these are not replaced by
+key-tweak or signature APIs.

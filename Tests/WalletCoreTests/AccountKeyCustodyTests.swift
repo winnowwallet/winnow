@@ -1,5 +1,5 @@
 import Foundation
-import NativeSecp256k1
+import P256K
 import Testing
 import TestSupport
 @testable import WalletCore
@@ -50,10 +50,11 @@ struct AccountKeyCustodyTests {
         for index in transaction.inputs.indices {
             let hash = try SighashBIP341.sighash(tx: transaction, inputIndex: index,
                                                 spentOutputs: outputs, hashType: .default)
-            let key = Data(outputs[index].scriptPubKey.suffix(32))
-            let signature = Data(transaction.inputs[index].witness[0])
-            #expect(Secp256k1.Schnorr.verify(signature: signature, message: hash, publicKey: key),
-                    "signature for input \(index)")
+            var message = [UInt8](hash)
+            let key = P256K.Schnorr.XonlyKey(dataRepresentation: outputs[index].scriptPubKey.suffix(32))
+            let signature = try P256K.Schnorr.SchnorrSignature(
+                dataRepresentation: transaction.inputs[index].witness[0])
+            #expect(key.isValid(signature, for: &message), "signature for input \(index)")
         }
     }
 

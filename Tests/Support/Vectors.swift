@@ -63,6 +63,15 @@ public struct BIP158Vector {
     public let header: Data
 }
 
+/// The valid descriptors (each with its expected scriptPubKeys) and the
+/// invalid ones of a BIP whose "Test Vectors" section is written the BIP387
+/// / BIP390 way: `* <tt>descriptor</tt>` bullets with `** <tt>script</tt>`
+/// sub-bullets, then an "Invalid descriptors" list.
+public struct DescriptorVectors {
+    public var valid: [(descriptor: String, scripts: [String])] = []
+    public var invalid: [String] = []
+}
+
 extension Vectors {
     /// The BIP158 testnet vectors. The JSON carries display-order hashes;
     /// every hash here is reversed into internal order.
@@ -87,18 +96,7 @@ extension Vectors {
                                 header: Data(header.reversed()))
         }
     }
-}
 
-/// The valid descriptors (each with its expected scriptPubKeys) and the
-/// invalid ones of a BIP whose "Test Vectors" section is written the BIP387
-/// / BIP390 way: `* <tt>descriptor</tt>` bullets with `** <tt>script</tt>`
-/// sub-bullets, then an "Invalid descriptors" list.
-public struct DescriptorVectors {
-    public var valid: [(descriptor: String, scripts: [String])] = []
-    public var invalid: [String] = []
-}
-
-extension Vectors {
     /// The descriptor vector blocks of a BIP387/BIP390-style mediawiki doc.
     public static func descriptorVectors(_ name: String, in bundle: Bundle) throws -> DescriptorVectors {
         let text = try string(name, in: bundle)

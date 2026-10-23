@@ -13,9 +13,6 @@ decisions; [OperatorCLITests](OperatorCLITests.swift) check command behavior.
 
 Run `swift test --filter ToolsTests` from the repository root.
 [FuzzRegressionTests](FuzzRegressionTests.swift) discover only
-`Cases/<target>/*.bin`; READMEs are not replay inputs.
-[FuzzTargetTests](FuzzTargetTests.swift) run every fuzz target on small inputs,
-and the Ledger target on hostile device frames, client commands and yields, so
-the harness's own checks run under `swift test`. Real-network observations
+`Cases/<target>/*.bin`; READMEs are not replay inputs. Real-network observations
 and checkpoint derivation from a full genesis-validated header file remain
 separate from these deterministic tests.

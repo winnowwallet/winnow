@@ -18,8 +18,6 @@ mkdir -p "$(dirname "$LOG_PATH")"
 # Build the debugging tool and its shared wallet core; the warning gate follows the
 # production Sources/ tree and the relocated soak driver.
 swift build --configuration release --product winnow-debug --scratch-path "$SCRATCH_PATH" 2>&1 | tee "$LOG_PATH"
-# A package without dependencies has no lockfile; one appearing here means the
-# manifest gained a dependency (scripts/check-dependencies is the full policy).
-test ! -e "$ROOT/Package.resolved"
+git -C "$ROOT" diff --exit-code -- Package.resolved
 
 "$ROOT/scripts/check-swift-warnings" "$LOG_PATH"

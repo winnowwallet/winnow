@@ -1,5 +1,5 @@
 import Foundation
-import NativeSecp256k1
+import P256K
 import Testing
 import TestSupport
 @testable import WalletCore
@@ -247,9 +247,12 @@ struct WalletTests {
         for index in signed.inputs.indices {
             let sighash = try SighashBIP341.sighash(tx: signed, inputIndex: index,
                                                     spentOutputs: spentOutputs, hashType: .default)
-            let outputKey = spentOutputs[index].scriptPubKey.suffix(32)
-            #expect(Secp256k1.Schnorr.verify(signature: signed.inputs[index].witness[0], message: sighash,
-                                             publicKey: outputKey), "input \(index) must verify")
+            let outputKey = P256K.Schnorr.XonlyKey(
+                dataRepresentation: spentOutputs[index].scriptPubKey.suffix(32))
+            let signature = try P256K.Schnorr.SchnorrSignature(
+                dataRepresentation: signed.inputs[index].witness[0])
+            var message = [UInt8](sighash)
+            #expect(outputKey.isValid(signature, for: &message), "input \(index) must verify")
         }
     }
 
@@ -352,8 +355,11 @@ struct WalletTests {
         let sighash = try SighashBIP341.sighash(
             tx: replacementTx, inputIndex: 0,
             spentOutputs: [SighashBIP341.SpentOutput(amount: 150_000, scriptPubKey: fundingScript)])
-        #expect(Secp256k1.Schnorr.verify(signature: replacementTx.inputs[0].witness[0], message: sighash,
-                                         publicKey: fundingScript.suffix(32)))
+        let outputKey = P256K.Schnorr.XonlyKey(dataRepresentation: fundingScript.suffix(32))
+        let signature = try P256K.Schnorr.SchnorrSignature(
+            dataRepresentation: replacementTx.inputs[0].witness[0])
+        var message = [UInt8](sighash)
+        #expect(outputKey.isValid(signature, for: &message))
 
         // Build is rollback-safe; commit swaps pending change and history.
         #expect(await wallet.history.first { $0.txid == originalTx.txid }?.replacedBy == nil)

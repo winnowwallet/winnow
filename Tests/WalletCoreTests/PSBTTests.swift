@@ -1,5 +1,5 @@
 import Foundation
-import NativeSecp256k1
+import P256K
 import Testing
 import TestSupport
 @testable import WalletCore
@@ -147,9 +147,10 @@ struct PSBTTests {
         for index in signed.inputs.indices {
             let sighash = try SighashBIP341.sighash(tx: signed, inputIndex: index,
                                                     spentOutputs: spentOutputs, hashType: .default)
-            let outputKey = spentOutputs[index].scriptPubKey.suffix(32)
-            #expect(Secp256k1.Schnorr.verify(signature: signed.inputs[index].witness[0], message: sighash,
-                                             publicKey: outputKey))
+            let outputKey = P256K.Schnorr.XonlyKey(dataRepresentation: spentOutputs[index].scriptPubKey.suffix(32))
+            let signature = try P256K.Schnorr.SchnorrSignature(dataRepresentation: signed.inputs[index].witness[0])
+            var message = [UInt8](sighash)
+            #expect(outputKey.isValid(signature, for: &message))
         }
 
         // The extracted tx is exactly what direct signing produces (aux = 0).

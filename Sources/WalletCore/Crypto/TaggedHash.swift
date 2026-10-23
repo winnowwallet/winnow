@@ -1,9 +1,9 @@
 import Foundation
-import NativeSecp256k1
+import enum P256K.SHA256
 
-/// BIP340 tagged hash, delegated to the native secp256k1 module (CryptoKit SHA-256).
+/// BIP340 tagged hash, delegated to the pinned secp256k1 implementation.
 public enum TaggedHash {
     public static func hash(_ tag: String, _ message: Data) -> Data {
-        TaggedSHA256.hash(tag: tag, message: message)
+        Data(SHA256.taggedHash(tag: Data(tag.utf8), data: message))
     }
 }

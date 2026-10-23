@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Require the local first-party package and no third-party resolutions.
-
-The app, tools and tests build from this checkout alone: the manifest declares
-no dependencies, SwiftPM writes no lockfile (it removes Package.resolved for a
-package without pins), project.yml references only the local package, and an
-Xcode build directory, when given, resolved no source-control package.
-"""
+"""Require local first-party packages and matching third-party resolutions."""
 import argparse
 import json
 import pathlib
@@ -19,10 +13,6 @@ root = pathlib.Path(__file__).resolve().parent.parent
 project = (root / 'project.yml').read_text()
 if not re.search(r'^  Winnow:\n    path: \.\s*$', project, re.M):
     raise SystemExit('the app must consume the root package locally')
-packages = re.search(r'^packages:\n(.*?)(?=^\S)', project, re.M | re.S)
-if not packages or re.findall(r'^  (\S+):\s*$', packages.group(1), re.M) != ['Winnow'] \
-        or re.search(r'^\s+(url|github):', packages.group(1), re.M):
-    raise SystemExit('project.yml must reference only the local Winnow package')
 
 def manifest(path):
     return json.loads(subprocess.check_output(
@@ -32,23 +22,23 @@ def pins(path):
     return {p['identity']: (p['location'], p['state'])
             for p in json.loads(path.read_text())['pins']}
 
-if manifest(root)['dependencies']:
-    raise SystemExit('the root manifest declares a dependency; review the monorepo dependency policy')
-resolved = root / 'Package.resolved'
-if resolved.exists() and pins(resolved):
-    raise SystemExit('Package.resolved pins a package; review the monorepo dependency policy')
+expected = pins(root / 'Package.resolved')
+if set(expected) != {'swift-secp256k1'}:
+    raise SystemExit('unexpected root dependency; review the monorepo dependency policy')
+version = expected['swift-secp256k1'][1]['version']
+remote = manifest(root)['dependencies'][0]['sourceControl'][0]
+if remote['requirement'] != {'exact': [version]}:
+    raise SystemExit('root manifest and lockfile disagree')
+if not re.search(r'^  swift-secp256k1:\n    url: [^\n]+\n    exactVersion: '+re.escape(version)+r'\s*$', project, re.M):
+    raise SystemExit('Xcode must pin the root third-party version')
 if args.xcode:
-    # Xcode records every resolved package of a build in its workspace state.
-    # Local packages appear there without a checkout; any source-control
-    # checkout is a dependency this policy forbids.
-    if not args.xcode.is_dir():
-        raise SystemExit(f'no Xcode build directory at {args.xcode}')
+    # Xcode can share the root lockfile instead of writing a workspace copy.
+    # Check the actual resolved checkout state from this build in either case.
     path = args.xcode / 'SourcePackages/workspace-state.json'
-    checkouts = {}
-    if path.exists():
-        dependencies = json.loads(path.read_text())['object']['dependencies']
-        checkouts = {d['packageRef']['identity']: d['packageRef']['location']
-                     for d in dependencies if d['state']['name'] == 'sourceControlCheckout'}
-    if checkouts:
-        raise SystemExit(f'Xcode resolved source-control packages: {sorted(checkouts)}')
-print('The app uses the local Winnow package and no third-party package')
+    dependencies = json.loads(path.read_text())['object']['dependencies']
+    actual = {d['packageRef']['identity']:
+              (d['packageRef']['location'], d['state']['checkoutState'])
+              for d in dependencies if d['state']['name'] == 'sourceControlCheckout'}
+    if actual != expected:
+        raise SystemExit('Xcode resolved dependencies differ from the root lockfile')
+print('The app uses the local Winnow package and its committed third-party pin')

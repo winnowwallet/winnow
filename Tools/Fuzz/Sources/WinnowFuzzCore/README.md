@@ -5,11 +5,8 @@
 Exercise.swift defines seeded generation and invariants for PSBTs, descriptors,
 transactions, blocks, wire messages, framing, filters, addresses, import bundles,
 census documents, DNS answers, funding sources, Taproot control
-blocks, and person cards/pastes. NativeSecp256k1Exercise.swift feeds one input
-to the native secp256k1 module and fails when the private and public forms of
-an operation disagree or a signature verifies where it must not. The
-[runbook](../../README.md) lists the sixteen targets and the app-owned stores
-outside this harness.
+blocks, and person cards/pastes. The [runbook](../../README.md) lists the
+fourteen targets and the app-owned stores outside this harness.
 It checks hostile inputs against the same parsers used by the wallet.
 
 The [fuzz executable](../WinnowFuzz/README.md) and

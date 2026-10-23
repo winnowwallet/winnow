@@ -9,10 +9,8 @@ cd "$(dirname "$0")/.."
 TEST_DIRS=(Tests UITests AppTests)
 for d in Tools/*/Tests; do [ -d "$d" ] && TEST_DIRS+=("$d"); done
 SETTERS=(.github/workflows scripts)
-# Optional overrides a developer may set by hand; never a gate. WINNOW_TIMING
-# opts into the native secp256k1 timing printout, which asserts nothing;
-# Sources/NativeSecp256k1/README.md names the command.
-ALLOW_UNSET="WINNOW_BITCOIN_CLI WINNOW_TIMING"
+# Optional overrides a developer may set by hand; never a gate.
+ALLOW_UNSET="WINNOW_BITCOIN_CLI"
 # Conditional skips that are deliberate and documented. The live gateway
 # journey needs a device or simulator on the tailnet; scripts/check-live-gateways-ui runs it.
 ALLOW_XCTSKIP="AppTests/E2EModeTests.swift UITests/LiveGatewayDeviceTests.swift"
@@ -37,10 +35,8 @@ done
 # where the OS records them; the same suite is included in iOS AppTests.
 # The live gateway check needs the tailnet that runs them; scripts/check-live-gateways sets its gate.
 # The tailnet simulation needs Headscale and tailscaled running; scripts/ci-tailnet sets its gate.
-# The native secp256k1 timing suite is an opt-in measurement that asserts nothing (WINNOW_TIMING above).
 if grep -rn 'enabled(if:' "${TEST_DIRS[@]}" | sed -E 's/^([^:]+):[0-9]+:/\1:/' \
   | grep -vF 'Tests/WalletCoreTests/FileProtectionTests.swift:@Suite("Persisted file protection", .enabled(if: fileProtectionRecorded))' \
-  | grep -vF 'Tests/BitcoinCoreTests/NativeSecp256k1TimingTests.swift:@Suite("Native secp256k1 timing", .enabled(if: ProcessInfo.processInfo.environment["WINNOW_TIMING"] != nil))' \
   | grep -vF 'Tests/WalletCoreTests/Network/TailnetGatewayDiscoveryTests.swift:    @Test(.enabled(if: ProcessInfo.processInfo.environment["WINNOW_LIVE_GATEWAYS"] == "1"))' \
   | grep -vF 'Tests/WalletCoreTests/Network/TailnetGatewayDiscoveryTests.swift:    @Test(.enabled(if: ProcessInfo.processInfo.environment["WINNOW_TAILNET_SIMULATION"] == "1"))'; then
   echo "::error::an undocumented conditional test suite was found"

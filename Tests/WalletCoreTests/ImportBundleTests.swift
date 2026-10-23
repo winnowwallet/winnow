@@ -1,4 +1,5 @@
 import Foundation
+import P256K
 import Testing
 import TestSupport
 @testable import WalletCore

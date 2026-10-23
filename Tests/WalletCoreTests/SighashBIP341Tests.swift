@@ -1,5 +1,5 @@
 import Foundation
-import NativeSecp256k1
+import P256K
 import Testing
 import TestSupport
 @testable import WalletCore
@@ -108,9 +108,11 @@ struct SighashBIP341Tests {
     func tweakedKeys() throws {
         let vector = try Self.vector()
         for input in vector.inputs {
-            let key = try Secp256k1.PrivateKey(input.internalPrivkey)
-            let tweak = Taproot.tweak(internalKey: key.xOnlyKey.x, merkleRoot: input.merkleRoot)
-            #expect(try key.addingXOnly(tweak).bytes == input.tweakedPrivkey, "input \(input.index)")
+            let internalPubkey = Data(try P256K.Schnorr.PrivateKey(dataRepresentation: input.internalPrivkey).xonly.bytes)
+            let tweak = Taproot.tweak(internalKey: internalPubkey, merkleRoot: input.merkleRoot)
+            let tweaked = try P256K.Schnorr.PrivateKey(dataRepresentation: input.internalPrivkey)
+                .add([UInt8](tweak)).dataRepresentation
+            #expect(tweaked == input.tweakedPrivkey, "input \(input.index)")
         }
     }
 
@@ -121,8 +123,10 @@ struct SighashBIP341Tests {
             let hashType = SighashBIP341.HashType(rawValue: input.hashType)
             // The spent output's scriptPubKey commits to the tweaked output key.
             let outputKey = vector.spentOutputs[input.index].scriptPubKey.suffix(32)
-            #expect(Secp256k1.Schnorr.verify(signature: input.witness.prefix(64), message: input.sigHash,
-                                             publicKey: outputKey), "input \(input.index) witness must verify")
+            let key = P256K.Schnorr.XonlyKey(dataRepresentation: outputKey)
+            var message = [UInt8](input.sigHash)
+            let signature = try P256K.Schnorr.SchnorrSignature(dataRepresentation: input.witness.prefix(64))
+            #expect(key.isValid(signature, for: &message), "input \(input.index) witness must verify")
             // 64-byte sig for SIGHASH_DEFAULT, otherwise the hash type byte is appended.
             if hashType == .default {
                 #expect(input.witness.count == 64)
@@ -169,7 +173,7 @@ struct SighashBIP341Tests {
     //
     // BIP341 script-path (BIP342 ext_flag = 1) test vectors
     // (bip341-scriptpath-test-vectors.json, generated once with Bitcoin Core's
-    // test framework): a tr(NUMS, multi_a(2, K1, K2, K3)) output spent with all
+    // test framework): a tr(NUMS, multi_a(2, K1, K2, K3)) vault spent with all
     // eight hash types, with and without an annex — SigMsg bytes, sighash, the
     // expected signatures, and the full BIP387 witness stack.
     //
@@ -239,7 +243,7 @@ struct SighashBIP341Tests {
                                     inputs: inputs)
     }
 
-    @Test("the output is the NUMS internal key plus a multi_a leaf, parsed back")
+    @Test("the vault is the NUMS internal key plus a multi_a leaf, parsed back")
     func fixtureShape() throws {
         let vector = try Self.scriptPathVector()
         #expect(vector.internalKey == Taproot.unspendableInternalKey)
@@ -284,11 +288,13 @@ struct SighashBIP341Tests {
         for input in vector.inputs {
             let hashType = SighashBIP341.HashType(rawValue: input.hashType)
             for secret in input.signingSecrets {
-                let xonly = try Secp256k1.PrivateKey(secret).xOnlyKey.x
+                let key = try P256K.Schnorr.PrivateKey(dataRepresentation: secret)
+                let xonly = Data(key.xonly.bytes)
                 let expected = try #require(input.signatures[xonly])
                 // The vector signature verifies against the leaf key + sighash.
-                #expect(Secp256k1.Schnorr.verify(signature: Data(expected.prefix(64)), message: input.sigHash,
-                                                 publicKey: xonly))
+                var message = [UInt8](input.sigHash)
+                let parsed = try P256K.Schnorr.SchnorrSignature(dataRepresentation: expected.prefix(64))
+                #expect(P256K.Schnorr.XonlyKey(dataRepresentation: xonly).isValid(parsed, for: &message))
                 // Our signer (no tweak!) reproduces the exact bytes with aux = 0.
                 let signature = try Signer.scriptPathSignature(
                     tx: vector.tx, inputIndex: input.index, spentOutputs: vector.spentOutputs,

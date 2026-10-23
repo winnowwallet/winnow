@@ -1,12 +1,12 @@
 import Foundation
-import NativeSecp256k1
+import P256K
 import Testing
 import TestSupport
 @testable import WalletCore
 
 /// End-to-end key-path signing: fake UTXO set → build tx → sighash → sign →
 /// verify the witness Schnorr signatures against the spent outputs' tweaked
-/// keys with the native verifier. A real cryptographic round trip, no network.
+/// keys with P256K. A real cryptographic round trip, no network.
 @Suite("Signer")
 struct SignerTests {
     /// A fake UTXO set paying BIP86 signet addresses of the test mnemonic.
@@ -52,9 +52,10 @@ struct SignerTests {
             // Verify against the tweaked output key committed by the scriptPubKey.
             let sighash = try SighashBIP341.sighash(tx: tx, inputIndex: index,
                                                     spentOutputs: spentOutputs, hashType: .default)
-            let outputKey = utxo.spent.scriptPubKey.suffix(32)
-            #expect(Secp256k1.Schnorr.verify(signature: signatureData, message: sighash, publicKey: outputKey),
-                    "input \(index) must verify")
+            let outputKey = P256K.Schnorr.XonlyKey(dataRepresentation: utxo.spent.scriptPubKey.suffix(32))
+            let signature = try P256K.Schnorr.SchnorrSignature(dataRepresentation: signatureData)
+            var message = [UInt8](sighash)
+            #expect(outputKey.isValid(signature, for: &message), "input \(index) must verify")
         }
 
         // The fully-signed transaction round-trips through the wire parser.
@@ -77,10 +78,12 @@ struct SignerTests {
         #expect(witness1 == witness2)
         #expect(witness1[0].count == 65 && witness1[0].last == 0x01)
 
-        let outputKey = fixture.utxos[0].spent.scriptPubKey.suffix(32)
+        let outputKey = P256K.Schnorr.XonlyKey(dataRepresentation: fixture.utxos[0].spent.scriptPubKey.suffix(32))
         let sighash = try SighashBIP341.sighash(tx: tx, inputIndex: 0,
                                                 spentOutputs: fixture.utxos.map(\.spent), hashType: .all)
-        #expect(Secp256k1.Schnorr.verify(signature: witness1[0].prefix(64), message: sighash, publicKey: outputKey))
+        let signature = try P256K.Schnorr.SchnorrSignature(dataRepresentation: witness1[0].prefix(64))
+        var message = [UInt8](sighash)
+        #expect(outputKey.isValid(signature, for: &message))
     }
 
     @Test("a resolver that finds no key throws missingKey")

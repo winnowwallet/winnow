@@ -4,12 +4,7 @@
 
 These copies of Bitcoin specifications and known-answer data anchor derivation,
 signatures, descriptors, and encoding tests to expected values outside Winnow.
-The nested [native-secp256k1 fixtures](native-secp256k1/README.md) hold
-independently computed field, square-root and x-only answers for the Swift
-curve module.
-
-`bip-0387.mediawiki` is BIP387's text; its `multi_a` and `sortedmulti_a`
-vectors drive [BIP387Tests](../BIP387Tests.swift).
+The nested [BIP327 vectors](bip327/README.md) cover MuSig2.
 
 [Primitive tests](../README.md) load named resources through
 [Vectors.swift](../../Support/Vectors.swift). SwiftPM copies this directory

@@ -94,7 +94,7 @@ case "$lane" in
   xcodegen
   export SIMULATOR_ID=$(scripts/ios-simulator iPhone)
   phase compilation-start
-  xcodebuild build-for-testing -project WinnowApp.xcodeproj -scheme WinnowApp -configuration Debug -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath "$DERIVED_DATA" 2>&1 | tee "$APP_RESULTS/debug-build.log"
+  xcodebuild build-for-testing -project WinnowApp.xcodeproj -scheme WinnowApp -configuration Debug -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath "$DERIVED_DATA" -skipPackagePluginValidation -skipMacroValidation 2>&1 | tee "$APP_RESULTS/debug-build.log"
   phase compilation-finished
   scripts/check-dependencies --xcode "$DERIVED_DATA"
   mkdir -p "$CI_RESULTS/debug-transfer"

@@ -1,10 +1,8 @@
 import Foundation
-import NativeSecp256k1
+import P256K
 
 public enum SignerError: Error, Equatable {
     case invalidPrivateKey
-    /// Auxiliary randomness that is not exactly 32 bytes.
-    case invalidAuxiliaryRand
     case spentOutputCountMismatch(inputs: Int, spentOutputs: Int)
     /// No key resolved for an input's spent scriptPubKey (hex).
     case missingKey(scriptPubKey: String)
@@ -27,12 +25,13 @@ public enum Signer {
                                auxiliaryRand: Data? = nil) throws -> [Data] {
         let sighash = try SighashBIP341.sighash(tx: tx, inputIndex: inputIndex,
                                                 spentOutputs: spentOutputs, hashType: hashType)
-        guard let key = try? Secp256k1.PrivateKey(tweakedPrivateKey) else {
+        guard let key = try? P256K.Schnorr.PrivateKey(dataRepresentation: tweakedPrivateKey) else {
             throw SignerError.invalidPrivateKey
         }
-        let aux = auxiliaryRand ?? randomAuxiliaryRand()
-        guard aux.count == 32 else { throw SignerError.invalidAuxiliaryRand }
-        var item = try Secp256k1.Schnorr.sign(message: sighash, privateKey: key, auxiliaryRand: aux)
+        var message = [UInt8](sighash)
+        var aux = [UInt8](auxiliaryRand ?? randomAuxiliaryRand())
+        let signature = try key.signature(message: &message, auxiliaryRand: &aux)
+        var item = signature.dataRepresentation
         // BIP341: a 64-byte sig implies SIGHASH_DEFAULT; other types append the byte.
         if hashType != .default { item.append(hashType.rawValue) }
         return [item]
@@ -84,10 +83,12 @@ public enum Signer {
                                                 scriptPath: SighashBIP341.ScriptPath(leafScript: leafScript,
                                                                                      leafVersion: leafVersion),
                                                 annex: annex)
-        guard let key = try? Secp256k1.PrivateKey(privateKey) else { throw SignerError.invalidPrivateKey }
-        let aux = auxiliaryRand ?? randomAuxiliaryRand()
-        guard aux.count == 32 else { throw SignerError.invalidAuxiliaryRand }
-        var item = try Secp256k1.Schnorr.sign(message: sighash, privateKey: key, auxiliaryRand: aux)
+        guard let key = try? P256K.Schnorr.PrivateKey(dataRepresentation: privateKey) else {
+            throw SignerError.invalidPrivateKey
+        }
+        var message = [UInt8](sighash)
+        var aux = [UInt8](auxiliaryRand ?? randomAuxiliaryRand())
+        var item = try key.signature(message: &message, auxiliaryRand: &aux).dataRepresentation
         if hashType != .default { item.append(hashType.rawValue) }
         return item
     }
@@ -101,7 +102,9 @@ public enum Signer {
     /// `scriptPathSignature` or PSBT_IN_TAP_SCRIPT_SIG fields.
     public static func multisigWitness(signatures: [Data: Data], leafScript: Script,
                                        controlBlock: Taproot.ControlBlock) throws -> [Data] {
-        guard let keys = Multisig.parsePolicy(leafScript)?.keys else { throw SignerError.malformedLeafScript }
+        guard let (_, keys) = Multisig.parse(leafScript) else {
+            throw SignerError.malformedLeafScript
+        }
         var stack = keys.reversed().map { signatures[$0] ?? Data() }
         stack.append(leafScript.bytes)
         stack.append(controlBlock.serialized)

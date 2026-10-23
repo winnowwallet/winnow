@@ -1,35 +1,31 @@
 # Wallet architecture
 
-Winnow's app owns the user interaction and device integration. WalletCore
-provides its Bitcoin rules, on top of NativeSecp256k1, Winnow's own Swift
-secp256k1 module. Shared control is limited to raw k-of-n script-path multisig
-accounts in Advanced mode, optionally with a Ledger as one signer over
-Bluetooth; there is no MuSig2. The app and development
-tools use the root [Package.swift](../Package.swift), which declares no
-dependencies, so there is no lockfile.
+Winnow's app owns the user interaction and device integration. Two Swift
+libraries provide its Bitcoin and shared-account rules. The app and development
+tools use the root [Package.swift](../Package.swift) and
+[Package.resolved](../Package.resolved).
 
 ## Source ownership
 
 | Component | Owns | Depends on |
 | --- | --- | --- |
-| [WinnowApp](../Sources/WinnowApp/README.md) | SwiftUI screens, payment review, authentication, lifecycle, persistence, background scheduling and iCloud backup | WalletCore and Apple frameworks |
-| WalletCore | Keys, descriptors, scripts, PSBTs, transactions, wallet state, people and contact cards, and Bitcoin P2P networking | NativeSecp256k1 |
-| [NativeSecp256k1](../Sources/NativeSecp256k1/README.md) | Field, scalar and point arithmetic, BIP32 and Taproot tweaks, BIP340 signing and verification; variable-time, not zeroized | Foundation and CryptoKit |
-| [TestSupport](../Tests/Support/README.md) | In-memory keys, controlled peers and disposable Bitcoin Core fixtures | WalletCore; development only |
+| [WinnowApp](../Sources/WinnowApp/README.md) | SwiftUI screens, payment review, authentication, lifecycle, persistence, background scheduling and iCloud backup | WalletCore, VaultKit and Apple frameworks |
+| WalletCore | Keys, descriptors, scripts, PSBTs, transactions, wallet state and Bitcoin P2P networking | P256K from swift-secp256k1 |
+| [VaultKit](../Sources/VaultKit/README.md) | People and public contact cards, shared-account setup, vault spends and approvals | WalletCore's public interface and P256K |
+| [TestSupport](../Tests/Support/README.md) | In-memory keys, controlled peers and disposable Bitcoin Core fixtures | WalletCore, VaultKit and P256K; development only |
 | [winnow-debug](../Tools/Debug/README.md) | Offline inspection, diagnostics, generators and network soaks | WalletCore |
-| [WinnowFuzz](../Tools/Fuzz/README.md) | Bounded hostile-input parsing and invariants | WalletCore and NativeSecp256k1 through WinnowFuzzCore |
+| [WinnowFuzz](../Tools/Fuzz/README.md) | Bounded hostile-input parsing and invariants | WalletCore and VaultKit through WinnowFuzzCore |
 | [winnow-fixture](../Tools/Fixture/README.md) | Test-bank preparation | TestSupport |
 
-There is no VaultKit and no shared-account record. An import bundle that
-carries shared-account records from the shared-account Winnow is refused
-rather than restored without those funds.
+WalletCore never imports VaultKit. `VaultRecord` stays in WalletCore because
+wallet state and backup imports carry optional shared accounts. A saved account
+record contains public policy and state; it does not contain another signer's
+private key or an active MuSig2 nonce session.
 
-WalletCore is a SwiftPM library product. It shares the app's source revision
-and version tags; there is no separate library release train. The package has
-no third-party dependencies: the native module is checked against answers
-recorded from libsecp256k1, and the signet miner has the node's own wallet sign
-block challenges. `scripts/check-dependencies` keeps Xcode from resolving any
-other package.
+WalletCore and VaultKit are SwiftPM library products. They share the app's source
+revision and version tags; there is no separate library release train. The only
+third-party package dependency is swift-secp256k1, pinned in the root lockfile.
+The app's resolved dependencies are checked against that file.
 
 ## Receiving and synchronization
 
@@ -48,16 +44,17 @@ wallet's chain-verification assumptions.
 
 ## Payment review and signing
 
-The app presents the recipient, amount and fee, authenticates protected
+The app presents the recipient, amount, account and fee, authenticates protected
 actions, and invalidates stale reviews when payment inputs change. WalletCore
-constructs transactions and validates PSBT commitments.
+constructs transactions and validates PSBT commitments. VaultKit handles the
+shared account's policy and approval exchange using those core rules.
 
-Receiving uses BIP86 Taproot, and every spend is a key-path spend signed by
-this phone's key. The [native secp256k1 module](../Sources/NativeSecp256k1/README.md)
-derives keys, applies the Taproot tweak and makes the BIP340 signature; it is
-variable-time and does not zeroize secrets. Contact-card labels do not
-establish authority; the descriptor and verified signatures do. The
-[write-side](write-side.html) guide explains the protocol and its limits.
+Ordinary receiving uses BIP86 Taproot. Shared accounts use MuSig2 key-path
+signing or threshold script-path signing. Signer names and contact-card labels
+do not establish authority; the descriptor and verified signatures do. Different
+keys alone do not prove different people or physically separate devices. The
+[write-side](write-side.html) and [shared-wallet](vaults.html) guides explain the
+protocols and their limits.
 
 ## Persistence, keys and backup
 
@@ -96,9 +93,6 @@ WalletCore directories organize one module:
   [wire protocol](../Sources/WalletCore/Network/Protocol/README.md),
   [broadcast](../Sources/WalletCore/Network/Broadcast/README.md) and
   [mempool](../Sources/WalletCore/Network/Mempool/README.md).
-- Curve arithmetic: [native secp256k1](../Sources/NativeSecp256k1/README.md),
-  with its [reference fixtures](../Tests/BitcoinCoreTests/Vectors/native-secp256k1/README.md)
-  and [fixture generators](../Tools/Generate/native-secp256k1/README.md).
 
 The [testing guide](testing.md) maps the test targets to these responsibilities.
 [Scripts](../scripts/README.md) and [workflows](../.github/workflows/README.md)
@@ -107,7 +101,7 @@ evidence live under [security](security/README.md); their findings and results
 apply to the revisions they identify.
 
 The public website has its own
-[repository](https://github.com/winnowwallet/website). The app bundles four
+[repository](https://github.com/winnowwallet/website). The app bundles five
 HTML guides and their stylesheet from this repository's `docs/` directory.
 Changes to those bundled files are app changes and participate in CI's build
 fingerprint.

@@ -15,5 +15,5 @@ xcodebuild -project WinnowApp.xcodeproj -scheme WinnowApp \
   -resultBundlePath "$evidence/LiveGateways.xcresult" \
   -only-testing:WinnowAppUITests/LiveGatewayDeviceTests \
   -parallel-testing-enabled NO -allowProvisioningUpdates \
-  test \
+  -skipPackagePluginValidation -skipMacroValidation test \
   2>&1 | tee "$evidence/live-gateways.log"
