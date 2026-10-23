@@ -80,10 +80,11 @@ let package = Package(
             exclude: ["README.md"]
         ),
         // The native curve code is checked layer by layer against the
-        // recorded fixtures and the official BIP vectors.
+        // recorded fixtures, the official BIP vectors, and the fuzz core's
+        // independent reference implementation.
         .testTarget(
             name: "BitcoinCoreTests",
-            dependencies: ["WalletCore", "TestSupport", "NativeSecp256k1"],
+            dependencies: ["WalletCore", "TestSupport", "NativeSecp256k1", "WinnowFuzzCore"],
             exclude: ["README.md"],
             resources: [.copy("Vectors")]
         ),
