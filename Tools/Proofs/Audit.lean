@@ -30,6 +30,7 @@ open Winnow
 #print axioms Scalar.N_limbs
 #print axioms Scalar.C_limbs
 #print axioms Curve.double_spec
+#print axioms Curve.double_infinity
 #print axioms Curve.addMixed_spec
 #print axioms Curve.addMixed_cases
 #print axioms Curve.same_x_negatives

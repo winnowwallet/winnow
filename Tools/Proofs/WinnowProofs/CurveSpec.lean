@@ -70,6 +70,12 @@ theorem double_spec [DecidableEq K] (x y z : K) (hz : z ≠ 0) (hy : y ≠ (secp
   · field_simp; ring
   · field_simp; ring
 
+/-- Doubling keeps the point at infinity there: Z3 = 2·Y·Z is 0 when Z is,
+which `JacobianPoint.doubled` relies on. -/
+theorem double_infinity (x y : K) : (Id.run (double x y 0)).2.2 = 0 := by
+  simp [double, fdouble, Id.run, bind, pure, FieldMachine.fmul, FieldMachine.fsqr,
+    FieldMachine.fadd, FieldMachine.fsub]
+
 /-- Mixed addition, generic case: for different x coordinates the result
 represents (x1, y1) + (x2, y2). -/
 theorem addMixed_spec [DecidableEq K] (x1 y1 z x2 y2 : K) (hz : z ≠ 0) (hx : x1 ≠ x2) (h2 : (2 : K) ≠ 0) :
