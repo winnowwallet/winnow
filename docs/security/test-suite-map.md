@@ -9,8 +9,8 @@ not evidence. App tests run in the Xcode test host, not through SwiftPM.
 
 | Historical SwiftPM suite | Current suite |
 | --- | --- |
-| `VaultFlowTests`, `VaultThresholdTests`, `PSBTMultisigTests` | removed with shared accounts (single-key build) |
-| `VaultCosignerIdentityTests`, `VaultDraftIdentityTests`, `VaultSignerIndependenceTests` | removed with shared accounts (single-key build) |
+| `VaultFlowTests`, `VaultThresholdTests`, `PSBTMultisigTests` | threshold cases removed with threshold accounts; MuSig2 cases are in `MuSig2AccountTests` and `PSBTMuSig2Tests` |
+| `VaultCosignerIdentityTests`, `VaultDraftIdentityTests`, `VaultSignerIndependenceTests` | MuSig2 participant refusals are in `MuSig2AccountTests`; the rest were removed with threshold accounts |
 | `SpentCoinTombstoneTests`, `ReorgRollbackTests` | `WalletReorgTests` |
 | `CoinSelectionPropertyTests`, `FeePolicyTests` | `CoinSelectionTests` |
 | `AntiFeeSnipingTests` | `TransactionBuilderTests` |
@@ -28,7 +28,8 @@ not evidence. App tests run in the Xcode test host, not through SwiftPM.
 
 The store-persistence cases formerly in `TxBroadcasterTests` are now in
 `TxBroadcasterStoreTests`; relay cases remain in `TxBroadcasterTests`.
-`MuSig2SessionSafetyTests` was removed with MuSig2 in the single-key build.
+`MuSig2SessionSafetyTests` is back with MuSig2 accounts, in
+`Tests/BitcoinCoreTests/MuSig2Tests.swift`.
 `WinnowGenerateTests` and the fuzz suite retain their names in `ToolsTests`.
 The demo/story tests were retired with that feature; the subprocess
 output-drain regression is retained in `DebugSystemTests`. The unused `BlockchainBackend` module and its two

@@ -11,6 +11,8 @@ public enum Secp256k1Error: Error, Equatable, Sendable {
     case invalidPublicKey
     /// A tweak that is not 32 bytes or is not below the group order.
     case invalidTweak
+    /// A scalar that is not 32 bytes or is not below the group order.
+    case invalidScalar
     /// A tweak that produced the zero scalar or the point at infinity.
     case invalidResult
     /// Auxiliary randomness for signing that is not exactly 32 bytes.

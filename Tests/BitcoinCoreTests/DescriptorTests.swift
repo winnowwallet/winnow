@@ -91,15 +91,16 @@ struct DescriptorTests {
         }
     }
 
-    /// musig() aggregation is not part of this build, and a leaf is not a
-    /// descriptor on its own; both stop at the parse.
-    @Test("musig() and bare leaves are refused at the parse")
+    /// A leaf is not a descriptor on its own, and `musig()` is a key-path
+    /// key only: beside a script tree or nested in another `musig()` it stops
+    /// at the parse. Key-path `musig()` is accepted; BIP390Tests covers it.
+    @Test("bare leaves and musig() outside the key path are refused at the parse")
     func multiKeyFormsRefused() {
         let xpub = "xpub6ERApfZwUNrhLCkDtcHTcxd75RbzS1ed54G1LkBUHQVHQKqhMkhgbmJbZRkrgZw4koxb5JaHWkY4ALHY2grBGRjaDMzQLcgJvLJuZZvRcEL"
         let other = "xpub68NZiKmJWnxxS6aaHmn81bvJeTESw724CRDs6HbuccFQN9Ku14VQrADWgqbhhTHBaohPX4CjNLf9fq9MYo6oDaPPLPxSb7gwQN3ih19Zm4Y"
         for text in [
-            "tr(musig(\(xpub),\(other))/0/*)",
-            "rawtr(musig(02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9,03dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659))",
+            "tr(musig(\(xpub),\(other))/0/*,pk(\(other)/1/*))",
+            "tr(musig(musig(\(xpub),\(other)))/0/*)",
             "pk(\(xpub)/0/*)",
             "multi_a(1,\(xpub)/0/*)",
         ] {

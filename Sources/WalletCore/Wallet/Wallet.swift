@@ -1779,6 +1779,15 @@ public actor Wallet {
         try accountPrivateKey()
     }
 
+    /// The account private key, checked against this wallet's descriptor, for
+    /// signing as a MuSig2 participant: the account xpub is the participant
+    /// key the wallet shares, so the one key signs whether the wallet holds a
+    /// seed, a master key or only its account key. The caller authenticates
+    /// first and holds the key for one signing operation only.
+    public func muSig2SigningKey() throws -> HDKey {
+        try accountPrivateKey()
+    }
+
     /// BIP86 key-path spend, below the account already checked for this wallet.
     private func tweakedPrivateKey(chain: AddressChain, index: UInt32, account: HDKey) throws -> Data {
         let key = try account.child(at: UInt32(chain.rawValue)).child(at: index)

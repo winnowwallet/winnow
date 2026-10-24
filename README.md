@@ -2,8 +2,9 @@
 
 Winnow is a Bitcoin wallet for iPhone and iPad, also available on Apple silicon
 Mac as an iPad app. It receives and sends bitcoin and saves recipients. This
-build signs with this phone's key, alone or as one signer of a k-of-n multisig
-account, and the curve arithmetic behind every signature is Winnow's own Swift.
+build signs with this phone's key, alone, as one signer of a k-of-n multisig
+account, or as one participant of a MuSig2 account, and the curve arithmetic
+behind every signature is Winnow's own Swift.
 
 [App Store](https://apps.apple.com/app/id6801502501) ·
 [TestFlight](https://testflight.apple.com/join/83djpNE7) ·
@@ -27,13 +28,23 @@ account" builds one from this phone and other Winnows' keys, for example a
 2-of-3 of three phones, with an optional recovery path: a coin that has not
 moved for a chosen number of blocks can then be spent by fewer of the same
 signers, or by a separate recovery key.
-There are no MuSig2 accounts, cosigner cards or shared-savings screens. A backup carrying a MuSig2
-account from the shared-account Winnow is refused rather than restored without
-those funds.
-Key derivation, the Taproot tweak and BIP340 signing run in
+
+Advanced mode's Wallet tab also holds MuSig2 accounts, kept raw. An account
+is an n-of-n Taproot key-path descriptor, `tr(musig(…)/<0;1>/*)` (BIP327,
+BIP328, BIP390), with this phone's key among its participants. Winnow watches
+its addresses with the same compact filters as the wallet. It signs only a
+PSBT that spends coins it found, sends any change back to the account and pays
+at most a tenth of the inputs in fee. Signers exchange the PSBT as text
+(BIP373); Bitcoin Core can be one of them. There are no threshold savings and
+no cosigner cards. A backup carries both kinds of account; one carrying any
+other kind from the shared-account Winnow is refused rather than restored
+without those funds.
+
+Key derivation, the Taproot tweak, BIP340 signing and MuSig2 run in
 [NativeSecp256k1](Sources/NativeSecp256k1/README.md), an in-tree Swift module
-that is variable-time and does not zeroize secrets. The package has no
-third-party dependencies, so the app links no code from outside this repository.
+that is variable-time and does not zeroize secrets. MuSig2's secret nonces are
+under the same limits as keys. The package has no third-party dependencies, so
+the app links no code from outside this repository.
 
 ## Connections and privacy
 

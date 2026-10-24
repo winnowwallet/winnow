@@ -156,10 +156,14 @@ public struct ImportBundle: Codable, Equatable, Sendable {
     public var transactions: [KnownTransaction]
     /// Multisig accounts (`MultisigAccountRecord`), under the key the
     /// shared-account Winnow used for all its accounts. Script-path k-of-n
-    /// accounts restore; a bundle carrying any other kind of account, such as
-    /// a MuSig2 one, is refused outright rather than restored without it
-    /// (see `decode`).
+    /// accounts restore here and key-path MuSig2 ones into `muSig2Accounts`;
+    /// a bundle carrying any other kind of account is refused outright rather
+    /// than restored without it (see `decode`).
     public var vaults: [MultisigAccountRecord]?
+    /// MuSig2 accounts (`MuSig2AccountRecord`), written under the same
+    /// `vaults` key after the multisig ones: a record whose descriptor has a
+    /// `musig()` key is one of these.
+    public var muSig2Accounts: [MuSig2AccountRecord]?
     /// Next unused BIP86 receive index. Absent from v1 files and from
     /// writers that only knew UTXO-derived maxima; the importer then
     /// falls back to `max(receive UTXO index) + 1`.
@@ -253,15 +257,19 @@ public struct ImportBundle: Codable, Equatable, Sendable {
             throw WalletError.invalidBundle(
                 "bundle declares \(bundle.transactions.count) transactions, above the \(maximumEntries) limit")
         }
-        guard (bundle.vaults?.count ?? 0) <= maximumVaults,
-              (bundle.vaults ?? []).reduce(0, { $0 + $1.allUtxos.count }) <= maximumEntries else {
+        let multisig = bundle.vaults ?? [], muSig2 = bundle.muSig2Accounts ?? []
+        guard multisig.count + muSig2.count <= maximumVaults,
+              multisig.reduce(0, { $0 + $1.allUtxos.count }) + muSig2.reduce(0, { $0 + $1.allUtxos.count })
+              <= maximumEntries else {
             throw WalletError.invalidBundle("too many multisig accounts or account coins")
         }
-        // MuSig2 accounts from the shared-account Winnow have no home here;
+        // Threshold accounts from the shared-account Winnow, or any account
+        // that is not a valid multisig or MuSig2 one, have no home here;
         // their coins must not vanish from a restore.
-        if let vaults = bundle.vaults, !vaults.isEmpty {
+        if !multisig.isEmpty || !muSig2.isEmpty {
             guard let network = BitcoinNetwork(rawValue: bundle.network),
-                  vaults.allSatisfy({ (try? MultisigAccount($0.descriptor, network: network)) != nil })
+                  multisig.allSatisfy({ (try? MultisigAccount($0.descriptor, network: network)) != nil }),
+                  muSig2.allSatisfy({ (try? MuSig2Account($0.descriptor, network: network)) != nil })
             else { throw WalletError.unsupportedWalletData }
         }
         return bundle
@@ -296,7 +304,56 @@ public struct ImportBundle: Codable, Equatable, Sendable {
         try container.encode(transactions, forKey: .transactions)
         try container.encodeIfPresent(nextReceiveIndex, forKey: .nextReceiveIndex)
         try container.encodeIfPresent(nextChangeIndex, forKey: .nextChangeIndex)
-        try container.encodeIfPresent(vaults, forKey: .vaults)
+        if vaults != nil || muSig2Accounts != nil {
+            try container.encode((vaults ?? []).map(AccountRecord.multisig)
+                + (muSig2Accounts ?? []).map(AccountRecord.muSig2), forKey: .vaults)
+        }
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decode(Int.self, forKey: .version)
+        network = try container.decode(String.self, forKey: .network)
+        descriptor = try container.decodeIfPresent(String.self, forKey: .descriptor)
+        mnemonic = try container.decodeIfPresent(String.self, forKey: .mnemonic)
+        lastKnownHeight = try container.decode(UInt32.self, forKey: .lastKnownHeight)
+        lastKnownBlockHash = try container.decodeIfPresent(String.self, forKey: .lastKnownBlockHash)
+        utxos = try container.decode([UTXO].self, forKey: .utxos)
+        transactions = try container.decode([KnownTransaction].self, forKey: .transactions)
+        nextReceiveIndex = try container.decodeIfPresent(UInt32.self, forKey: .nextReceiveIndex)
+        nextChangeIndex = try container.decodeIfPresent(UInt32.self, forKey: .nextChangeIndex)
+        guard let records = try container.decodeIfPresent([AccountRecord].self, forKey: .vaults) else { return }
+        let multisig = records.compactMap { if case let .multisig(record) = $0 { record } else { nil } }
+        let muSig2 = records.compactMap { if case let .muSig2(record) = $0 { record } else { nil } }
+        vaults = multisig.isEmpty ? nil : multisig
+        muSig2Accounts = muSig2.isEmpty ? nil : muSig2
+    }
+
+    /// One record under `vaults`. Both kinds share the record shape, so the
+    /// descriptor decides: a `musig()` key makes a MuSig2 account, and
+    /// anything else is read as a multisig account, which `decode` then
+    /// refuses unless it parses as one.
+    private enum AccountRecord: Codable {
+        case multisig(MultisigAccountRecord)
+        case muSig2(MuSig2AccountRecord)
+
+        private enum Keys: String, CodingKey { case descriptor }
+
+        init(from decoder: any Decoder) throws {
+            let descriptor = try decoder.container(keyedBy: Keys.self).decode(String.self, forKey: .descriptor)
+            if (try? Descriptor(descriptor))?.muSigKey != nil {
+                self = .muSig2(try MuSig2AccountRecord(from: decoder))
+            } else {
+                self = .multisig(try MultisigAccountRecord(from: decoder))
+            }
+        }
+
+        func encode(to encoder: any Encoder) throws {
+            switch self {
+            case let .multisig(record): try record.encode(to: encoder)
+            case let .muSig2(record): try record.encode(to: encoder)
+            }
+        }
     }
 
     /// The bundle's claimed UTXOs in wallet form.

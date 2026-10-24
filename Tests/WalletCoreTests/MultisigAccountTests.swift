@@ -438,10 +438,11 @@ struct MultisigAccountTests {
     }
 
     /// Bundles written by the shared-account Winnow keep every account under
-    /// `vaults`. A script-path multisig account restores; anything else, such
-    /// as a MuSig2 account, refuses the bundle, so its coins never vanish
-    /// from a restore.
-    @Test("bundles carry multisig accounts and refuse any other kind of account")
+    /// `vaults`, and so does this build: script-path multisig accounts and
+    /// MuSig2 accounts restore side by side, told apart by their descriptors.
+    /// Any other kind of account, such as a single-key one, refuses the
+    /// bundle, so its coins never vanish from a restore.
+    @Test("bundles carry multisig and MuSig2 accounts and refuse any other kind of account")
     func bundleAccounts() throws {
         let (account, masters) = try Self.account()
         let record = MultisigAccountRecord(id: account.id, name: "Household", descriptor: account.descriptor.serialized(),
@@ -453,19 +454,28 @@ struct MultisigAccountTests {
         #expect(try ImportBundle.decode(json: bundle.serialized()).vaults == [record])
 
         let keys = try masters.map { try TestKeys.bareKeyExpression(master: $0) }
-        var muSig2 = record
-        // Main's MuSig2 account shape; this build cannot even parse it.
-        muSig2.descriptor = "tr(musig(\(keys[0]),\(keys[1]))/<0;1>/*)"
-        for refused in [[muSig2], [record, muSig2]] {
+        let muSig2Account = try MuSig2Account("tr(musig(\(keys[0]),\(keys[1]))/<0;1>/*)", network: .signet)
+        let muSig2 = MuSig2AccountRecord(id: muSig2Account.id, name: "Shared",
+                                         descriptor: muSig2Account.descriptor.serialized(), createdAtHeight: 90)
+        bundle.muSig2Accounts = [muSig2]
+        let both = try ImportBundle.decode(json: bundle.serialized())
+        #expect(both.vaults == [record])
+        #expect(both.muSig2Accounts == [muSig2])
+
+        var singleKey = record
+        singleKey.descriptor = "tr(\(keys[0])/<0;1>/*)"
+        for refused in [[singleKey], [record, singleKey]] {
             bundle.vaults = refused
             #expect(throws: WalletError.unsupportedWalletData) { _ = try ImportBundle.decode(json: bundle.serialized()) }
         }
+        bundle.vaults = [record]
         var mainnet = bundle
         mainnet.network = "mainnet"
-        mainnet.vaults = [record]
         #expect(throws: WalletError.unsupportedWalletData) { _ = try ImportBundle.decode(json: mainnet.serialized()) }
-        bundle.vaults = Array(repeating: record, count: ImportBundle.maximumVaults + 1)
-        #expect(throws: WalletError.self) { _ = try ImportBundle.decode(json: bundle.serialized()) }
+        bundle.vaults = Array(repeating: record, count: ImportBundle.maximumVaults)
+        #expect(throws: WalletError.self, "the cap counts both kinds") {
+            _ = try ImportBundle.decode(json: bundle.serialized())
+        }
     }
 }
 

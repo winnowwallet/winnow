@@ -1,8 +1,8 @@
-Winnow on Swift-only curve math: 2-of-3 multisig with recovery paths (internal test)
+Winnow on Swift-only curve math: 2-of-3 multisig with recovery paths and raw MuSig2 accounts (internal test)
 
-Every address and signature comes from Winnow's own Swift secp256k1 module instead of libsecp256k1. The module is variable-time and does not clear secrets from memory; that is accepted for this test build. Advanced mode builds k-of-n Taproot multisig accounts from Winnows or any signer, with an optional recovery path. There is no MuSig2 and no shared savings. Compact-filter sync, peer routing, people, labels and backups are unchanged.
+Every address and signature comes from Winnow's own Swift secp256k1 module instead of libsecp256k1. The module is variable-time and does not clear secrets from memory; that is accepted for this test build. Advanced mode builds k-of-n Taproot multisig accounts from Winnows or any signer, with an optional recovery path, and holds raw n-of-n MuSig2 accounts. There are no shared savings or cosigner cards. Compact-filter sync, peer routing, people, labels and backups are unchanged.
 
-Do not install this build on a phone that holds funds in MuSig2 accounts (build 0.8.8) or shared-account vaults. It cannot see them, and its automatic iCloud backup leaves them out.
+Do not install this build on a phone that holds funds in shared-account vaults. It cannot see them, and its automatic iCloud backup leaves them out. MuSig2 accounts from build 0.8.8 carry over.
 
 2-of-3 with three Winnows, on signet
 
@@ -16,12 +16,16 @@ Do not install this build on a phone that holds funds in MuSig2 accounts (build 
 
 Also try: a separate recovery key instead of fewer signers, a 2-of-2 of two phones, and joining the same descriptor twice (the same account comes back, not a copy). None of this appears in Simple mode.
 
+MuSig2 accounts
+
+On signet, in Advanced mode, copy this phone's key from Wallet → Add MuSig2 account, build tr(musig(PHONE_KEY,OTHER_KEY)/<0;1>/*) with a second signer such as Bitcoin Core, paste it and check the first address on both. Fund it, create a PSBT, add this phone's nonce, combine the other signer's, add the partial signature, combine theirs and broadcast. Leaving the screen between rounds must discard the exchange.
+
 Ordinary wallet
 
 Receive from a faucet, send a payment and watch it confirm. Restore the same recovery words in the App Store Winnow on another device: the first receive address must match. Pay a saved person and a pasted address. Bump the fee on a pending payment.
 
 Backups
 
-A backup from this build carries its multisig accounts. A file carrying MuSig2 accounts or vaults must be refused with a clear message, never restored partially.
+A backup from this build carries its multisig accounts and MuSig2 accounts. A file carrying vaults must be refused with a clear message, never restored partially.
 
 Report bugs publicly at https://github.com/winnowwallet/winnow/issues. Include the app version, device, network and steps to reproduce. Never include recovery words, private keys, or wallet backup files.

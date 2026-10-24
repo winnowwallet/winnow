@@ -2,9 +2,10 @@ import Foundation
 import WalletCore
 
 /// A Bitcoin Core signer for disposable node/app tests. Core generates the
-/// key and signs script-path spends through `walletprocesspsbt`, with its own
-/// libsecp256k1; only its public expression goes into the app. The private
-/// descriptor is used only to configure the test's Core wallet.
+/// key, signs script-path spends and runs both MuSig2 rounds through
+/// `walletprocesspsbt`, with its own libsecp256k1; only its public expression
+/// goes into the app. The private descriptor is used only to configure the
+/// test's Core wallet.
 public struct CoreSigner {
     public enum SetupError: Error { case invalid(String) }
     public let wallet: String
@@ -40,7 +41,11 @@ public struct CoreSigner {
     /// Imports the account with Core's own key private, so Core watches the
     /// same addresses and can sign as one of its signers.
     public func importMultisigAccount(_ account: MultisigAccount) throws {
-        let text = String(account.descriptor.serialized().split(separator: "#")[0])
+        try importAccount(account.descriptor)
+    }
+
+    private func importAccount(_ descriptor: Descriptor) throws {
+        let text = String(descriptor.serialized().split(separator: "#")[0])
         let privateText = text.replacingOccurrences(of: publicExpression, with: privateExpression)
         guard privateText != text else { throw SetupError.invalid("Core key absent from the account") }
         let checksum = try BitcoinCLI.string(BitcoinCLI.runObject(["getdescriptorinfo", privateText]), "checksum")
@@ -51,6 +56,12 @@ public struct CoreSigner {
         guard ((imported as? [Any])?.first as? [String: Any])?["success"] as? Bool == true else {
             throw SetupError.invalid("Core refused the account descriptor")
         }
+    }
+
+    /// Imports a MuSig2 account with Core's own key private, so Core watches
+    /// the same addresses and can sign as its participant.
+    public func importMuSig2Account(_ account: MuSig2Account) throws {
+        try importAccount(account.descriptor)
     }
 
     /// Core signs whatever it can in the PSBT; the result is combined back

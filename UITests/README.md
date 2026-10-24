@@ -16,7 +16,18 @@ verify where two are needed. The phone finalizes the BIP387 witness, which
 must carry exactly two, and broadcasts, and Core must accept and mine it.
 Three blocks later the phone alone spends the change on the recovery leaf,
 with both leaves' counts on screen, and Core must accept the CSV-locked
-witness. The journey is one test result.
+witness. Last, [MuSig2Journey.swift](MuSig2Journey.swift) files a 2-of-2
+MuSig2 account with Bitcoin Core as the other signer, receives into it, and
+spends from it. The journey is one test result.
+
+In the MuSig2 leg the phone shows its own key, the test builds
+`tr(musig(PHONE,CORE)/<0;1>/*)`, and the account's first address must equal
+Core's `deriveaddresses`. The phone creates the PSBT; Core's
+`walletprocesspsbt` adds its nonce, then its partial signature, each pasted
+back into the phone between the phone's own two rounds. The phone aggregates
+and broadcasts, and Core must accept the single 64-byte key-path signature,
+mine it and find the change. That makes Core's own libsecp256k1 MuSig2 the
+interop check on the phone's Swift implementation.
 
 Two smaller classes share the bundle.
 [PeerGatewaySettingsUITests.swift](PeerGatewaySettingsUITests.swift) checks the
@@ -66,10 +77,13 @@ The source contains 11 captures, attached to the result bundle and copied to
 `WINNOW_SCREENSHOT_DIR`: `01-onboarding`, `03-receive`, `56-home-beginner`,
 `06-send-review`, `08-send-confirmed`, `09-home-after-send`, then the multisig
 leg's `26-savings-share`, `27-savings-funded`, `14-approval-waiting`,
-`15-approval-sent` and `28-savings-confirmed`, the names the shared-account
-Winnow used for its threshold leg. They are taken at screens the journey
-already visits. CI normalizes the continuous video after successful tests and
-retains all 11 checkpoints in wallet evidence. The public
+`15-approval-sent` and `28-savings-confirmed`, and the MuSig2 leg's
+`35-extra-device-policy`, `36-extra-device-review`,
+`37-extra-device-waiting`, `39-extra-device-sent` and
+`40-extra-device-confirmed`, the names the shared-account Winnow used for the
+same screens. They are taken at screens the journey already visits. CI
+normalizes the continuous video after successful tests and retains all 16
+checkpoints in wallet evidence. The public
 website, which still presents the sixteen-checkpoint journey of the
 shared-account Winnow, is maintained in winnowwallet/website,
 where [video provenance](https://github.com/winnowwallet/website/blob/main/docs/videos/README.md)
@@ -82,6 +96,7 @@ source and run in journey-provenance.json.
 `SIGNET_SETUP_SECONDS` measures XCTest's fast chain and
 bank readiness checks; `SIGNET_MULTISIG_SECONDS` measures the multisig leg and
 `SIGNET_RECOVERY_SECONDS` its recovery-path spend after the delay;
+`SIGNET_MUSIG_SECONDS` measures the MuSig2 leg;
 `SIGNET_ORDINARY_SECONDS` measures the payment and
 `SIGNET_JOURNEY_SECONDS` the complete app journey. Xcode reports overall test
 execution separately; compilation is outside that test duration.

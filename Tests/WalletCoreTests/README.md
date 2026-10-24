@@ -3,7 +3,7 @@
 # Wallet decisions and recovery tests
 
 These tests protect balances, coin selection, fees, key storage, imports,
-transaction signing, people, and reorg recovery. They exercise the shared
+transaction signing, MuSig2 accounts, people, and reorg recovery. They exercise the shared
 wallet rules used by the GUI instead of reproducing those rules in app tests.
 
 The same target includes [network tests](Network/README.md)
