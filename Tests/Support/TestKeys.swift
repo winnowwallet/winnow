@@ -29,4 +29,17 @@ public enum TestKeys {
         let fingerprint = String(format: "%08x", master.fingerprint)
         return "[\(fingerprint)/86'/1'/0']\(account.neutered.serialized(network: .testnet))"
     }
+
+    /// `masters` in the order `account` lists their keys. The account
+    /// builder sorts signers by key, so a test that names signer `i` by the
+    /// position `approvals` reports uses this order.
+    public static func inSignerOrder(_ masters: [HDKey], of account: MultisigAccount) throws -> [HDKey] {
+        let listed = account.signers.compactMap { signer -> Data? in
+            guard case let .extended(xpub, _) = signer.base else { return nil }
+            return xpub.publicKey
+        }
+        return try masters.map { master in
+            (master, listed.firstIndex(of: try master.derived(path: "m/86'/1'/0'").publicKey) ?? Int.max)
+        }.sorted { $0.1 < $1.1 }.map(\.0)
+    }
 }

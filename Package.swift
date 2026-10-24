@@ -74,7 +74,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "WinnowFixture",
-            dependencies: ["TestSupport"],
+            dependencies: ["TestSupport", "WalletCore"],
             path: "Tools/Fixture",
             exclude: ["README.md"]
         ),
