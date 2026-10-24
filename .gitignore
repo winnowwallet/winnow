@@ -23,3 +23,6 @@ xcuserdata/
 
 # Local Python checks
 __pycache__/
+
+# Lean build output and the fetched Mathlib (Tools/Proofs)
+Tools/Proofs/.lake/

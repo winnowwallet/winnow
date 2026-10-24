@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Rebuilds Tools/Proofs (which checks every proof), audits the axioms the
+# theorems use, regenerates the Swift and diffs it against the committed
+# Sources/NativeSecp256k1/Generated. Needs elan (`brew install elan-init`);
+# the first run fetches Mathlib's prebuilt files (about 5 GB). Not run in CI:
+# the app builds from the committed Swift and needs no Lean.
+set -euo pipefail
+cd "$(dirname "$0")/../Tools/Proofs"
+command -v lake >/dev/null || { echo "lake not found: install elan (brew install elan-init)" >&2; exit 2; }
+
+lake exe cache get > /dev/null
+lake build
+
+audit=$(lake env lean Audit.lean)
+expected=$(grep -c '^#print axioms' Audit.lean)
+standard='(propext|Classical\.choice|Quot\.sound)'
+clean=$(grep -cE "(depends on axioms: \[$standard(, $standard)*\]|does not depend on any axioms)$" <<< "$audit" || true)
+if [ "$clean" -ne "$expected" ]; then
+  echo "$audit"
+  echo "::error::a theorem depends on an axiom beyond propext, Classical.choice and Quot.sound" >&2
+  exit 1
+fi
+
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+lake exe emit "$scratch"
+diff -ru "$scratch" ../../Sources/NativeSecp256k1/Generated
+echo "generated Swift matches the proved programs; $expected theorems use only the standard axioms"

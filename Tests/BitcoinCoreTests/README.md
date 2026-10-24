@@ -17,6 +17,9 @@ also hold field and scalar arithmetic to the fuzz core's independent
 [reference implementation](../../Tools/Fuzz/Sources/WinnowFuzzCore/ReferenceSecp256k1.swift)
 on operands built from structured limbs (all ones, the top bit, the limbs of p
 and n), which reach carries and reductions that random values do not.
+`NativeSecp256k1GeneratedTests` holds the [Lean-generated arithmetic](../../Tools/Proofs/README.md)
+to the hand-written arithmetic it replaced, kept in
+`HandWrittenSecp256k1Arithmetic.swift`, and to the same reference.
 The test target keeps its primitive-focused name; production has one WalletCore target.
 
 Run `swift test --filter BitcoinCoreTests` from the repository root.

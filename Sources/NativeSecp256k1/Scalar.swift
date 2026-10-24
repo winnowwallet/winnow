@@ -24,12 +24,10 @@ struct Scalar: Equatable, Hashable, Sendable {
         value = parsed
     }
 
-    /// Any 256-bit integer, reduced modulo n. Since n > 2^255, one
-    /// subtraction suffices; this is how BIP340 reduces hash outputs.
+    /// Any 256-bit integer, reduced modulo n; this is how BIP340 reduces
+    /// hash outputs.
     init(reducing integer: Integer256) {
-        value = integer < Self.order
-            ? integer
-            : integer.subtractingReportingOverflow(Self.order).partialValue
+        value = GeneratedScalar.reduce(integer)
     }
 
     var bigEndian: Data { value.bigEndian }
@@ -38,30 +36,23 @@ struct Scalar: Equatable, Hashable, Sendable {
     /// Bit `index` of the canonical value, 0 being the least significant.
     func bit(_ index: Int) -> Bool { value.bit(index) }
 
+    // The bodies are in Generated/GeneratedScalar.swift, printed from
+    // programs that Tools/Proofs proves return the canonical residue.
+
     static func + (lhs: Scalar, rhs: Scalar) -> Scalar {
-        let (sum, carry) = lhs.value.addingReportingOverflow(rhs.value)
-        // Both operands are below n, so the true sum is below 2n. With a
-        // carry the wrapped value is below n and subtracting n (wrapping)
-        // yields sum + 2^256 − n, the correct residue.
-        guard carry || sum >= Self.order else { return Scalar(canonical: sum) }
-        return Scalar(canonical: sum.subtractingReportingOverflow(Self.order).partialValue)
+        Scalar(canonical: GeneratedScalar.add(lhs.value, rhs.value))
     }
 
     func negated() -> Scalar {
-        isZero ? self : Scalar(canonical: Self.order.subtractingReportingOverflow(value).partialValue)
+        Scalar(canonical: GeneratedScalar.negate(value))
     }
 
-    static func - (lhs: Scalar, rhs: Scalar) -> Scalar { lhs + rhs.negated() }
+    static func - (lhs: Scalar, rhs: Scalar) -> Scalar {
+        Scalar(canonical: GeneratedScalar.subtract(lhs.value, rhs.value))
+    }
 
-    /// The product modulo n by the binary method: 256 doublings and at most
-    /// 256 additions, each a modular addition. Slow but simple; the wallet
-    /// multiplies scalars once per signature.
+    /// The product modulo n: the full 512-bit product, then a reduction.
     func multiplied(by other: Scalar) -> Scalar {
-        var accumulator = Scalar.zero
-        for index in stride(from: 255, through: 0, by: -1) {
-            accumulator = accumulator + accumulator
-            if other.bit(index) { accumulator = accumulator + self }
-        }
-        return accumulator
+        Scalar(canonical: GeneratedScalar.multiply(value, other.value))
     }
 }
