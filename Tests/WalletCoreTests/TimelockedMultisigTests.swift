@@ -86,13 +86,34 @@ struct TimelockedMultisigTests {
         return compact(witness.count) + witness.reduce(0) { $0 + compact($1.count) + $1.count }
     }
 
+    /// The builder's canonical order covers the recovery leaf: separate
+    /// recovery keys in any order, and the signers reused for recovery in
+    /// any order, give one descriptor.
+    @Test("recovery keys in any order, and signers in any order, give one descriptor")
+    func recoveryKeyOrderDoesNotMatter() throws {
+        let signers = try TestKeys.masters().map { try TestKeys.keyExpression(master: $0) }
+        let others = try [0xD4, 0xD5, 0xD6].map { try TestKeys.keyExpression(master: TestKeys.master(entropyByte: $0)) }
+        let separate = try [others, Array(others.reversed()), [others[1], others[2], others[0]]].map {
+            try MultisigAccount.descriptor(threshold: 2, signers: Array(signers.prefix(2)),
+                                           recovery: .separateKeys(threshold: 2, keys: $0, blocks: 144),
+                                           network: .signet).serialized()
+        }
+        #expect(Set(separate).count == 1)
+        let reused = try [signers, Array(signers.reversed())].map {
+            try MultisigAccount.descriptor(threshold: 2, signers: $0, recovery: .fewerSigners(threshold: 1, blocks: 10),
+                                           network: .signet).serialized()
+        }
+        #expect(Set(reused).count == 1)
+    }
+
     @Test("2-of-3 now, or any 1 of the same 3 once a coin is 10 blocks old")
     func fewerSigners() throws {
-        let masters = try TestKeys.masters()
+        let unordered = try TestKeys.masters()
         let descriptor = try MultisigAccount.descriptor(
-            threshold: 2, signers: try masters.map { try TestKeys.keyExpression(master: $0) },
+            threshold: 2, signers: try unordered.map { try TestKeys.keyExpression(master: $0) },
             recovery: .fewerSigners(threshold: 1, blocks: 10), network: .signet)
         let account = try MultisigAccount(descriptor: descriptor, network: .signet)
+        let masters = try TestKeys.inSignerOrder(unordered, of: account)
         let recovery = try #require(account.recovery)
         #expect(recovery.threshold == 1 && recovery.blocks == 10 && recovery.keys.count == 3)
         #expect(try MultisigAccount(descriptor.serialized(), network: .signet).address(index: 2) == account.address(index: 2))
@@ -117,6 +138,11 @@ struct TimelockedMultisigTests {
         #expect(Self.witnessSize(fast.inputs[0].witness) <= (try account.witnessBytesPerInput(path: .signers)))
 
         // The recovery path: refused while the coin is young, then one key.
+        // A coin from block 100 under a 10-block lock opens in block 110,
+        // the first block Core's BIP68 check accepts its spend in: the
+        // account screen's "recovery path from block 110" and the rule agree.
+        #expect(account.recoveryUnlockHeight(of: coin) == 110)
+        #expect(!account.isUnlockedForRecovery(coin, chainTip: 108) && account.isUnlockedForRecovery(coin, chainTip: 109))
         #expect(throws: MultisigAccountError.self) { _ = try spend(account, coin, tip: 108, path: .recovery) }
         var later = try spend(account, coin, tip: 109, path: .recovery)
         #expect(try account.reviewSpend(later, knownUTXOs: [coin], ownedOutputCoordinates: owned, chainTip: 109).path
