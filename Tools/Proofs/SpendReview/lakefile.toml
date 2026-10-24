@@ -1,0 +1,12 @@
+name = "SpendReview"
+defaultTargets = ["SpendReview", "spend-review-vectors"]
+
+# Lean core only: no Mathlib, no Batteries.
+
+[[lean_lib]]
+name = "SpendReview"
+
+# Writes the differential fixture; see README.md.
+[[lean_exe]]
+name = "spend-review-vectors"
+root = "Main"
