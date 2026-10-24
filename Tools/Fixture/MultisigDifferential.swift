@@ -13,10 +13,8 @@ import WalletCore
 /// delay). For every case Core must agree with Winnow on:
 ///
 /// - the descriptor checksum and the first four receive and change addresses,
-///   and, for a sorted leaf, that listing the signers in another order
-///   leaves the leaf script unchanged (the address still changes: the
-///   internal key's chain code hashes the signers in listed order, which is
-///   reported as a note);
+///   and that listing the signers, or a recovery leaf's separate keys, in
+///   another order builds the very same descriptor;
 /// - which signers a PSBT carries valid signatures from, Core's included
 ///   (both sides compute the same script-path sighash);
 /// - every subset of exactly k signers, each signing in a shuffled order:
@@ -43,10 +41,6 @@ enum MultisigDifferential {
     final class Tally {
         private(set) var agreed: [String: Int] = [:]
         private(set) var disagreements: [String] = []
-        /// Properties worth knowing that are not disagreements with Core.
-        private(set) var notes: [String] = []
-
-        func note(_ text: String) { notes.append(text) }
 
         func check(_ agrees: Bool, _ kind: String, _ detail: @autoclosure () -> String) {
             if agrees {
@@ -194,20 +188,17 @@ enum MultisigDifferential {
                 tally.check(ours == theirs, "address", "\(tag) \(choice)/\(index): Core \(theirs), Winnow \(ours)")
             }
         }
-        // A sorted leaf must not depend on the order the signers are listed
-        // in. A fewer-signers recovery leaf is multi_a, unsorted, so it is
-        // left out: there the order is part of the policy.
-        if case .fewerSigners = generated.recovery { return }
-        let reordered = try MultisigAccount.descriptor(threshold: generated.threshold, signers: expressions.reversed(),
-                                                       recovery: generated.recovery, network: .regtest)
-        tally.check(try reordered.resolvedTaproot(index: 0).tree == account.descriptor.resolvedTaproot(index: 0).tree,
-                    "sorted leaf ignores signer order", "\(tag): listing the signers in reverse changes the leaves")
-        // The internal key's chain code hashes the signers in listed order,
-        // so the address itself does depend on it: reported, not failed,
-        // because existing accounts carry their internal key in the text.
-        if try MultisigAccount(descriptor: reordered, network: .regtest).address(index: 0) != account.address(index: 0) {
-            tally.note("address depends on the listed signer order (internal key chain code), \(tag)")
+        // The builder writes keys in one canonical order, so listing the
+        // signers, or a recovery leaf's separate keys, in another order must
+        // give the very same descriptor, internal key included.
+        let reversedRecovery = generated.recovery.map { plan -> MultisigAccount.RecoveryPlan in
+            guard case let .separateKeys(m, keys, blocks) = plan else { return plan }
+            return .separateKeys(threshold: m, keys: keys.reversed(), blocks: blocks)
         }
+        let reordered = try MultisigAccount.descriptor(threshold: generated.threshold, signers: expressions.reversed(),
+                                                       recovery: reversedRecovery, network: .regtest)
+        tally.check(reordered.serialized() == text, "signer order",
+                    "\(tag): listing the keys in reverse gives \(reordered.serialized().suffix(8)), not \(account.id)")
     }
 
     // MARK: - The signers' leaf

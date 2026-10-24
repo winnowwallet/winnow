@@ -264,8 +264,24 @@ public struct MultisigAccount: Sendable {
     /// validated as an account for `network`. The internal key is written as
     /// an extended key on the NUMS point (`unspendableKeyExpression`), so a
     /// BIP388 signer such as a Ledger can register the account.
+    ///
+    /// The signers, and a recovery leaf's separate keys, are written in one
+    /// canonical order whatever order they arrive in: by x-only account key,
+    /// ascending. The internal key's chain code hashes the keys in written
+    /// order, so without it two people listing the same keys differently,
+    /// or someone rebuilding an account from its keys, would get another
+    /// account with other addresses. Accounts built before this keep their
+    /// stored descriptor, which carries its own internal key. Order
+    /// independence is in MultisigAccountTests.signerOrderDoesNotMatter and
+    /// TimelockedMultisigTests.recoveryKeyOrderDoesNotMatter;
+    /// `scripts/check-multisig-core` holds the addresses to Bitcoin Core.
     public static func descriptor(threshold: Int, signers: [String], recovery: RecoveryPlan? = nil,
                                   network: BitcoinNetwork) throws -> Descriptor {
+        let signers = try canonicalOrder(signers)
+        let recovery = try recovery.map { plan -> RecoveryPlan in
+            guard case let .separateKeys(m, keys, blocks) = plan else { return plan }
+            return .separateKeys(threshold: m, keys: try canonicalOrder(keys), blocks: blocks)
+        }
         var leaf = "sortedmulti_a(\(threshold),\(signers.joined(separator: ",")))"
         if let recovery { leaf = "{\(leaf),\(try recoveryLeaf(recovery, signers: signers))}" }
         let descriptor: Descriptor
@@ -280,6 +296,19 @@ public struct MultisigAccount: Sendable {
         }
         _ = try MultisigAccount(descriptor: descriptor, network: network)
         return descriptor
+    }
+
+    /// Key expressions sorted by their x-only account key, ascending (the
+    /// order `sortedmulti_a` gives its derived keys).
+    private static func canonicalOrder(_ expressions: [String]) throws -> [String] {
+        let keyed = try expressions.map { expression -> (key: Data, expression: String) in
+            guard let parsed = try? Descriptor("tr(\(expression))"), case let .tr(single) = parsed.expression,
+                  case let .extended(xpub, _) = single.base else {
+                throw MultisigAccountError.invalidDescriptor("a signer key expression does not parse")
+            }
+            return (Data(xpub.publicKey.dropFirst()), expression)
+        }
+        return keyed.sorted { $0.key.lexicographicallyPrecedes($1.key) }.map(\.expression)
     }
 
     /// The recovery leaf's text: `and_v(v:pk(K),older(N))` for one key,

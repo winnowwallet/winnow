@@ -52,9 +52,6 @@ enum WinnowFixture {
             for (kind, count) in tally.agreed.sorted(by: { $0.key < $1.key }) {
                 print("agree  \(count)\t\(kind)")
             }
-            for note in Set(tally.notes.map { $0.components(separatedBy: ", seed").first ?? $0 }).sorted() {
-                print("note   \(tally.notes.filter { $0.hasPrefix(note) }.count)\t\(note)")
-            }
             for disagreement in tally.disagreements {
                 print("DISAGREE \(disagreement)")
             }

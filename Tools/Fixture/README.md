@@ -51,7 +51,8 @@ signs with its own libsecp256k1), the signers listed in a shuffled order, and
 an optional recovery leaf (fewer of the same signers, or separate keys, after
 1 to 4 blocks; 16, 144, 4,032 or 65,535 blocks are checked for addresses
 only). Core must agree with Winnow on the descriptor checksum, the first four
-receive and change addresses, which signers a PSBT carries valid signatures
+receive and change addresses (and listing the keys in another order must
+build the same descriptor), which signers a PSBT carries valid signatures
 from, and every subset of exactly k signers: Winnow finalizes, Core's mempool
 accepts, Core's own finalizer produces the same bytes, and one spend is mined.
 k − 1 signers finish on neither side; k + 1 still finish. On the recovery
@@ -60,8 +61,8 @@ opens and accept it in the block it opens, and the signers' leaf finishes a
 spend carrying the recovery sequence (BIP326).
 
 [MultisigDifferential.swift](MultisigDifferential.swift) has the checks.
-The command prints how many checks of each kind agreed, every disagreement
-with the seed and case that reproduce it, and notes for properties that are
-not disagreements; it exits non-zero on any disagreement. Forty cases take
+The command prints how many checks of each kind agreed and every
+disagreement with the seed and case that reproduce it; it exits non-zero on
+any disagreement. Forty cases take
 about two minutes. It is a local check; CI does not run it.
 

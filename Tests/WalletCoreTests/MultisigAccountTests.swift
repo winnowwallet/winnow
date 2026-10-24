@@ -14,11 +14,13 @@ struct MultisigAccountTests {
     /// An external P2TR destination.
     let destination = Data([0x51, 0x20] + repeatElement(0x77, count: 32))
 
+    /// The account and its signers' masters, `masters[i]` holding signer `i`.
     static func account(threshold: Int = 2, count: Int = 3) throws -> (MultisigAccount, [HDKey]) {
         let masters = Array(try TestKeys.masters().prefix(count))
         let descriptor = try MultisigAccount.descriptor(
             threshold: threshold, signers: try masters.map { try TestKeys.keyExpression(master: $0) }, network: .signet)
-        return (try MultisigAccount(descriptor: descriptor, network: .signet), masters)
+        let account = try MultisigAccount(descriptor: descriptor, network: .signet)
+        return (account, try TestKeys.inSignerOrder(masters, of: account))
     }
 
     static func funding(_ account: MultisigAccount, amount: Int64, choice: AddressChain = .receive,
@@ -194,6 +196,36 @@ struct MultisigAccountTests {
             _ = try account.finalizeSpend(&psbt, knownUTXOs: [utxo], ownedOutputCoordinates: owned,
                                           chainTip: testChainTip)
         }
+    }
+
+    // MARK: - Canonical order
+
+    /// Two phones that each list the same signers in their own order, this
+    /// phone first as the builder does, must make the same account; and an
+    /// account written in another order before the builder sorted keys
+    /// still parses, keeps its own internal key and its own addresses.
+    @Test("the same signers in any order make the same account; an older account keeps its addresses")
+    func signerOrderDoesNotMatter() throws {
+        let expressions = try TestKeys.masters().map { try TestKeys.keyExpression(master: $0) }
+        let orders = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]]
+        let built = try orders.map { order in
+            try MultisigAccount.descriptor(threshold: 2, signers: order.map { expressions[$0] }, network: .signet)
+        }
+        #expect(Set(built.map { $0.serialized() }).count == 1)
+        let account = try MultisigAccount(descriptor: built[0], network: .signet)
+
+        // The descriptor the builder wrote before sorting, for signers listed
+        // in reverse: the same leaf, another chain code on the NUMS xpub.
+        let reversed = Array(expressions.reversed())
+        let leaf = "sortedmulti_a(2,\(reversed.joined(separator: ",")))"
+        let draft = try Descriptor("tr(\(Taproot.unspendableInternalKey.hex),\(leaf))")
+        let olderKey = try MultisigAccount.unspendableKeyExpression(leafKeys: Array(draft.allKeys.dropFirst()),
+                                                                     network: .signet)
+        let older = try MultisigAccount("tr(\(olderKey),\(leaf))", network: .signet)
+        #expect(older.descriptor.serialized() != account.descriptor.serialized())
+        #expect(try older.address(index: 0) != account.address(index: 0))
+        #expect(try MultisigAccount(older.descriptor.serialized(), network: .signet).address(index: 0)
+            == older.address(index: 0))
     }
 
     // MARK: - Review (SEC-004)
