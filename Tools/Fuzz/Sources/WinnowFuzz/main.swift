@@ -134,6 +134,14 @@ private func binaryCorpus(for target: FuzzTarget) -> [Data] {
         let publicKey = Data(hex: "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9")!
         return [Data(), three + one + Data([0x02]) + generatorXOnly + Data(repeating: 0, count: 64)
                 + signature + publicKey]
+    case .ledger:
+        // A two-frame reply, a preimage request for a committed hash, a proof
+        // request, and a yielded script-path signature.
+        let frames = (try? LedgerBluetoothFraming.frames(for: Data(repeating: 0x90, count: 40), frameSize: 23)) ?? []
+        let winnow = Data(hex: "f1c01ae726fd268ed10606d63225deced6528b0bd1d69417e21c792851d68447")!
+        let yielded = Data([0x01, 64]) + Data(repeating: 0x11, count: 64) + Data(repeating: 0x22, count: 64)
+        return [Data(), frames.reduce(Data(), +), Data([0x40, 0x00]) + winnow,
+                Data([0x41]) + Data(repeating: 0, count: 32) + Data([100, 5]), Data([0xA0]), yielded]
     }
 }
 
