@@ -1,14 +1,14 @@
 import WalletCore
 import CryptoKit
 import Foundation
-import P256K
 
 /// BIP325 signet miner for the dev node. Core 31.1's `generatetoaddress`
 /// builds blocks but does NOT sign them for custom signets (no signet
 /// signing path in rpc/mining.cpp — the node rejects them with
 /// bad-signet-blksig), so the harness runs the whole cycle itself:
-/// getblocktemplate → build coinbase → BIP325 block signature (legacy
-/// SIGHASH_ALL against the challenge) → PoW grind → submitblock.
+/// getblocktemplate → build coinbase → BIP325 block signature (the node's
+/// own "miner" wallet signs the challenge over RPC, as Core's reference
+/// miner does) → PoW grind → submitblock.
 ///
 /// The UI journey uses this through the TestSupport library to mature
 /// fixture funding and confirm its payments.
@@ -22,21 +22,37 @@ public enum SignetMiner {
         Data(SHA256.hash(data: Data(SHA256.hash(data: data))))
     }
 
-    /// The challenge's signing secret, from the miner wallet's private
-    /// descriptor (WIF inside `multi(1,<wif>)`). Never printed.
-    private static func signingSecret() throws -> Data {
-        let result = try BitcoinCLI.runObject(["listdescriptors", "true"], wallet: "miner")
-        let descriptors = try BitcoinCLI.array(result, "descriptors")
-        guard let descriptor = (descriptors.first as? [String: Any])?["desc"] as? String,
-              let open = descriptor.firstIndex(of: "("), let close = descriptor.lastIndex(of: ")")
-        else { throw MinerError.wallet("miner wallet has no private descriptor") }
-        let wif = String(descriptor[descriptor.index(after: open) ..< close]
-            .split(separator: ",").last ?? "")
-        let payload = try Base58Check.decode(wif)
-        guard payload.count == 34, payload.first == 0xEF, payload.last == 0x01 else {
-            throw MinerError.wallet("unexpected WIF payload")
+    /// The BIP325 solution: tx_spending's scriptSig, signed by the node's own
+    /// "miner" wallet through `signrawtransactionwithwallet` (legacy
+    /// SIGHASH_ALL against the challenge), the way Bitcoin Core's reference
+    /// signet miner signs. The challenge secret never leaves the node and the
+    /// harness carries no ECDSA of its own.
+    ///
+    /// The challenge is 1 <pubkey> 1 OP_CHECKMULTISIG — a bare legacy script,
+    /// so the solution lives in tx_spending's scriptSig (the witness stack is
+    /// ignored for non-witness scriptPubKeys): OP_0 (CHECKMULTISIG dummy,
+    /// NULLDUMMY) || push(sig); empty witness.
+    private static func challengeSolution(spending toSpendTxid: Data) throws -> Data {
+        // tx_spending: version 0, locktime 0, in(to_spend:0, empty scriptSig,
+        // seq 0), out(0, OP_RETURN). The wallet fills in the scriptSig.
+        let spending = Transaction(
+            version: 0,
+            inputs: [Transaction.Input(previousOutput: Transaction.Outpoint(txid: toSpendTxid, vout: 0),
+                                       scriptSig: Data(), sequence: 0)],
+            outputs: [Transaction.Output(value: 0, scriptPubKey: Data([0x6A]))],
+            locktime: 0)
+        let previousOutputs = #"[{"txid":"\#(toSpendTxid.displayHex)","vout":0,"#
+            + #""scriptPubKey":"\#(BitcoinCLI.challengeHex)","amount":0}]"#
+        let result = try BitcoinCLI.runObject(
+            ["signrawtransactionwithwallet", spending.serialized(includeWitness: false).hex, previousOutputs, "ALL"],
+            wallet: "miner")
+        guard result["complete"] as? Bool == true, let hex = result["hex"] as? String,
+              let signedData = Data(hex: hex), let signed = try? Transaction.decode(signedData),
+              signed.inputs.count == 1, signed.inputs[0].witness.isEmpty, !signed.inputs[0].scriptSig.isEmpty
+        else {
+            throw MinerError.wallet("the miner wallet did not sign the challenge: \(result["errors"] ?? "no detail")")
         }
-        return payload.dropFirst().dropLast()
+        return signed.inputs[0].scriptSig
     }
 
     /// CScript-style data push (handles PUSHDATA1 for the ~80-byte section).
@@ -264,29 +280,7 @@ public enum SignetMiner {
         toSpend.appendUInt32LE(0)
         let toSpendTxid = sha256d(toSpend)
 
-        // Legacy SIGHASH_ALL preimage of tx_spending spending the challenge.
-        var preimage = Data()
-        preimage.appendUInt32LE(0)
-        preimage.appendVarInt(1)
-        preimage.append(toSpendTxid)
-        preimage.appendUInt32LE(0)
-        preimage.appendVarData(BitcoinCLI.challenge)
-        preimage.appendUInt32LE(0)
-        preimage.appendVarInt(1)
-        preimage.appendUInt64LE(0)
-        preimage.appendVarData(Data([0x6A])) // OP_RETURN
-        preimage.appendUInt32LE(0)
-        preimage.appendUInt32LE(1) // SIGHASH_ALL
-        let sighash = SHA256.hash(data: Data(SHA256.hash(data: preimage)))
-
-        // The challenge is 1 <pubkey> 1 OP_CHECKMULTISIG — a bare legacy
-        // script, so the solution lives in tx_spending's scriptSig (the
-        // witness stack is ignored for non-witness scriptPubKeys):
-        // OP_0 (CHECKMULTISIG dummy, NULLDUMMY) || push(sig); empty witness.
-        let secret = try signingSecret()
-        let signature = try P256K.Signing.PrivateKey(dataRepresentation: secret)
-            .signature(for: sighash).derRepresentation + Data([0x01])
-        let solutionScriptSig = Data([0x00]) + push(signature)
+        let solutionScriptSig = try challengeSolution(spending: toSpendTxid)
         var section = signetHeader
         section.appendVarData(solutionScriptSig) // tx_spending scriptSig
         section.appendVarInt(0) // tx_spending witness stack (empty)

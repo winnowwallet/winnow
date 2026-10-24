@@ -105,7 +105,7 @@ jobs:
           -authenticationKeyPath "${RUNNER_TEMP}/winnow-signing/AuthKey.p8"
           -authenticationKeyID "$ASC_KEY_ID"
           -authenticationKeyIssuerID "$ASC_ISSUER_ID"
-          -skipPackagePluginValidation -skipMacroValidation archive
+          archive
 
       - name: Verify shipped archive excludes E2E controls
         run: >-
@@ -150,8 +150,7 @@ jobs:
             -allowProvisioningUpdates \
             -authenticationKeyPath "${RUNNER_TEMP}/winnow-signing/AuthKey.p8" \
             -authenticationKeyID "$ASC_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
-            -skipPackagePluginValidation -skipMacroValidation
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
 
       - name: Verify the exported production package
         run: scripts/verify-exported-ipa build/export/WinnowApp.ipa
@@ -224,6 +223,13 @@ jobs:
       - name: GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
+          # This branch ships internal TestFlight builds of the native Winnow:
+          # the release is marked pre-release so it never becomes "latest"
+          # and its body says what the build is and is not.
+          prerelease: true
+          name: "${{ github.ref_name }}: native Swift secp256k1 with Taproot multisig and recovery paths (internal TestFlight)"
+          body: |
+            Internal TestFlight build: curve math in the in-tree Swift secp256k1 module, raw k-of-n Taproot multisig accounts in Advanced mode with optional timelocked recovery paths. No MuSig2 and no shared-account vaults. Not on the App Store. Do not install it over a Winnow that holds MuSig2 or vault funds.
           generate_release_notes: true
           files: |
             supply-chain/winnow.spdx.json
