@@ -117,6 +117,11 @@ struct TimelockedMultisigTests {
         #expect(Self.witnessSize(fast.inputs[0].witness) <= (try account.witnessBytesPerInput(path: .signers)))
 
         // The recovery path: refused while the coin is young, then one key.
+        // A coin from block 100 under a 10-block lock opens in block 110,
+        // the first block Core's BIP68 check accepts its spend in: the
+        // account screen's "recovery path from block 110" and the rule agree.
+        #expect(account.recoveryUnlockHeight(of: coin) == 110)
+        #expect(!account.isUnlockedForRecovery(coin, chainTip: 108) && account.isUnlockedForRecovery(coin, chainTip: 109))
         #expect(throws: MultisigAccountError.self) { _ = try spend(account, coin, tip: 108, path: .recovery) }
         var later = try spend(account, coin, tip: 109, path: .recovery)
         #expect(try account.reviewSpend(later, knownUTXOs: [coin], ownedOutputCoordinates: owned, chainTip: 109).path

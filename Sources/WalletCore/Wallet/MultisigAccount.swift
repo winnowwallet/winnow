@@ -490,7 +490,10 @@ public struct MultisigAccount: Sendable {
     }
 
     /// The first block in which `coin` can be spent on the recovery path;
-    /// nil when it is unconfirmed or that block is past `UInt32.max`.
+    /// nil when it is unconfirmed or that block is past `UInt32.max`. Pinned
+    /// in TimelockedMultisigTests.fewerSigners, and held to Bitcoin Core's
+    /// BIP68 boundary, with `isUnlockedForRecovery`, by
+    /// `scripts/check-multisig-core`.
     public func recoveryUnlockHeight(of coin: WalletUTXO) -> UInt32? {
         guard let recovery, coin.height > 0 else { return nil }
         let (unlock, overflow) = coin.height.addingReportingOverflow(recovery.blocks)
