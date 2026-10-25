@@ -688,7 +688,7 @@ public actor Wallet {
     public let accountKey: HDKey
     private let keyStore: any KeyStore
     private let storageURL: URL?
-    private var state: WalletState
+    var state: WalletState
 
     init(network: BitcoinNetwork, descriptor: Descriptor, accountKey: HDKey,
          keyStore: any KeyStore, storageURL: URL?, state: WalletState) throws {
@@ -1809,7 +1809,7 @@ public actor Wallet {
     /// Resolve a root secret down the descriptor origin, or use an account
     /// secret at that origin. Loading an account key must not derive the
     /// hardened origin path a second time. No private key enters wallet state.
-    private func accountPrivateKey() throws -> HDKey {
+    func accountPrivateKey() throws -> HDKey {
         let origin = Self.originUnchecked(of: descriptor)
         let resolved: HDKey
         switch try keyStore.load(walletID: id) {
@@ -1837,7 +1837,7 @@ public actor Wallet {
     }
 
     /// BIP86 key-path spend, below the account already checked for this wallet.
-    private func tweakedPrivateKey(chain: AddressChain, index: UInt32, account: HDKey) throws -> Data {
+    func tweakedPrivateKey(chain: AddressChain, index: UInt32, account: HDKey) throws -> Data {
         let key = try account.child(at: UInt32(chain.rawValue)).child(at: index)
         guard let secret = key.privateKey else {
             throw WalletError.invalidDescriptor("neutered key in signing path")
@@ -2020,7 +2020,7 @@ public actor Wallet {
         try persist(state)
     }
 
-    private func persist(_ candidate: WalletState) throws {
+    func persist(_ candidate: WalletState) throws {
         guard let storageURL else { return }
         let data = try JSONEncoder().encode(candidate)
         try data.write(to: storageURL,

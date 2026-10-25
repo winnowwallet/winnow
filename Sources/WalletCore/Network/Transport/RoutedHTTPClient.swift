@@ -80,14 +80,34 @@ public final class RoutedHTTPClient: Sendable {
     }
     public func get(_ url: URL, maximumBytes: Int, accept: String? = nil,
                     progress: (@Sendable (Int) -> Void)? = nil) async throws -> Data {
-        guard enabled, Self.permits(url), maximumBytes > 0 else { throw Failure.unavailable }
+        var request = URLRequest(url: url)
+        if let accept { request.setValue(accept, forHTTPHeaderField: "Accept") }
+        return try await perform(request, maximumBytes: maximumBytes, progress: progress)
+    }
+
+    /// One bounded POST: `body` under `contentType`, the answer capped at
+    /// `maximumBytes`. The same host rules, routing and cancellation as
+    /// `get`; a payjoin relay exchange is its only caller today.
+    public func post(_ url: URL, body: Data, contentType: String, accept: String? = nil,
+                     maximumBytes: Int) async throws -> Data {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = body
+        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        if let accept { request.setValue(accept, forHTTPHeaderField: "Accept") }
+        return try await perform(request, maximumBytes: maximumBytes, progress: nil)
+    }
+
+    private func perform(_ request: URLRequest, maximumBytes: Int,
+                         progress: (@Sendable (Int) -> Void)?) async throws -> Data {
+        guard enabled, let url = request.url, Self.permits(url), maximumBytes > 0 else { throw Failure.unavailable }
         let id = UUID()
         // Admit and register the owned task under the same lock used by
         // cancel(). Invalidate URLSession only at deinit: Foundation raises an
         // Objective-C exception if an old client creates a task after invalidation.
         let pending = try requests.withLock { state in
             guard !state.closed else { throw Failure.unavailable }
-            let task = Task { [session] in try await Self.fetch(session, url, maximumBytes, accept, progress) }
+            let task = Task { [session] in try await Self.fetch(session, request, maximumBytes, progress) }
             state.tasks[id] = task
             return task
         }
@@ -96,12 +116,9 @@ public final class RoutedHTTPClient: Sendable {
             try await pending.value
         } onCancel: { pending.cancel() }
     }
-    private static func fetch(_ session: URLSession, _ url: URL, _ maximumBytes: Int,
-                              _ accept: String?,
+    private static func fetch(_ session: URLSession, _ request: URLRequest, _ maximumBytes: Int,
                               _ progress: (@Sendable (Int) -> Void)?) async throws -> Data {
         try Task.checkCancellation()
-        var request = URLRequest(url: url)
-        if let accept { request.setValue(accept, forHTTPHeaderField: "Accept") }
         let (bytes, response) = try await session.bytes(for: request)
         defer { bytes.task.cancel() }
         guard let http = response as? HTTPURLResponse else { throw Failure.response }

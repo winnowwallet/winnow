@@ -59,6 +59,19 @@ extension HistoryEntry {
             }
         }
 
+        /// Records a payjoin: every external output other than the reviewed
+        /// payment belongs to the receiver (its change, or a batched payment
+        /// of its own), so the history does not list it as someone we paid.
+        mutating func annotatePayjoin(payee: Payment) {
+            var payeeSeen = false
+            for index in external.indices {
+                let isPayee = !payeeSeen && external[index].scriptPubKey == payee.scriptPubKey
+                    && external[index].amount >= payee.amount
+                if isPayee { payeeSeen = true }
+                external[index].payjoinReceiver = isPayee ? nil : true
+            }
+        }
+
         /// Copies silent payment codes from a replaced transaction's outputs
         /// onto the outputs of its replacement that carry the same script.
         mutating func inheritSilentPayments(from previous: Outputs) {
@@ -96,15 +109,21 @@ extension HistoryEntry {
         /// in the JSON, so wallet files and bundles written before it decode
         /// unchanged.
         public var silentPaymentAddress: String?
+        /// Set when a payjoin receiver added this output: it is the
+        /// receiver's own, not a recipient of ours. Optional in the JSON
+        /// like `silentPaymentAddress`.
+        public var payjoinReceiver: Bool?
 
-        public init(vout: UInt32, amount: Int64, scriptPubKey: Data, silentPaymentAddress: String? = nil) {
+        public init(vout: UInt32, amount: Int64, scriptPubKey: Data, silentPaymentAddress: String? = nil,
+                    payjoinReceiver: Bool? = nil) {
             self.vout = vout
             self.amount = amount
             self.scriptPubKey = scriptPubKey
             self.silentPaymentAddress = silentPaymentAddress
+            self.payjoinReceiver = payjoinReceiver
         }
 
-        private enum CodingKeys: String, CodingKey { case vout, amount, scriptPubKey, silentPaymentAddress }
+        private enum CodingKeys: String, CodingKey { case vout, amount, scriptPubKey, silentPaymentAddress, payjoinReceiver }
 
         public init(from decoder: any Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -114,7 +133,8 @@ extension HistoryEntry {
             }
             self.init(vout: try container.decode(UInt32.self, forKey: .vout),
                       amount: try container.decode(Int64.self, forKey: .amount), scriptPubKey: script,
-                      silentPaymentAddress: try container.decodeIfPresent(String.self, forKey: .silentPaymentAddress))
+                      silentPaymentAddress: try container.decodeIfPresent(String.self, forKey: .silentPaymentAddress),
+                      payjoinReceiver: try container.decodeIfPresent(Bool.self, forKey: .payjoinReceiver))
         }
 
         public func encode(to encoder: any Encoder) throws {
@@ -123,6 +143,7 @@ extension HistoryEntry {
             try container.encode(amount, forKey: .amount)
             try container.encode(scriptPubKey.hex, forKey: .scriptPubKey)
             try container.encodeIfPresent(silentPaymentAddress, forKey: .silentPaymentAddress)
+            try container.encodeIfPresent(payjoinReceiver, forKey: .payjoinReceiver)
         }
     }
 }

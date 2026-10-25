@@ -499,9 +499,9 @@ extension PSBT {
     /// P2TR witness UTXO before moving it into the final witness. Trusted
     /// wallet policy must separately bind that declaration to the real coin;
     /// finalization proves document self-consistency, not chain ownership.
-    private func validatedKeyPathWitness(input index: Int, signature: Data,
-                                         tx: Transaction,
-                                         spentOutputs: [SighashBIP341.SpentOutput]) throws -> [Data] {
+    func validatedKeyPathWitness(input index: Int, signature: Data,
+                                 tx: Transaction,
+                                 spentOutputs: [SighashBIP341.SpentOutput]) throws -> [Data] {
         let hashType: SighashBIP341.HashType
         switch signature.count {
         case 64:
@@ -528,14 +528,17 @@ extension PSBT {
         return [signature]
     }
 
-    /// Extractor role: the fully-signed raw transaction.
+    /// Extractor role: the fully-signed raw transaction. Every input needs a
+    /// final witness or, for a legacy or wrapped input another party signed,
+    /// a final scriptSig.
     public func extractedTransaction() throws -> Transaction {
         var tx = try unsignedTransaction()
         for index in tx.inputs.indices {
-            guard let witness = inputs[index].finalScriptWitness else {
+            guard inputs[index].isFinalized else {
                 throw PSBTError.missingField("input \(index) final witness")
             }
-            tx.inputs[index].witness = witness
+            tx.inputs[index].witness = inputs[index].finalScriptWitness ?? []
+            tx.inputs[index].scriptSig = inputs[index].finalScriptSig ?? Data()
         }
         return tx
     }

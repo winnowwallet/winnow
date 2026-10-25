@@ -27,7 +27,7 @@ public enum HPKE {
     }
 
     static let version = Data("HPKE-v1".utf8)
-    static let kdfID: UInt16 = 0x0001 // HKDF-SHA256
+    public static let kdfID: UInt16 = 0x0001 // HKDF-SHA256
     static let nh = 32
 
     // MARK: - KDF
@@ -292,8 +292,13 @@ extension HPKE {
             return bytes[bytes.startIndex + 1 ..< bytes.startIndex + 33]
         }
 
-        /// The 33-byte compressed form BIP 77 carries in URIs and messages.
-        public static func compressed(_ publicKey: PublicKey) -> Data { publicKey.dataRepresentation }
+        /// The 33-byte compressed form BIP 77 carries in URIs and messages,
+        /// whatever format the key was created with.
+        public static func compressed(_ publicKey: PublicKey) -> Data {
+            let uncompressed = publicKey.uncompressedRepresentation
+            let parity = uncompressed[uncompressed.endIndex - 1] & 1
+            return Data([0x02 | parity]) + uncompressed[uncompressed.startIndex + 1 ..< uncompressed.startIndex + 33]
+        }
 
         public static func publicKey(compressed bytes: Data) throws -> PublicKey {
             guard bytes.count == 33 else { throw Failure.invalidLength }
