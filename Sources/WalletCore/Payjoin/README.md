@@ -30,7 +30,7 @@ at most the agreed contribution; every other input the receiver's, finalized,
 with its UTXO and our sequence number; the absolute fee never lower; the
 contribution spent on fees and no larger than the receiver's inputs cost at
 the original rate; and `Σ our inputs − Σ our outputs ≤ amount + fee +
-contribution`. The primitives live in [Crypto](../Crypto/README.md)
+contribution`; once signed, the transaction must pay the `minfeerate` the sender asked for, within one satoshi of rounding. The primitives live in [Crypto](../Crypto/README.md)
 (HPKE, OHTTP, ElligatorSwift); [the wallet](../Wallet/README.md) builds the
 sender context from a prepared send, signs a checked proposal and commits
 the payjoin transaction; [the app](../../WinnowApp/README.md) binds the

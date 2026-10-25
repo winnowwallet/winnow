@@ -53,10 +53,14 @@ extension WinnowAppUITests {
         send.tap()
         try await serving.value
         var payment: String?
-        XCTAssertTrue(poll(timeout: 90, interval: 1, "the node receives the payjoin transaction") {
+        let sendError = app.staticTexts["sendError"]
+        let arrived = poll(timeout: 90, interval: 1, "the node receives the payjoin transaction") {
             payment = (try? Set(BitcoinCLI.mempoolTxids()))?.subtracting(before).first
-            return payment != nil
-        })
+            return payment != nil || sendError.exists
+        }
+        if sendError.exists { XCTFail("the app reported: \(sendError.label)") }
+        let seen = await directory.innerRequests.map { "\($0.method) \($0.path) \($0.body.count)B" }
+        XCTAssertTrue(arrived, "no payjoin transaction reached the node; the directory saw: \(seen)")
         let txid = try XCTUnwrap(payment)
         let transaction = try BitcoinCLI.runObject(["getrawtransaction", txid, "true"])
         let decoded = try Transaction.decode(XCTUnwrap(Data(hex: BitcoinCLI.string(transaction, "hex"))))

@@ -136,6 +136,19 @@ final class PayjoinSendFlowTests: XCTestCase {
         XCTAssertEqual(transaction.outputs.first { $0.scriptPubKey == rig.receiver.paymentScript }?.value, 50_000)
     }
 
+    /// A proposal that passes every check but the fee-rate floor, which
+    /// only the signed transaction shows: the original goes out.
+    func testFeeFloorRefusalAfterSigningFallsBack() async throws {
+        let rig = try await rig(coins: [200_000], name: "pj-floor")
+        let preview = try await rig.model.previewSend(destination: await rig.receiver.uri(), amount: 50_000,
+                                                      priority: .medium, override: 2)
+        let serving = Task { try await rig.receiver.serve(.underpayFeeRate) }
+        let txid = try await rig.model.send(preview: preview)
+        try await serving.value
+        XCTAssertEqual(try XCTUnwrap(sentEntry(rig.model, txid: txid).transaction()).inputs.count, 1)
+        XCTAssertEqual(rig.model.lastPayjoinOutcome, .plain(reason: "the receiver's proposal failed review"))
+    }
+
     /// No answer within the budget: the original is broadcast on its own.
     func testSilentReceiverFallsBackAfterTheWait() async throws {
         let rig = try await rig(coins: [200_000], name: "pj-silent")

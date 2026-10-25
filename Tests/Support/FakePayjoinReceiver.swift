@@ -34,6 +34,9 @@ public final class FakePayjoinReceiver: @unchecked Sendable {
         case decreaseFee
         /// Takes the whole allowed contribution for an input lighter than it.
         case overchargeForInput
+        /// Adds its input but no fee at all: every check passes except the
+        /// fee-rate floor, which only the signed transaction can show.
+        case underpayFeeRate
         /// Leaves its own input unsigned.
         case unfinalizedInput
         /// Leaves a BIP 32 key path on the sender's input.
@@ -209,16 +212,22 @@ public final class FakePayjoinReceiver: @unchecked Sendable {
             spent.insert(SighashBIP341.SpentOutput(amount: coin.amount, scriptPubKey: coin.scriptPubKey), at: at)
             receiverIndex = at
             // The fee its own P2TR key-path input costs (57.5 vbytes) is what
-            // the sender may be asked for; the satoshi of slack for the whole
-            // transaction's vsize rounding is the receiver's own.
+            // the sender may be asked for. What the receiver actually adds is
+            // whatever keeps the whole transaction at the sender's minfeerate
+            // (the reference receiver does the same), never less than that.
             let addedFee = Int64((feeRate * 57.5).rounded(.up))
             var contribution = min(maxContribution, addedFee)
-            var feeIncrease = addedFee + 1
+            let minRate = parameters["minfeerate"].flatMap(Double.init) ?? feeRate
+            let newVsize = Double(TransactionBuilder.vsize(of: try original.extractedTransaction())) + 58
+            var feeIncrease = max(addedFee, Int64((minRate * newVsize).rounded(.up)) - senderFee)
             switch behaviour {
             case .stealChange: contribution = maxContribution + 1_000
             case .overchargeForInput:
                 contribution = maxContribution
                 feeIncrease = maxContribution
+            case .underpayFeeRate:
+                contribution = 0
+                feeIncrease = 0
             default: break
             }
             if let contributionIndex, contribution > 0 {

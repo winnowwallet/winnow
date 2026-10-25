@@ -173,6 +173,19 @@ struct PayjoinProposalTests {
         }
     }
 
+    @Test("a proposal that adds an input without fee passes the checks and fails the floor once signed")
+    func feeFloorAfterSigning() async throws {
+        let fixture = try await Self.fixture()
+        let proposal = try fixture.receiver.buildProposal(original: fixture.prepared.built.psbt,
+                                                          parameters: fixture.parameters, behaviour: .underpayFeeRate)
+        let checked = try fixture.context.check(proposal: proposal)
+        #expect(checked.contributedFee == 0)
+        #expect(checked.proposedFee == checked.originalFee)
+        await #expect(throws: PayjoinProposalError.self) {
+            try await fixture.wallet.signPayjoinProposal(checked, prepared: fixture.prepared)
+        }
+    }
+
     @Test("a sender input pre-finalized by the receiver, or signed with another sighash type, is refused")
     func senderInputTampering() async throws {
         let fixture = try await Self.fixture()

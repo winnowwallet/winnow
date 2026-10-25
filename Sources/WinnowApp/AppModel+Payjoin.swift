@@ -105,7 +105,7 @@ extension AppModel {
         }
         lastPayjoinOutcome = nil
         defer { payjoinPhase = nil }
-        let outcome: Result<CheckedProposal?, Error>
+        var outcome: Result<CheckedProposal?, Error>
         do {
             let context = try await wallet.payjoinContext(for: prepared, payee: payee,
                                                           feeRateSatPerVByte: preview.feeRateSatPerVByte)
@@ -116,14 +116,21 @@ extension AppModel {
             outcome = .failure(error)
         }
         if case let .success(checked?) = outcome, preview.authorizes(payjoinProposal: checked) {
-            let signed = try await wallet.signPayjoinProposal(checked, prepared: prepared)
-            let txid = try await broadcast(signed, feeRateSatPerVByte: preview.feeRateSatPerVByte)
-            try await wallet.commitPayjoin(prepared, payee: payee, transaction: signed, checked: checked)
-            lastPayjoinOutcome = .joined(receiverInputs: checked.receiverInputCount, contribution: checked.contributedFee)
-            e2e?.journal("payjoin.joined", fields: ["txid": txid.displayHex,
-                                                    "receiverInputs": String(checked.receiverInputCount),
-                                                    "contribution": String(checked.contributedFee)])
-            return txid
+            do {
+                // Signing runs the last BIP 78 check, the fee-rate floor on
+                // the signed transaction; a refusal there falls back like
+                // any other, and only a failed broadcast is an error.
+                let signed = try await wallet.signPayjoinProposal(checked, prepared: prepared)
+                let txid = try await broadcast(signed, feeRateSatPerVByte: preview.feeRateSatPerVByte)
+                try await wallet.commitPayjoin(prepared, payee: payee, transaction: signed, checked: checked)
+                lastPayjoinOutcome = .joined(receiverInputs: checked.receiverInputCount, contribution: checked.contributedFee)
+                e2e?.journal("payjoin.joined", fields: ["txid": txid.displayHex,
+                                                        "receiverInputs": String(checked.receiverInputCount),
+                                                        "contribution": String(checked.contributedFee)])
+                return txid
+            } catch let error as PayjoinProposalError {
+                outcome = .failure(error)
+            }
         }
         let reason = Self.fallbackReason(outcome)
         lastPayjoinOutcome = .plain(reason: reason)

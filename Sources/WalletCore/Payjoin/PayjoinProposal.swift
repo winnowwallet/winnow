@@ -346,10 +346,13 @@ public struct CheckedProposal: Equatable, Sendable {
     }
 
     /// The fee rate check that needs the signed transaction (BIP 78: "once
-    /// the proposal is signed").
+    /// the proposal is signed"). One satoshi of tolerance: the sender's own
+    /// builder rounds its fee up by less than that, and a receiver that
+    /// pays the floor exactly in weight units lands within it.
     public func verifyFeeRate(of signed: Transaction) throws {
-        let rate = Double(proposedFee) / Double(TransactionBuilder.vsize(of: signed))
-        guard rate + 0.000_001 >= minFeeRateSatPerVByte else {
+        let vsize = TransactionBuilder.vsize(of: signed)
+        let rate = Double(proposedFee) / Double(vsize)
+        guard Double(proposedFee) + 1 >= minFeeRateSatPerVByte * Double(vsize) else {
             throw PayjoinProposalError.feeRateBelowMinimum(satPerVByte: rate, minimum: minFeeRateSatPerVByte)
         }
     }
