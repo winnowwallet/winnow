@@ -258,12 +258,24 @@ struct SendView: View {
                         .accessibilityIdentifier("silentPaymentNote")
                 }
             }
+            payjoinReview(preview)
             paymentAmounts(preview)
             reviewWarnings(preview)
             Section {
                 Button(actionTitle(preview)) { send() }
                     .accessibilityIdentifier("sendButton")
                     .disabled(sending)
+                if let phase = model.payjoinPhase, sending {
+                    Label(phase == .posting ? "Sending the payment to the receiver's payjoin mailbox…"
+                        : "Waiting for the receiver to answer (payjoin)…", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("payjoinWaiting")
+                    if phase == .waiting {
+                        Button("Send without payjoin") { model.skipPayjoinWait() }
+                            .accessibilityIdentifier("skipPayjoinButton")
+                    }
+                }
                 Button("Edit payment") {
                     self.preview = nil
                     error = nil
@@ -285,6 +297,40 @@ struct SendView: View {
 
     private func actionTitle(_ preview: AppModel.SendPreview) -> String {
         sending ? "Working…" : "Send payment"
+    }
+
+    /// Which hosts a payjoin send contacts, and how.
+    private func payjoinDisclosure(_ payjoin: AppModel.PayjoinRequest) -> String {
+        let relay = payjoin.relay.host ?? "the relay"
+        let directory = payjoin.parameters.directory.host ?? "the directory"
+        let route = model.activePeerGateways.payjoinProxy == nil ? "" : " over Tor"
+        return "Winnow contacts the payjoin relay \(relay) and, through it, the receiver's directory \(directory)\(route)."
+    }
+
+    /// What a payjoin request adds to the review: the receiver may join the
+    /// transaction with its own coins, and may take the stated amount from
+    /// the change for fees. The destination and amount above stay as shown.
+    @ViewBuilder
+    private func payjoinReview(_ preview: AppModel.SendPreview) -> some View {
+        if let payjoin = preview.payjoin {
+            Section("Payjoin") {
+                Text("The receiver asked to add its own coins to this transaction (payjoin). The address and amount above stay exactly as shown; the receiver may add inputs and outputs of its own and may take up to \(satsText(payjoin.maxFeeContribution)) from your change for the fees they cost. If it does not answer within two minutes, the payment is sent on its own.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("payjoinNote")
+                Text(payjoinDisclosure(payjoin))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("payjoinDisclosure")
+            }
+        } else if let reason = preview.payjoinUnavailable {
+            Section("Payjoin") {
+                Text("This request offers payjoin, but \(reason). The payment goes to the address directly.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("payjoinUnavailableNote")
+            }
+        }
     }
 
     private func reviewWarnings(_ preview: AppModel.SendPreview) -> some View {
@@ -318,8 +364,22 @@ struct SendView: View {
         .foregroundStyle(.orange)
     }
 
+    /// How a payjoin send ended, on the receipt.
+    @ViewBuilder
+    private var payjoinOutcomeSection: some View {
+        if let outcome = model.lastPayjoinOutcome {
+            Section {
+                Text(outcome.text)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("payjoinOutcome")
+            }
+        }
+    }
+
     private func paymentStatus(_ txid: Data) -> some View {
         Group {
+            payjoinOutcomeSection
             Section {
                 if confirmedHeight != nil {
                     Label("Payment confirmed", systemImage: "checkmark.circle.fill")

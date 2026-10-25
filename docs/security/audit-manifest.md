@@ -47,6 +47,16 @@ census refresh egress in the frozen table below and the census I2P mirror row
 above are gone, routed HTTP carries explorer requests only, and I2P-only
 routing makes no HTTP request at all.
 
+Scope note (2026-10-26): payjoin v2 (BIP 77) sending adds one egress, made
+only when the user pays a `bitcoin:` request carrying `pj=` and reviews the
+payjoin envelope. Routed through the Tor gateway whenever one is configured;
+refused under I2P-only routing. Nothing is contacted for an ordinary address
+or a silent payment code.
+
+| Egress | Transport | Carries | When |
+|---|---|---|---|
+| Payjoin relay | `RoutedHTTPClient.post` to the per-network relay (`Advanced › Payjoin relay`, default `https://payjoin.achow101.com`), path `/{receiver's directory}/`, `Content-Type: message/ohttp-req` (`WalletCore/Payjoin/PayjoinSender.swift`) | Fixed 8,192-byte Oblivious HTTP envelopes: inside, HPKE-sealed to the directory, a POST of the 7,168-byte Message A (the signed Original PSBT, sealed again to the receiver) to the receiver's mailbox, then GETs of our own mailbox. The relay sees the device address and the blob; the directory sees mailbox ids and blobs; the receiver sees the Original PSBT | Only while a payjoin send runs: one POST, then polls for at most two minutes or until the user taps "Send without payjoin" |
+
 ## Frozen target, 2026-09-14
 
 | Item | Value |
@@ -206,6 +216,8 @@ export staging files. Primary test owners: `BitcoinCoreTests`,
 - `PSBT/PSBT.swift`, `PSBT/PSBTRoles.swift`
 - `Script/Multisig.swift`, `Script/Script.swift`, `Script/Taproot.swift`
 - `SilentPayments/Sending.swift`, `SilentPayments/SilentPaymentAddress.swift` (BIP352 sending, reinstated October 2026)
+- `Crypto/Secp256k1Field.swift`, `Crypto/ElligatorSwift.swift`, `Crypto/HPKE.swift`, `Crypto/OHTTP.swift` (BIP 324 encoding, RFC 9180, RFC 9458/9292, October 2026)
+- `Payjoin/PayjoinURI.swift`, `Payjoin/PayjoinMessages.swift`, `Payjoin/PayjoinSender.swift`, `Payjoin/PayjoinProposal.swift`, `PSBT/PSBT+Payjoin.swift`, `Wallet/Wallet+Payjoin.swift`, `WinnowApp/AppModel+Payjoin.swift` (BIP 77 payjoin sending, October 2026)
 - `Transactions/AddressDecoder.swift`, `Transactions/FundingSources.swift`, `Transactions/SighashBIP341.swift`, `Transactions/SilentPayment.swift`, `Transactions/Signer.swift`, `Transactions/TransactionBuilder.swift`
 - `Wallet/CoinSelection.swift`, `Wallet/ExportStagingFile.swift`, `Wallet/FeePolicy.swift`, `Wallet/ImportBundle.swift`, `Wallet/People.swift`
 - `Wallet/Wallet.swift`

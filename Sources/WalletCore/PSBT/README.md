@@ -13,6 +13,12 @@ signature against the recomputed sighash, checks the leaf commits to the spent
 output, and builds the BIP387 witness once the leaf's threshold is met.
 MuSig2 fields are carried as unknown pairs and never interpreted.
 
+A [payjoin](../Payjoin/README.md) proposal arrives with the receiver's inputs
+already final, possibly legacy or wrapped segwit, so
+[PSBT+Payjoin](PSBT+Payjoin.swift) reads final scriptSigs and non-witness
+UTXOs, finalizes only the sender's inputs, and strips the Original PSBT to what
+BIP 78 lets the receiver see; the extractor carries final scriptSigs too.
+
 [Transaction construction](../Transactions/README.md) and the
 [wallet](../Wallet/README.md) consume these types.
 

@@ -34,3 +34,9 @@ checks routing, refusal, malformed replies, timeout, cancellation, and direct TC
 with clearnet, the Tor gateway without it, and for I2P alone the I2P gateway
 restricted to `.i2p` hosts, so a public URL is refused before any request.
 [Routing tests](../../../../Tests/WalletCoreTests/Network/RoutingTests.swift) cover the refusal.
+Its `post` is a bounded POST with the same rules, made for the
+[payjoin](../../Payjoin/README.md) relay exchange; `payjoinProxy` sends that
+traffic through the Tor gateway whenever one is configured, clearnet or not,
+since a payjoin names a payment and the relay would otherwise see the phone.
+[Payjoin sender tests](../../../../Tests/WalletCoreTests/PayjoinSenderTests.swift)
+drive it against a loopback directory.

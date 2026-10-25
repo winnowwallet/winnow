@@ -10,7 +10,13 @@ where the test holds the receiver's keys (Core has no BIP352 support), derives
 the one address that receiver would scan for from the mined transaction,
 requires the app to have paid exactly that, and has a watch-only Core wallet
 confirm the coin by that address. [WinnowAppUITests.swift](WinnowAppUITests.swift)
-owns both payments and the fixture readiness checks. It then runs
+owns both payments and the fixture readiness checks. Then
+[PayjoinJourney.swift](PayjoinJourney.swift) pays a BIP 77 payjoin request
+whose receiver the test plays: a loopback directory (relay, gateway and
+mailboxes) in the runner, a receiver with a coin Core funded, the request
+pasted into the app with the relay named in the control file, the payjoin
+envelope on the review, and a transaction Core must accept and mine with both
+parties' inputs. It then runs
 [MultisigJourney.swift](MultisigJourney.swift): a 2-of-3 script-path multisig
 account between the phone and two Bitcoin Core wallets, whose first address
 must equal Core's `deriveaddresses`. The phone funds it, creates the PSBT and
@@ -84,6 +90,8 @@ source and run in journey-provenance.json.
 `SIGNET_SETUP_SECONDS` measures XCTest's fast chain and
 bank readiness checks; `SIGNET_MULTISIG_SECONDS` measures the multisig leg and
 `SIGNET_RECOVERY_SECONDS` its recovery-path spend after the delay;
+`SIGNET_SILENT_SECONDS` and `SIGNET_PAYJOIN_SECONDS` the cumulative time
+after the silent payment and the payjoin legs;
 `SIGNET_ORDINARY_SECONDS` measures the payment and
 `SIGNET_JOURNEY_SECONDS` the complete app journey. Xcode reports overall test
 execution separately; compilation is outside that test duration.

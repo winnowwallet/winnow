@@ -3,7 +3,10 @@
 # Wallet decisions and recovery tests
 
 These tests protect balances, coin selection, fees, key storage, imports,
-transaction signing, silent payment sends, people, and reorg recovery. They exercise the shared
+transaction signing, silent payment sends, payjoin (HPKE, OHTTP and
+ElligatorSwift against their published vectors, the BIP 78 sender checklist
+against BIP 78's vectors and hostile proposals, the BIP 77 session over a
+loopback directory), people, and reorg recovery. They exercise the shared
 wallet rules used by the GUI instead of reproducing those rules in app tests.
 
 The same target includes [network tests](Network/README.md)

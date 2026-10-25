@@ -76,6 +76,9 @@ struct E2EMode {
     /// the runner's latest write is what the app sees.
     struct Control: Codable, Equatable {
         var clipboard: String?
+        /// A payjoin relay for this run (the journey's loopback directory),
+        /// read when a payjoin send starts, over the Settings value.
+        var payjoinRelay: String?
     }
 
     /// The control file's contents now; nil without a file, or when it
@@ -322,6 +325,7 @@ struct E2EMode {
 
     struct Control {
         var clipboard: String?
+        var payjoinRelay: String?
     }
 
     func control() -> Control? { unavailable() }

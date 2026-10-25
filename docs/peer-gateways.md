@@ -50,8 +50,11 @@ each release ships carries validated v3 onion and ordinary base32 I2P entries
 beside clearnet ones, held to the same diversity checks.
 
 Explorer requests use direct HTTP when clearnet is selected and SOCKS through
-Tor otherwise. I2P-only routing makes no HTTP request at all, so it never asks
-its gateway for a public host and explorer requests stay off.
+Tor otherwise. Payjoin relay requests (made only when paying a `bitcoin:`
+request that offers BIP 77 payjoin) go through the Tor gateway whenever one is
+configured, clearnet selected or not. I2P-only routing makes no HTTP request
+at all, so it never asks its gateway for a public host; explorer requests and
+payjoin stay off.
 Corrupt saved routing settings keep networking offline until replaced.
 
 [winnowwallet/census `gateways/`](https://github.com/winnowwallet/census/tree/main/gateways)

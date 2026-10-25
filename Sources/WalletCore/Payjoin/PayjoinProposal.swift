@@ -162,45 +162,56 @@ public struct PayjoinContext: Equatable, Sendable {
         var addedWeight: Int
     }
 
+    /// BIP 78: the receiver may insert inputs, never drop or reorder ours.
+    private func requireOriginalInputsInOrder(_ proposal: PSBT) throws {
+        var remaining = original.inputs[...]
+        for input in proposal.inputs where remaining.first.map({ Self.sameOutpoint($0, input) }) == true {
+            remaining = remaining.dropFirst()
+        }
+        guard remaining.isEmpty else { throw PayjoinProposalError.senderInputsMissingOrShuffled }
+    }
+
+    private static func sameOutpoint(_ lhs: PSBT.Input, _ rhs: PSBT.Input) -> Bool {
+        lhs.previousTxid == rhs.previousTxid && lhs.outputIndex == rhs.outputIndex
+    }
+
     /// The sender's inputs appear in order as a subsequence, untouched and
     /// unsigned; every other input is the receiver's, finalized, with its
     /// UTXO, sharing the sender's sequence number.
     private func checkInputs(_ proposal: inout PSBT) throws -> InputFacts {
-        // BIP 78: the receiver may insert inputs, never drop or reorder ours.
-        var remaining = original.inputs.map { ($0.previousTxid, $0.outputIndex) }[...]
-        for input in proposal.inputs where remaining.first.map({ $0.0 == input.previousTxid && $0.1 == input.outputIndex }) == true {
-            remaining = remaining.dropFirst()
-        }
-        guard remaining.isEmpty else { throw PayjoinProposalError.senderInputsMissingOrShuffled }
+        try requireOriginalInputsInOrder(proposal)
         var originalIndex = 0
-        var senderIndices: [Int] = []
-        var addedWeight = 0
+        var facts = InputFacts(senderIndices: [], addedWeight: 0)
         var seen: Set<Transaction.Outpoint> = []
         let sequence = original.inputs.first?.sequence ?? 0xFFFF_FFFF
         for index in proposal.inputs.indices {
             let input = proposal.inputs[index]
-            guard let txid = input.previousTxid, let vout = input.outputIndex else {
-                throw PayjoinProposalError.malformed("input \(index) outpoint")
-            }
-            guard seen.insert(Transaction.Outpoint(txid: txid, vout: vout)).inserted else {
-                throw PayjoinProposalError.duplicateInput
-            }
-            guard !input.carriesKeyPaths else { throw PayjoinProposalError.inputCarriesKeyPaths(index) }
-            guard !input.carriesPartialSignatures else { throw PayjoinProposalError.inputCarriesPartialSignatures(index) }
-            if originalIndex < original.inputs.count, original.inputs[originalIndex].previousTxid == txid,
-               original.inputs[originalIndex].outputIndex == vout {
+            try checkAnyInput(input, at: index, seen: &seen)
+            if originalIndex < original.inputs.count, Self.sameOutpoint(original.inputs[originalIndex], input) {
                 try checkSenderInput(input, at: index, original: original.inputs[originalIndex])
                 proposal.inputs[index].witnessUTXO = original.inputs[originalIndex].witnessUTXO
                 proposal.inputs[index].sighashType = 0
-                senderIndices.append(index)
+                facts.senderIndices.append(index)
                 originalIndex += 1
             } else {
                 try checkReceiverInput(input, at: index, sequence: sequence)
-                addedWeight += Self.weight(ofFinalizedInput: input)
+                facts.addedWeight += Self.weight(ofFinalizedInput: input)
             }
         }
-        guard originalIndex == original.inputs.count else { throw PayjoinProposalError.senderInputsMissingOrShuffled }
-        return InputFacts(senderIndices: senderIndices, addedWeight: addedWeight)
+        return facts
+    }
+
+    /// Rules for every input, ours or theirs: a unique outpoint, no key
+    /// paths, no partial signatures.
+    private func checkAnyInput(_ input: PSBT.Input, at index: Int, seen: inout Set<Transaction.Outpoint>) throws {
+        guard let txid = input.previousTxid, let vout = input.outputIndex else {
+            throw PayjoinProposalError.malformed("input \(index) outpoint")
+        }
+        guard seen.insert(Transaction.Outpoint(txid: txid, vout: vout)).inserted else {
+            throw PayjoinProposalError.duplicateInput
+        }
+        guard !input.carriesKeyPaths else { throw PayjoinProposalError.inputCarriesKeyPaths(index) }
+        guard !input.carriesPartialSignatures else { throw PayjoinProposalError.inputCarriesPartialSignatures(index) }
     }
 
     private func checkSenderInput(_ input: PSBT.Input, at index: Int, original: PSBT.Input) throws {
@@ -242,33 +253,41 @@ public struct PayjoinContext: Equatable, Sendable {
     private func checkOutputs(_ proposal: PSBT) throws -> OutputFacts {
         let originalOutputs = try originalTransaction().outputs
         var originalIndex = 0
-        var contributed: Int64 = 0
-        var senderOutputTotal: Int64 = 0
+        var facts = OutputFacts(contributed: 0, senderOutputTotal: 0)
         for (index, output) in proposal.outputs.enumerated() {
             guard !output.carriesKeyPaths else { throw PayjoinProposalError.outputCarriesKeyPaths(index) }
             guard let script = output.script, let value = output.amount else {
                 throw PayjoinProposalError.malformed("output \(index)")
             }
-            guard originalIndex < originalOutputs.count else { continue }
-            let expected = originalOutputs[originalIndex]
-            guard script == expected.scriptPubKey else { continue } // the receiver's own output
-            if expected.scriptPubKey == payeeScript {
-                guard value >= expected.value else { throw PayjoinProposalError.paymentOutputChanged }
-            } else if originalIndex == feeOutputIndex, value < expected.value {
-                contributed = expected.value - value
-                guard contributed <= maxFeeContribution else {
-                    throw PayjoinProposalError.feeContributionExceedsMaximum(contributed: contributed,
-                                                                             maximum: maxFeeContribution)
-                }
-                senderOutputTotal += value
-            } else {
-                guard value >= expected.value else { throw PayjoinProposalError.senderOutputReduced(index) }
-                senderOutputTotal += value
+            // Past the last original, or a script that is not the next
+            // original's: the receiver's own output.
+            guard originalIndex < originalOutputs.count, script == originalOutputs[originalIndex].scriptPubKey else {
+                continue
             }
+            try checkMatchedOutput(value: value, at: index, original: originalOutputs[originalIndex],
+                                   originalIndex: originalIndex, facts: &facts)
             originalIndex += 1
         }
         guard originalIndex == originalOutputs.count else { throw PayjoinProposalError.senderOutputsMissingOrShuffled }
-        return OutputFacts(contributed: contributed, senderOutputTotal: senderOutputTotal)
+        return facts
+    }
+
+    private func checkMatchedOutput(value: Int64, at index: Int, original: Transaction.Output, originalIndex: Int,
+                                    facts: inout OutputFacts) throws {
+        if original.scriptPubKey == payeeScript {
+            guard value >= original.value else { throw PayjoinProposalError.paymentOutputChanged }
+            return
+        }
+        facts.senderOutputTotal += value
+        if originalIndex == feeOutputIndex, value < original.value {
+            facts.contributed = original.value - value
+            guard facts.contributed <= maxFeeContribution else {
+                throw PayjoinProposalError.feeContributionExceedsMaximum(contributed: facts.contributed,
+                                                                         maximum: maxFeeContribution)
+            }
+            return
+        }
+        guard value >= original.value else { throw PayjoinProposalError.senderOutputReduced(index) }
     }
 
     private struct FeeFacts {
@@ -313,6 +332,18 @@ public struct CheckedProposal: Equatable, Sendable {
     public var minFeeRateSatPerVByte: Double
     /// Σ sender inputs − Σ sender outputs: what leaves the wallet.
     public var senderSpend: Int64
+
+    public init(psbt: PSBT, senderInputIndices: [Int], receiverInputCount: Int, contributedFee: Int64,
+                proposedFee: Int64, originalFee: Int64, minFeeRateSatPerVByte: Double, senderSpend: Int64) {
+        self.psbt = psbt
+        self.senderInputIndices = senderInputIndices
+        self.receiverInputCount = receiverInputCount
+        self.contributedFee = contributedFee
+        self.proposedFee = proposedFee
+        self.originalFee = originalFee
+        self.minFeeRateSatPerVByte = minFeeRateSatPerVByte
+        self.senderSpend = senderSpend
+    }
 
     /// The fee rate check that needs the signed transaction (BIP 78: "once
     /// the proposal is signed").

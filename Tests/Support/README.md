@@ -34,7 +34,8 @@ configuration and under Xcode.
 | `WalletFixtures.swift` | `testEntropy`, `testMnemonic`, `testMaster`, `fakeHeader`, `coinbaseInput`, `fakeMatch`, `matureCoinbase`, `testChainTip`, `makeTestWallet`, `fund`, `fundedWallet` |
 | `TestScripts.swift` | `TestScripts.p2trDestination`, `TestScripts.bip86FirstMainnetAddress` |
 | `TestKeys.swift` | `TestKeys.master(entropyByte:)`, `masters()`, and the `keyExpression`/`bareKeyExpression` text that people and label tests paste |
-| `P2P/` | `SyntheticChain`/`makeSyntheticChain`, `minedHeader`, `makeTestParams`, `makeFakeSegwitTx`, `ResumeOnce`, `LoopbackNode`, `LoopbackHTTPServer` |
+| `FakePayjoinReceiver.swift` | `FakePayjoinReceiver`: the other side of a BIP 77 payjoin — session key, mailbox, a P2TR coin of its own, the BIP 21 URI, and a proposal builder whose `Behaviour` dial covers honest, echo, hostile, erroring and silent receivers |
+| `P2P/` | `SyntheticChain`/`makeSyntheticChain`, `minedHeader`, `makeTestParams`, `makeFakeSegwitTx`, `ResumeOnce`, `LoopbackNode`, `LoopbackHTTPServer`, `FakePayjoinDirectory` (a BIP 77 directory on loopback: OHTTP relay, gateway and mailboxes in one process) |
 | `Node/` | `BitcoinCLI`, `CoreSigner`, `HostProcess`, `SignetMiner`, `SignetFixture`: the custom-signet node and Core signer used by the UI journey |
 
 Helpers that only one target can use stay in that target: `blockOutputScripts`

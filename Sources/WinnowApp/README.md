@@ -37,8 +37,17 @@ past labels and fresh-address counters in the existing
 people.json store. Receive shares the wallet’s payment card.
 
 [Documented journeys](https://github.com/winnowwallet/website/blob/main/docs/journeys.json) identify the supported experiences.
+A `bitcoin:` request that offers payjoin (BIP 77) is reviewed as the ordinary
+payment plus its envelope — the receiver may add inputs and outputs of its own
+and take at most the stated contribution from the change — and the proposal
+that comes back is held to that envelope by `SendPreview.authorizes(payjoinProposal:)`
+([AppModel+Payjoin](AppModel+Payjoin.swift)) before our inputs are signed; no
+answer within two minutes, a refused proposal or a transport failure
+broadcasts the reviewed original. The relay is an Advanced setting per network
+and the request goes through the Tor gateway whenever one is configured.
 [App tests](../../AppTests/README.md) check state and protected actions,
-including [paying a silent payment code](../../AppTests/SilentPaymentSendFlowTests.swift);
+including [paying a silent payment code](../../AppTests/SilentPaymentSendFlowTests.swift)
+and [paying a payjoin request](../../AppTests/PayjoinSendFlowTests.swift);
 [UI tests](../../UITests/README.md) drive the simulator against a disposable node.
 Simulator tests do not establish physical-device lock behavior or battery life.
 

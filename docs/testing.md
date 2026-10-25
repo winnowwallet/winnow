@@ -65,8 +65,9 @@ local entry points on a development Mac.
 
 `WinnowAppUITests.test01CreateReceiveSendConfirm` creates a wallet, receives,
 reviews, sends and confirms an ordinary payment, then a BIP352 silent payment
-to a code whose receiver the test plays (Core cannot), then the multisig
-account journey. A disposable private signet fixture funds the app's address,
+to a code whose receiver the test plays (Core cannot), then a BIP 77 payjoin
+request whose receiver and directory the test plays on loopback (Core mines
+the two-party transaction), then the multisig account journey. A disposable private signet fixture funds the app's address,
 accepts the transactions and mines confirmations. The test checks both the
 app's outcomes and the node's accepted payments.
 

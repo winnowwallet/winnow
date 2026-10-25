@@ -44,6 +44,7 @@ struct SettingsView: View {
                 peerCatalogSection
                 manualPeersSection
                 explorerSection
+                payjoinSection
                 chainVerificationSection
                 connectedPeersSection
                 aboutSection
@@ -150,6 +151,30 @@ struct SettingsView: View {
         } footer: {
             Text("Manual peers are tried first when their network is enabled. Clearnet seeds resolve over HTTPS (Cloudflare 1.1.1.1), with system DNS as the fallback. Overlay names are resolved by their SOCKS gateway. The default port is 8333 (mainnet) / 38333 (signet). Peers must advertise compact filters and pass Winnow's checks.")
         }
+        }
+    }
+
+    @ViewBuilder
+    private var payjoinSection: some View {
+        if model.showsPayjoinSettings {
+            Section {
+                TextField("OHTTP relay URL (https)", text: Binding(
+                    get: { model.payjoinRelayString },
+                    set: { model.setPayjoinRelay($0) }
+                ))
+                .font(.system(.footnote, design: .monospaced))
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .accessibilityIdentifier("payjoinRelayField")
+                Text("Selected: \(model.payjoinRelayURL?.absoluteString ?? "none — payjoin requests are paid directly")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("payjoinRelaySelected")
+            } header: {
+                Text("Payjoin relay")
+            } footer: {
+                Text("When a payment request carries a payjoin offer (BIP 77), Winnow sends the signed payment to the receiver's mailbox through this Oblivious HTTP relay, which sees your IP address and an encrypted blob but not the payment; the receiver's directory sees neither. The request goes through your Tor gateway whenever one is configured. Nothing is contacted unless you pay such a request. Leave empty for the default relay.")
+            }
         }
     }
 

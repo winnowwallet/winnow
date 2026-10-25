@@ -10,19 +10,24 @@ extension Wallet {
     /// 110 vbytes, roughly one more input of any common type.
     public static let feeContributionVBytes = 110.0
 
+    /// The most the receiver may take from `change` for fees: the recommended
+    /// contribution at this rate, capped so the change stays above dust;
+    /// nothing without change. Pure, so the review can show the same number
+    /// the wallet later offers.
+    public static func payjoinFeeContribution(feeRateSatPerVByte: Double, change: Payment?) -> Int64 {
+        guard let change else { return 0 }
+        let recommended = Int64((feeRateSatPerVByte * feeContributionVBytes).rounded(.up))
+        let dust = CoinSelection.dustThreshold(scriptPubKey: change.scriptPubKey)
+        return max(0, min(recommended, change.amount - dust))
+    }
+
     /// The sender context for `prepared`: the payee output it pays, the
-    /// change output the receiver may draw fees from (capped so change stays
-    /// above dust), and the fee rate the proposal must keep.
+    /// change output the receiver may draw fees from, and the fee rate the
+    /// proposal must keep.
     public func payjoinContext(for prepared: PreparedSend, payee: Payment,
                                feeRateSatPerVByte: Double) throws -> PayjoinContext {
-        let recommended = Int64((feeRateSatPerVByte * Self.feeContributionVBytes).rounded(.up))
-        var feeOutputIndex: Int?
-        var contribution: Int64 = 0
-        if let change = prepared.change, let index = prepared.changeOutputIndex {
-            let dust = CoinSelection.dustThreshold(scriptPubKey: change.scriptPubKey)
-            contribution = max(0, min(recommended, change.amount - dust))
-            feeOutputIndex = contribution > 0 ? Int(index) : nil
-        }
+        let contribution = Self.payjoinFeeContribution(feeRateSatPerVByte: feeRateSatPerVByte, change: prepared.change)
+        let feeOutputIndex = contribution > 0 ? prepared.changeOutputIndex.map(Int.init) : nil
         return try PayjoinContext(original: prepared.built.psbt, payeeScript: payee.scriptPubKey,
                                   payeeAmount: payee.amount, feeOutputIndex: feeOutputIndex,
                                   maxFeeContribution: contribution, minFeeRateSatPerVByte: feeRateSatPerVByte)

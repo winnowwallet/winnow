@@ -65,6 +65,13 @@ final class AppModel {
         case noStorage
         case paymentDetailsUnavailable
         case personCannotBePaid
+        /// A BIP 352 code cannot ride in a payjoin: the receiver's input
+        /// would change the key set the output is derived from.
+        case payjoinCannotPaySilentPayment
+        /// The request insists on payjoin (`req-pj`) and this wallet cannot.
+        case payjoinUnavailable(String)
+        /// The request names an amount the entered one does not match.
+        case paymentRequestAmount(sats: Int64)
 
         var errorDescription: String? {
             switch self {
@@ -81,6 +88,10 @@ final class AppModel {
                     + "Enter an explicit rate of at least \(floor) sat/vB, or wait for the floor to change. "
                     + "Winnow will not raise an automatic rate that far on its own."
             case .sendReviewChanged: "The available coins, fee, or change changed. Review the payment again before signing."
+            case .payjoinCannotPaySilentPayment:
+                "This request combines a silent payment code with payjoin. A payjoin changes the inputs a silent payment is derived from, so the two cannot be paid together."
+            case let .payjoinUnavailable(reason): "This request requires payjoin, and \(reason)."
+            case let .paymentRequestAmount(sats): "This request asks for \(sats) sats. Enter that amount to pay it."
             // MARK: Connection
             case .noStack: "The sync stack is not running."
             case .noPeers: "No peers reachable. Check the network connection or add a manual peer in Settings."
@@ -381,6 +392,16 @@ final class AppModel {
     private(set) var manualPeers: [String] // "host:port"
     private(set) var esploraURLString: String
     private(set) var explorerProvider: ExplorerProvider
+    /// The custom payjoin relay for this network; empty means the default.
+    private(set) var payjoinRelayString: String
+    /// Where a payjoin send is while `send` runs, for the sheet.
+    var payjoinPhase: PayjoinPhase?
+    /// How the last payjoin send ended, for the receipt.
+    var lastPayjoinOutcome: PayjoinOutcome?
+    /// The poll a "Send without payjoin" tap cancels.
+    var payjoinWait: Task<CheckedProposal?, Error>?
+    /// How long `send` waits for a receiver before broadcasting the original.
+    var payjoinWaitBudget: TimeInterval = 120
 
     /// The warned external block explorer. Presets cover the common sites;
     /// `custom` uses whatever Esplora-compatible URL the owner typed. It is
@@ -436,6 +457,9 @@ final class AppModel {
         static let automaticUsedGateways = "peerGateways.automaticUsedGateways"
         static func esploraURL(_ network: BitcoinNetwork) -> String { "esploraURL.\(network.rawValue)" }
         static func explorerProvider(_ network: BitcoinNetwork) -> String { "explorerProvider.\(network.rawValue)" }
+        /// The OHTTP relay payjoin requests go through, per network like the
+        /// explorer: a signet relay choice must not follow the wallet to mainnet.
+        static func payjoinRelay(_ network: BitcoinNetwork) -> String { "payjoinRelay.\(network.rawValue)" }
         /// The pre-#81 flat keys, migrated once into the active network.
         static let legacyManualPeers = "manualPeers"
         static let legacyEsploraURL = "esploraURL"
@@ -507,6 +531,7 @@ final class AppModel {
         let scoped = Self.networkScopedSettings(defaults: defaults, network: selectedNetwork)
         manualPeers = scoped.manualPeers
         esploraURLString = scoped.esploraURL
+        payjoinRelayString = scoped.payjoinRelay
         lastCompleteCheck = defaults.object(forKey: DefaultsKey.lastCompleteCheck(selectedNetwork)) as? Date
         // Provider default is blockstream.info; an installation that had
         // already typed a custom explorer URL keeps it by migrating to
@@ -1826,6 +1851,13 @@ final class AppModel {
         /// The person this pays, for the review label only. `destination`
         /// stays the address: the authorization boundary is unchanged.
         var recipient: Recipient?
+        /// The receiver's BIP 77 payjoin offer, when the request carried one
+        /// this wallet can take up. `authorizes(payjoinProposal:)` is the
+        /// gate for what comes back.
+        var payjoin: PayjoinRequest?
+        /// Why a payjoin the request offered is not being attempted; the
+        /// payment then goes to the address directly.
+        var payjoinUnavailable: String?
 
         struct Recipient: Equatable {
             var personID: String
@@ -1919,7 +1951,8 @@ final class AppModel {
         try await requireRelayFloors(rate: resolution.rate)
         let feeRate = resolution.rate
         let trimmed = destination.trimmingCharacters(in: .whitespacesAndNewlines)
-        let (payments, silentPayments) = try Self.parseDestination(trimmed, amount: amount, network: network)
+        let parsed = try Self.parseDestination(trimmed, amount: amount, network: network)
+        let (payments, silentPayments) = (parsed.payments, parsed.silentPayments)
         guard let wallet else { throw AppError.noWallet }
         let utxos = await wallet.spendableUtxos
         let changeScript = try await wallet.scriptPubKey(chain: .change, index: wallet.nextChangeIndex)
@@ -1930,24 +1963,55 @@ final class AppModel {
                                                  changeScriptPubKey: changeScript,
                                                  feeRateSatPerVByte: feeRate)
         let change = selection.changeAmount.map { Payment(amount: $0, scriptPubKey: changeScript) }
-        return SendPreview(destination: trimmed, payments: payments, silentPayments: silentPayments,
-                           feeRateSatPerVByte: feeRate, fee: selection.fee,
-                           changeAmount: selection.changeAmount, inputCount: selection.selected.count,
-                           selectedOutpoints: selection.selected.map {
-                               .init(txid: $0.txid, vout: $0.vout)
-                           }, change: change,
-                           locktimeLagsTip: syncPhase.headerTipMayLagNetwork)
+        var preview = SendPreview(destination: parsed.address, payments: payments, silentPayments: silentPayments,
+                                  feeRateSatPerVByte: feeRate, fee: selection.fee,
+                                  changeAmount: selection.changeAmount, inputCount: selection.selected.count,
+                                  selectedOutpoints: selection.selected.map {
+                                      .init(txid: $0.txid, vout: $0.vout)
+                                  }, change: change,
+                                  locktimeLagsTip: syncPhase.headerTipMayLagNetwork)
+        if let uri = parsed.uri, uri.payjoin != nil {
+            try attachPayjoin(from: uri, to: &preview)
+        }
+        return preview
     }
 
     /// One destination string, sorted into the payment kind it names: a
     /// silent payment code becomes a `SilentPayment` (its HRP checked against
-    /// this network), anything else must be an address this wallet pays.
+    /// this network), a `bitcoin:` URI yields its address (and its payjoin
+    /// offer, see `PaymentURI`), anything else must be an address this
+    /// wallet pays. A URI that names an amount must agree with the entered
+    /// one; a URI that pairs a silent payment code with payjoin is refused.
     static func parseDestination(_ destination: String, amount: Int64,
-                                 network: BitcoinNetwork) throws -> (payments: [Payment], silentPayments: [SilentPayment]) {
-        if SilentPaymentAddress.looksLikeCode(destination) {
-            return ([], [try SilentPayment(amount: amount, address: destination, network: network)])
+                                 network: BitcoinNetwork) throws -> ParsedDestination {
+        if PaymentURI.looksLikeURI(destination) {
+            let uri = try PaymentURI(destination)
+            if let requested = uri.amountSats, requested != amount {
+                throw AppError.paymentRequestAmount(sats: requested)
+            }
+            if SilentPaymentAddress.looksLikeCode(uri.address) {
+                guard uri.payjoin == nil else { throw AppError.payjoinCannotPaySilentPayment }
+                return ParsedDestination(address: uri.address, payments: [],
+                                         silentPayments: [try SilentPayment(amount: amount, address: uri.address, network: network)])
+            }
+            return ParsedDestination(address: uri.address,
+                                     payments: [try Payment(amount: amount, address: uri.address, network: network)],
+                                     silentPayments: [], uri: uri)
         }
-        return ([try Payment(amount: amount, address: destination, network: network)], [])
+        if SilentPaymentAddress.looksLikeCode(destination) {
+            return ParsedDestination(address: destination, payments: [],
+                                     silentPayments: [try SilentPayment(amount: amount, address: destination, network: network)])
+        }
+        return ParsedDestination(address: destination,
+                                 payments: [try Payment(amount: amount, address: destination, network: network)],
+                                 silentPayments: [])
+    }
+
+    struct ParsedDestination {
+        var address: String
+        var payments: [Payment]
+        var silentPayments: [SilentPayment]
+        var uri: PaymentURI?
     }
 
     /// A payment to a person in the address book: the next fresh address is
@@ -2008,9 +2072,14 @@ final class AppModel {
                                                   chainTip: await chainTipHeight)
         guard preview.authorizes(prepared.built, resolvedSilentPayments: prepared.resolvedSilentPayments)
         else { throw AppError.sendReviewChanged }
-        let txid = try await broadcast(prepared.built.transaction,
+        let txid: Data
+        if preview.payjoin != nil {
+            txid = try await sendThroughPayjoin(preview: preview, prepared: prepared, wallet: wallet)
+        } else {
+            txid = try await broadcast(prepared.built.transaction,
                                        feeRateSatPerVByte: preview.feeRateSatPerVByte)
-        try await wallet.commit(prepared)
+            try await wallet.commit(prepared)
+        }
         if let recipient = preview.recipient {
             if let index = recipient.paymentIndex {
                 await advancePersonPaymentIndex(id: recipient.personID, past: index)
@@ -2116,6 +2185,7 @@ final class AppModel {
     var showsManualPeers: Bool { advancedMode || !manualPeers.isEmpty }
     var showsChainVerification: Bool { advancedMode || verifyFromGenesis }
     var showsExplorerSettings: Bool { advancedMode || !esploraURLString.isEmpty }
+    var showsPayjoinSettings: Bool { advancedMode || !payjoinRelayString.isEmpty }
 
     /// "0.6.0 (123)", from the bundle the app shipped in.
     static let appVersionText: String = {
@@ -2562,8 +2632,9 @@ final class AppModel {
         let codes = (entry.outputs?.external ?? []).reduce(into: [UInt32: String]()) { result, output in
             if let code = output.silentPaymentAddress { result[output.vout] = code }
         }
+        let receiverOwned = Set((entry.outputs?.external ?? []).filter { $0.payjoinReceiver == true }.map(\.vout))
         return transaction.outputs.enumerated().compactMap { index, output in
-            guard !owned.contains(output.scriptPubKey),
+            guard !owned.contains(output.scriptPubKey), !receiverOwned.contains(UInt32(index)),
                   let address = AddressDecoder.address(for: output.scriptPubKey, network: network) else { return nil }
             let code = codes[UInt32(index)]
             // A silent payment's person is found by code, since the script is
@@ -2676,10 +2747,11 @@ final class AppModel {
     /// What a given network's peer and explorer settings are.
     /// Pure, so the isolation between networks can be tested without a model.
     static func networkScopedSettings(defaults: UserDefaults, network: BitcoinNetwork)
-        -> (manualPeers: [String], esploraURL: String)
+        -> (manualPeers: [String], esploraURL: String, payjoinRelay: String)
     {
         (manualPeers: defaults.stringArray(forKey: DefaultsKey.manualPeers(network)) ?? [],
-         esploraURL: defaults.string(forKey: DefaultsKey.esploraURL(network)) ?? "")
+         esploraURL: defaults.string(forKey: DefaultsKey.esploraURL(network)) ?? "",
+         payjoinRelay: defaults.string(forKey: DefaultsKey.payjoinRelay(network)) ?? "")
     }
 
     /// Re-reads the per-network settings after `network` changes. These are
@@ -2690,6 +2762,7 @@ final class AppModel {
         let settings = Self.networkScopedSettings(defaults: defaults, network: network)
         manualPeers = settings.manualPeers
         esploraURLString = settings.esploraURL
+        payjoinRelayString = settings.payjoinRelay
         lastCompleteCheck = defaults.object(forKey: DefaultsKey.lastCompleteCheck(network)) as? Date
     }
 
@@ -2877,6 +2950,11 @@ final class AppModel {
     func setExplorerProvider(_ provider: ExplorerProvider) {
         explorerProvider = provider
         defaults.set(provider.rawValue, forKey: DefaultsKey.explorerProvider(network))
+    }
+
+    func setPayjoinRelay(_ text: String) {
+        payjoinRelayString = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        defaults.set(payjoinRelayString, forKey: DefaultsKey.payjoinRelay(network))
     }
 
     /// The selected external block-explorer website. Winnow contacts it

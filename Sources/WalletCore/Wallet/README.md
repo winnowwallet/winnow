@@ -42,6 +42,15 @@ mobile resource budget. Watch-set construction costs work proportional to the
 reserved ranges. No recovery record or new cursor is proof that those addresses
 have been scanned.
 
+[Wallet+Payjoin](Wallet+Payjoin.swift) is the wallet's part of a
+[payjoin](../Payjoin/README.md) send: the sender context for a prepared send
+(the payee, the change output the receiver may draw at most the recommended
+contribution from, the fee rate to keep), signing only its own inputs of a
+checked proposal with the keys that signed the original, and committing the
+payjoin transaction — the selected coins spent by its txid, the change coin
+found by script with the value it ended up with, the fee recorded as what we
+paid, no fee bump kept because the receiver's inputs cannot be re-signed.
+
 [WalletCore tests](../../../Tests/WalletCoreTests/README.md) cover balances, selection,
 imports, people, and reorg recovery. [App tests](../../../AppTests/README.md)
 check persistence and protected actions; the [UI journey](../../../UITests/README.md)

@@ -69,6 +69,14 @@ public struct PeerGatewayConfiguration: Codable, Equatable, Sendable {
     public var permitsHTTP: Bool { isValid && (networks.contains(.clearnet) || networks.contains(.tor)) }
     public var httpProxy: PeerEndpoint? { networks.contains(.clearnet) ? nil : torProxy }
 
+    /// Payjoin relay traffic goes through the Tor gateway whenever one is
+    /// configured, clearnet on or off: unlike an explorer page, a payjoin
+    /// names a payment, and the relay is the one party that would otherwise
+    /// see the phone's address. Direct only with clearnet and no Tor;
+    /// refused with I2P alone.
+    public var permitsPayjoin: Bool { permitsHTTP }
+    public var payjoinProxy: PeerEndpoint? { networks.contains(.tor) ? torProxy : nil }
+
     public enum Invalid: Error, LocalizedError {
         case configuration, address
         public var errorDescription: String? {

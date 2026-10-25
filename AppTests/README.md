@@ -5,6 +5,10 @@
 These tests exercise the app's state transitions, persistence, privacy, and
 authorization boundaries without driving every case through screen taps.
 They protect the decisions behind payment review, recovery, and the address book.
+[Payjoin flow tests](PayjoinSendFlowTests.swift) pay a BIP 77 request through
+a loopback directory with honest, hostile, erroring and silent receivers, and
+[payjoin review tests](PayjoinReviewTests.swift) mutate the proposal gate one
+fact at a time and pin the relay setting's resolution.
 [Silent payment flow tests](SilentPaymentSendFlowTests.swift) pay a BIP352 code
 through the model and check the derived output against a receiver written from
 the BIP in TestSupport.
