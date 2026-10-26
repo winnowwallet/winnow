@@ -14,10 +14,14 @@ raw k-of-n `tr(NUMS, sortedmulti_a(k, …))` account, optionally with a second,
 timelocked recovery leaf `and_v(v:pk(K),older(N))` or
 `and_v(v:multi_a(m,…),older(N))` for N of 1 to 65535 blocks, whose keys are
 either the same signers on their `/<2;3>/*` path or other keys on `/<0;1>/*`.
-A recovery spend sets each input's sequence to N and selects only coins at
-least N blocks deep; when every input's sequence meets the lock, either leaf
-may finish the spend, and the finalizer puts exactly k signatures in the
-witness. The account holds the shape and signer checks
+A nested account has several signers' leaves, one per group of members that
+can spend together, a member being keys that always sign as one (a phone and
+its Ledger); a key in several leaves takes `/<2;3>/*`, `/<4;5>/*`… in turn,
+so no derived key is shared between leaves. A recovery spend sets each
+input's sequence to N and selects only coins at
+least N blocks deep; when every input's sequence meets the lock, either kind
+of leaf may finish the spend, and the finalizer puts exactly a leaf's
+threshold of signatures in the witness. The account holds the shape and signer checks
 from the shared-account Winnow's audit (SEC-009, SEC-019, SEC-020), spend
 creation, the review every signer repeats before signing (SEC-004),
 signing and finalization. New accounts write the internal key as an xpub on
@@ -27,7 +31,8 @@ with the bare NUMS key still load. A record may carry the registration of its
 record is read. Import bundles carry these accounts under `vaults`;
 a bundle carrying any other kind of account is refused rather than restored
 without it. [Account tests](../../../Tests/WalletCoreTests/MultisigAccountTests.swift)
-cover each rule.
+cover each rule; [nested tests](../../../Tests/WalletCoreTests/NestedMultisigTests.swift)
+the builder over members, what joining admits and spends on each leaf.
 
 An embedding application can restore its reserved address ranges with
 `Wallet.advanceCursors(nextReceiveIndex:nextChangeIndex:)`. Each cursor is the

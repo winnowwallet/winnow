@@ -10,23 +10,26 @@ import WalletCore
 /// which signers are Bitcoin Core wallets (keys Core generated, signing with
 /// its own libsecp256k1), the order the signers are listed in, and the
 /// recovery leaf (none, fewer of the same signers, or separate keys, after a
-/// delay). For every case Core must agree with Winnow on:
+/// delay). A third of the cases with three or more signers are nested: some
+/// signers are paired into one member (a phone and its Ledger), the
+/// threshold counts members, and the account has a leaf per group of
+/// members. For every case Core must agree with Winnow on:
 ///
 /// - the descriptor checksum and the first four receive and change addresses,
 ///   and that listing the signers, or a recovery leaf's separate keys, in
 ///   another order builds the very same descriptor;
-/// - which signers a PSBT carries valid signatures from, Core's included
-///   (both sides compute the same script-path sighash);
-/// - every subset of exactly k signers, each signing in a shuffled order:
-///   Winnow finalizes, Core's mempool accepts the transaction, and Core's own
-///   finalizer produces the same bytes; with k + 1 signers both still finish
-///   and Core accepts Winnow's k-signature witness; with k − 1 neither
-///   finishes; one spend is mined;
+/// - which keys of every leaf a PSBT carries valid signatures from, Core's
+///   included (both sides compute the same script-path sighash);
+/// - every subset of exactly k signing groups, each signing in a shuffled
+///   order: Winnow finalizes, Core's mempool accepts the transaction, and
+///   Core's own finalizer produces the same bytes; with k + 1 groups both
+///   still finish and Core accepts Winnow's witness; with k − 1, or with a
+///   member missing one of its keys, neither finishes; one spend is mined;
 /// - the recovery leaf, for delays of one to four blocks: every subset of its
 ///   threshold, refused by Core and by Winnow's unlock rule one block before
 ///   the lock opens and accepted by both in the block it opens; one key fewer
-///   finishing on neither side unless the same people also complete the
-///   signers' leaf; the signers' leaf finishing a spend that carries the
+///   finishing on neither side unless the same people also complete a
+///   signers' leaf; a signers' leaf finishing a spend that carries the
 ///   recovery sequence (BIP326); and one recovery spend is mined.
 ///
 /// A disagreement is recorded with its seed and case and the run continues,
@@ -83,21 +86,29 @@ enum MultisigDifferential {
     /// One generated account.
     struct Case {
         let number: Int
+        /// Of the groups.
         let threshold: Int
-        /// In the order the descriptor lists them.
         let signers: [Signer]
+        /// The signers as the policy counts them, by position in `signers`:
+        /// one each for an ordinary account; a nested account's members,
+        /// some of two signers.
+        let groups: [[Int]]
         let recovery: MultisigAccount.RecoveryPlan?
         /// The keys of a `separateKeys` recovery leaf, all Winnow masters.
         let recoveryMasters: [HDKey]
 
+        /// Whether the account has a leaf per group of members: a threshold
+        /// of every member is one leaf of every key, the ordinary account.
+        var isNested: Bool { groups.contains { $0.count > 1 } && threshold < groups.count }
+
         var summary: String {
-            let who = signers.map(\.label).joined(separator: ",")
+            let who = groups.map { $0.map { signers[$0].label }.joined(separator: "+") }.joined(separator: ",")
             let leaf = switch recovery {
             case nil: "no recovery"
             case let .fewerSigners(m, blocks): "recovery \(m) of the signers after \(blocks)"
             case let .separateKeys(m, keys, blocks): "recovery \(m) of \(keys.count) other keys after \(blocks)"
             }
-            return "\(threshold)-of-\(signers.count) [\(who)], \(leaf)"
+            return "\(threshold)-of-\(groups.count) [\(who)], \(leaf)"
         }
     }
 
@@ -131,11 +142,32 @@ enum MultisigDifferential {
 
     static func generate(number: Int, rng: inout SeededRandom) throws -> Case {
         let count = 2 + rng.count(4)
-        let threshold = 1 + rng.count(count)
         let coreCount = min(rng.count(3), count)
         var signers: [Signer] = try (0 ..< coreCount).map { .core(try CoreSigner(wallet: "case\(number)-core\($0)")) }
         signers += try (coreCount ..< count).map { _ in .winnow(try master(&rng)) }
         shuffle(&signers, &rng)
+        let nested = count >= 3 && rng.count(3) == 0
+        var groups: [[Int]] = []
+        if nested {
+            // Pairs and singles in shuffled order, with at least one pair.
+            var order = Array(signers.indices)
+            shuffle(&order, &rng)
+            var cursor = 0
+            while cursor < order.count {
+                if cursor + 1 < order.count, groups.isEmpty || rng.count(2) == 0 {
+                    groups.append([order[cursor], order[cursor + 1]])
+                    cursor += 2
+                } else {
+                    groups.append([order[cursor]])
+                    cursor += 1
+                }
+            }
+        } else {
+            groups = signers.indices.map { [$0] }
+        }
+        var threshold = 1 + rng.count(groups.count)
+        // One member alone may spend only when every member is a pair.
+        if nested, threshold == 1, groups.contains(where: { $0.count == 1 }) { threshold = 2 }
         let blocks: UInt32 = rng.count(10) < 7 ? UInt32(1 + rng.count(Int(spendableDelay)))
             : [16, 144, 4_032, 65_535][rng.count(4)]
         var recoveryMasters: [HDKey] = []
@@ -143,24 +175,33 @@ enum MultisigDifferential {
         switch rng.count(3) {
         case 0:
             recovery = nil
-        case 1:
-            recovery = .fewerSigners(threshold: 1 + rng.count(count), blocks: blocks)
+        case 1 where !nested:
+            recovery = .fewerSigners(threshold: 1 + rng.count(groups.count), blocks: blocks)
         default:
             recoveryMasters = try (0 ..< 1 + rng.count(3)).map { _ in try master(&rng) }
             recovery = .separateKeys(threshold: 1 + rng.count(recoveryMasters.count),
                                      keys: try recoveryMasters.map { try TestKeys.keyExpression(master: $0) },
                                      blocks: blocks)
         }
-        return Case(number: number, threshold: threshold, signers: signers, recovery: recovery,
+        return Case(number: number, threshold: threshold, signers: signers, groups: groups, recovery: recovery,
                     recoveryMasters: recoveryMasters)
     }
 
     static func check(_ generated: Case, rng: inout SeededRandom, tally: Tally, tag: String) throws {
         let expressions = try generated.signers.map { try $0.expression }
-        let descriptor = try MultisigAccount.descriptor(threshold: generated.threshold, signers: expressions,
+        let members = generated.groups.map { $0.map { expressions[$0] } }
+        let descriptor = try MultisigAccount.descriptor(members: members, threshold: generated.threshold,
                                                         recovery: generated.recovery, network: .regtest)
         let account = try MultisigAccount(descriptor: descriptor, network: .regtest)
-        try checkAddresses(account, generated: generated, expressions: expressions, tally: tally, tag: tag)
+        tally.check(account.isNested == generated.isNested, "nesting",
+                    "\(tag): Winnow built \(account.signersLeaves.count) signers' leaves")
+        if generated.isNested {
+            let members = account.members
+            tally.check(members?.threshold == generated.threshold && members?.groups.count == generated.groups.count,
+                        "members read back", "\(tag): Winnow reads \(String(describing: members?.threshold)) of "
+                            + "\(String(describing: members?.groups.count))")
+        }
+        try checkAddresses(account, generated: generated, members: members, tally: tally, tag: tag)
         for signer in generated.signers {
             if case let .core(core) = signer { try core.importMultisigAccount(account) }
         }
@@ -172,7 +213,7 @@ enum MultisigDifferential {
 
     // MARK: - Descriptor and addresses
 
-    static func checkAddresses(_ account: MultisigAccount, generated: Case, expressions: [String],
+    static func checkAddresses(_ account: MultisigAccount, generated: Case, members: [[String]],
                                tally: Tally, tag: String) throws {
         let text = account.descriptor.serialized()
         let body = String(text.split(separator: "#")[0])
@@ -189,19 +230,20 @@ enum MultisigDifferential {
             }
         }
         // The builder writes keys in one canonical order, so listing the
-        // signers, or a recovery leaf's separate keys, in another order must
-        // give the very same descriptor, internal key included.
+        // members, their keys, or a recovery leaf's separate keys in another
+        // order must give the very same descriptor, internal key included.
         let reversedRecovery = generated.recovery.map { plan -> MultisigAccount.RecoveryPlan in
             guard case let .separateKeys(m, keys, blocks) = plan else { return plan }
             return .separateKeys(threshold: m, keys: keys.reversed(), blocks: blocks)
         }
-        let reordered = try MultisigAccount.descriptor(threshold: generated.threshold, signers: expressions.reversed(),
+        let reordered = try MultisigAccount.descriptor(members: members.reversed().map { $0.reversed() },
+                                                       threshold: generated.threshold,
                                                        recovery: reversedRecovery, network: .regtest)
         tally.check(reordered.serialized() == text, "signer order",
                     "\(tag): listing the keys in reverse gives \(reordered.serialized().suffix(8)), not \(account.id)")
     }
 
-    // MARK: - The signers' leaf
+    // MARK: - The signers' leaves
 
     static func checkSignersPath(_ account: MultisigAccount, generated: Case, rng: inout SeededRandom,
                                  tally: Tally, tag: String) throws {
@@ -211,11 +253,17 @@ enum MultisigDifferential {
         let psbt = try account.createSpend(utxos: coins, payments: [Payment(amount: 60_000, scriptPubKey: destination)],
                                            changeIndex: 0, feeRateSatPerVByte: 2, chainTip: tip)
         let owned = [MultisigAccount.OutputCoordinate(choice: 1, index: 0)]
-        let positions = try signerPositions(account.signers, of: generated.signers)
         let k = generated.threshold
-        var trials = combinations(of: Array(generated.signers.indices), size: k)
-        if k > 1 { trials.append(Array(generated.signers.indices.prefix(k - 1))) }
-        if k < generated.signers.count { trials.append(Array(generated.signers.indices.prefix(k + 1))) }
+        let groups = generated.groups
+        // Signer subsets: every k groups, k − 1 and k + 1 groups, and for a
+        // nested account k groups with one member missing a key.
+        var trials = combinations(of: Array(groups.indices), size: k).map { $0.flatMap { groups[$0] } }
+        if k > 1 { trials.append(Array(groups.indices.prefix(k - 1)).flatMap { groups[$0] }) }
+        if k < groups.count { trials.append(Array(groups.indices.prefix(k + 1)).flatMap { groups[$0] }) }
+        if let pair = groups.firstIndex(where: { $0.count > 1 }) {
+            let chosen = [pair] + groups.indices.filter { $0 != pair }.prefix(k - 1)
+            trials.append(chosen.flatMap { groups[$0] }.filter { $0 != groups[pair][0] })
+        }
         var first: (label: String, hex: String)?
         for var subset in trials {
             shuffle(&subset, &rng)
@@ -224,22 +272,28 @@ enum MultisigDifferential {
             for member in subset {
                 try sign(&signed, as: generated.signers[member], account: account, coins: coins, owned: owned, tip: tip)
             }
-            let approved = try account.approvals(of: signed, knownUTXOs: coins)
-            let expected = Set(subset.map { positions[$0] })
-            tally.check(approved == expected, "verified signers",
-                        "\(label): Winnow verifies \(approved.sorted()), signed by \(expected.sorted())")
+            // Every leaf must verify exactly the subset's keys that sit on it.
+            for path in account.signersPaths {
+                let approved = try account.approvals(of: signed, knownUTXOs: coins, path: path)
+                let expected = try positions(in: account.keys(on: path), of: subset.map { generated.signers[$0] })
+                tally.check(approved == expected, "verified signers",
+                            "\(label) \(path): Winnow verifies \(approved.sorted()), signed by \(expected.sorted())")
+            }
+            let complete = groups.filter { Set($0).isSubset(of: Set(subset)) }.count
             let outcome = try finalizeBoth(account, signed, coins: coins, owned: owned, tip: tip)
-            guard subset.count >= k else {
+            guard complete >= k else {
                 tally.check(outcome.winnow == nil && outcome.core == nil, "below threshold refused",
                             "\(label): Winnow finished \(outcome.winnow != nil), Core finished \(outcome.core != nil)")
                 continue
             }
             guard let ours = outcome.winnow else {
-                tally.check(false, "threshold finalizes", "\(label): Winnow refused \(k) signatures")
+                tally.check(false, "threshold finalizes", "\(label): Winnow refused \(k) complete groups")
                 continue
             }
             tally.check(outcome.core != nil, "threshold finalizes", "\(label): Core's finalizer did not complete")
-            if subset.count == k, let theirs = outcome.core {
+            // With exactly k groups one leaf can finish, so the finalizers
+            // must produce the same witness; with more, each may pick a leaf.
+            if complete == k, let theirs = outcome.core {
                 tally.check(ours == theirs, "finalizers agree", "\(label): Winnow \(ours), Core \(theirs)")
             }
             let verdict = try mempoolVerdict(ours)
@@ -248,6 +302,13 @@ enum MultisigDifferential {
         }
         // Mined only after every subset was tried against the unspent coins.
         if let first { try broadcastAndMine(first.hex, tally: tally, label: first.label) }
+    }
+
+    /// Whether some signers' leaf has its threshold of verified signatures.
+    static func signersLeafCanFinish(_ account: MultisigAccount, _ psbt: PSBT, coins: [WalletUTXO]) throws -> Bool {
+        try account.signersPaths.contains {
+            try account.approvals(of: psbt, knownUTXOs: coins, path: $0).count >= account.threshold(on: $0)
+        }
     }
 
     // MARK: - The recovery leaf
@@ -281,8 +342,8 @@ enum MultisigDifferential {
                         "\(label): Winnow verifies \(approved.sorted()), signed by \(subset.sorted())")
             let outcome = try finalizeBoth(account, signed, coins: [coin], owned: owned, tip: openTip)
             // A signer reused for recovery signs both leaves, so when its
-            // signatures meet the signers' threshold that leaf can finish.
-            let signersCanFinish = try account.approvals(of: signed, knownUTXOs: [coin]).count >= generated.threshold
+            // signatures meet a signers' threshold that leaf can finish.
+            let signersCanFinish = try signersLeafCanFinish(account, signed, coins: [coin])
             guard subset.count >= m else {
                 let finished = (outcome.winnow != nil, outcome.core != nil)
                 tally.check(finished == (signersCanFinish, signersCanFinish), "below recovery threshold",
@@ -295,17 +356,17 @@ enum MultisigDifferential {
                 continue
             }
             tally.check(outcome.core != nil, "recovery finalizes", "\(label): Core's finalizer did not complete")
-            // When the signers' leaf can finish too, each finalizer may pick
+            // When a signers' leaf can finish too, each finalizer may pick
             // either leaf, so only a recovery-only spend must match byte for byte.
             if let theirs = outcome.core, !signersCanFinish {
                 tally.check(ours == theirs, "recovery finalizers agree", "\(label): Winnow \(ours), Core \(theirs)")
             }
             ready.append((label, ours))
         }
-        // BIP326: the signers' leaf may finish a spend that carries the
+        // BIP326: a signers' leaf may finish a spend that carries the
         // recovery sequence; such a spend obeys the same relative lock.
         var bySigners = psbt
-        for member in generated.signers.indices.prefix(generated.threshold) {
+        for member in generated.groups.prefix(generated.threshold).flatMap({ $0 }) {
             try sign(&bySigners, as: generated.signers[member], account: account, coins: [coin], owned: owned,
                      tip: openTip)
         }
@@ -380,18 +441,13 @@ enum MultisigDifferential {
         return (winnow, core)
     }
 
-    /// Positions in the account's signer list, by generated signer.
-    static func signerPositions(_ keys: [Descriptor.SingleKey], of signers: [Signer]) throws -> [Int] {
+    /// The positions in `keys` held by `signers`, those on the leaf only.
+    static func positions(in keys: [Descriptor.SingleKey], of signers: [Signer]) throws -> Set<Int> {
         let listed = try keys.map { key -> String in
             guard case let .extended(xpub, _) = key.base else { throw Failure(description: "a signer is not an xpub") }
             return xpub.serialized(network: .testnet)
         }
-        return try signers.map { signer in
-            guard let position = listed.firstIndex(of: try signer.accountKey) else {
-                throw Failure(description: "a signer is missing from the account")
-            }
-            return position
-        }
+        return Set(try signers.compactMap { listed.firstIndex(of: try $0.accountKey) })
     }
 
     // MARK: - The node

@@ -67,6 +67,71 @@ struct LedgerPairView: View {
     }
 }
 
+/// On the Join screen: reads this phone's Ledger's key and shows it with the
+/// phone's, the share another phone's builder pastes to count the two as
+/// one signer of a nested account.
+struct LedgerKeyShareRows: View {
+    let phoneKey: String
+    @Environment(AppModel.self) private var model
+    @State private var reading = false
+    @State private var ledgerKey: String?
+    @State private var error: String?
+
+    var body: some View {
+        if let ledgerKey {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("This phone and its Ledger, as one signer").font(.caption).foregroundStyle(.secondary)
+                MultisigLiteralRow(text: phoneKey + "\n" + ledgerKey, copyIdentifier: "multisigMemberShareCopy")
+            }
+        } else {
+            Button(reading ? "Reading the Ledger…" : "Add this phone's Ledger key") { read() }
+                .accessibilityIdentifier("multisigLedgerKeyButton")
+                .disabled(reading)
+        }
+        if let error {
+            Text(error).font(.footnote).foregroundStyle(.red)
+        }
+    }
+
+    private func read() {
+        reading = true
+        error = nil
+        Task {
+            defer { reading = false }
+            do { ledgerKey = try await model.ledgerKeyExpression() } catch { self.error = error.localizedDescription }
+        }
+    }
+}
+
+/// On a joined account that names a Ledger key this phone has not paired:
+/// registers the account on this phone's Ledger, which approves it on its
+/// screen and must derive the phone's first address.
+struct LedgerRegisterButton: View {
+    let record: MultisigAccountRecord
+    @Environment(AppModel.self) private var model
+    @State private var registering = false
+    @State private var error: String?
+
+    var body: some View {
+        Button(registering ? "Check the Ledger's screen…" : "Register on Ledger") { register() }
+            .accessibilityIdentifier("ledgerRegisterButton")
+            .disabled(registering)
+        if let error {
+            Text(error).font(.footnote).foregroundStyle(.red)
+                .accessibilityIdentifier("ledgerRegisterError")
+        }
+    }
+
+    private func register() {
+        registering = true
+        error = nil
+        Task {
+            defer { registering = false }
+            do { try await model.registerLedger(record: record) } catch { self.error = error.localizedDescription }
+        }
+    }
+}
+
 /// The receive card's check: the Ledger shows the address so the user can
 /// compare it with the phone's before sharing it.
 struct LedgerVerifyAddressButton: View {

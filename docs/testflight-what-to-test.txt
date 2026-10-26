@@ -1,4 +1,4 @@
-Winnow: 2-of-3 multisig with recovery paths, a Ledger signer, silent payment codes (internal test)
+Winnow: 2-of-3 multisig with recovery paths, a Ledger signer, a phone and its Ledger as one signer, silent payment codes (internal test)
 
 Send accepts a BIP352 silent payment code (sp1…/tsp1…) and derives the recipient's address from the coins it spends; the receipt shows both. Advanced mode builds k-of-n Taproot multisig accounts from Winnows, a Ledger or any signer, with an optional recovery path. There is no MuSig2 and no shared savings. Compact-filter sync, peer routing, people, labels and backups are unchanged.
 
@@ -15,6 +15,13 @@ Do not install this build on a phone that holds funds in MuSig2 accounts (build 
 7. After the delay (144 blocks a day), New or pasted PSBT → Recovery path: one signer alone can spend a coin that has not moved. Before the delay it must refuse.
 
 Also try: a separate recovery key instead of fewer signers, a 2-of-3 of three phones without a Ledger, declining on the Ledger, and joining the same descriptor twice (the same account comes back, not a copy). None of this appears in Simple mode.
+
+A phone and its Ledger as one signer (a nested account), on signet
+
+1. On the second phone: Wallet → Multisig → Join with a descriptor → Add this phone's Ledger key (Bitcoin Test open on its Ledger). Copy the two keys shown together under "This phone and its Ledger, as one signer" and send them to the first phone.
+2. On the first phone: New multisig account. Paste them with Paste a signer's key: they appear as "2 keys, one signer". Turn on Include a Ledger and Count the Ledger with this phone as one signer, keep "Any 2 of 2" or add a third signer for "Any 2 of 3", and tap Create account; approve the account on the Ledger (Bitcoin app 2.2.1 or later). The account screen must say Policy "2 of 2 members" or "2 of 3 members" and list each member's keys, this phone's and its Ledger's named.
+3. On the second phone: Join with a descriptor, then on the account screen tap Register on Ledger and approve the same account on its Ledger. Both phones must show the same first address; Verify on Ledger shows it on each Ledger.
+4. Fund the address and wait for it to confirm. Create the PSBT on the first phone: the review lists one signature count per group, none complete. Add this phone's signature and Sign with Ledger: still none complete, since one member is one member. Paste the PSBT on the second phone, add its signature and Sign with Ledger, paste it back on the first phone: one group is complete. Finalize and broadcast. A phone signing without its Ledger must never complete a group.
 
 Silent payment codes
 

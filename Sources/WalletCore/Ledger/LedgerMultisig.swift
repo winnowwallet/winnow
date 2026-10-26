@@ -50,11 +50,25 @@ public enum LedgerMultisig {
         return ("[\(String(format: "%08x", fingerprint))/\(origin)]\(text)/<0;1>/*", fingerprint)
     }
 
-    /// The account's Ledger signer: the one whose origin is the Ledger's
-    /// fingerprint and key path.
+    /// The account's Ledger signer: the key, on any leaf, whose origin is the
+    /// Ledger's fingerprint and key path.
     static func ledgerSigner(of account: MultisigAccount, fingerprint: UInt32,
                              path: [UInt32]) -> Descriptor.SingleKey? {
-        account.signers.first { $0.origin?.fingerprint == fingerprint && $0.origin?.path == path }
+        account.allKeys.first { $0.origin?.fingerprint == fingerprint && $0.origin?.path == path }
+    }
+
+    /// Whether a Ledger with `fingerprint` holds a key of the account, so a
+    /// phone joining it can register it on that Ledger.
+    public static func hasLedgerSigner(_ account: MultisigAccount, fingerprint: UInt32) -> Bool {
+        ledgerSigner(of: account, fingerprint: fingerprint, path: keyPath(network: account.network)) != nil
+    }
+
+    /// Whether any key of the account sits at a Ledger's key path, whoever
+    /// holds it: the account screen then offers to register the account on
+    /// a Ledger this phone has not paired yet.
+    public static func namesALedgerKey(_ account: MultisigAccount) -> Bool {
+        let path = keyPath(network: account.network)
+        return account.allKeys.contains { $0.origin?.path == path }
     }
 
     /// Registers the account on the Ledger after the user approves it there,

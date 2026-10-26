@@ -6,7 +6,10 @@ A Ledger with the Bitcoin app (version 2.1.2 or later; Bitcoin Test on signet)
 can be the second signer of a [multisig account](../Wallet/README.md): a 2-of-2
 `tr(NUMS, sortedmulti_a(2, phone, Ledger))` where the phone adds one
 script-path signature and the Ledger adds the other after showing the payment
-on its own screen. Nothing here depends on Ledger code: the client is written
+on its own screen. A phone and its Ledger can also count as one member of a
+nested account, one with a signers' leaf per group of members: the Ledger
+then registers the whole tree as one policy and signs every leaf its key is
+in. Nothing here depends on Ledger code: the client is written
 from the app's documented protocol and its open-source Python client, and
 talks to any `LedgerTransport` (Bluetooth in the app, a simulator in tests).
 

@@ -33,8 +33,9 @@ public struct LedgerWalletPolicy: Equatable, Sendable {
 
     /// The account's descriptor as a policy: the internal key is `@0`, each
     /// distinct key after it gets the next placeholder in descriptor order,
-    /// `/<0;1>/*` becomes `/**` and a reused signer's `/<2;3>/*` stays as it
-    /// is. The template therefore derives exactly the account's addresses.
+    /// `/<0;1>/*` becomes `/**` and a reused signer's `/<2;3>/*`, `/<4;5>/*`…
+    /// stays as it is. The tree keeps the descriptor's shape. The template
+    /// therefore derives exactly the account's addresses.
     public init(name: String, account: MultisigAccount) throws {
         guard case let .trTree(internalKey, tree) = account.descriptor.expression,
               case .extended = internalKey.base else {
@@ -47,7 +48,10 @@ public struct LedgerWalletPolicy: Equatable, Sendable {
                 keys.append(information)
                 return keys.count - 1
             }()
-            return key.derivation.elements == MultisigAccount.signerSuffix ? "@\(index)/**" : "@\(index)/<2;3>/*"
+            guard let appearance = MultisigAccount.appearance(of: key.derivation.elements) else {
+                throw LedgerError.mismatch("every policy key must be an extended public key under /<2n;2n+1>/*")
+            }
+            return appearance == 0 ? "@\(index)/**" : "@\(index)\(MultisigAccount.pairSuffixText(appearance))"
         }
         func leaf(_ expression: Descriptor.LeafExpression) throws -> String {
             switch expression {
@@ -63,20 +67,20 @@ public struct LedgerWalletPolicy: Equatable, Sendable {
                 throw LedgerError.mismatch("a plain pk() leaf is not an account leaf")
             }
         }
-        let body: String
-        switch tree {
-        case let .leaf(only): body = try leaf(only)
-        case let .branch(.leaf(left), .leaf(right)): body = "{\(try leaf(left)),\(try leaf(right))}"
-        default: throw LedgerError.mismatch("only one- and two-leaf accounts can be registered")
+        func node(_ tree: Descriptor.ScriptTree) throws -> String {
+            switch tree {
+            case let .leaf(expression): try leaf(expression)
+            case let .branch(left, right): "{\(try node(left)),\(try node(right))}"
+            }
         }
-        try self.init(name: name, template: "tr(@0/**,\(body))", keys: keys)
+        try self.init(name: name, template: "tr(@0/**,\(try node(tree)))", keys: keys)
     }
 
     /// `[fingerprint/86'/1'/0']tpub…` with the derivation suffix removed.
     static func keyInformation(_ key: Descriptor.SingleKey) throws -> String {
         guard case let .extended(xpub, network) = key.base, xpub.privateKey == nil,
-              [MultisigAccount.signerSuffix, MultisigAccount.recoverySuffix].contains(key.derivation.elements) else {
-            throw LedgerError.mismatch("every policy key must be an extended public key under /<0;1>/* or /<2;3>/*")
+              MultisigAccount.appearance(of: key.derivation.elements) != nil else {
+            throw LedgerError.mismatch("every policy key must be an extended public key under /<2n;2n+1>/*")
         }
         var text = ""
         if let origin = key.origin {
