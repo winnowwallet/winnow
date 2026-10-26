@@ -12,6 +12,9 @@ struct CloudAppState: Codable, Equatable, Sendable {
     let receiveLabels: [String: String]
     let ownDisplayName: String
     let advancedMode: Bool
+    /// Paired Ledgers and saved keys; absent in a context written before
+    /// the signer list existed.
+    var signers: SignerStore.Backup? = nil
 
     @MainActor
     func validate(for bundle: ImportBundle) throws {
@@ -21,6 +24,7 @@ struct CloudAppState: Codable, Equatable, Sendable {
             throw WalletError.invalidBundle("cloud wallet context does not match")
         }
         try PeopleStore.validateBackup(people, network: network)
+        if let signers { try SignerStore.validateBackup(signers, network: network) }
         _ = try ReceiveAddressLabelStore.validatedBackup(receiveLabels, network: network)
         guard try encoded().count <= CloudWalletBackup.maximumAppStateBytes else {
             throw WalletError.invalidBundle("cloud wallet context is too large")

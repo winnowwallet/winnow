@@ -1,26 +1,60 @@
 import SwiftUI
 import WalletCore
 
-/// Builds a k-of-n account from this phone's key, the other signers' keys
-/// (other Winnows show theirs under "This phone's key" when joining) and
-/// optionally a Ledger's, with an optional timelocked recovery path. Keys
-/// pasted together, a phone's with its Ledger's, count as one signer, and
-/// the Ledger can count with this phone the same way: the account is then
-/// nested, any k of its members spending with every key each has. The
-/// finished descriptor is shown to share: every other signer adds the same
-/// account by pasting it under "Join with a descriptor".
+/// Builds a k-of-n account from members: this phone, a Ledger paired under
+/// Settings → Signers, keys saved there or pasted now, or an account already
+/// on this phone, whose keys then sign together. A member of several keys,
+/// such as a phone with its Ledger, makes the account nested: any k of the
+/// members spend, each with every key it has. An optional timelocked
+/// recovery path. The finished descriptor is shown to share: every other
+/// signer adds the same account under "Join with a descriptor", and a paired
+/// Ledger among the members approves it on its screen here.
 struct MultisigBuildView: View {
     enum RecoveryMode: String, CaseIterable, Identifiable {
         case fewerSigners, separateKey
         var id: String { rawValue }
     }
 
+    /// One key of a member, with what to call it.
+    struct Key: Identifiable, Equatable, Hashable {
+        let key: String
+        let label: String
+        var id: String { key }
+    }
+
+    struct Member: Identifiable, Equatable {
+        let id = UUID()
+        var keys: [Key]
+
+        /// "This phone + Nano X", each name once.
+        var title: String {
+            keys.map(\.label).reduce(into: [String]()) { names, label in
+                if !names.contains(label) { names.append(label) }
+            }.joined(separator: " + ")
+        }
+    }
+
+    enum Picking: Identifiable {
+        case newMember
+        case into(UUID)
+        var id: String {
+            if case let .into(member) = self { return member.uuidString }
+            return "new"
+        }
+    }
+
+    enum Registration: Equatable {
+        case registered(String)
+        case failed(String)
+    }
+
+    static let phoneLabel = "This phone"
+
     @Environment(AppModel.self) private var model
     @State private var name = ""
-    @State private var otherMembers: [[String]] = []
-    @State private var includeLedger = false
-    @State private var ledgerWithPhone = false
+    @State private var members: [Member] = []
     @State private var threshold = 2
+    @State private var picking: Picking?
     @State private var withRecovery = false
     @State private var recoveryMode: RecoveryMode = .fewerSigners
     @State private var recoveryThreshold = 1
@@ -29,23 +63,19 @@ struct MultisigBuildView: View {
     @State private var creating = false
     @State private var error: String?
     @State private var created: MultisigAccountRecord?
+    @State private var registration: Registration?
 
     /// About 144 blocks a day; BIP68 counts at most 65,535 blocks.
     static func blocks(forDays days: Int) -> UInt32 {
         UInt32(min(days * 144, Int(MultisigAccount.maximumRecoveryBlocks)))
     }
 
-    /// The keys of one pasted member: one per line or space.
-    static func member(from text: String) -> [String] {
-        text.split(whereSeparator: \.isWhitespace).map(String.init)
-    }
+    private var usedKeys: Set<String> { Set(members.flatMap { $0.keys.map(\.key) }) }
 
-    /// Signers as the policy counts them: members, not keys.
-    private var signerCount: Int { 1 + otherMembers.count + (includeLedger && !ledgerWithPhone ? 1 : 0) }
-
-    /// Some member holds more than one key, so the account has a leaf per
-    /// group of members and its recovery path takes a separate key.
-    private var isNested: Bool { (includeLedger && ledgerWithPhone) || otherMembers.contains { $0.count > 1 } }
+    /// Some member holds more than one key and fewer than all the members
+    /// spend, so the account has a leaf per group and its recovery path
+    /// takes a separate key.
+    private var isNested: Bool { members.contains { $0.keys.count > 1 } && threshold < members.count }
 
     private var recoveryPlan: MultisigAccount.RecoveryPlan? {
         guard withRecovery else { return nil }
@@ -58,6 +88,23 @@ struct MultisigBuildView: View {
         }
     }
 
+    /// The paired Ledgers among the members, by name.
+    private var pairedLedgerNames: [String] {
+        model.signers.filter { $0.isLedger && usedKeys.contains($0.keys[0]) }.map(\.name)
+    }
+
+    /// The account these members make, or why they do not, shown before
+    /// Create; a recovery key not pasted yet is left out of it.
+    private var preview: Result<MultisigAccount, any Error>? {
+        guard members.count >= 2 else { return nil }
+        let recovery = withRecovery && recoveryMode == .separateKey && recoveryKey.isEmpty ? nil : recoveryPlan
+        return Result {
+            let descriptor = try MultisigAccount.descriptor(members: members.map { $0.keys.map(\.key) }, threshold: threshold,
+                                                            recovery: recovery, network: model.network)
+            return try MultisigAccount(descriptor: descriptor, network: model.network)
+        }
+    }
+
     var body: some View {
         Form {
             if let created {
@@ -67,83 +114,139 @@ struct MultisigBuildView: View {
                     TextField("Name", text: $name)
                         .autocorrectionDisabled()
                         .accessibilityIdentifier("multisigBuildNameField")
+                } footer: {
+                    Text("A Ledger shows the name when it registers the account: plain letters, digits and punctuation.")
                 }
-                signersSection
+                membersSection
                 thresholdSection
                 recoverySection
-                Section {
-                    Button(creating ? "Creating…" : "Create account") { create() }
-                        .accessibilityIdentifier("multisigBuildCreateButton")
-                        .disabled(creating || DisplayName.normalized(name) == nil || signerCount < 2
-                            || (withRecovery && recoveryMode == .separateKey && recoveryKey.isEmpty))
-                } footer: {
-                    Text(includeLedger
-                        ? "Open the Bitcoin app on the Ledger (Bitcoin Test on signet), version 2.2.1 or later for a recovery path or a nested account. It reads the Ledger's key, then asks you to approve the account on the Ledger."
-                        : "Winnow watches the account from the next block it scans.")
-                }
+                createSection
                 if let error {
                     Section { Text(error).font(.footnote).foregroundStyle(.red).accessibilityIdentifier("multisigBuildError") }
                 }
             }
         }
         .navigationTitle("New multisig account")
-        .onChange(of: signerCount) { _, count in
-            threshold = min(max(threshold, 1), count)
-            recoveryThreshold = min(max(recoveryThreshold, 1), count)
+        .onAppear(perform: seed)
+        .onChange(of: members.count) { _, count in
+            threshold = min(max(threshold, 1), max(count, 1))
+            recoveryThreshold = min(max(recoveryThreshold, 1), max(count, 1))
         }
         .onChange(of: isNested) { _, nested in
             if nested { recoveryMode = .separateKey }
         }
+        .sheet(item: $picking) { picking in
+            SignerPickerSheet(exclude: usedKeys) { keys in add(keys, to: picking) }
+        }
     }
 
-    private var signersSection: some View {
+    /// This phone is the first member; the user adds the rest.
+    private func seed() {
+        guard members.isEmpty, let key = try? model.multisigKeyExpression() else { return }
+        members = [Member(keys: [Key(key: key, label: Self.phoneLabel)])]
+    }
+
+    private func add(_ keys: [Key], to picking: Picking) {
+        let fresh = keys.filter { !usedKeys.contains($0.key) }
+        guard !fresh.isEmpty else { return }
+        if case let .into(id) = picking, let index = members.firstIndex(where: { $0.id == id }) {
+            members[index].keys += fresh
+        } else {
+            members.append(Member(keys: fresh))
+        }
+    }
+
+    private func remove(_ key: Key, from member: Member) {
+        guard let index = members.firstIndex(where: { $0.id == member.id }) else { return }
+        members[index].keys.removeAll { $0 == key }
+        if members[index].keys.isEmpty { members.remove(at: index) }
+    }
+
+    private var membersSection: some View {
         Section {
-            if let key = try? model.multisigKeyExpression() {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(includeLedger && ledgerWithPhone ? "This phone, with its Ledger" : "This phone")
-                        .font(.caption).foregroundStyle(.secondary)
-                    MultisigLiteralRow(text: key, copyIdentifier: "multisigBuildOwnKeyCopy")
-                }
+            ForEach(Array(members.enumerated()), id: \.element.id) { index, member in
+                MemberRow(member: member, index: index, onAddKey: { picking = .into(member.id) },
+                          onRemove: { remove($0, from: member) })
             }
-            ForEach(otherMembers.indices, id: \.self) { index in
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        if otherMembers[index].count > 1 {
-                            Text("\(otherMembers[index].count) keys, one signer").font(.caption).foregroundStyle(.secondary)
-                        }
-                        ForEach(otherMembers[index], id: \.self) { key in
-                            ReviewAddress(address: key)
+            Button("Add a member") { picking = .newMember }
+                .accessibilityIdentifier("multisigBuildAddMemberButton")
+        } header: {
+            Text("Members · \(members.count)")
+        } footer: {
+            Text("A member is one signer: this phone, a paired Ledger, keys someone sent, or an account already on this phone. A member of several keys, such as a phone with its Ledger, spends only with all of them. Pair Ledgers and save keys under Settings → Signers.")
+        }
+    }
+
+    /// One member: its keys, each by fingerprint and name, with a way to add
+    /// a key that signs with it and to take a key out.
+    struct MemberRow: View {
+        let member: Member
+        let index: Int
+        let onAddKey: () -> Void
+        let onRemove: (Key) -> Void
+        @Environment(AppModel.self) private var model
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text(member.title).font(.headline)
+                    Spacer()
+                    Button("Add a key that signs with this member", systemImage: "plus.circle", action: onAddKey)
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.borderless)
+                        .accessibilityIdentifier("multisigBuildMemberAddKey-\(index)")
+                }
+                ForEach(member.keys) { key in
+                    HStack {
+                        Text(SignerLabel.fingerprint(of: key.key, network: model.network) + "  " + key.label)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        if key.label != MultisigBuildView.phoneLabel {
+                            Button(role: .destructive) { onRemove(key) } label: { Image(systemName: "minus.circle") }
+                                .buttonStyle(.borderless)
+                                .accessibilityLabel("Remove this key")
                         }
                     }
-                    Spacer(minLength: 0)
-                    Button(role: .destructive) { otherMembers.remove(at: index) } label: { Image(systemName: "minus.circle") }
-                        .buttonStyle(.borderless)
-                        .accessibilityLabel("Remove this signer")
+                }
+                if member.keys.count > 1 {
+                    Text("\(member.keys.count) keys, one signer").font(.caption).foregroundStyle(.secondary)
                 }
             }
-            Button("Paste a signer's key") {
-                let member = Self.member(from: model.pasteboardText() ?? "")
-                if !member.isEmpty, !otherMembers.contains(member) { otherMembers.append(member) }
-            }
-            .accessibilityIdentifier("multisigBuildPasteKeyButton")
-            Toggle("Include a Ledger", isOn: $includeLedger)
-                .accessibilityIdentifier("multisigBuildLedgerToggle")
-            if includeLedger {
-                Toggle("Count the Ledger with this phone as one signer", isOn: $ledgerWithPhone)
-                    .accessibilityIdentifier("multisigBuildLedgerWithPhoneToggle")
-            }
-        } header: {
-            Text("Signers · \(signerCount)")
-        } footer: {
-            Text("Another Winnow shows its key under Join with a descriptor → This phone's key, alone or together with its Ledger's. Any signer's key works: [fingerprint/path]xpub…/<0;1>/*. Keys pasted together count as one signer, which spends only with all of them.")
+            .accessibilityIdentifier("multisigBuildMember-\(index)")
         }
     }
 
     private var thresholdSection: some View {
         Section {
-            Stepper("Any \(threshold) of \(signerCount) spend at once", value: $threshold, in: 1 ... max(signerCount, 1))
+            Stepper("Any \(threshold) of \(members.count) members spend", value: $threshold, in: 1 ... max(members.count, 1))
                 .accessibilityIdentifier("multisigBuildThresholdStepper")
+            previewRow
         }
+    }
+
+    @ViewBuilder
+    private var previewRow: some View {
+        switch preview {
+        case let .success(account):
+            Text(Self.previewText(account)).font(.footnote).foregroundStyle(.secondary)
+                .accessibilityIdentifier("multisigBuildPolicyPreview")
+        case let .failure(failure):
+            Text(failure.localizedDescription).font(.footnote).foregroundStyle(.red)
+                .accessibilityIdentifier("multisigBuildPolicyPreview")
+        case nil:
+            Text("Add at least one more member.").font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    /// "2 of 3 members: 3 ways to spend, each needing every key of its
+    /// members, up to 3 keys." Pinned by AppTests/SignerRosterTests.
+    static func previewText(_ account: MultisigAccount) -> String {
+        guard account.isNested else {
+            return "\(account.policySummary): any \(account.threshold) of the \(account.signers.count) keys sign a spend."
+        }
+        let largest = account.signersLeaves.map(\.keys.count).max() ?? 0
+        return "\(account.policySummary): \(account.signersLeaves.count) ways to spend, each needing every key of its members, up to \(largest) keys. A member missing one of its keys cannot help."
     }
 
     @ViewBuilder
@@ -163,8 +266,8 @@ struct MultisigBuildView: View {
                 }
                 switch recoveryMode {
                 case .fewerSigners:
-                    Stepper("Any \(recoveryThreshold) of the \(signerCount) signers", value: $recoveryThreshold,
-                            in: 1 ... max(signerCount, 1))
+                    Stepper("Any \(recoveryThreshold) of the \(members.count) signers", value: $recoveryThreshold,
+                            in: 1 ... max(members.count, 1))
                         .accessibilityIdentifier("multisigBuildRecoveryThresholdStepper")
                 case .separateKey:
                     if recoveryKey.isEmpty {
@@ -190,17 +293,42 @@ struct MultisigBuildView: View {
         }
     }
 
+    private var createSection: some View {
+        Section {
+            Button(creating ? "Creating…" : "Create account") { create() }
+                .accessibilityIdentifier("multisigBuildCreateButton")
+                .disabled(creating || DisplayName.normalized(name) == nil || (try? preview?.get()) == nil
+                    || (withRecovery && recoveryMode == .separateKey && recoveryKey.isEmpty))
+        } footer: {
+            Text(pairedLedgerNames.isEmpty
+                ? "Winnow watches the account from the next block it scans."
+                : "Then open the Bitcoin app on \(pairedLedgerNames.joined(separator: " and ")) (Bitcoin Test on signet; 2.2.1 or later for a recovery path or a nested account): the account is approved on its screen.")
+        }
+    }
+
     private func createdSection(_ record: MultisigAccountRecord) -> some View {
         Section {
             Text("Account created").font(.headline).foregroundStyle(.green)
                 .accessibilityIdentifier("multisigBuildCreated")
+            switch registration {
+            case let .registered(ledger):
+                Text("Approved on \(ledger).").font(.footnote).foregroundStyle(.green)
+                    .accessibilityIdentifier("multisigBuildLedgerRegistered")
+            case let .failed(reason):
+                Text("The account is on this phone, but the Ledger did not register it: \(reason)")
+                    .font(.footnote).foregroundStyle(.red)
+                    .accessibilityIdentifier("multisigBuildLedgerError")
+                LedgerRegisterButton(record: model.multisigAccounts.first { $0.id == record.id } ?? record)
+            case nil:
+                EmptyView()
+            }
             QRCodeView(content: record.descriptor)
                 .frame(maxWidth: 260)
                 .frame(maxWidth: .infinity)
             CopyableTextBlock(text: record.descriptor)
             NavigationLink(value: MultisigRoute.account(record.id)) { Text("Open the account") }
         } footer: {
-            Text("Every other signer adds this same descriptor under Join with a descriptor. Check that each one shows the same first address. A member with a Ledger then registers the account on it from the account screen.")
+            Text("Every other signer adds this same descriptor under Join with a descriptor. Check that each one shows the same first address. A member whose Ledger is paired on their phone approves the account on it as they join.")
         }
     }
 
@@ -210,12 +338,148 @@ struct MultisigBuildView: View {
         Task {
             defer { creating = false }
             do {
-                created = try await model.createMultisigAccount(name: name, threshold: threshold, otherMembers: otherMembers,
-                                                                includeLedger: includeLedger, ledgerWithPhone: ledgerWithPhone,
-                                                                recovery: recoveryPlan)
+                let record = try await model.createMultisigAccount(name: name, threshold: threshold,
+                                                                   members: members.map { $0.keys.map(\.key) },
+                                                                   recovery: recoveryPlan)
+                created = record
+                await register(record)
             } catch {
                 self.error = error.localizedDescription
             }
+        }
+    }
+
+    /// A paired Ledger among the members approves the account now.
+    private func register(_ record: MultisigAccountRecord) async {
+        guard let ledger = pairedLedgerNames.first else { return }
+        do {
+            if try await model.registerPairedLedger(record: record) != nil { registration = .registered(ledger) }
+        } catch {
+            registration = .failed(error.localizedDescription)
+        }
+    }
+}
+
+/// Picks a member's keys: a paired Ledger, keys someone sent, an account
+/// already on this phone (its keys, which then sign together), or keys
+/// pasted now. A key already among the members cannot be picked twice.
+struct SignerPickerSheet: View {
+    let exclude: Set<String>
+    let onPick: ([MultisigBuildView.Key]) -> Void
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @State private var pasteError: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                ledgersSection
+                savedSection
+                accountsSection
+                pasteSection
+            }
+            .navigationTitle("Add a member")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+            }
+        }
+    }
+
+    private func pick(_ keys: [MultisigBuildView.Key]) {
+        onPick(keys)
+        dismiss()
+    }
+
+    private var ledgersSection: some View {
+        Section("Ledgers") {
+            let ledgers = model.signers.filter(\.isLedger)
+            if ledgers.isEmpty {
+                Text("None paired. Pair one under Settings → Signers.").foregroundStyle(.secondary)
+            }
+            ForEach(ledgers) { record in signerButton(record) }
+        }
+    }
+
+    private var savedSection: some View {
+        Section("Saved keys") {
+            let saved = model.signers.filter { !$0.isLedger }
+            if saved.isEmpty {
+                Text("None saved. Save keys someone sent under Settings → Signers, or paste them below.")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(saved) { record in signerButton(record) }
+        }
+    }
+
+    private func signerButton(_ record: SignerRecord) -> some View {
+        Button { pick(record.keys.map { .init(key: $0, label: record.name) }) } label: {
+            SignerRow(record: record)
+        }
+        .foregroundStyle(.primary)
+        .disabled(record.keys.contains(where: exclude.contains))
+        .accessibilityIdentifier("signerPick-\(record.id)")
+    }
+
+    private var accountsSection: some View {
+        Section {
+            if model.multisigAccounts.isEmpty {
+                Text("None yet.").foregroundStyle(.secondary)
+            }
+            ForEach(model.multisigAccounts) { record in accountRow(record) }
+        } header: {
+            Text("Accounts on this phone")
+        } footer: {
+            Text("A whole account as one member: every one of its keys then signs. Only an account that already needs all its keys can be one.")
+        }
+    }
+
+    @ViewBuilder
+    private func accountRow(_ record: MultisigAccountRecord) -> some View {
+        if let account = try? model.multisigAccount(for: record) {
+            let eligible = !account.isNested && account.threshold == account.signers.count
+            let keys = account.signerExpressions
+            Button {
+                pick(keys.map { .init(key: $0, label: record.name) })
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(record.name)
+                    Text(eligible ? "\(keys.count) keys, one signer" : "\(account.policySummary): cannot be one member yet")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .foregroundStyle(.primary)
+            .disabled(!eligible || keys.contains(where: exclude.contains))
+            .accessibilityIdentifier("signerPickAccount-\(record.id)")
+        }
+    }
+
+    private var pasteSection: some View {
+        Section {
+            Button("Paste keys from the clipboard") { paste() }
+                .accessibilityIdentifier("signerPickerPasteButton")
+            if let pasteError {
+                Text(pasteError).font(.footnote).foregroundStyle(.red)
+                    .accessibilityIdentifier("signerPickerPasteError")
+            }
+        } footer: {
+            Text("One key, or several that always sign together, as another Winnow shows them under Join with a descriptor.")
+        }
+    }
+
+    private func paste() {
+        let keys = (model.pasteboardText() ?? "").split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !keys.isEmpty else {
+            pasteError = "The clipboard holds no key."
+            return
+        }
+        do {
+            let labelled = try keys.map { key -> MultisigBuildView.Key in
+                let single = try MultisigAccount.signerKey(key, network: model.network)
+                return .init(key: key, label: "Pasted " + String(format: "%08x", single.origin?.fingerprint ?? 0))
+            }
+            pick(labelled)
+        } catch {
+            pasteError = error.localizedDescription
         }
     }
 }

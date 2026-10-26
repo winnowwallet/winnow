@@ -4,10 +4,11 @@ import WalletCore
 import XCTest
 
 /// A nested account through two phones, each with its own Ledger (the device
-/// simulator), and a third member with one key: phone A builds it counting
-/// its Ledger as one signer, phone B joins with the descriptor and registers
-/// its Ledger, both fund it, and the spend finishes only once two whole
-/// members have signed. Advanced mode only.
+/// simulator) paired under Settings → Signers, and a third member with one
+/// key: phone A builds it from its signers counting its Ledger with itself,
+/// phone B joins with the descriptor and its paired Ledger registers it, both
+/// fund it, and the spend finishes only once two whole members have signed.
+/// Advanced mode only.
 @MainActor
 final class NestedMultisigFlowTests: XCTestCase {
     func testTwoPhonesWithLedgersAndAThirdMember() async throws {
@@ -19,38 +20,43 @@ final class NestedMultisigFlowTests: XCTestCase {
         phoneB.ledgerConnector = LedgerPairingTests.SimulatorConnector(simulator: ledgerB)
         let third = try TestKeys.master(entropyByte: 0xD4)
 
-        // Phone B's share is its key and its Ledger's, together.
-        let shareB = [try phoneB.multisigKeyExpression(), try await phoneB.ledgerKeyExpression()]
-        let created = try await phoneA.createMultisigAccount(
+        // Each phone pairs its Ledger. Phone B's share is its key and its
+        // Ledger's, together, which phone A saves under B's name.
+        let pairedA = try await phoneA.pairLedger(name: "Ledger A")
+        let pairedB = try await phoneB.pairLedger(name: "Ledger B")
+        let shareB = try phoneB.multisigKeyExpression() + "\n" + pairedB.keys[0]
+        let savedB = try await phoneA.addSignerKeys(name: "Household B", text: shareB)
+        XCTAssertEqual(savedB.keys.count, 2)
+        let savedThird = try await phoneA.addSignerKeys(name: "Carol", text: try TestKeys.keyExpression(master: third))
+
+        var created = try await phoneA.createMultisigAccount(
             name: "Three households", threshold: 2,
-            otherMembers: [shareB, [try TestKeys.keyExpression(master: third)]],
-            includeLedger: true, ledgerWithPhone: true, recovery: nil)
+            members: [[try phoneA.multisigKeyExpression()] + pairedA.keys, savedB.keys, savedThird.keys], recovery: nil)
         let account = try phoneA.multisigAccount(for: created)
         XCTAssertTrue(account.isNested)
         XCTAssertEqual(account.policySummary, "2 of 3 members")
         XCTAssertEqual(account.members?.groups.map(\.count).sorted(), [1, 2, 2])
+        XCTAssertEqual(phoneA.pairedLedgers(in: account).map(\.name), ["Ledger A"])
+        XCTAssertNil(created.ledger)
+        let approvedA = try await phoneA.registerPairedLedger(record: created)
+        created = try XCTUnwrap(approvedA)
         XCTAssertNotNil(created.ledger)
         let namesA = await ledgerA.registeredNames
         XCTAssertEqual(namesA, ["Three households"])
+        // The account screen names every key it knows.
         let members = try XCTUnwrap(account.members)
-        let own = try XCTUnwrap(members.groups.first { group in
-            group.contains { key in
-                if case let .extended(xpub, _) = key.base { return xpub.publicKey == phoneA.multisigOwnAccountKey }
-                return false
-            }
-        })
-        XCTAssertTrue(MultisigAccountView.groupText(own, ownKey: phoneA.multisigOwnAccountKey,
-                                                    ledger: created.ledger?.masterFingerprint)
-            .contains("(this phone)"))
-        XCTAssertTrue(MultisigAccountView.groupText(own, ownKey: phoneA.multisigOwnAccountKey,
-                                                    ledger: created.ledger?.masterFingerprint)
-            .contains("(Ledger)"))
+        let names = phoneA.signerNames(for: created)
+        let texts = members.groups.map { MultisigAccountView.groupText($0, ownKey: phoneA.multisigOwnAccountKey, names: names) }
+        XCTAssertTrue(texts.contains { $0.contains("(this phone)") && $0.contains("(Ledger A)") }, "\(texts)")
+        XCTAssertTrue(texts.contains { $0.contains("(Household B)") }, "\(texts)")
+        XCTAssertTrue(texts.contains { $0.contains("(Carol)") }, "\(texts)")
 
-        // Phone B joins with the descriptor and registers its own Ledger.
+        // Phone B joins with the descriptor; its own paired Ledger registers it.
         var joined = try await phoneB.addMultisigAccount(name: "Three households", descriptor: created.descriptor)
         XCTAssertNil(joined.ledger)
         XCTAssertTrue(LedgerMultisig.namesALedgerKey(account))
-        joined = try await phoneB.registerLedger(record: joined)
+        let approvedB = try await phoneB.registerPairedLedger(record: joined)
+        joined = try XCTUnwrap(approvedB)
         XCTAssertEqual(joined.ledger?.masterFingerprint, try TestKeys.master(entropyByte: 0xD5).fingerprint)
         let namesB = await ledgerB.registeredNames
         XCTAssertEqual(namesB, ["Three households"])
@@ -108,13 +114,19 @@ final class NestedMultisigFlowTests: XCTestCase {
         XCTAssertEqual(transaction.inputs[0].witness.count, 6, "four signatures, the leaf and its control block")
     }
 
-    func testRegisteringAndTheLedgerKeyAreAdvancedModeOnly() async throws {
+    func testPairingSavingAndRegisteringAreAdvancedModeOnly() async throws {
         let model = try await readyMultisigModel(advanced: false)
         model.ledgerConnector = LedgerPairingTests.SimulatorConnector(
             simulator: LedgerSimulator(master: try TestKeys.master(entropyByte: 0xB2)))
         do {
-            _ = try await model.ledgerKeyExpression()
-            XCTFail("read a Ledger key in Simple mode")
+            _ = try await model.pairLedger(name: "Nano X")
+            XCTFail("paired a Ledger in Simple mode")
+        } catch {
+            XCTAssertEqual(error as? AppModel.LedgerActionError, .advancedModeOnly)
+        }
+        do {
+            _ = try await model.addSignerKeys(name: "Bob", text: try TestKeys.keyExpression(master: TestKeys.masters()[2]))
+            XCTFail("saved a key in Simple mode")
         } catch {
             XCTAssertEqual(error as? AppModel.LedgerActionError, .advancedModeOnly)
         }
@@ -125,5 +137,6 @@ final class NestedMultisigFlowTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? AppModel.LedgerActionError, .advancedModeOnly)
         }
+        XCTAssertTrue(model.signers.isEmpty)
     }
 }

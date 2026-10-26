@@ -670,6 +670,31 @@ public struct MultisigAccount: Sendable {
         return key.publicKey
     }
 
+    /// A signer key expression as the builders take it and the app's signer
+    /// roster keeps it: `[fp/path]xpub…/<0;1>/*`, an extended public key
+    /// carrying its origin, on `network`. Exercised through the roster by
+    /// AppTests/SignerRosterTests.
+    public static func signerKey(_ expression: String, network: BitcoinNetwork) throws -> Descriptor.SingleKey {
+        let text = expression.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.contains(where: { $0 == "(" || $0 == ")" || $0 == "," || $0.isWhitespace }),
+              let parsed = try? Descriptor("tr(\(text))"), case let .tr(single) = parsed.expression else {
+            throw MultisigAccountError.invalidDescriptor("a signer key expression does not parse")
+        }
+        try requireAccountKey(single, network: network)
+        return single
+    }
+
+    /// The signers' key expressions as the builders take them, each on the
+    /// `/<0;1>/*` suffix whatever path its leaf gave it: what the app pastes
+    /// to make a whole account one member of another.
+    public var signerExpressions: [String] {
+        signers.map { signer in
+            var key = signer
+            key.derivation = Descriptor.Derivation(Self.signerSuffix)
+            return Serializer.serialize(key)
+        }
+    }
+
     /// Every key expression in the account: each signers' leaf's keys in
     /// tree order, then the recovery keys. A signer in several leaves is
     /// listed once per leaf, each time on that leaf's path.

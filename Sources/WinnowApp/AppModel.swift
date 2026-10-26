@@ -316,6 +316,12 @@ final class AppModel {
     /// Set when `multisig.json` could not be read. Shown on the multisig
     /// screens; the store refuses mutations meanwhile. Never blocks boot.
     private(set) var multisigStorageNotice: String?
+    /// The signers this phone knows (Advanced mode only): paired Ledgers and
+    /// other people's keys, mirrored from the store.
+    private(set) var signers: [SignerRecord] = []
+    /// Set when `signers.json` could not be read. Shown on the Signers
+    /// screen; the store refuses mutations meanwhile. Never blocks boot.
+    private(set) var signerStorageNotice: String?
     private var ownedMultisigScripts: Set<Data> = []
     private(set) var wallet: Wallet?
     private(set) var stack: SyncStack?
@@ -343,6 +349,7 @@ final class AppModel {
     let keychainAuthentication = KeychainAuthentication()
     let peopleStore: PeopleStore
     let multisigStore: MultisigStore
+    let signerStore: SignerStore
     /// How a Ledger signer is reached: Bluetooth on a phone, the simulator in
     /// app tests.
     var ledgerConnector: any LedgerConnector = LedgerBluetoothConnector()
@@ -478,6 +485,7 @@ final class AppModel {
         let storeKeys = storeKeys ?? KeychainStoreKeyVault(service: keychainService)
         peopleStore = PeopleStore(keys: storeKeys)
         multisigStore = MultisigStore(keys: storeKeys)
+        signerStore = SignerStore(keys: storeKeys)
         let defaults = e2e?.defaults ?? defaults
         self.defaults = defaults
         let initialGatewaySettings: PeerGatewaySettings
@@ -562,6 +570,7 @@ final class AppModel {
         }
         await configurePeople()
         await configureMultisig()
+        await configureSigners()
         guard let walletURL = walletURL() else {
             stage = .storageDamaged(
                 "Winnow could not access its protected local storage. No wallet files or keys were changed.")
@@ -1473,6 +1482,7 @@ final class AppModel {
         }
         await configurePeople()
         await configureMultisig()
+        await configureSigners()
         receiveLabelStore = nil
         self.wallet = wallet
         walletID = await wallet.id
@@ -1614,6 +1624,7 @@ final class AppModel {
         syncPhase = .idle
         await configurePeople()
         await configureMultisig()
+        await configureSigners()
         stage = .onboarding
         e2e?.journal("wallet.destroyed", fields: ["walletID": walletID])
 
@@ -2420,6 +2431,7 @@ final class AppModel {
         case advancedModeOnly
         case invalidName
         case notPaired
+        case oneLedgerPerAccount
 
         var errorDescription: String? {
             switch self {
@@ -2429,78 +2441,128 @@ final class AppModel {
                 "Use a name of 1 to 64 plain letters, digits and punctuation: the Ledger shows it on its screen."
             case .notPaired:
                 "No Ledger is paired with this account."
+            case .oneLedgerPerAccount:
+                "Winnow registers one of this phone's Ledgers per account. Put one Ledger in it, or build the account from another phone."
             }
         }
     }
 
-    /// Pairs the Ledger as the second signer of a new 2-of-2:
-    /// `tr(NUMS, sortedmulti_a(2, this phone, the Ledger))`. The Ledger's
-    /// key comes from its BIP87 account; the user approves the account on the
-    /// Ledger's screen; the Ledger must derive the phone's first address.
-    @discardableResult
-    func pairLedger(name: String) async throws -> MultisigAccountRecord {
-        try await createMultisigAccount(name: name, threshold: 2, otherKeys: [], includeLedger: true, recovery: nil)
-    }
+    // MARK: Signers
 
-    /// The account builder: this phone's key, the other signers' pasted key
-    /// expressions (other Winnows, any signer's `[fp/path]xpub…/<0;1>/*`),
-    /// and optionally a Ledger's key read over Bluetooth, any `threshold` of
-    /// them, with an optional timelocked recovery path. The descriptor is
-    /// then shared with the other signers, who add it by pasting. A Ledger
-    /// among the signers registers the account on its own screen.
+    /// Pairs a Ledger: reads its signer key over Bluetooth and files it under
+    /// `name` among this phone's signers, for the account builder and the
+    /// Join screen's member share. Pairing the same Ledger again renames it.
+    /// Exercised by AppTests/SignerRosterTests and LedgerPairingTests.
     @discardableResult
-    func createMultisigAccount(name: String, threshold: Int, otherKeys: [String], includeLedger: Bool,
-                               recovery: MultisigAccount.RecoveryPlan?) async throws -> MultisigAccountRecord {
-        try await createMultisigAccount(name: name, threshold: threshold, otherMembers: otherKeys.map { [$0] },
-                                        includeLedger: includeLedger, ledgerWithPhone: false, recovery: recovery)
-    }
-
-    /// The builder over members: each other member is one signer's keys, a
-    /// single key or a phone's key pasted together with its Ledger's. With
-    /// `ledgerWithPhone` the Ledger joins this phone's member instead of
-    /// being a member of its own. A member of more than one key makes the
-    /// account nested: any `threshold` of the members spend, each with every
-    /// key it has. Exercised by AppTests/NestedMultisigFlowTests.
-    @discardableResult
-    func createMultisigAccount(name: String, threshold: Int, otherMembers: [[String]], includeLedger: Bool,
-                               ledgerWithPhone: Bool, recovery: MultisigAccount.RecoveryPlan?) async throws
-        -> MultisigAccountRecord {
+    func pairLedger(name: String) async throws -> SignerRecord {
         guard advancedMode else { throw LedgerActionError.advancedModeOnly }
-        guard let name = DisplayName.normalized(name), !includeLedger || LedgerWalletPolicy.isValidName(name) else {
-            throw LedgerActionError.invalidName
-        }
-        let pasted = otherMembers.map { member in
-            member.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-        }.filter { !$0.isEmpty }
-        guard includeLedger else {
-            let descriptor = try MultisigAccount.descriptor(members: [[multisigKeyExpression()]] + pasted, threshold: threshold,
-                                                            recovery: recovery, network: network)
-            _ = try multisigAccount(validating: descriptor.serialized())
-            return try await existingOrNewMultisigAccount(name: name, descriptor: descriptor)
+        guard DisplayName.normalized(name) != nil else {
+            throw SignerStorageError.invalidState("a signer needs a short, single-line name")
         }
         let session = try await ledgerConnector.connect()
+        let expression: String
+        let fingerprint: UInt32
         do {
-            let client = LedgerBitcoinClient(transport: session)
-            let (ledgerKey, fingerprint) = try await LedgerMultisig.signerExpression(client: client, network: network)
-            let members = ledgerWithPhone ? [[try multisigKeyExpression(), ledgerKey]] + pasted
-                : [[try multisigKeyExpression()]] + pasted + [[ledgerKey]]
-            let descriptor = try MultisigAccount.descriptor(members: members, threshold: threshold,
-                                                            recovery: recovery, network: network)
-            let account = try multisigAccount(validating: descriptor.serialized())
-            let registration = try await LedgerMultisig.register(account, name: name, fingerprint: fingerprint,
-                                                                 client: client)
+            (expression, fingerprint) = try await LedgerMultisig.signerExpression(
+                client: LedgerBitcoinClient(transport: session), network: network)
             await session.close()
-            // Pairing the same Ledger again yields the same account: refile
-            // its registration rather than adding a second copy.
-            let record = try await existingOrNewMultisigAccount(name: name, descriptor: descriptor)
-            try await multisigStore.setLedger(id: record.id, registration: registration)
-            multisigAccounts = await multisigStore.all
-            e2e?.journal("multisig.ledgerPaired", fields: ["id": record.id])
-            return multisigAccounts.first { $0.id == record.id } ?? record
         } catch {
             await session.close()
             throw error
         }
+        let record = try await signerStore.addLedger(name: name, key: expression, fingerprint: fingerprint)
+        signers = await signerStore.all
+        e2e?.journal("signer.ledgerPaired", fields: ["id": record.id, "fingerprint": String(format: "%08x", fingerprint)])
+        return record
+    }
+
+    /// Files keys someone sent as one signer: a single key, or a phone's
+    /// pasted together with its Ledger's, which then count as one member.
+    /// Exercised by AppTests/SignerRosterTests.
+    @discardableResult
+    func addSignerKeys(name: String, text: String) async throws -> SignerRecord {
+        guard advancedMode else { throw LedgerActionError.advancedModeOnly }
+        let keys = text.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !keys.isEmpty else { throw SignerStorageError.invalidState("paste at least one key") }
+        for key in keys { _ = try MultisigAccount.signerKey(key, network: network) }
+        let record = try await signerStore.addKeys(name: name, keys: keys)
+        signers = await signerStore.all
+        return record
+    }
+
+    func renameSigner(id: String, name: String) async throws {
+        try await signerStore.rename(id: id, name: name)
+        signers = await signerStore.all
+    }
+
+    func removeSigner(id: String) async throws {
+        try await signerStore.remove(id: id)
+        signers = await signerStore.all
+    }
+
+    /// The paired Ledgers holding a key of `account`.
+    func pairedLedgers(in account: MultisigAccount) -> [SignerRecord] {
+        signers.filter { signer in
+            signer.isLedger && signer.masterFingerprint.map { LedgerMultisig.hasLedgerSigner(account, fingerprint: $0) } == true
+        }
+    }
+
+    /// What to call each key of an account, by fingerprint: a paired
+    /// Ledger's or a saved signer's name, or "Ledger" for the registered
+    /// device when it is not in the list.
+    func signerNames(for record: MultisigAccountRecord) -> [UInt32: String] {
+        var names: [UInt32: String] = [:]
+        if let ledger = record.ledger { names[ledger.masterFingerprint] = "Ledger" }
+        for signer in signers {
+            for key in signer.keys {
+                if let fingerprint = (try? MultisigAccount.signerKey(key, network: network))?.origin?.fingerprint {
+                    names[fingerprint] = signer.name
+                }
+            }
+        }
+        return names
+    }
+
+    /// The account builder over members: each member is one signer's keys,
+    /// this phone's own among them wherever the user put it, a Ledger's, a
+    /// key someone sent, or several keys that sign together, such as a
+    /// phone's with its Ledger's or a whole account's. A member of more than
+    /// one key makes the account nested: any `threshold` of the members
+    /// spend, each with every key it has. The descriptor is then shared with
+    /// the other signers, who add it by pasting; a paired Ledger in the
+    /// account registers it afterwards (`registerPairedLedger`). Exercised by
+    /// AppTests/MultisigAccountFlowTests, LedgerPairingTests,
+    /// NestedMultisigFlowTests and SignerRosterTests.
+    @discardableResult
+    func createMultisigAccount(name: String, threshold: Int, members: [[String]],
+                               recovery: MultisigAccount.RecoveryPlan?) async throws -> MultisigAccountRecord {
+        guard advancedMode else { throw LedgerActionError.advancedModeOnly }
+        guard let name = DisplayName.normalized(name) else { throw LedgerActionError.invalidName }
+        let members = members.map { member in
+            member.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        }.filter { !$0.isEmpty }
+        let descriptor = try MultisigAccount.descriptor(members: members, threshold: threshold, recovery: recovery,
+                                                        network: network)
+        let account = try multisigAccount(validating: descriptor.serialized())
+        // A Ledger shows the name when it registers the account, whoever's
+        // Ledger it is, so the name must be one a Ledger can show.
+        guard !LedgerMultisig.namesALedgerKey(account) || LedgerWalletPolicy.isValidName(name) else {
+            throw LedgerActionError.invalidName
+        }
+        guard pairedLedgers(in: account).count <= 1 else { throw LedgerActionError.oneLedgerPerAccount }
+        return try await existingOrNewMultisigAccount(name: name, descriptor: descriptor)
+    }
+
+    /// Registers an account just built or joined on this phone's paired
+    /// Ledger when one holds a key of it: the Ledger shows the policy, the
+    /// user approves it there, and it must derive the phone's first address.
+    /// Nil when no paired Ledger is in the account. Exercised by
+    /// AppTests/LedgerPairingTests and NestedMultisigFlowTests.
+    @discardableResult
+    func registerPairedLedger(record: MultisigAccountRecord) async throws -> MultisigAccountRecord? {
+        let account = try multisigAccount(for: record)
+        guard record.ledger == nil, !pairedLedgers(in: account).isEmpty else { return nil }
+        return try await registerLedger(record: record)
     }
 
     /// The account already on this phone with this descriptor, or a new one.
@@ -2528,27 +2590,11 @@ final class AppModel {
         }
     }
 
-    /// This phone's Ledger's key, read over Bluetooth, for a member share:
-    /// another phone's builder takes it pasted beside this phone's key, so
-    /// the two count as one signer of a nested account.
-    func ledgerKeyExpression() async throws -> String {
-        guard advancedMode else { throw LedgerActionError.advancedModeOnly }
-        let session = try await ledgerConnector.connect()
-        do {
-            let (key, _) = try await LedgerMultisig.signerExpression(client: LedgerBitcoinClient(transport: session),
-                                                                     network: network)
-            await session.close()
-            return key
-        } catch {
-            await session.close()
-            throw error
-        }
-    }
-
-    /// Registers an account this phone joined on its Ledger, which must hold
-    /// one of the account's keys: the Ledger shows the policy, the user
-    /// approves it there, and it must derive the phone's first address.
-    /// Exercised by AppTests/NestedMultisigFlowTests.
+    /// Registers an account on the Ledger connected now, which must hold one
+    /// of the account's keys: the Ledger shows the policy, the user approves
+    /// it there, and it must derive the phone's first address. The account
+    /// screen offers this for a joined account whose paired Ledger did not
+    /// register it on joining. Exercised by AppTests/NestedMultisigFlowTests.
     @discardableResult
     func registerLedger(record: MultisigAccountRecord) async throws -> MultisigAccountRecord {
         guard advancedMode else { throw LedgerActionError.advancedModeOnly }
@@ -2884,6 +2930,7 @@ final class AppModel {
         loadNetworkScopedSettings()
         await configurePeople()
         await configureMultisig()
+        await configureSigners()
         guard let walletURL = walletURL() else {
             stage = .storageDamaged(
                 "Winnow could not access its protected local storage. No wallet files or keys were changed.")
@@ -3185,6 +3232,22 @@ final class AppModel {
         multisigAccounts = await multisigStore.all
     }
 
+    private func signersURL() -> URL? {
+        storageDirectory()?.appending(path: "signers.json")
+    }
+
+    /// Reads the signers this phone knows. Damage is a notice, not a stage,
+    /// and the file is not a wallet's: it stays when a wallet is deleted.
+    func configureSigners() async {
+        switch await signerStore.configure(storageURL: signersURL(), network: network) {
+        case let .damaged(message):
+            signerStorageNotice = message
+        case .missing, .loaded:
+            signerStorageNotice = nil
+        }
+        signers = await signerStore.all
+    }
+
     private func peopleURL() -> URL? {
         storageDirectory()?.appending(path: "people.json")
     }
@@ -3299,7 +3362,10 @@ extension AppModel {
         let restoration = try await cloudBackups.restoreContents(id)
         let bundle = restoration.contents.bundle
         var appState = try CloudAppState.decode(restoration.contents.appState, for: bundle)
-        if let saved = appState { appState?.people = try await peopleStore.planRestore(saved.people) }
+        if let saved = appState {
+            appState?.people = try await peopleStore.planRestore(saved.people)
+            appState?.signers = try await signerStore.planRestore(saved.signers ?? [])
+        }
         try Task.checkCancellation()
         guard walletID == nil, network == selectedNetwork else { throw CancellationError() }
         let validatedState = appState
@@ -3341,13 +3407,18 @@ extension AppModel {
         guard let receiveLabelStore else { throw AppError.noWallet }
         let state = try await CloudAppState(network: bundle.network, descriptor: bundle.descriptor,
                                            people: peopleStore.backup(), receiveLabels: receiveLabelStore.backup(),
-                                           ownDisplayName: ownDisplayName, advancedMode: advancedMode)
+                                           ownDisplayName: ownDisplayName, advancedMode: advancedMode,
+                                           signers: signerStore.backup())
         try state.validate(for: bundle)
         return state
     }
 
     private func applyCloudAppState(_ state: CloudAppState) async throws {
         try await peopleStore.restore(state.people)
+        if let signers = state.signers {
+            try await signerStore.restore(signers)
+            self.signers = await signerStore.all
+        }
         configureReceiveAddressLabels()
         guard let receiveLabelStore else { throw AppError.noWallet }
         try receiveLabelStore.restore(state.receiveLabels)

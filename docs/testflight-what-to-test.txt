@@ -7,21 +7,23 @@ Do not install this build on a phone that holds funds in MuSig2 accounts (build 
 2-of-3 with two Winnows and a Ledger, on signet
 
 1. On every phone, turn on Advanced mode and switch to signet (Advanced → Settings → Signet).
-2. On the second phone: Wallet → Multisig → Join with a descriptor, and copy This phone's key. Send it to the first phone.
-3. On the first phone: Wallet → Multisig → New multisig account. Name it, paste the second phone's key, turn on Include a Ledger, keep "Any 2 of 3", and optionally turn on Recovery after a delay (try Fewer signers, 1 of 3, after 1 day). Open Bitcoin Test on the Ledger (version 2.2.1 or later for a recovery path) and tap Create account; approve the account on the Ledger.
-4. Copy the descriptor it shows and paste it on the second phone under Join with a descriptor. Both phones must show the same first address; Verify on Ledger shows it on the Ledger too.
-5. Fund the address from a signet faucet and wait for it to confirm.
-6. Spend with any two: create the PSBT on one phone, add its signature, then Sign with Ledger, or paste the PSBT on the other phone and sign there, and paste it back. Finalize and broadcast.
-7. After the delay (144 blocks a day), New or pasted PSBT → Recovery path: one signer alone can spend a coin that has not moved. Before the delay it must refuse.
+2. On the first phone: Settings → Signers → Pair a Ledger. Name it, open Bitcoin Test on the Ledger, tap Pair. It appears under Ledgers with its fingerprint; nothing is approved on the Ledger yet.
+3. On the second phone: Settings → Signers shows This phone's key; copy it and send it to the first phone. On the first phone: Settings → Signers → Save keys someone sent: name it, Paste keys, Save.
+4. On the first phone: Wallet → Multisig → New multisig account. Name it. Add a member → pick the Ledger; Add a member → pick the saved key. Under the threshold the preview must read "2 of 3: any 2 of the 3 keys sign a spend." Optionally turn on Recovery after a delay (try Fewer signers, 1 of 3, after 1 day). Tap Create account, then approve the account on the Ledger (version 2.2.1 or later for a recovery path): "Approved on <its name>" must appear.
+5. Copy the descriptor it shows and paste it on the second phone under Join with a descriptor. Both phones must show the same first address; Verify on Ledger shows it on the Ledger too.
+6. Fund the address from a signet faucet and wait for it to confirm.
+7. Spend with any two: create the PSBT on one phone, add its signature, then Sign with Ledger, or paste the PSBT on the other phone and sign there, and paste it back. Finalize and broadcast.
+8. After the delay (144 blocks a day), New or pasted PSBT → Recovery path: one signer alone can spend a coin that has not moved. Before the delay it must refuse.
 
-Also try: a separate recovery key instead of fewer signers, a 2-of-3 of three phones without a Ledger, declining on the Ledger, and joining the same descriptor twice (the same account comes back, not a copy). None of this appears in Simple mode.
+Also try: a separate recovery key instead of fewer signers; a 2-of-3 of three phones without a Ledger (Add a member → Paste keys from the clipboard); declining on the Ledger (the account stays, and its screen offers Register on Ledger); joining the same descriptor twice (the same account comes back, not a copy); renaming or removing a signer under Settings → Signers (accounts already built are unchanged). None of this appears in Simple mode.
 
 A phone and its Ledger as one signer (a nested account), on signet
 
-1. On the second phone: Wallet → Multisig → Join with a descriptor → Add this phone's Ledger key (Bitcoin Test open on its Ledger). Copy the two keys shown together under "This phone and its Ledger, as one signer" and send them to the first phone.
-2. On the first phone: New multisig account. Paste them with Paste a signer's key: they appear as "2 keys, one signer". Turn on Include a Ledger and Count the Ledger with this phone as one signer, keep "Any 2 of 2" or add a third signer for "Any 2 of 3", and tap Create account; approve the account on the Ledger (Bitcoin app 2.2.1 or later). The account screen must say Policy "2 of 2 members" or "2 of 3 members" and list each member's keys, this phone's and its Ledger's named.
-3. On the second phone: Join with a descriptor, then on the account screen tap Register on Ledger and approve the same account on its Ledger. Both phones must show the same first address; Verify on Ledger shows it on each Ledger.
+1. On the second phone: Settings → Signers → Pair a Ledger (its own Ledger). Then Wallet → Multisig → Join with a descriptor: under This phone's key, copy the two keys shown together as "This phone and <Ledger>, as one signer" and send them to the first phone, which saves them under Settings → Signers → Save keys someone sent ("2 keys that always sign together: one signer").
+2. On the first phone: New multisig account. On the member "This phone", tap the plus and pick the Ledger: the member reads "This phone + <Ledger>", "2 keys, one signer". Add a member → the saved pair. Keep "Any 2 of 2", or add a third member for "Any 2 of 3": the preview must read "2 of 3 members: 3 ways to spend, each needing every key of its members, up to 4 keys." Tap Create account and approve it on the Ledger (Bitcoin app 2.2.1 or later). The account screen must say Policy "2 of 2 members" or "2 of 3 members" and list each member's keys by name.
+3. On the second phone: Join with a descriptor. The screen says its Ledger holds a key of this account; tap Save and approve the account on that Ledger. If the Ledger was not reachable, the account screen offers Register on Ledger. Both phones must show the same first address; Verify on Ledger shows it on each Ledger.
 4. Fund the address and wait for it to confirm. Create the PSBT on the first phone: the review lists one signature count per group, none complete. Add this phone's signature and Sign with Ledger: still none complete, since one member is one member. Paste the PSBT on the second phone, add its signature and Sign with Ledger, paste it back on the first phone: one group is complete. Finalize and broadcast. A phone signing without its Ledger must never complete a group.
+5. A whole account as a member: build the 2-of-2 of this phone and its Ledger first (Add a member → the Ledger, Any 2 of 2). Then New multisig account → Add a member → under Accounts on this phone pick it: its two keys join as one member, "2 keys, one signer". A 2-of-3 account is listed but cannot be picked yet.
 
 Silent payment codes
 
@@ -33,6 +35,6 @@ Receive from a faucet, send a payment and watch it confirm. Restore the same rec
 
 Backups
 
-A backup from this build carries its multisig accounts and Ledger pairings. A file carrying MuSig2 accounts or vaults must be refused with a clear message, never restored partially.
+A backup from this build carries its multisig accounts and Ledger registrations; the iCloud copy also carries the signer list (paired Ledgers and saved keys), merged with the phone's own on restore. A file carrying MuSig2 accounts or vaults must be refused with a clear message, never restored partially.
 
 Report bugs publicly at https://github.com/winnowwallet/winnow/issues. Include the app version, device, Ledger model and app version, network and steps to reproduce. Never include recovery words, private keys, or wallet backup files.
