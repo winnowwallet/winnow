@@ -152,14 +152,32 @@ step_wait_processing() {
 }
 
 step_notes() {
-  local bid localizations localization_id payload response expected actual
+  # App Store Connect reports a build VALID a few seconds before its beta
+  # build localizations take writes (release 0.8.16 got a 409 three seconds
+  # after VALID; 0.8.14 wrote five seconds after and passed). Each attempt
+  # looks the localization up again, since Apple may create the en-US one
+  # itself in between, and prints the API's answer when it refuses.
+  local bid attempt
   bid=$(build_id)
   if [ ! -s "$WHATS_NEW_FILE" ]; then
     echo "TestFlight What to Test file is missing or empty: $WHATS_NEW_FILE" >&2
     return 1
   fi
+  for attempt in $(seq 1 8); do
+    write_notes "$bid" && return 0
+    echo "notes: not accepted yet (attempt $attempt/8); retrying" >&2
+    sleep 15
+  done
+  echo "notes: App Store Connect did not accept What to Test for build $bid" >&2
+  return 1
+}
 
-  localizations=$(asc GET "/builds/$bid/betaBuildLocalizations?limit=200")
+write_notes() { # write_notes <build id>
+  local bid="$1" localizations localization_id payload response expected actual
+  if ! localizations=$(asc GET "/builds/$bid/betaBuildLocalizations?limit=200"); then
+    printf '%s\n' "$localizations" >&2
+    return 1
+  fi
   localization_id=$(printf '%s' "$localizations" | python3 -c '
 import json, sys
 rows = json.load(sys.stdin)["data"]
@@ -176,7 +194,10 @@ path, resource_id = sys.argv[1:]
 print(json.dumps({"data": {"type": "betaBuildLocalizations", "id": resource_id,
                            "attributes": {"whatsNew": pathlib.Path(path).read_text().rstrip()}}}))
 ' "$WHATS_NEW_FILE" "$localization_id")
-    response=$(asc PATCH "/betaBuildLocalizations/$localization_id" "$payload")
+    if ! response=$(asc PATCH "/betaBuildLocalizations/$localization_id" "$payload"); then
+      printf '%s\n' "$response" >&2
+      return 1
+    fi
     echo "notes: updated en-US What to Test for build $bid"
   else
     payload=$(python3 -c '
@@ -186,7 +207,10 @@ print(json.dumps({"data": {"type": "betaBuildLocalizations",
                            "attributes": {"locale": "en-US", "whatsNew": pathlib.Path(path).read_text().rstrip()},
                            "relationships": {"build": {"data": {"type": "builds", "id": build_id}}}}}))
 ' "$WHATS_NEW_FILE" "$bid")
-    response=$(asc POST /betaBuildLocalizations "$payload")
+    if ! response=$(asc POST /betaBuildLocalizations "$payload"); then
+      printf '%s\n' "$response" >&2
+      return 1
+    fi
     echo "notes: created en-US What to Test for build $bid"
   fi
 
