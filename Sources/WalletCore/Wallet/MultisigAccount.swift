@@ -429,8 +429,9 @@ public struct MultisigAccount: Sendable {
                                   network: BitcoinNetwork) throws -> Descriptor {
         let signers = try canonicalOrder(signers)
         let leaf = "sortedmulti_a(\(threshold),\(signers.joined(separator: ",")))"
-        let recoveryLeaf = try recovery.map { try recoveryLeaf($0, signers: signers) }
-        return try build(leaves: [leaf] + (recoveryLeaf.map { [$0] } ?? []), network: network)
+        var leaves = [leaf]
+        if let recovery { leaves.append(try Self.recoveryLeaf(recovery, signers: signers)) }
+        return try build(leaves: leaves, network: network)
     }
 
     /// A nested account: `threshold` of `members` spend, each member a group
