@@ -60,7 +60,8 @@ evidenced by `LedgerTests` against Ledger's published policy-id and address
 vectors and a device simulator: its registration must return the policy's own
 id and derive the phone's first address, a shown address must equal the
 phone's, and its signatures are kept only after they verify. No test runs a
-real Ledger; that check is manual, on a Nano X over signet. A timelocked
+real Ledger; on 2026-10-26 the owner's Nano X co-signed a mainnet spend from a
+2-of-2 account ([evidence](evidence/ledger-mainnet-2026-10-26.md)). A timelocked
 recovery leaf is admitted only beside the signers' leaf, with a lock of 1 to
 65535 blocks, distinct keys, and a reused signer only on its `/<2;3>/*` path
 (`TimelockedMultisigTests`, checked against Bitcoin Core's descriptor answers);

@@ -46,4 +46,5 @@ vectors include such a key, which the app labels "unspendable".
 ids and Taproot addresses against Ledger's published vectors, the Merkle
 trees against an independent oracle, framing and the interpreter, and whole
 pairings and spends against the [device simulator](../../../Tests/Support/LedgerSimulator.swift).
-No test here proves a real device agrees; a Nano X on signet does that.
+No test here proves a real device agrees; a Nano X did, co-signing a mainnet
+2-of-2 spend on 2026-10-26 ([evidence](../../../docs/security/evidence/ledger-mainnet-2026-10-26.md)).
