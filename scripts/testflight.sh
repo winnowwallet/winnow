@@ -151,18 +151,34 @@ step_wait_processing() {
   return 1
 }
 
-step_notes() {
-  # App Store Connect reports a build VALID a few seconds before its beta
-  # build localizations take writes (release 0.8.16 got a 409 three seconds
-  # after VALID; 0.8.14 wrote five seconds after and passed). Each attempt
-  # looks the localization up again, since Apple may create the en-US one
-  # itself in between, and prints the API's answer when it refuses.
-  local bid attempt
-  bid=$(build_id)
+# App Store Connect takes at most this many characters of What to Test and
+# answers ENTITY_ERROR.ATTRIBUTE.INVALID.TOO_LONG (a 409) above it, which
+# releases 0.8.16 and 0.8.17 found only after uploading. The release
+# workflow's policy job checks the file first (scripts/check-release-policy).
+WHATS_NEW_LIMIT=4000
+
+step_check_notes() {
   if [ ! -s "$WHATS_NEW_FILE" ]; then
     echo "TestFlight What to Test file is missing or empty: $WHATS_NEW_FILE" >&2
     return 1
   fi
+  local length
+  length=$(python3 -c 'import pathlib, sys; print(len(pathlib.Path(sys.argv[1]).read_text().rstrip()))' "$WHATS_NEW_FILE")
+  if [ "$length" -gt "$WHATS_NEW_LIMIT" ]; then
+    echo "TestFlight What to Test is $length characters; App Store Connect takes at most $WHATS_NEW_LIMIT: $WHATS_NEW_FILE" >&2
+    return 1
+  fi
+  echo "notes: $length of $WHATS_NEW_LIMIT characters"
+}
+
+step_notes() {
+  # A write can be refused for a moment after the build turns VALID, or
+  # for good, as an over-long text is. Each attempt looks the en-US
+  # localization up again, since Apple may create it itself in between, and
+  # prints the API's answer when it refuses, so the reason is in the log.
+  local bid attempt
+  bid=$(build_id)
+  step_check_notes || return 1
   for attempt in $(seq 1 8); do
     write_notes "$bid" && return 0
     echo "notes: not accepted yet (attempt $attempt/8); retrying" >&2
@@ -646,6 +662,7 @@ case "${1:-all}" in
   upload) step_upload ;;
   wait-processing) step_wait_processing ;;
   notes) step_notes ;;
+  check-notes) step_check_notes ;;
   internal) step_internal ;;
   external) step_external ;;
   status) step_status ;;
