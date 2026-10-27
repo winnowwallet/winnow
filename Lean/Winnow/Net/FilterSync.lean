@@ -27,6 +27,8 @@ inductive FilterSyncError where
   | noPeers
   /-- the pool is in a relay-only session (`PeerPool.enterRelayOnly`), which does not read the chain -/
   | relayOnly
+  /-- `requireDistinctSources` refused the agreement this run found -/
+  | crossCheckUnavailable (reason : String)
   | peersCoolingDown (count : Nat)
   | checkpointMismatch (reason : String)
   | badPeerResponse (reason : String)
@@ -35,7 +37,8 @@ inductive FilterSyncError where
   deriving Repr, BEq, Inhabited
 
 def FilterSyncError.name : FilterSyncError → String
-  | .busy => "busy" | .noPeers => "noPeers" | .relayOnly => "relayOnly" | .peersCoolingDown _ => "peersCoolingDown"
+  | .busy => "busy" | .noPeers => "noPeers" | .relayOnly => "relayOnly" | .crossCheckUnavailable _ => "crossCheckUnavailable"
+  | .peersCoolingDown _ => "peersCoolingDown"
   | .checkpointMismatch _ => "checkpointMismatch" | .badPeerResponse _ => "badPeerResponse"
   | .filterHeaderMismatch _ => "filterHeaderMismatch" | .unexpectedBlockHash => "unexpectedBlockHash"
 
@@ -66,6 +69,74 @@ def PeerSource.ofRaw? : String → Option PeerSource
   | "manual" => some .manual | "persisted" => some .persisted | "fallback" => some .census
   | "dnsSeed" => some .dnsSeed | _ => none
 
+def PeerSource.rawValue : PeerSource → String
+  | .manual => "manual" | .persisted => "persisted" | .census => "fallback" | .dnsSeed => "dnsSeed"
+
+/-- Whether a scan may advance on answers that all reached us through one acquisition channel
+(`FilterSync.CrossCheckPolicy`). Every network defaults to `acceptSingleSource`, the behaviour before the
+policy existed; a caller that wants distinct sources asks for it. -/
+inductive CrossCheckPolicy where
+  /-- whatever agreed is enough, down to a lone surviving peer -/
+  | acceptSingleSource
+  /-- the adopted cfcheckpt answer must come from peers of at least two distinct known classes, or the run
+  throws `crossCheckUnavailable` having changed nothing -/
+  | requireDistinctSources
+  deriving Repr, BEq, Inhabited
+
+/-- How many distinct source classes must agree before `requireDistinctSources` lets a scan advance. -/
+def minimumAgreeingSourceClasses : Nat := 2
+
+/-- One peer whose cfcheckpt answer was adopted: its `host:port`, and the class the pool reached it through
+(`none` when unknown; an unknown class never counts towards distinct sources). -/
+structure CrossCheckAgreement where
+  endpoint : String
+  source : Option PeerSource
+  deriving Repr, BEq, Inhabited
+
+/-- Who agreed about the filter commitments a run scanned on (`CrossCheckReceipt`): the tip the answers
+were about, SHA256d of the adopted cfcheckpt message (hex), and the agreeing peers in the order asked.
+Saved with the frontier and rewritten on every commit; a degraded run writes an honest one-class receipt. -/
+structure CrossCheckReceipt where
+  tipHeight : UInt32
+  answerDigest : String
+  agreed : Array CrossCheckAgreement
+  deriving Repr, BEq, Inhabited
+
+namespace CrossCheckReceipt
+/-- The distinct known classes among the agreeing peers (not the pool's: a pool holding three classes proves
+nothing about which of them answered). -/
+def sourceClasses (r : CrossCheckReceipt) : Array PeerSource :=
+  r.agreed.foldl (fun acc a => match a.source with
+    | some s => if acc.contains s then acc else acc.push s
+    | none => acc) #[]
+def spansDistinctSources (r : CrossCheckReceipt) : Bool := r.sourceClasses.size ≥ minimumAgreeingSourceClasses
+
+def toJson (r : CrossCheckReceipt) : Json :=
+  Json.mkObj [("tipHeight", Lean.toJson r.tipHeight.toNat), ("answerDigest", Json.str r.answerDigest),
+    ("agreed", Json.arr (r.agreed.map fun a =>
+      Json.mkObj ([("endpoint", Json.str a.endpoint)] ++
+        (match a.source with | some s => [("source", Json.str s.rawValue)] | none => []))))]
+
+/-- A class this build does not know decodes as `none` rather than refusing the file. -/
+def ofJson? (j : Json) : Option CrossCheckReceipt := do
+  let tip ← (j.getObjValAs? Nat "tipHeight").toOption
+  if tip > 0xFFFFFFFF then none
+  let digest ← (j.getObjValAs? String "answerDigest").toOption
+  let agreed ← (j.getObjValAs? (Array Json) "agreed").toOption
+  let agreed ← agreed.mapM fun a => do
+    let endpoint ← (a.getObjValAs? String "endpoint").toOption
+    let source := match a.getObjVal? "source" with
+      | .ok (.str s) => PeerSource.ofRaw? s
+      | _ => none
+    return ({ endpoint, source } : CrossCheckAgreement)
+  return { tipHeight := tip.toUInt32, answerDigest := digest, agreed }
+end CrossCheckReceipt
+
+def CrossCheckPolicy.admits (p : CrossCheckPolicy) (r : CrossCheckReceipt) : Bool :=
+  match p with
+  | .acceptSingleSource => true
+  | .requireDistinctSources => r.spansDistinctSources
+
 inductive PersistenceState where
   | disabled | missing | loaded
   deriving BEq, Inhabited, Repr
@@ -84,11 +155,17 @@ structure BlockMatch where
 structure Progress where
   nextScanHeight : UInt32
   filterHeaders : Std.HashMap String String := {}
+  /-- the cross-check of the run that last moved this frontier; none in an older file and after a rollback -/
+  crossCheck : Option CrossCheckReceipt := none
+  /-- what the file says it is, when it says: forward progress never writes it; a range-scan record writes
+  `"range"`, which the forward loader refuses -/
+  record : Option String := none
   deriving Inhabited
 
 namespace Progress
 def eq (a b : Progress) : Bool :=
-  a.nextScanHeight == b.nextScanHeight && a.filterHeaders.size == b.filterHeaders.size &&
+  a.nextScanHeight == b.nextScanHeight && a.crossCheck == b.crossCheck && a.record == b.record &&
+    a.filterHeaders.size == b.filterHeaders.size &&
     a.filterHeaders.toList.all fun (k, v) => b.filterHeaders[k]? == some v
 instance : BEq Progress := ⟨eq⟩
 
@@ -98,8 +175,10 @@ def sortedHeaders (p : Progress) : Array (String × String) :=
 
 /-- The JSON `JSONEncoder` writes (key order aside, which carries no meaning). -/
 def toJson (p : Progress) : Json :=
-  Json.mkObj [("nextScanHeight", Lean.toJson p.nextScanHeight.toNat),
-    ("filterHeaders", Json.mkObj (p.sortedHeaders.toList.map fun (k, v) => (k, Json.str v)))]
+  Json.mkObj ([("nextScanHeight", Lean.toJson p.nextScanHeight.toNat),
+    ("filterHeaders", Json.mkObj (p.sortedHeaders.toList.map fun (k, v) => (k, Json.str v)))] ++
+    (match p.crossCheck with | some r => [("crossCheck", r.toJson)] | none => []) ++
+    (match p.record with | some k => [("record", Json.str k)] | none => []))
 
 /-- `JSONDecoder().decode(Progress.self, …)`: an object with an integral `nextScanHeight` in UInt32 range
 (`5.0`, `1e2`, `-0` are accepted, as Foundation accepts them) and an object of strings `filterHeaders`;
@@ -119,7 +198,16 @@ def ofJsonText (text : String) : Except FilterSyncStorageError Progress := do
   for (k, val) in kvs.toArray do
     let .str s := val | throw bad
     headers := headers.insert k s
-  return { nextScanHeight := v.toNat.toUInt32, filterHeaders := headers }
+  let crossCheck ← match j.getObjVal? "crossCheck" with
+    | .ok .null | .error _ => pure none
+    | .ok r => match CrossCheckReceipt.ofJson? r with
+      | some c => pure (some c)
+      | none => throw bad
+  let record ← match j.getObjVal? "record" with
+    | .ok .null | .error _ => pure none
+    | .ok (.str k) => pure (some k)
+    | .ok _ => throw bad
+  return { nextScanHeight := v.toNat.toUInt32, filterHeaders := headers, crossCheck, record }
 end Progress
 
 namespace FilterSync
@@ -143,16 +231,35 @@ def lastScannedHeight (p : Progress) : Option UInt32 :=
 /-! ## The progress file -/
 
 /-- `validate(progress:startHeight:)`, run on a loaded file. -/
-def validateLoaded (p : Progress) (startHeight : UInt32) : Except FilterSyncStorageError Unit := do
-  if p.nextScanHeight < startHeight then throw (.frontierBeforeWallet p.nextScanHeight startHeight)
-  if p.filterHeaders.size > maximumPinnedHeaders then throw (.damaged "there are too many pinned filter headers")
-  for (key, value) in p.filterHeaders.toArray do
+def maximumReceiptEntries : Nat := 64
+def maximumReceiptEndpointBytes : Nat := 320
+
+/-- `validate(receipt:)`: at most 64 peers, a 64-character hex digest of 32 bytes, plausible endpoints. -/
+def validateReceipt (r : Option CrossCheckReceipt) : Except FilterSyncStorageError Unit := do
+  let some r := r | return
+  if r.agreed.size > maximumReceiptEntries then throw (.damaged "the cross-check receipt names too many peers")
+  unless r.answerDigest.utf8ByteSize == 64 && ((Winnow.Wire.dataOfHex? r.answerDigest).map (·.size == 32) |>.getD false) do
+    throw (.damaged "the cross-check receipt's answer digest is not 32 bytes")
+  unless r.agreed.all (fun a => 1 ≤ a.endpoint.utf8ByteSize && a.endpoint.utf8ByteSize ≤ maximumReceiptEndpointBytes) do
+    throw (.damaged "a cross-check receipt endpoint is not a plausible length")
+
+/-- `validate(filterHeaders:below:maxPinned:)`: canonical decimal heights below the frontier, 32-byte hex. -/
+def validateFilterHeaders (headers : Std.HashMap String String) (frontier : UInt32) (maxPinned : Nat) :
+    Except FilterSyncStorageError Unit := do
+  if headers.size > maxPinned then throw (.damaged "there are too many pinned filter headers")
+  for (key, value) in headers.toArray do
     let some height := parseUInt32? key | throw (.damaged "a filter-header height is not canonical decimal")
     if toString height.toNat != key then throw (.damaged "a filter-header height is not canonical decimal")
     -- (two keys naming one height cannot survive the canonical check)
-    if !(height < p.nextScanHeight) then throw (.damaged "a pinned filter header is at or beyond the scan frontier")
+    if !(height < frontier) then throw (.damaged "a pinned filter header is at or beyond the scan frontier")
     if !(value.utf8ByteSize == 64 && ((Winnow.Wire.dataOfHex? value).map (·.size == 32) |>.getD false)) then
       throw (.damaged "a pinned filter header is not 32 bytes")
+
+def validateLoaded (p : Progress) (startHeight : UInt32) : Except FilterSyncStorageError Unit := do
+  if let some kind := p.record then throw (.damaged s!"the file is a \"{kind}\" record, not compact-filter progress")
+  if p.nextScanHeight < startHeight then throw (.frontierBeforeWallet p.nextScanHeight startHeight)
+  validateFilterHeaders p.filterHeaders p.nextScanHeight maximumPinnedHeaders
+  validateReceipt p.crossCheck
 
 /-- `load(storageURL:startHeight:)` over the file's text (`none`: no file). -/
 def load (file : Option String) (startHeight : UInt32) : Except FilterSyncStorageError (PersistenceState × Progress) := do
@@ -178,7 +285,9 @@ def rollBack (p : Progress) (forkHeight : UInt32) : Option Progress :=
     nextScanHeight := min p.nextScanHeight resumeFrom
     filterHeaders := p.filterHeaders.filter fun k _ => match parseUInt32? k with
       | some h => h ≤ forkHeight
-      | none => false }
+      | none => false
+    -- a corroboration taken on a branch that no longer exists
+    crossCheck := none }
   if candidate == p then none else some candidate
 
 /-- The pinned headers a frontier can still be asked for: every checkpoint boundary, the earliest pin,

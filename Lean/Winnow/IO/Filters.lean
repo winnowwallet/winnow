@@ -21,6 +21,8 @@ structure FilterSyncIO where
   chain : HeaderStore
   requiredCheckpointPeers : Nat
   filtersPerChunk : UInt32
+  /-- whether a run may advance on answers from one acquisition channel (`CrossCheckPolicy`) -/
+  crossCheckPolicy : CrossCheckPolicy
   path : Option System.FilePath
   persistenceState : PersistenceState
   progress : IO.Ref Progress
@@ -43,18 +45,21 @@ private def readProgressFile (p : System.FilePath) : NetM (Option String) := do
   | none => throw (.filterStorage (.damaged "the JSON or a progress field is invalid"))
 
 def new (pool : PeerPool) (chain : HeaderStore) (startHeight : UInt32) (path : Option System.FilePath := none)
-    (requiredCheckpointPeers : Nat := 3) (filtersPerChunk : UInt32 := defaultFiltersPerChunk) : NetM FilterSyncIO := do
+    (requiredCheckpointPeers : Nat := 3) (filtersPerChunk : UInt32 := defaultFiltersPerChunk)
+    (crossCheckPolicy : CrossCheckPolicy := .acceptSingleSource) : NetM FilterSyncIO := do
   let file ← match path with
     | some p => readProgressFile p
     | none => pure none
   let (state, progress) ← match initialProgress path.isSome file startHeight with
     | .ok r => pure r
     | .error e => throw (.filterStorage e)
-  return { pool, chain, requiredCheckpointPeers, filtersPerChunk := clampFiltersPerChunk filtersPerChunk, path,
+  return { pool, chain, requiredCheckpointPeers, filtersPerChunk := clampFiltersPerChunk filtersPerChunk, crossCheckPolicy, path,
            persistenceState := state, progress := ← IO.mkRef progress, requesting := ← IO.mkRef false,
            peakChunkFilterBytes := ← IO.mkRef 0 }
 
 def nextScanHeight (f : FilterSyncIO) : BaseIO UInt32 := do return (← f.progress.get).nextScanHeight
+/-- Who corroborated the checkpoint answer the frontier stands on (`lastCrossCheck`). -/
+def lastCrossCheck (f : FilterSyncIO) : BaseIO (Option CrossCheckReceipt) := do return (← f.progress.get).crossCheck
 def lastScannedHeight (f : FilterSyncIO) : BaseIO (Option UInt32) := do return FilterSync.lastScannedHeight (← f.progress.get)
 def filterHeader (f : FilterSyncIO) (height : UInt32) : BaseIO (Option ByteArray) := do
   return filterHeader? (← f.progress.get).filterHeaders height
@@ -135,7 +140,13 @@ private def majorityReference (f : FilterSyncIO) (checkpoints : Array (PeerConne
   let agreeing := (checkpoints.filter (·.2 == value)).map (·.1)
   let (crossSource, disputed) ← f.sourceSpanOf agreeing minority
   if disputed then f.refuseDisputedVote (checkpoints.map (·.1)) "cfcheckpt: one source class outvotes another"
-  for c in minority do f.pool.misbehaving c "cfcheckpt mismatch"
+  -- a majority the policy is about to refuse is not evidence against its dissenters: under
+  -- `requireDistinctSources` a single-class majority advances nothing, so they are cooled off rather than
+  -- struck from the good-peers list on one channel's word (`dismissMinority`)
+  let condemned := crossSource || f.crossCheckPolicy == .acceptSingleSource
+  for c in minority do
+    if condemned then f.pool.misbehaving c "cfcheckpt mismatch"
+    else f.pool.transportFailure c "cfcheckpt mismatch in a single-class vote"
   return (value, crossSource)
 
 private def reconcile (f : FilterSyncIO) (reference : CFCheckptMessage) (crossSource : Bool) (tip : UInt32)
@@ -147,13 +158,38 @@ private def reconcile (f : FilterSyncIO) (reference : CFCheckptMessage) (crossSo
     if let some cb := onReorg then cb target
     f.rollBack target
 
-private def adoptReference (f : FilterSyncIO) (peers : Array PeerConnection) (tipHash : ByteArray) (tip : UInt32)
-    (onReorg : Option (UInt32 → NetM Unit)) : NetM (CFCheckptMessage × Array String) := do
+/-- `receipt(tipHeight:answer:agreed:)`: the agreeing peers with the class the pool reached each through. -/
+def receiptOf (f : FilterSyncIO) (tip : UInt32) (answer : CFCheckptMessage) (agreeing : Array PeerConnection) :
+    IO CrossCheckReceipt := do
+  let agreed ← agreeing.mapM fun c => do
+    return ({ endpoint := c.endpoint.description, source := ← f.pool.source c.endpoint } : CrossCheckAgreement)
+  return { tipHeight := tip, answerDigest := hex (sha256d answer.serialized), agreed }
+
+/-- `requireAdmissible`: the policy's verdict on who agreed, before anything is scanned. -/
+def requireAdmissible (f : FilterSyncIO) (r : CrossCheckReceipt) : NetM Unit := do
+  unless f.crossCheckPolicy.admits r do
+    let peers := r.agreed.size
+    let classes := r.sourceClasses.size
+    throw (.filters (.crossCheckUnavailable
+      s!"{peers} peer{if peers == 1 then "" else "s"} agreed, from {classes} known source class{if classes == 1 then "" else "es"}"))
+
+/-- `anchoredReference`: the majority cfcheckpt answer, the peers that gave it and the receipt naming them,
+admitted by the policy. -/
+def anchoredReference (f : FilterSyncIO) (peers : Array PeerConnection) (tip : UInt32) (tipHash : ByteArray) :
+    NetM (CFCheckptMessage × Array String × CrossCheckReceipt × Bool) := do
   let checkpoints ← f.collectedCheckpoints peers tipHash tip
   let (reference, crossSource) ← f.majorityReference checkpoints
-  let approvedEndpoints := (checkpoints.filter (·.2 == reference)).map (·.1.endpoint.description)
-  f.reconcile reference crossSource tip onReorg
-  return (reference, approvedEndpoints)
+  let agreeing := (checkpoints.filter (·.2 == reference)).map (·.1)
+  let receipt ← f.receiptOf tip reference agreeing
+  f.requireAdmissible receipt
+  return (reference, agreeing.map (·.endpoint.description), receipt, crossSource)
+
+private def adoptReference (f : FilterSyncIO) (peers : Array PeerConnection) (tipHash : ByteArray) (tip : UInt32)
+    (onReorg : Option (UInt32 → NetM Unit)) : NetM (CFCheckptMessage × Array String × CrossCheckReceipt) := do
+  let (reference, approvedEndpoints, receipt, _) ← f.anchoredReference peers tip tipHash
+  -- a contradicted pin is rewound only by a reference whose agreement spans source classes
+  f.reconcile reference receipt.spansDistinctSources tip onReorg
+  return (reference, approvedEndpoints, receipt)
 
 private def collectedCFHeaders (f : FilterSyncIO) (batchStart : UInt32) (stopHash : ByteArray) (queryPeers : Array PeerConnection) :
     NetM (Array (PeerConnection × CFHeadersMessage)) := do
@@ -279,7 +315,7 @@ def sync (f : FilterSyncIO) (watchScripts : Array ByteArray) (maxBlocks : Option
     if let .error e := validateAgainstTip (← f.progress.get) tip then throw (.filterStorage e)
     if tip < (← f.progress.get).nextScanHeight then return
     let some room := scanCeiling (← f.progress.get).nextScanHeight maxBlocks tip | return
-    let (reference, approvedEndpoints) ← f.adoptReference peers tipHash tip onReorg
+    let (reference, approvedEndpoints, receipt) ← f.adoptReference peers tipHash tip onReorg
     let mut peers ← f.approved approvedEndpoints
     let ceiling := (scanCeiling (← f.progress.get).nextScanHeight maxBlocks tip).getD room
     while (← f.progress.get).nextScanHeight ≤ ceiling do
@@ -292,8 +328,10 @@ def sync (f : FilterSyncIO) (watchScripts : Array ByteArray) (maxBlocks : Option
       peers ← f.approved approvedEndpoints
       let some first := peers[0]? | throw (.filters .noPeers)
       f.scanFilters batchStart batchStop first watchScripts proposed onMatch
+      -- the receipt is written on every batch, so the corroboration on disk never describes an older pass
       let candidate : Progress := { nextScanHeight := batchStop + 1,
-                                    filterHeaders := prunedFilterHeaders proposed (batchStop + 1) }
+                                    filterHeaders := prunedFilterHeaders proposed (batchStop + 1),
+                                    crossCheck := some receipt }
       f.persist candidate
       f.progress.set candidate
     if let .error e := finalCheckpointGuard (← f.progress.get).filterHeaders reference tip then throw (.filters e)

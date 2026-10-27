@@ -91,6 +91,8 @@ def FilterSyncError.description : FilterSyncError → String
   | .noPeers => "No Bitcoin peers are available for compact-filter synchronization."
   | .relayOnly =>
     "Winnow is keeping Bitcoin peers connected only to finish relaying a payment. Resume syncing to scan for new blocks."
+  | .crossCheckUnavailable r =>
+    s!"Winnow could not check this scan against connections from different sources ({r}). Nothing was scanned; it will try again as the peer pool changes."
   | .peersCoolingDown c =>
     s!"{c} Bitcoin peer{if c == 1 then " is" else "s are"} resting briefly after a slow reply. Scanning will resume on its own."
   | .checkpointMismatch r => s!"Bitcoin peers disagreed about compact-filter checkpoints ({r})."

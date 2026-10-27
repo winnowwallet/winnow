@@ -446,6 +446,35 @@ def nodeChecks (dir : String) (n : Node) (swift : Option String) : IO Unit := do
   let fs2 ← runNet "filters reopen" (FilterSyncIO.new pool store 0 (some filtersPath))
   check "filters.json round trip" (fs2.persistenceState == .loaded && (← fs2.nextScanHeight) == (← fs.nextScanHeight) &&
     (← fs2.pinnedFilterHeaders).size == (← fs.pinnedFilterHeaders).size) s!"{(← fs.pinnedFilterHeaders).size} pinned"
+  -- 3a. The cross-check receipt (#226): who agreed, through which class, persisted with the frontier.
+  let xcheck ← fs.lastCrossCheck
+  check "receipt: the node, as a manual peer, about the tip" (match xcheck with
+    | some r => r.tipHeight.toNat == tip && r.answerDigest.length == 64 &&
+        r.agreed == #[{ endpoint := n.endpoint.description, source := some .manual }]
+    | none => false) s!"{repr xcheck}"
+  check "receipt: one class, so not distinct sources" (xcheck.any (!·.spansDistinctSources))
+  check "receipt: persisted with the frontier" ((← fs2.lastCrossCheck) == xcheck)
+  let strictPath : System.FilePath := s!"{dir}/strict-filters.json"
+  let strict ← runNet "strict filters" (FilterSyncIO.new pool store 0 (some strictPath) (crossCheckPolicy := .requireDistinctSources))
+  check "receipt: requireDistinctSources refuses one class, having scanned nothing"
+    ((match ← (strict.sync #[spk] (onMatch := fun _ => pure ())).toBaseIO with
+      | .error (.filters (.crossCheckUnavailable _)) => true | _ => false) && (← strict.nextScanHeight) == 0 &&
+     !(← fileExists strictPath))
+  -- the file names what it is, and the rules a receipt is held to
+  let some r := xcheck | throw (IO.userError "no receipt")
+  let withRecord : Progress := { nextScanHeight := 5, crossCheck := some r, record := some "range" }
+  check "progress: a range record is refused by the forward loader"
+    (match FilterSync.load (some withRecord.toJson.compress) 0 with | .error (.damaged _) => true | _ => false)
+  let badDigest : CrossCheckReceipt := { r with answerDigest := "00" }
+  let withBadDigest : Progress := { nextScanHeight := 5, crossCheck := some badDigest }
+  check "progress: a bad digest is refused" (match FilterSync.load (some withBadDigest.toJson.compress) 0 with
+    | .error (.damaged _) => true | _ => false)
+  let withReceipt : Progress := { nextScanHeight := 5, crossCheck := some r }
+  let unknownClass := withReceipt.toJson.compress.replace "\"manual\"" "\"tailnet\""
+  check "progress: an unknown source class reads as none" (match FilterSync.load (some unknownClass) 0 with
+    | .ok (_, p) => p.crossCheck.any (·.agreed.all (·.source.isNone)) | .error _ => false)
+  check "progress: a rollback drops the receipt" (match FilterSync.rollBack withReceipt 2 with
+    | some p => p.crossCheck.isNone && p.nextScanHeight == 3 | none => false)
   -- 4. A reorg: invalidate three blocks, mine four elsewhere.
   let tipBefore ← n.height
   let forkAt := tipBefore - 3
