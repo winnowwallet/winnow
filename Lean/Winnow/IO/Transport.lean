@@ -49,6 +49,9 @@ structure PendingCollector where
   expected : Nat
   received : Array PeerMessage
   promise : IO.Promise (Except NetError (Array PeerMessage))
+  /-- the burst's byte bound (`maxTotalBytes`), and the payload bytes received so far -/
+  maxTotalBytes : Option Nat := none
+  receivedBytes : Nat := 0
 
 structure ConnState where
   peerServices : UInt64 := 0
@@ -216,28 +219,43 @@ def request (c : PeerConnection) (m : PeerMessage) (commands : Array String) (ti
       throw e
     awaitPromise p
 
-/-- Sends a request and collects `count` responses of one command (the `cfilter` burst). -/
-def requestMany (c : PeerConnection) (m : PeerMessage) (command : String) (count : Nat) (timeoutMs : Nat := 60_000) :
-    NetM (Array PeerMessage) := do
+private def burstTooLarge (command : String) (bytes limit : Nat) : NetError :=
+  .peer (.protocolViolation s!"{command} burst of {bytes} bytes exceeds the {limit}-byte bound")
+
+/-- Sends a request and collects `count` responses of one command (the `cfilter` burst). A burst past
+`maxTotalBytes` payload bytes tears the connection down with a protocol violation. -/
+def requestMany (c : PeerConnection) (m : PeerMessage) (command : String) (count : Nat) (timeoutMs : Nat := 60_000)
+    (maxTotalBytes : Option Nat := none) : NetM (Array PeerMessage) := do
   if count == 0 then throw (.other "requestMany: count must be positive")
   let p ← IO.Promise.new
   let r ← c.state.modifyGet fun st =>
     let st := purge st (·.command == command)
     let id := st.nextId
     let st := { st with nextId := id + 1 }
-    let rec drain (st : ConnState) (got : Array PeerMessage) (fuel : Nat) : ConnState × Array PeerMessage :=
+    let rec drain (st : ConnState) (got : Array PeerMessage) (bytes : Nat) (fuel : Nat) : ConnState × Array PeerMessage × Nat :=
       match fuel with
-      | 0 => (st, got)
+      | 0 => (st, got, bytes)
       | fuel + 1 =>
-        if got.size ≥ count then (st, got)
+        if got.size ≥ count then (st, got, bytes)
         else match st.backlog.findIdx? (·.1.command == command) with
-          | some i => let (msg, st) := takeFromBacklog st i; drain st (got.push msg) fuel
-          | none => (st, got)
-    let (st, got) := drain st #[] (st.backlog.size + 1)
-    if got.size ≥ count then (Sum.inl got, st)
-    else (Sum.inr id, { st with collectors := st.collectors.push { id, command, expected := count, received := got, promise := p } })
+          | some i =>
+            let size := st.backlog[i]!.2
+            let (msg, st) := takeFromBacklog st i
+            drain st (got.push msg) (bytes + size) fuel
+          | none => (st, got, bytes)
+    let (st, got, bytes) := drain st #[] 0 (st.backlog.size + 1)
+    if maxTotalBytes.any (bytes > ·) then (Sum.inl (Sum.inl bytes), st)
+    else if got.size ≥ count then (Sum.inl (Sum.inr got), st)
+    else
+      let col : PendingCollector :=
+        { id, command, expected := count, received := got, promise := p, maxTotalBytes, receivedBytes := bytes }
+      (Sum.inr id, { st with collectors := st.collectors.push col })
   match r with
-  | .inl got => c.send m; return got
+  | .inl (.inl bytes) =>
+    let e := burstTooLarge command bytes (maxTotalBytes.getD 0)
+    c.teardown (some e)
+    throw e
+  | .inl (.inr got) => c.send m; return got
   | .inr id =>
     c.scheduleTimeout id timeoutMs
     try
@@ -270,6 +288,7 @@ private inductive Inbound where
   | none
   | resolve (p : IO.Promise (Except NetError PeerMessage)) (m : PeerMessage)
   | collected (p : IO.Promise (Except NetError (Array PeerMessage))) (ms : Array PeerMessage)
+  | burstTooLarge (p : IO.Promise (Except NetError (Array PeerMessage))) (e : NetError)
   | notify (subs : Array PeerStream) (m : PeerMessage)
   | teardown (e : NetError)
 
@@ -294,9 +313,14 @@ private def handleInbound (c : PeerConnection) (command : String) (payload : Byt
           match st.collectors.find? (·.command == command) with
           | some col =>
             let received := col.received.push message
-            if received.size ≥ col.expected then
+            let receivedBytes := col.receivedBytes + bytes
+            if col.maxTotalBytes.any (receivedBytes > ·) then
+              (.burstTooLarge col.promise (burstTooLarge command receivedBytes (col.maxTotalBytes.getD 0)),
+               { st with collectors := st.collectors.filter (·.id != col.id) })
+            else if received.size ≥ col.expected then
               (.collected col.promise received, { st with collectors := st.collectors.filter (·.id != col.id) })
-            else (.none, { st with collectors := st.collectors.map fun x => if x.id == col.id then { col with received } else x })
+            else (.none, { st with collectors := st.collectors.map fun x =>
+              if x.id == col.id then { col with received, receivedBytes } else x })
           | none =>
             if bytes > c.backlogByteLimit then
               (.teardown (.peer (.protocolViolation
@@ -316,6 +340,7 @@ private def handleInbound (c : PeerConnection) (command : String) (payload : Byt
       | .none => pure ()
       | .resolve p m => p.resolve (.ok m)
       | .collected p ms => p.resolve (.ok ms)
+      | .burstTooLarge p e => p.resolve (.error e); c.teardown (some e)
       | .notify subs m => for s in subs do s.yield (.message m)
       | .teardown e => c.teardown (some e)
 

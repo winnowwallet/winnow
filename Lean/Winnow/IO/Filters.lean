@@ -16,6 +16,16 @@ aside), written atomically, at most 128 MiB. `busy` guards one request at a time
 namespace Winnow.IO
 open Winnow.Net Winnow.Net.FilterSync
 
+/-- What one range-scan run has spent (`RangeScanRun`), held for the length of a run so the chunk loop can
+refuse from inside: the byte and time caps bound a run, not a batch. -/
+structure RangeRun where
+  deadlineMs : Nat
+  maxDurationMs : Nat
+  maxBytes : Nat
+  filterBytesRead : Nat := 0
+  blockBytesRead : Nat := 0
+  matchedHeights : Array UInt32 := #[]
+
 structure FilterSyncIO where
   pool : PeerPool
   chain : HeaderStore
@@ -29,6 +39,8 @@ structure FilterSyncIO where
   requesting : IO.Ref Bool
   /-- Test seam: the most filter bytes held at once. -/
   peakChunkFilterBytes : IO.Ref Nat
+  /-- the range scan running, if one is (none on the forward path) -/
+  rangeRun : IO.Ref (Option RangeRun)
 
 namespace FilterSyncIO
 
@@ -55,7 +67,7 @@ def new (pool : PeerPool) (chain : HeaderStore) (startHeight : UInt32) (path : O
     | .error e => throw (.filterStorage e)
   return { pool, chain, requiredCheckpointPeers, filtersPerChunk := clampFiltersPerChunk filtersPerChunk, crossCheckPolicy, path,
            persistenceState := state, progress := ← IO.mkRef progress, requesting := ← IO.mkRef false,
-           peakChunkFilterBytes := ← IO.mkRef 0 }
+           peakChunkFilterBytes := ← IO.mkRef 0, rangeRun := ← IO.mkRef none }
 
 def nextScanHeight (f : FilterSyncIO) : BaseIO UInt32 := do return (← f.progress.get).nextScanHeight
 /-- Who corroborated the checkpoint answer the frontier stands on (`lastCrossCheck`). -/
@@ -256,18 +268,42 @@ private def verifiedBlock (f : FilterSyncIO) (peer : PeerConnection) (height : U
   | .notfound _ => throw (.filters (.badPeerResponse s!"peer lost block at {height}"))
   | _ => throw (.filters (.badPeerResponse "expected block"))
 
+/-- The range run's deadline (free on the forward path), read before every chunk and every matched filter. -/
+def checkRangeDeadline (f : FilterSyncIO) : NetM Unit := do
+  let some r ← f.rangeRun.get | return
+  if (← monoMs) ≥ r.deadlineMs then throw (.range (.runTimedOut r.maxDurationMs))
+
+/-- Charges a run's byte budget (filters and matched blocks together) and refuses past it. -/
+def chargeRange (f : FilterSyncIO) (filterBytes blockBytes : Nat) : NetM Unit := do
+  let some r ← f.rangeRun.modifyGet fun r => match r with
+      | some r =>
+        let r := { r with filterBytesRead := r.filterBytesRead + filterBytes, blockBytesRead := r.blockBytesRead + blockBytes }
+        (some r, some r)
+      | none => (none, none)
+    | return
+  let total := r.filterBytesRead + r.blockBytesRead
+  if total > r.maxBytes then throw (.range (.filterBytesExhausted total r.maxBytes))
+
+/-- One chunk: the burst is bounded (`chunkByteBound`; past it the connection is torn down and the peer
+marked misbehaving), every filter is verified against its pinned header before any is matched, the range
+budget is charged for the chunk, then each filter is matched and each hit's block fetched and delivered. -/
 private def scanChunk (f : FilterSyncIO) (chunkStart chunkStop : UInt32) (peer : PeerConnection)
     (watchScripts : Array ByteArray) (filterHeaders : Std.HashMap String String)
     (onMatch : BlockMatch → NetM Unit) : NetM (Std.HashMap UInt32 Unit) := do
+  f.checkRangeDeadline
   let some stopHash ← f.chain.blockHash chunkStop | throw (.filters (.badPeerResponse s!"missing header at {chunkStop}"))
   let count := (chunkStop - chunkStart).toNat + 1
-  let responses ← peer.requestMany (.getcfilters { startHeight := chunkStart, stopHash }) "cfilter" count
-    (chunkTimeoutSeconds count * 1000)
+  let responses ← match ← (peer.requestMany (.getcfilters { startHeight := chunkStart, stopHash }) "cfilter" count
+      (chunkTimeoutSeconds count * 1000) (maxTotalBytes := some (chunkByteBound count))).toBaseIO with
+    | .ok r => pure r
+    | .error e@(.peer (.protocolViolation _)) => f.pool.misbehaving peer e.description; throw e
+    | .error e => throw e
   let mut heightByHash : Std.HashMap ByteArray UInt32 := {}
   for i in [0:count] do
     let h := chunkStart + i.toUInt32
     if let some hash ← f.chain.blockHash h then heightByHash := heightByHash.insert hash h
   let mut seen : Std.HashMap UInt32 Unit := {}
+  let mut verified : Array (UInt32 × CFilterMessage) := #[]
   let mut chunkBytes := 0
   for response in responses do
     let .cfilter m := response | throw (.filters (.badPeerResponse "expected cfilter"))
@@ -276,14 +312,20 @@ private def scanChunk (f : FilterSyncIO) (chunkStart chunkStop : UInt32) (peer :
       | .error e => throw (.filters e)
     seen := seen'
     chunkBytes := chunkBytes + m.filter.size
-    if watchScripts.isEmpty then continue
+    verified := verified.push (height, m)
+  f.peakChunkFilterBytes.modify (max · chunkBytes)
+  f.chargeRange chunkBytes 0
+  if watchScripts.isEmpty then return seen
+  for (height, m) in verified do
+    f.checkRangeDeadline
     let hit ← match filterMatches m watchScripts with
       | .ok b => pure b
       | .error e => throw (.other s!"filter decode: {e}")
     if !hit then continue
     let block ← f.verifiedBlock peer height m.blockHash
     onMatch { height, blockHash := m.blockHash, block }
-  f.peakChunkFilterBytes.modify (max · chunkBytes)
+    -- serialising again only when a range budget is counting
+    if (← f.rangeRun.get).isSome then f.chargeRange 0 block.serialized.size
   return seen
 
 private def scanFilters (f : FilterSyncIO) (batchStart batchStop : UInt32) (peer : PeerConnection)
@@ -356,6 +398,102 @@ def transaction (f : FilterSyncIO) (txid : ByteArray) (height : UInt32) : NetM T
       | .error e => lastError := e
     throw lastError
   finally
+    f.requesting.set false
+
+end FilterSyncIO
+
+/-! ## Restore-only range scans (`scanRange`, upstream #226) -/
+
+namespace FilterSyncIO
+
+private def liftRange {α} (r : Except RangeScanError α) : NetM α :=
+  match r with | .ok a => pure a | .error e => throw (.range e)
+
+private def readRangeRecord (path : Option System.FilePath) : NetM (Option RangeScanProgress) := do
+  let some p := path | return none
+  if !(← fileExists p) then return none
+  let some size ← fileSize? p | throw (.range .recordUnreadable)
+  if size > RangeScanProgress.maxBytes then throw (.range (.recordTooLarge RangeScanProgress.maxBytes))
+  let data ← match ← (IO.FS.readBinFile p).toBaseIO with
+    | .ok d => pure d
+    | .error _ => throw (.range .recordUnreadable)
+  let some text := String.fromUTF8? data | throw (.range (.recordDamaged "the JSON or a progress field is invalid"))
+  liftRange (RangeScanProgress.load (some text))
+
+private def persistRangeRecord (path : Option System.FilePath) (r : RangeScanProgress) : NetM Unit := do
+  let some p := path | return
+  let data := r.toJson.compress.toUTF8
+  if data.size > RangeScanProgress.maxBytes then throw (.range (.recordTooLarge RangeScanProgress.maxBytes))
+  match ← (writeAtomic p data).toBaseIO with
+  | .ok () => pure ()
+  | .error _ => throw (.range .recordWriteFailed)
+
+/-- The batch loop: the forward scan's, with the range's record in place of the frontier and no reorg
+handling (the chain is read, never advanced). Every batch is judged as the forward path judges it, and a
+batch that fails any check commits nothing. -/
+private def runRange (f : FilterSyncIO) (initial : RangeScanProgress) (tip : UInt32) (tipHash : ByteArray)
+    (watchScripts : Array ByteArray) (path : Option System.FilePath) (onMatch : BlockMatch → NetM Unit) :
+    NetM RangeScanProgress := do
+  let peers ← f.pool.connectedPeers
+  if peers.isEmpty then throw (← f.noPeersError)
+  let (reference, approvedEndpoints, receipt, _) ← f.anchoredReference peers tip tipHash
+  if let .error e := checkPinnedBoundaries initial.filterHeaders reference tip then throw (.filters e)
+  let mut peers ← f.approved approvedEndpoints
+  let collect : BlockMatch → NetM Unit := fun m => do
+    f.rangeRun.modify (·.map fun r => { r with matchedHeights := r.matchedHeights.push m.height })
+    onMatch m
+  let mut record := initial
+  while record.nextScanHeight ≤ record.toHeight do
+    f.checkRangeDeadline
+    let batchStart := record.nextScanHeight
+    let batchStop := (min (batchStart.toNat + maxRangePerRequest.toNat - 1) record.toHeight.toNat).toUInt32
+    let some stopHash ← f.chain.blockHash batchStop | throw (.filters (.badPeerResponse s!"missing header at {batchStop}"))
+    -- read before the peer is asked: pinning writes the announced previous header when the record holds none
+    let anchored := batchStart == 0 || record.filterHeaders.contains (toString (batchStart - 1).toNat)
+    let proposed ← f.pinFilterHeaders batchStart batchStop stopHash peers record.filterHeaders
+    if let .error e := checkPinnedBoundaries proposed reference tip then throw (.filters e)
+    if !anchored then
+      if let .error e := RangeScan.requireComparedBoundary proposed batchStart batchStop tip then throw (.filters e)
+    peers ← f.approved approvedEndpoints
+    let some first := peers[0]? | throw (.filters .noPeers)
+    f.scanFilters batchStart batchStop first watchScripts proposed collect
+    let candidate := { record with nextScanHeight := batchStop + 1,
+                                   filterHeaders := RangeScan.prunedRangeHeaders proposed (batchStop + 1) initial.fromHeight,
+                                   crossCheck := some receipt }
+    persistRangeRecord path candidate
+    record := candidate
+  return record
+
+/-- `scanRange(from:to:watchScripts:limits:storageURL:onMatch:)`: scans `[from, to]` for `watchScripts`
+without moving the forward frontier: one pass, or one run of a pass, of a restore's back-scan. The header
+chain is read, never advanced; the range must be inside it. The record at `path` (never the forward
+progress file: each loader refuses the other's) resumes, restarts for a new script set, or starts fresh;
+`none` keeps it in memory. A run stopped by a cap or a peer leaves the record at the last batch that
+committed, so `onMatch` must be idempotent per height. Shares the busy flag with `sync`. -/
+def scanRange (f : FilterSyncIO) (fromHeight toHeight : UInt32) (watchScripts : Array ByteArray)
+    (limits : RangeScanLimits := RangeScanLimits.make) (path : Option System.FilePath := none)
+    (onMatch : BlockMatch → NetM Unit) : NetM RangeScanOutcome := do
+  f.beginRequest
+  try
+    liftRange (RangeScan.checkShape fromHeight toHeight watchScripts.size limits)
+    if (← f.pool.mode) != .full then throw (.filters .relayOnly)
+    -- the tip and its hash in one read
+    let chain ← f.chain.snapshot
+    let tip := chain.height
+    let tipHash := chain.tipHash
+    liftRange (RangeScan.checkChain fromHeight toHeight chain.startHeight tip)
+    let mut record ← liftRange (RangeScanProgress.resumed (← readRangeRecord path) fromHeight toHeight
+      (RangeScanProgress.fingerprint watchScripts) limits)
+    liftRange (RangeScan.checkCheckpointAnchor record toHeight tip)
+    f.rangeRun.set (some { deadlineMs := (← monoMs) + limits.maxDurationMs, maxDurationMs := limits.maxDurationMs,
+                           maxBytes := limits.maxFilterBytes })
+    if !record.isComplete then record ← f.runRange record tip tipHash watchScripts path onMatch
+    let run := (← f.rangeRun.get).getD { deadlineMs := 0, maxDurationMs := 0, maxBytes := 0 }
+    return { fromHeight, toHeight, matchedHeights := run.matchedHeights, scannedThrough := record.scannedThrough,
+             isComplete := record.isComplete, iteration := record.iteration, filterBytesRead := run.filterBytesRead,
+             blockBytesRead := run.blockBytesRead, crossCheck := record.crossCheck }
+  finally
+    f.rangeRun.set none
     f.requesting.set false
 
 end FilterSyncIO

@@ -218,6 +218,10 @@ def checkpointInterval : UInt32 := 1_000
 def defaultFiltersPerChunk : UInt32 := 100
 def maximumProgressBytes : Nat := 128 * 1_024 * 1_024
 def maximumPinnedHeaders : Nat := 2_000_000
+/-- The largest cfilter message a chunk may carry (BIP158 filters are tens of kilobytes on mainnet). -/
+def maxFilterMessageBytes : Nat := 1_250_000
+/-- `chunkByteBound(filters:)`: how many bytes a chunk of `filters` cfilters may total. -/
+def chunkByteBound (filters : Nat) : Nat := filters * maxFilterMessageBytes
 
 /-- `filtersPerChunk` clamped to 1 … `maxRangePerRequest`. -/
 def clampFiltersPerChunk (n : UInt32) : UInt32 := min (max 1 n) maxRangePerRequest

@@ -12,4 +12,5 @@ import Winnow.Net.Framing
 import Winnow.Net.Block
 import Winnow.Net.Messages
 import Winnow.Net.FilterSync
+import Winnow.Net.RangeScan
 import Winnow.Net.Mempool

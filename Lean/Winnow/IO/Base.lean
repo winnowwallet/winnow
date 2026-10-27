@@ -161,6 +161,8 @@ inductive NetError where
   | pool (e : PoolError)
   | filters (e : FilterSyncError)
   | filterStorage (e : FilterSyncStorageError)
+  /-- a restore-only range scan's refusal (`RangeScanError`) -/
+  | range (e : RangeScanError)
   | broadcast (e : BroadcastError)
   | broadcastStorage (e : BroadcastStorageError)
   | wire (e : WireError)
@@ -174,7 +176,7 @@ namespace NetError
 /-- The Swift `kind(error)`: the enum case name. -/
 def name : NetError → String
   | .peer e => e.name | .framing e => e.name | .headers e => e.name | .pool e => e.name
-  | .filters e => e.name | .filterStorage e => e.name
+  | .filters e => e.name | .filterStorage e => e.name | .range e => e.name
   | .broadcast .invalidFeeRate => "invalidFeeRate" | .broadcast .stopped => "stopped"
   | .broadcastStorage e => e.name | .wire e => e.name | .http e => e.name
   | .cancelled => "cancelled" | .other _ => "other"
@@ -190,6 +192,7 @@ def description : NetError → String
   | .pool e => e.description
   | .filters e => FilterSyncError.description e
   | .filterStorage e => FilterSyncStorageError.description e
+  | .range e => e.description
   | .broadcast .invalidFeeRate => "The transaction fee rate must be a positive, finite number within Bitcoin's monetary range."
   | .broadcast .stopped => "This transaction relay session has stopped. Reconnect before changing relay state."
   | .broadcastStorage e => e.description

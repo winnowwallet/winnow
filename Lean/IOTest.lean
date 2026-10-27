@@ -382,6 +382,86 @@ def fakeChecks (dir : String) : IO Unit := do
   pool2.stop
   let _ := dir
 
+/-- 3b. Restore-only range scans (#226): a back-scan for the funded script below the forward frontier. -/
+def rangeChecks (dir : String) (pool : PeerPool) (store : HeaderStore) (fs : FilterSyncIO) (spk : ByteArray)
+    (tip fundHeight : Nat) (filtersPath : System.FilePath) : IO Unit := do
+  let rangePath : System.FilePath := s!"{dir}/range.json"
+  let rfs ← runNet "range filters" (FilterSyncIO.new pool store 0 none)
+  let rtip := tip.toUInt32
+  let rangeMatches ← IO.mkRef (#[] : Array Nat)
+  let forwardBefore ← fs.nextScanHeight
+  let out ← runNet "scanRange" (rfs.scanRange 1 rtip #[spk] (path := some rangePath)
+    (onMatch := fun m => rangeMatches.modify (·.push m.height.toNat)))
+  check "range: finds the payment, the run complete" ((← rangeMatches.get).contains fundHeight && out.isComplete &&
+    out.matchedHeights.contains fundHeight.toUInt32 && out.iteration == 1 && out.filterBytesRead > 0) s!"{repr out}"
+  check "range: the forward frontiers are untouched" ((← fs.nextScanHeight) == forwardBefore && (← rfs.nextScanHeight) == 0)
+  check "range: the receipt names the node" (out.crossCheck.any (·.agreed.any (·.source == some .manual)))
+  let again ← runNet "scanRange again" (rfs.scanRange 1 rtip #[spk] (path := some rangePath) (onMatch := fun _ => pure ()))
+  check "range: a finished pass resumes as finished, reading nothing" (again.isComplete && again.matchedHeights.isEmpty &&
+    again.filterBytesRead == 0)
+  let other := ByteArray.mk #[0x51, 0x20] ++ ByteArray.mk (Array.replicate 32 0x44)
+  let pass2 ← runNet "scanRange pass 2" (rfs.scanRange 1 rtip #[spk, other] (path := some rangePath)
+    (onMatch := fun _ => pure ()))
+  check "range: a new script set is the next pass over the range" (pass2.iteration == 2 && pass2.isComplete &&
+    pass2.matchedHeights.contains fundHeight.toUInt32)
+  let refused {α} (x : NetM α) (ok : RangeScanError → Bool) : IO Bool := do
+    match ← x.toBaseIO with | .error (.range e) => return ok e | _ => return false
+  let budgetPath : System.FilePath := s!"{dir}/range-budget.json"
+  check "range: a run past its byte budget refuses, the batch committing nothing"
+    ((← refused (rfs.scanRange 1 rtip #[spk] (RangeScanLimits.make (maxFilterBytes := 1)) (some budgetPath) (fun _ => pure ()))
+      (fun | .filterBytesExhausted r 1 => r > 1 | _ => false)) && !(← fileExists budgetPath))
+  check "range: and resumes with a budget" ((← runNet "scanRange budget" (rfs.scanRange 1 rtip #[spk]
+    (path := some budgetPath) (onMatch := fun _ => pure ()))).isComplete)
+  check "range: no time budget is refused before a filter is read"
+    (← refused (rfs.scanRange 1 rtip #[spk] (RangeScanLimits.make (maxDurationMs := 0)) none (fun _ => pure ()))
+      (fun | .runTimedOut 0 => true | _ => false))
+  let strictRange ← runNet "strict range" (FilterSyncIO.new pool store 0 none (crossCheckPolicy := .requireDistinctSources))
+  check "range: the strict policy refuses one class before a filter is fetched"
+    (match ← (strictRange.scanRange 1 rtip #[spk] (onMatch := fun _ => pure ())).toBaseIO with
+     | .error (.filters (.crossCheckUnavailable _)) => true | _ => false)
+  if rtip < 3000 then
+    -- 2001 would run: its anchor at 2000 is itself a boundary the reference speaks for
+    check "range: a range that reaches no checkpoint, with no anchor, is refused"
+      (← refused (rfs.scanRange 2101 rtip #[spk] (onMatch := fun _ => pure ()))
+        (fun | .rangeSpansNoCheckpoint 2101 _ => true | _ => false))
+  check "range: shape refusals" ((← refused (rfs.scanRange 10 9 #[spk] (onMatch := fun _ => pure ()))
+      (fun | .invalidRange 10 9 => true | _ => false)) &&
+    (← refused (rfs.scanRange 10 10 #[] (onMatch := fun _ => pure ())) (· == .noWatchScripts)) &&
+    (← refused (rfs.scanRange 10 11 #[spk] (RangeScanLimits.make (maxBlocks := 1)) none (fun _ => pure ()))
+      (fun | .rangeTooWide 2 1 => true | _ => false)) &&
+    (← refused (rfs.scanRange 10 10 #[spk, other] (RangeScanLimits.make (maxScripts := 1)) none (fun _ => pure ()))
+      (fun | .tooManyScripts 2 1 => true | _ => false)) &&
+    (← refused (rfs.scanRange 10 (rtip + 1) #[spk] (onMatch := fun _ => pure ()))
+      (fun | .rangeAboveChain t _ => t == rtip + 1 | _ => false)))
+  check "range: the forward loader refuses a range record"
+    (match ← (FilterSyncIO.new pool store 0 (some rangePath)).toBaseIO with
+     | .error (.filterStorage (.damaged _)) => true | _ => false)
+  check "range: the range loader refuses forward progress"
+    (← refused (rfs.scanRange 1 rtip #[spk] (path := some filtersPath) (onMatch := fun _ => pure ()))
+      (fun | .recordDamaged r => (r.splitOn "not a range-scan record").length > 1 | _ => false))
+  -- the record's rules
+  let fp := RangeScanProgress.fingerprint #[spk]
+  check "range: a repeated script is the same set, in any order"
+    (RangeScanProgress.fingerprint #[spk, other, other] == RangeScanProgress.fingerprint #[other, spk] &&
+     fp != RangeScanProgress.fingerprint #[spk, other])
+  let capped : RangeScanProgress := { fromHeight := 1, toHeight := rtip, nextScanHeight := 1, watchFingerprint := fp, iteration := 1 }
+  check "range: the pass cap refuses at its boundary"
+    ((match RangeScanProgress.resumed (some capped) 1 rtip (RangeScanProgress.fingerprint #[other])
+        (RangeScanLimits.make (maxIterations := 1)) with
+      | .error (.tooManyIterations 2 1) => true | _ => false) &&
+     (RangeScanProgress.resumed (some capped) 1 rtip (RangeScanProgress.fingerprint #[other])
+        (RangeScanLimits.make (maxIterations := 2))).toBool)
+  check "range: a pass number past the ceiling is damage"
+    (match RangeScanProgress.load (some ({ capped with iteration := 51 }).toJson.compress) with
+     | .error (.recordDamaged "the pass number is out of range") => true | _ => false)
+  let greedy := RangeScanLimits.make 0xFFFFFFFF 1_000_000 (2 ^ 40) 86_400_000 1_000
+  check "range: no cap can be raised past its ceiling" (greedy.maxBlocks == 262_800 && greedy.maxScripts == 20_000 &&
+    greedy.maxFilterBytes == 1_073_741_824 && greedy.maxDurationMs == 3_600_000 && greedy.maxIterations == 50)
+  let hdr := hex (ByteArray.mk (Array.replicate 32 7))
+  let wide : Std.HashMap String String := (List.range 3200).foldl (fun m h => m.insert (toString (h + 1)) hdr) ({} : Std.HashMap String String)
+  check "range: pruning keeps the anchor below the range" ((RangeScan.prunedRangeHeaders wide 3201 1).contains "0" == false &&
+    (RangeScan.prunedRangeHeaders wide 3201 2).contains "1" && !(FilterSync.prunedFilterHeaders wide 3201).contains "2")
+
 def nodeChecks (dir : String) (n : Node) (swift : Option String) : IO Unit := do
   say s!"node: bitcoind regtest pid {n.pid}, p2p {n.p2p}"
   discard <| n.cli #["createwallet", "w"]
@@ -475,6 +555,8 @@ def nodeChecks (dir : String) (n : Node) (swift : Option String) : IO Unit := do
     | .ok (_, p) => p.crossCheck.any (·.agreed.all (·.source.isNone)) | .error _ => false)
   check "progress: a rollback drops the receipt" (match FilterSync.rollBack withReceipt 2 with
     | some p => p.crossCheck.isNone && p.nextScanHeight == 3 | none => false)
+  -- 3b. Restore-only range scans (#226)
+  rangeChecks dir pool store fs spk tip fundHeight filtersPath
   -- 4. A reorg: invalidate three blocks, mine four elsewhere.
   let tipBefore ← n.height
   let forkAt := tipBefore - 3
