@@ -15,8 +15,15 @@ census catalog (the list each build ships). The node is killed by PID at the end
 
 Usage: `io-test [--swift <oracle-io binary>]` (the binary compares Winnow's Swift side on the same node). -/
 
-def bitcoind := "/opt/homebrew/bin/bitcoind"
-def bitcoinCli := "/opt/homebrew/bin/bitcoin-cli"
+/-- A Bitcoin Core binary: `$WINNOW_BITCOIND` / `$WINNOW_BITCOIN_CLI`, else Homebrew's, else the PATH. -/
+def findTool (env name : String) : IO String := do
+  if let some path := (← IO.getEnv env) then return path
+  for dir in ["/opt/homebrew/bin", "/usr/local/bin"] do
+    if ← System.FilePath.pathExists s!"{dir}/{name}" then return s!"{dir}/{name}"
+  return name
+
+initialize bitcoind : String ← findTool "WINNOW_BITCOIND" "bitcoind"
+initialize bitcoinCli : String ← findTool "WINNOW_BITCOIN_CLI" "bitcoin-cli"
 
 initialize failures : IO.Ref (Array String) ← IO.mkRef #[]
 initialize passes : IO.Ref Nat ← IO.mkRef 0

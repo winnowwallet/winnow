@@ -5,7 +5,7 @@ import Lean.Data.Json
 (Tools/Fixture/MultisigDifferential.swift, run by scripts/check-multisig-core at 1cf93fb): Winnow's Taproot
 script-path multisig (`MultisigAccount`) held to Bitcoin Core on a disposable regtest node.
 
-The node is started here (temp datadir, random ports, `/opt/homebrew/bin/bitcoind -regtest`) and killed at
+The node is started here (temp datadir, random ports, `bitcoind -regtest`) and killed at
 the end, also on failure. Seeded cases vary the threshold, the number of signers (two to five), which
 signers are Bitcoin Core wallets (keys Core generated, signing through `walletprocesspsbt` with its own
 libsecp256k1), the order the signers are listed in, and the recovery leaf (none, fewer of the same signers,
@@ -32,8 +32,15 @@ disagreement. -/
 open Winnow Keys Lean
 open MultisigAccount (OutputCoordinate SpendPath RecoveryPlan)
 
-def bitcoind := "/opt/homebrew/bin/bitcoind"
-def bitcoinCli := "/opt/homebrew/bin/bitcoin-cli"
+/-- A Bitcoin Core binary: `$WINNOW_BITCOIND` / `$WINNOW_BITCOIN_CLI`, else Homebrew's, else the PATH. -/
+def findTool (env name : String) : IO String := do
+  if let some path := (← IO.getEnv env) then return path
+  for dir in ["/opt/homebrew/bin", "/usr/local/bin"] do
+    if ← System.FilePath.pathExists s!"{dir}/{name}" then return s!"{dir}/{name}"
+  return name
+
+initialize bitcoind : String ← findTool "WINNOW_BITCOIND" "bitcoind"
+initialize bitcoinCli : String ← findTool "WINNOW_BITCOIN_CLI" "bitcoin-cli"
 
 def say (s : String) : IO Unit := do IO.println s; (← IO.getStdout).flush
 

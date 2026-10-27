@@ -16,8 +16,15 @@ combined, finalized, broadcast, confirmed) → export (carrying the account) →
 directory (same balance, the account restored) → stop networking (no loop, no peer, no file change while blocks arrive) → reopen from
 disk → delete. One `ok`/`FAIL` line per check; the exit code is the verdict. -/
 
-def bitcoind := "/opt/homebrew/bin/bitcoind"
-def bitcoinCli := "/opt/homebrew/bin/bitcoin-cli"
+/-- A Bitcoin Core binary: `$WINNOW_BITCOIND` / `$WINNOW_BITCOIN_CLI`, else Homebrew's, else the PATH. -/
+def findTool (env name : String) : IO String := do
+  if let some path := (← IO.getEnv env) then return path
+  for dir in ["/opt/homebrew/bin", "/usr/local/bin"] do
+    if ← System.FilePath.pathExists s!"{dir}/{name}" then return s!"{dir}/{name}"
+  return name
+
+initialize bitcoind : String ← findTool "WINNOW_BITCOIND" "bitcoind"
+initialize bitcoinCli : String ← findTool "WINNOW_BITCOIN_CLI" "bitcoin-cli"
 
 initialize failures : IO.Ref (Array String) ← IO.mkRef #[]
 /-- Every `Deps.journal` line of the run: which backend (A, B, C), the event, its fields. -/

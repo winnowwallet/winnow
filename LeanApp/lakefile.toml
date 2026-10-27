@@ -7,9 +7,13 @@ defaultTargets = ["WinnowApp"]
 name = "winnow"
 path = "../Lean"
 
+# ElmLean, pinned: the framework's Lean package (framework/lean) and, beside it, the native shell's C
+# shim and build scripts (framework/native), at .lake/packages/elmlean/framework after `lake update`.
 [[require]]
 name = "elmlean"
-path = "/Users/posix4e/Library/Application Support/Claude/scratch-workspaces/3be3d554-5020-49f1-ad41-8efd1840c16b/cebe0e70-dc78-4056-bf9c-b964bd14e320/scratch-2026-10-25-93255d/framework/lean"
+git = "https://github.com/posix4e/elmlean.git"
+rev = "015dc2d9e78064cac479e3697ae5f1216f4a25d3"
+subDir = "framework/lean"
 
 [[lean_lib]]
 name = "WinnowApp"

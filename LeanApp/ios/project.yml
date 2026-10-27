@@ -18,7 +18,7 @@ targets:
     platform: iOS
     sources:
       - { path: build/native-shell, name: ElmLeanShell }
-      - { path: "/Users/posix4e/Library/Application Support/Claude/scratch-workspaces/3be3d554-5020-49f1-ad41-8efd1840c16b/cebe0e70-dc78-4056-bf9c-b964bd14e320/scratch-2026-10-25-93255d/framework/native/c", name: ElmLeanShim }
+      - { path: ../.lake/packages/elmlean/framework/native/c, name: ElmLeanShim }
       - { path: build/lean-c, name: LeanC, compilerFlags: [-w] }
       # the design papers, bundled as the Swift app bundles them (shown by the `page` node)
       - { path: ../../docs/site.css, buildPhase: resources }
@@ -49,7 +49,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: art.fralex.winnow.lean
         PRODUCT_NAME: WinnowLean
         GENERATE_INFOPLIST_FILE: NO
-        HEADER_SEARCH_PATHS: ["/Users/posix4e/.elan/toolchains/leanprover--lean4---v4.35.0/include", "/Users/posix4e/Library/Application Support/Claude/scratch-workspaces/3be3d554-5020-49f1-ad41-8efd1840c16b/cebe0e70-dc78-4056-bf9c-b964bd14e320/scratch-2026-10-25-93255d/framework/native/c"]
+        HEADER_SEARCH_PATHS: ["$(HOME)/.elan/toolchains/leanprover--lean4---v4.35.0/include", "$(PROJECT_DIR)/../.lake/packages/elmlean/framework/native/c"]
         LIBRARY_SEARCH_PATHS: ["$(PROJECT_DIR)/build/lib"]
         OTHER_LDFLAGS: [-lLean, -lStd, -lInit, -lleanrt, -luv, -lgmp, -lc++]
         DEAD_CODE_STRIPPING: YES
