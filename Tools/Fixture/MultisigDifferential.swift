@@ -201,8 +201,8 @@ enum MultisigDifferential {
                     recovery: recovery, recoveryMasters: recoveryMasters)
     }
 
-    /// Groups of one to three signers in shuffled order, at least one of
-    /// more than one.
+    /// Groups of one to three signers in shuffled order: the first of two or
+    /// three, leaving at least one signer for a second member.
     static func nestedGroups(count: Int, rng: inout SeededRandom) -> [[Int]] {
         var order = Array(0 ..< count)
         shuffle(&order, &rng)
@@ -210,7 +210,7 @@ enum MultisigDifferential {
         var cursor = 0
         while cursor < order.count {
             let room = order.count - cursor
-            let size = groups.isEmpty && room > 1 ? 2 + rng.count(min(room, 3) - 1) : 1 + rng.count(min(room, 3))
+            let size = groups.isEmpty ? 2 + rng.count(min(room - 1, 3) - 1) : 1 + rng.count(min(room, 3))
             groups.append(Array(order[cursor ..< cursor + size]))
             cursor += size
         }
