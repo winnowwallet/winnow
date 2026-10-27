@@ -5,11 +5,21 @@
 # environment, the Release build must boot into its ordinary storage and write no test-mode run, while the
 # Debug build (the control) must start that run and journal it.
 #
-#   scripts/verify-release-no-test-mode <Release WinnowLean.app> <Debug WinnowLean.app> [simulator udid]
+#   scripts/verify-release-no-test-mode <Release WinnowLean.app> <Debug WinnowLean.app>
+#
+# Both builds are com.btcswift.app and each launch starts from a fresh install, so this runs on a throwaway
+# simulator it creates and deletes: never on one that may hold a real Winnow wallet.
 set -euo pipefail
 RELEASE="${1:?Release .app (iphonesimulator)}"; DEBUG="${2:?Debug .app (iphonesimulator)}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-UDID="${3:-$("$HERE/ios-simulator")}"
+MODEL="$(xcrun simctl list devices available -j | /usr/bin/python3 -c '
+import json, sys
+for d in json.load(sys.stdin)["devices"].values():
+    for x in d:
+        if x["name"].startswith("iPhone"): print(x["deviceTypeIdentifier"]); sys.exit()')"
+UDID=$(xcrun simctl create "Winnow release check $$" "$MODEL")
+trap 'xcrun simctl shutdown "$UDID" >/dev/null 2>&1; xcrun simctl delete "$UDID" >/dev/null 2>&1 || true' EXIT
+xcrun simctl boot "$UDID"
 xcrun simctl bootstatus "$UDID" -b >/dev/null
 RUN="relcheck$$"
 
