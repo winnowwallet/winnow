@@ -4,8 +4,9 @@ import WalletCore
 import XCTest
 
 /// A Ledger as the second signer, through the app model and the device
-/// simulator: Advanced mode only, the stored registration, the address check
-/// on the device, a spend both sign, and a refusal on the device.
+/// simulator: Advanced mode only, pairing into the signer list, the account
+/// built from it and its stored registration, the address check on the
+/// device, a spend both sign, and a refusal on the device.
 @MainActor
 final class LedgerPairingTests: XCTestCase {
     struct SimulatorConnector: LedgerConnector {
@@ -33,15 +34,28 @@ final class LedgerPairingTests: XCTestCase {
         func close() async {}
     }
 
+    /// Pairs the simulator as "Nano X" and builds `threshold` of this phone,
+    /// `otherKeys` and the Ledger, which then registers the account.
+    func buildWithLedger(_ model: AppModel, name: String, otherKeys: [String] = [], threshold: Int = 2,
+                         recovery: MultisigAccount.RecoveryPlan? = nil) async throws -> MultisigAccountRecord {
+        let ledger = try await model.pairLedger(name: "Nano X")
+        let record = try await model.createMultisigAccount(
+            name: name, threshold: threshold, members: [[try model.multisigKeyExpression()]] + otherKeys.map { [$0] } + [ledger.keys],
+            recovery: recovery)
+        let approved = try await model.registerPairedLedger(record: record)
+        return try XCTUnwrap(approved)
+    }
+
     func testLedgerSigningIsAdvancedModeOnly() async throws {
         let model = try await readyMultisigModel(advanced: false)
         model.ledgerConnector = SimulatorConnector(simulator: LedgerSimulator(master: try TestKeys.masters()[1]))
         do {
-            try await model.pairLedger(name: "Phone and Ledger")
+            try await model.pairLedger(name: "Nano X")
             XCTFail("paired a Ledger in Simple mode")
         } catch {
             XCTAssertEqual(error as? AppModel.LedgerActionError, .advancedModeOnly)
         }
+        XCTAssertTrue(model.signers.isEmpty)
         XCTAssertTrue(model.multisigAccounts.isEmpty)
     }
 
@@ -50,20 +64,42 @@ final class LedgerPairingTests: XCTestCase {
         let simulator = LedgerSimulator(master: try TestKeys.masters()[1])
         model.ledgerConnector = SimulatorConnector(simulator: simulator)
 
-        var record = try await model.pairLedger(name: "Phone and Ledger")
+        // Pairing files the Ledger among the signers; nothing is registered yet.
+        let ledger = try await model.pairLedger(name: "Nano X")
+        XCTAssertTrue(ledger.isLedger)
+        XCTAssertEqual(ledger.masterFingerprint, try TestKeys.masters()[1].fingerprint)
+        XCTAssertEqual(model.signers.map(\.name), ["Nano X"])
+        let before = await simulator.registeredNames
+        XCTAssertTrue(before.isEmpty)
+        // Pairing again renames it rather than adding a copy.
+        let again = try await model.pairLedger(name: "Nano X, renamed")
+        XCTAssertEqual(again.id, ledger.id)
+        XCTAssertEqual(model.signers.map(\.name), ["Nano X, renamed"])
+
+        // The 2-of-2 of this phone and the Ledger, which the Ledger then approves.
+        let members = [[try model.multisigKeyExpression()], ledger.keys]
+        var record = try await model.createMultisigAccount(name: "Phone and Ledger", threshold: 2, members: members, recovery: nil)
+        XCTAssertNil(record.ledger)
+        let approved = try await model.registerPairedLedger(record: record)
+        record = try XCTUnwrap(approved)
         let account = try model.multisigAccount(for: record)
         XCTAssertEqual(account.threshold, 2)
         XCTAssertEqual(account.signers.count, 2)
+        XCTAssertFalse(account.isNested)
         let registration = try XCTUnwrap(record.ledger)
         XCTAssertEqual(registration.masterFingerprint, try TestKeys.masters()[1].fingerprint)
         XCTAssertEqual(registration.keyPath, LedgerMultisig.keyPath(network: .signet))
         let names = await simulator.registeredNames
         XCTAssertEqual(names, ["Phone and Ledger"])
+        XCTAssertEqual(model.signerNames(for: record)[registration.masterFingerprint], "Nano X, renamed")
 
-        // Pairing again refiles the same account rather than adding a copy.
-        let again = try await model.pairLedger(name: "Phone and Ledger")
-        XCTAssertEqual(again.id, record.id)
+        // Building the same account again yields it rather than a copy, and
+        // a registered account registers no further.
+        let same = try await model.createMultisigAccount(name: "Phone and Ledger", threshold: 2, members: members, recovery: nil)
+        XCTAssertEqual(same.id, record.id)
         XCTAssertEqual(model.multisigAccounts.count, 1)
+        let none = try await model.registerPairedLedger(record: record)
+        XCTAssertNil(none)
 
         let shown = try await model.verifyLedgerAddress(record: record, index: 0)
         XCTAssertEqual(shown, try account.address(index: 0))
@@ -141,9 +177,8 @@ final class LedgerPairingTests: XCTestCase {
         model.ledgerConnector = SimulatorConnector(simulator: simulator)
         let otherWinnow = try TestKeys.keyExpression(master: masters[2])
 
-        let record = try await model.createMultisigAccount(
-            name: "Family 2-of-3", threshold: 2, otherKeys: [" \(otherWinnow) "], includeLedger: true,
-            recovery: .fewerSigners(threshold: 1, blocks: 4320))
+        let record = try await buildWithLedger(model, name: "Family 2-of-3", otherKeys: [" \(otherWinnow) "],
+                                               recovery: .fewerSigners(threshold: 1, blocks: 4320))
         let account = try model.multisigAccount(for: record)
         XCTAssertEqual(account.threshold, 2)
         XCTAssertEqual(account.signers.count, 3)
@@ -162,7 +197,7 @@ final class LedgerPairingTests: XCTestCase {
     func testStoreRefusesARegistrationForAnotherAccount() async throws {
         let model = try await readyMultisigModel(advanced: true)
         model.ledgerConnector = SimulatorConnector(simulator: LedgerSimulator(master: try TestKeys.masters()[1]))
-        let record = try await model.pairLedger(name: "Phone and Ledger")
+        let record = try await buildWithLedger(model, name: "Phone and Ledger")
         var forged = try XCTUnwrap(record.ledger)
         forged.policyID = Data(repeating: 0x11, count: 32)
         do {

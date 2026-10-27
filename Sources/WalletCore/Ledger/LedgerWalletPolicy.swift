@@ -21,11 +21,28 @@ public struct LedgerWalletPolicy: Equatable, Sendable {
             && bytes.first != 0x20 && bytes.last != 0x20
     }
 
+    /// The longest descriptor template the Bitcoin app registers:
+    /// `MAX_DESCRIPTOR_TEMPLATE_LENGTH_V2` in its `src/common/wallet.h`,
+    /// checked in `read_wallet_policy_header` (app-bitcoin-new, 2.2.x). A
+    /// three-key leaf costs about 50 characters once its keys are on later
+    /// pairs, so a Ledger takes about ten such leaves; the phone can hold
+    /// an account of `MultisigAccount.maximumLeaves` without one.
+    public static let maximumTemplateLength = 512
+    /// The most keys in a policy, `MAX_N_KEYS_IN_WALLET_POLICY`, the
+    /// internal key included.
+    public static let maximumKeys = 15
+
     public init(name: String, template: String, keys: [String]) throws {
         guard Self.isValidName(name) else {
             throw LedgerError.mismatch("an account name must be 1 to 64 plain characters with no space at either end")
         }
-        guard !keys.isEmpty, keys.count <= 252 else { throw LedgerError.mismatch("a policy needs 1 to 252 keys") }
+        guard !keys.isEmpty, keys.count <= Self.maximumKeys else {
+            throw LedgerError.mismatch("a Ledger policy holds at most \(Self.maximumKeys - 1) signer keys")
+        }
+        guard template.utf8.count <= Self.maximumTemplateLength else {
+            throw LedgerError.mismatch(
+                "this account's policy is \(template.utf8.count) characters and a Ledger takes at most \(Self.maximumTemplateLength); fewer members, or members needing fewer of their keys, make it smaller")
+        }
         self.name = name
         self.template = template
         self.keys = keys
@@ -33,8 +50,9 @@ public struct LedgerWalletPolicy: Equatable, Sendable {
 
     /// The account's descriptor as a policy: the internal key is `@0`, each
     /// distinct key after it gets the next placeholder in descriptor order,
-    /// `/<0;1>/*` becomes `/**` and a reused signer's `/<2;3>/*` stays as it
-    /// is. The template therefore derives exactly the account's addresses.
+    /// `/<0;1>/*` becomes `/**` and a reused signer's `/<2;3>/*`, `/<4;5>/*`…
+    /// stays as it is. The tree keeps the descriptor's shape. The template
+    /// therefore derives exactly the account's addresses.
     public init(name: String, account: MultisigAccount) throws {
         guard case let .trTree(internalKey, tree) = account.descriptor.expression,
               case .extended = internalKey.base else {
@@ -47,7 +65,10 @@ public struct LedgerWalletPolicy: Equatable, Sendable {
                 keys.append(information)
                 return keys.count - 1
             }()
-            return key.derivation.elements == MultisigAccount.signerSuffix ? "@\(index)/**" : "@\(index)/<2;3>/*"
+            guard let appearance = MultisigAccount.appearance(of: key.derivation.elements) else {
+                throw LedgerError.mismatch("every policy key must be an extended public key under /<2n;2n+1>/*")
+            }
+            return appearance == 0 ? "@\(index)/**" : "@\(index)\(MultisigAccount.pairSuffixText(appearance))"
         }
         func leaf(_ expression: Descriptor.LeafExpression) throws -> String {
             switch expression {
@@ -63,20 +84,20 @@ public struct LedgerWalletPolicy: Equatable, Sendable {
                 throw LedgerError.mismatch("a plain pk() leaf is not an account leaf")
             }
         }
-        let body: String
-        switch tree {
-        case let .leaf(only): body = try leaf(only)
-        case let .branch(.leaf(left), .leaf(right)): body = "{\(try leaf(left)),\(try leaf(right))}"
-        default: throw LedgerError.mismatch("only one- and two-leaf accounts can be registered")
+        func node(_ tree: Descriptor.ScriptTree) throws -> String {
+            switch tree {
+            case let .leaf(expression): try leaf(expression)
+            case let .branch(left, right): "{\(try node(left)),\(try node(right))}"
+            }
         }
-        try self.init(name: name, template: "tr(@0/**,\(body))", keys: keys)
+        try self.init(name: name, template: "tr(@0/**,\(try node(tree)))", keys: keys)
     }
 
     /// `[fingerprint/86'/1'/0']tpub…` with the derivation suffix removed.
     static func keyInformation(_ key: Descriptor.SingleKey) throws -> String {
         guard case let .extended(xpub, network) = key.base, xpub.privateKey == nil,
-              [MultisigAccount.signerSuffix, MultisigAccount.recoverySuffix].contains(key.derivation.elements) else {
-            throw LedgerError.mismatch("every policy key must be an extended public key under /<0;1>/* or /<2;3>/*")
+              MultisigAccount.appearance(of: key.derivation.elements) != nil else {
+            throw LedgerError.mismatch("every policy key must be an extended public key under /<2n;2n+1>/*")
         }
         var text = ""
         if let origin = key.origin {

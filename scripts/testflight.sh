@@ -151,15 +151,49 @@ step_wait_processing() {
   return 1
 }
 
-step_notes() {
-  local bid localizations localization_id payload response expected actual
-  bid=$(build_id)
+# App Store Connect takes at most this many characters of What to Test and
+# answers ENTITY_ERROR.ATTRIBUTE.INVALID.TOO_LONG (a 409) above it, which
+# releases 0.8.16 and 0.8.17 found only after uploading. The release
+# workflow's policy job checks the file first (scripts/check-release-policy).
+WHATS_NEW_LIMIT=4000
+
+step_check_notes() {
   if [ ! -s "$WHATS_NEW_FILE" ]; then
     echo "TestFlight What to Test file is missing or empty: $WHATS_NEW_FILE" >&2
     return 1
   fi
+  local length
+  length=$(python3 -c 'import pathlib, sys; print(len(pathlib.Path(sys.argv[1]).read_text().rstrip()))' "$WHATS_NEW_FILE")
+  if [ "$length" -gt "$WHATS_NEW_LIMIT" ]; then
+    echo "TestFlight What to Test is $length characters; App Store Connect takes at most $WHATS_NEW_LIMIT: $WHATS_NEW_FILE" >&2
+    return 1
+  fi
+  echo "notes: $length of $WHATS_NEW_LIMIT characters"
+}
 
-  localizations=$(asc GET "/builds/$bid/betaBuildLocalizations?limit=200")
+step_notes() {
+  # A write can be refused for a moment after the build turns VALID, or
+  # for good, as an over-long text is. Each attempt looks the en-US
+  # localization up again, since Apple may create it itself in between, and
+  # prints the API's answer when it refuses, so the reason is in the log.
+  local bid attempt
+  bid=$(build_id)
+  step_check_notes || return 1
+  for attempt in $(seq 1 8); do
+    write_notes "$bid" && return 0
+    echo "notes: not accepted yet (attempt $attempt/8); retrying" >&2
+    sleep 15
+  done
+  echo "notes: App Store Connect did not accept What to Test for build $bid" >&2
+  return 1
+}
+
+write_notes() { # write_notes <build id>
+  local bid="$1" localizations localization_id payload response expected actual
+  if ! localizations=$(asc GET "/builds/$bid/betaBuildLocalizations?limit=200"); then
+    printf '%s\n' "$localizations" >&2
+    return 1
+  fi
   localization_id=$(printf '%s' "$localizations" | python3 -c '
 import json, sys
 rows = json.load(sys.stdin)["data"]
@@ -176,7 +210,10 @@ path, resource_id = sys.argv[1:]
 print(json.dumps({"data": {"type": "betaBuildLocalizations", "id": resource_id,
                            "attributes": {"whatsNew": pathlib.Path(path).read_text().rstrip()}}}))
 ' "$WHATS_NEW_FILE" "$localization_id")
-    response=$(asc PATCH "/betaBuildLocalizations/$localization_id" "$payload")
+    if ! response=$(asc PATCH "/betaBuildLocalizations/$localization_id" "$payload"); then
+      printf '%s\n' "$response" >&2
+      return 1
+    fi
     echo "notes: updated en-US What to Test for build $bid"
   else
     payload=$(python3 -c '
@@ -186,7 +223,10 @@ print(json.dumps({"data": {"type": "betaBuildLocalizations",
                            "attributes": {"locale": "en-US", "whatsNew": pathlib.Path(path).read_text().rstrip()},
                            "relationships": {"build": {"data": {"type": "builds", "id": build_id}}}}}))
 ' "$WHATS_NEW_FILE" "$bid")
-    response=$(asc POST /betaBuildLocalizations "$payload")
+    if ! response=$(asc POST /betaBuildLocalizations "$payload"); then
+      printf '%s\n' "$response" >&2
+      return 1
+    fi
     echo "notes: created en-US What to Test for build $bid"
   fi
 
@@ -622,6 +662,7 @@ case "${1:-all}" in
   upload) step_upload ;;
   wait-processing) step_wait_processing ;;
   notes) step_notes ;;
+  check-notes) step_check_notes ;;
   internal) step_internal ;;
   external) step_external ;;
   status) step_status ;;

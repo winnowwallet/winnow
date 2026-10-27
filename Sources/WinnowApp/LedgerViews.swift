@@ -1,68 +1,36 @@
 import SwiftUI
 import WalletCore
 
-/// Pairs a Ledger as the second signer of a new 2-of-2 account, in Advanced
-/// mode's Multisig section. The Ledger's key comes from its own Bitcoin app;
-/// the user checks the account on the Ledger's screen and approves it there.
-struct LedgerPairView: View {
+/// The account screen's Ledger buttons. Pairing is under Settings → Signers
+/// ([SignerViews](SignerViews.swift)); the builder and Join register a
+/// paired Ledger themselves, and "Register on Ledger" covers an account
+/// they could not.
+
+/// On an account that names a Ledger key this phone has not registered it
+/// with: registers the account on the Ledger connected now, which approves
+/// it on its screen and must derive the phone's first address.
+struct LedgerRegisterButton: View {
+    let record: MultisigAccountRecord
     @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    @State private var name = ""
-    @State private var pairing = false
+    @State private var registering = false
     @State private var error: String?
 
-    private var nameIsUsable: Bool {
-        DisplayName.normalized(name).map(LedgerWalletPolicy.isValidName) ?? false
-    }
-
     var body: some View {
-        Form {
-            Section {
-                TextField("Name", text: $name)
-                    .autocorrectionDisabled()
-                    .accessibilityIdentifier("ledgerNameField")
-            } footer: {
-                Text("The Ledger shows this name when it signs: plain letters, digits and punctuation, at most 64.")
-            }
-
-            Section {
-                Text("1. Unlock the Ledger and open its Bitcoin app, version 2.1.2 or later (Bitcoin Test on signet).")
-                Text("2. Tap Pair. The first time, confirm the same pairing code on the phone and the Ledger.")
-                Text("3. On the Ledger, check the account and both keys, then approve.")
-            } header: {
-                Text("Steps")
-            } footer: {
-                Text("The account is tr(NUMS, sortedmulti_a(2, this phone, the Ledger)). Spending needs both: neither this phone nor the Ledger can pay alone, and losing either one loses the account.")
-            }
-
-            Section {
-                Button(pairing ? "Pairing…" : "Pair") { pair() }
-                    .accessibilityIdentifier("ledgerPairButton")
-                    .disabled(pairing || !nameIsUsable)
-                if pairing { ProgressView() }
-            }
-
-            if let error {
-                Section {
-                    Text(error).font(.footnote).foregroundStyle(.red)
-                        .accessibilityIdentifier("ledgerPairError")
-                }
-            }
+        Button(registering ? "Check the Ledger's screen…" : "Register on Ledger") { register() }
+            .accessibilityIdentifier("ledgerRegisterButton")
+            .disabled(registering)
+        if let error {
+            Text(error).font(.footnote).foregroundStyle(.red)
+                .accessibilityIdentifier("ledgerRegisterError")
         }
-        .navigationTitle("Pair a Ledger")
     }
 
-    private func pair() {
-        pairing = true
+    private func register() {
+        registering = true
         error = nil
         Task {
-            defer { pairing = false }
-            do {
-                try await model.pairLedger(name: name)
-                dismiss()
-            } catch {
-                self.error = error.localizedDescription
-            }
+            defer { registering = false }
+            do { try await model.registerLedger(record: record) } catch { self.error = error.localizedDescription }
         }
     }
 }

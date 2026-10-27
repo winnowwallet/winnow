@@ -160,6 +160,12 @@ public struct ImportBundle: Codable, Equatable, Sendable {
     /// a MuSig2 one, is refused outright rather than restored without it
     /// (see `decode`).
     public var vaults: [MultisigAccountRecord]?
+    /// The signers the phone knows (`SignerRecord`): paired Ledgers and keys
+    /// other people sent, so a restored phone builds its next account from
+    /// the same list. Public keys only. Old files omit it; the app merges it
+    /// with the phone's own on restore rather than replacing that, since the
+    /// list is not a wallet's (see `decode`).
+    public var signers: [SignerRecord]?
     /// Next unused BIP86 receive index. Absent from v1 files and from
     /// writers that only knew UTXO-derived maxima; the importer then
     /// falls back to `max(receive UTXO index) + 1`.
@@ -253,18 +259,30 @@ public struct ImportBundle: Codable, Equatable, Sendable {
             throw WalletError.invalidBundle(
                 "bundle declares \(bundle.transactions.count) transactions, above the \(maximumEntries) limit")
         }
+        try checkAccountsAndSigners(of: bundle)
+        return bundle
+    }
+
+    /// The multisig accounts and the signer list, bounded and parsed on the
+    /// bundle's network before anything of them is kept.
+    private static func checkAccountsAndSigners(of bundle: ImportBundle) throws {
         guard (bundle.vaults?.count ?? 0) <= maximumVaults,
               (bundle.vaults ?? []).reduce(0, { $0 + $1.allUtxos.count }) <= maximumEntries else {
             throw WalletError.invalidBundle("too many multisig accounts or account coins")
         }
+        let network = BitcoinNetwork(rawValue: bundle.network)
         // MuSig2 accounts from the shared-account Winnow have no home here;
         // their coins must not vanish from a restore.
         if let vaults = bundle.vaults, !vaults.isEmpty {
-            guard let network = BitcoinNetwork(rawValue: bundle.network),
-                  vaults.allSatisfy({ (try? MultisigAccount($0.descriptor, network: network)) != nil })
+            guard let network, vaults.allSatisfy({ (try? MultisigAccount($0.descriptor, network: network)) != nil })
             else { throw WalletError.unsupportedWalletData }
         }
-        return bundle
+        // A signer list that is not one is refused with the file, never
+        // restored in part.
+        if let signers = bundle.signers, !signers.isEmpty {
+            guard let network else { throw WalletError.invalidBundle("signers for an unknown network \(bundle.network)") }
+            try SignerRecord.checkShape(signers, network: network)
+        }
     }
 
     /// Pretty-printed, sorted-key JSON ready for a share sheet. Nil optionals
@@ -281,7 +299,7 @@ public struct ImportBundle: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case version, network, descriptor, mnemonic, lastKnownHeight, lastKnownBlockHash, utxos, transactions
-        case nextReceiveIndex, nextChangeIndex, vaults
+        case nextReceiveIndex, nextChangeIndex, vaults, signers
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -297,6 +315,7 @@ public struct ImportBundle: Codable, Equatable, Sendable {
         try container.encodeIfPresent(nextReceiveIndex, forKey: .nextReceiveIndex)
         try container.encodeIfPresent(nextChangeIndex, forKey: .nextChangeIndex)
         try container.encodeIfPresent(vaults, forKey: .vaults)
+        try container.encodeIfPresent(signers, forKey: .signers)
     }
 
     /// The bundle's claimed UTXOs in wallet form.

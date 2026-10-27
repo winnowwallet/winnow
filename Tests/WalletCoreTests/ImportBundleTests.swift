@@ -50,6 +50,36 @@ struct ImportBundleTests {
                                          from: JSONEncoder().encode(bundle)) == bundle)
     }
 
+    @Test("a bundle carries the signer list, and one that is not a list is refused")
+    func signers() async throws {
+        var bundle = try await makeBundle()
+        let key = try TestKeys.keyExpression(master: TestKeys.master(entropyByte: 0xE5))
+        let carol = SignerRecord(id: "carol", kind: .keys, name: "Carol", keys: [key], masterFingerprint: nil,
+                                 addedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        bundle.signers = [carol]
+        let text = try bundle.serialized()
+        #expect(text.contains("\"signers\""))
+        #expect(try ImportBundle.decode(json: text).signers == [carol])
+        // Absent from an older file, and from one with nothing to carry.
+        let plain = try await makeBundle()
+        #expect(try ImportBundle.decode(json: plain.serialized()).signers == nil)
+
+        // No keys, too many, text that is no key and a whole policy are
+        // refused with the file, as is a list over the ceiling; the app
+        // checks the rest before touching local state.
+        for keys in [[String](), Array(repeating: key, count: SignerRecord.maximumKeysPerSigner + 1),
+                     ["tpubnonsense"], ["sortedmulti_a(1,\(key))"]] {
+            var broken = bundle
+            broken.signers = [SignerRecord(id: "x", kind: .keys, name: "X", keys: keys, masterFingerprint: nil, addedAt: Date())]
+            #expect(throws: WalletError.self) { try ImportBundle.decode(json: try broken.serialized()) }
+        }
+        var crowd = bundle
+        crowd.signers = (0 ... SignerRecord.maximumSigners).map {
+            SignerRecord(id: "s\($0)", kind: .keys, name: "S\($0)", keys: [key], masterFingerprint: nil, addedAt: Date())
+        }
+        #expect(throws: WalletError.self) { try ImportBundle.decode(json: try crowd.serialized()) }
+    }
+
     @Test("importing seeds the wallet state; scanning resumes after the bundle height")
     func seeding() async throws {
         let bundle = try await makeBundle()

@@ -12,6 +12,11 @@ struct CloudAppState: Codable, Equatable, Sendable {
     let receiveLabels: [String: String]
     let ownDisplayName: String
     let advancedMode: Bool
+    /// Paired Ledgers and saved keys, as a context written while only the
+    /// iCloud copy carried them; the bundle itself carries them now
+    /// (`ImportBundle.signers`), so new contexts leave this nil and an old
+    /// one's list is still merged on restore.
+    var signers: SignerStore.Backup? = nil
 
     @MainActor
     func validate(for bundle: ImportBundle) throws {
@@ -21,6 +26,7 @@ struct CloudAppState: Codable, Equatable, Sendable {
             throw WalletError.invalidBundle("cloud wallet context does not match")
         }
         try PeopleStore.validateBackup(people, network: network)
+        if let signers { try SignerStore.validateBackup(signers, network: network) }
         _ = try ReceiveAddressLabelStore.validatedBackup(receiveLabels, network: network)
         guard try encoded().count <= CloudWalletBackup.maximumAppStateBytes else {
             throw WalletError.invalidBundle("cloud wallet context is too large")
