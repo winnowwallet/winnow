@@ -86,7 +86,8 @@ private partial def listen (m : MempoolWindowIO) (peer : PeerConnection) (stream
     m.listeners.modify (·.filter (·.1 != peer.endpoint.description))
 
 private def attachToConnectedPeers (m : MempoolWindowIO) : IO Unit := do
-  if !(← m.isRunning) then return
+  -- a relay-only pool holds its seats for a payment going out, not for reading what the network relays
+  if !(← m.isRunning) || (← m.pool.mode) != .full then return
   for peer in ← m.pool.connectedPeers do
     let key := peer.endpoint.description
     if (← m.listeners.get).any (·.1 == key) then continue
