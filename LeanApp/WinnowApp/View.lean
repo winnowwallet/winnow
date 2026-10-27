@@ -81,6 +81,9 @@ def confirms (m : Model) : List H :=
     [.alert s!"Look up funding addresses with {host}?"
        ((if m.person.lookupConsent.isSome then lookupDisclosure else "No lookup selected.") ++ " Funding addresses do not establish who sent the payment or where they want a payment sent.")
        [.button s!"Look up with {host}" .plain (some (.people .infer)), cancel]]
+  | some (.removeMultisig _) =>
+    [.alert "Remove this account from this phone?" "Only an empty account can be removed. The other signers keep theirs."
+       [.button "Remove" .destructive (some (.multisig .remove)), cancel]]
   | some (.openExternal url exposed) =>
     let host := urlHost url
     [.alert "Open external block explorer?"
@@ -121,6 +124,14 @@ def mainScreen (m : Model) : H :=
   match m.routes.getLast? with
   | some (.payment t) => .screen "Payment" (some (.home .pop)) ([.list (paymentSections m t)] ++ overlays m)
   | some .backup => backupScreen m (overlays m)
+  | some .multisigAdd => multisigAddScreen m (overlays m)
+  | some .multisigBuild =>
+    .screen "New multisig account" (some (.multisig .pop)) ([.list (multisigBuildSections m)] ++ overlays m)
+  | some (.multisigAccount id) =>
+    .screen ((m.multisigInfo? id).map (·.name) |>.getD "Multisig") (some (.multisig .pop))
+      ([.list (multisigAccountSections m id)] ++ overlays m)
+  | some (.multisigPSBT id) =>
+    .screen "Multisig PSBT" (some (.multisig .pop)) ([.list (multisigPSBTSections m id)] ++ overlays m)
   | none =>
     if m.settings.advancedMode then
       .screen "Winnow" none

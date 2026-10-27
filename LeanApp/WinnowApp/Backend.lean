@@ -76,6 +76,30 @@ structure Backend where
   removeSenderLabel : (txid : String) → IO Records
   /-- The consented explorer lookup of funding addresses. -/
   lookupSender : (txid baseURL : String) → IO (List String)
+  -- Multisig accounts (Advanced mode; `Real/Multisig.lean`). Accounts are named by their id, PSBTs travel
+  -- as Base64, and every PSBT operation answers with the PSBT in hand reviewed again.
+  /-- `multisigAccounts`, `multisigStorageNotice`, `multisigKeyExpression()`. -/
+  multisigOverview : IO MultisigOverview
+  /-- `multisigAccount(validating:)` of a pasted descriptor. -/
+  checkMultisigDescriptor : (text : String) → IO MultisigCheck
+  /-- `addMultisigAccount(name:descriptor:)`; the new account's id. -/
+  addMultisigAccount : (name descriptor : String) → IO String
+  removeMultisigAccount : (id : String) → IO Unit
+  newMultisigReceiveAddress : (id : String) → IO Unit
+  /-- `createMultisigAccount(name:threshold:otherKeys:includeLedger: false, recovery:)` (refused outside
+  Advanced mode); the account's id and descriptor. -/
+  createMultisigAccount : (advanced : Bool) → (name : String) → (threshold : Nat) → (otherKeys : List String) →
+    Option MultisigRecovery → IO (String × String)
+  /-- `createMultisigSpend(record:address:amount:feeRateSatPerVByte:path:)` (`recovery`: the recovery path). -/
+  createMultisigSpend : (id address : String) → (amount : Int) → (feeRate : Float) → (recovery : Bool) → IO MultisigPSBT
+  /-- The PSBT in hand reviewed again (the account's coins or frontiers moved). -/
+  reviewMultisigPSBT : (id psbt : String) → IO MultisigPSBT
+  /-- A pasted PSBT: combined with the one in hand, or used once it reviews. -/
+  addMultisigPSBT : (id : String) → (working : Option String) → (pasted : String) → IO MultisigPSBT
+  /-- After device authentication: this phone's signature on every input. -/
+  signMultisigSpend : (id psbt : String) → IO MultisigPSBT
+  /-- Finalize, broadcast and record the spend; the txid. -/
+  broadcastMultisigSpend : (id psbt : String) → IO String
 
 def notPorted (what : String) : IO α := throw (IO.userError s!"{what}: this part of Winnow is still being ported to Lean.")
 
@@ -122,6 +146,17 @@ def Backend.pending : Backend where
   labelSender := fun _ _ => notPorted "Sender labels"
   removeSenderLabel := fun _ => notPorted "Sender labels"
   lookupSender := fun _ _ => notPorted "Explorer lookups"
+  multisigOverview := pure {}
+  checkMultisigDescriptor := fun _ => notPorted "Multisig accounts"
+  addMultisigAccount := fun _ _ => notPorted "Multisig accounts"
+  removeMultisigAccount := fun _ => notPorted "Multisig accounts"
+  newMultisigReceiveAddress := fun _ => notPorted "Multisig accounts"
+  createMultisigAccount := fun _ _ _ _ _ => notPorted "Multisig accounts"
+  createMultisigSpend := fun _ _ _ _ _ => notPorted "Multisig accounts"
+  reviewMultisigPSBT := fun _ _ => notPorted "Multisig accounts"
+  addMultisigPSBT := fun _ _ _ => notPorted "Multisig accounts"
+  signMultisigSpend := fun _ _ => notPorted "Multisig accounts"
+  broadcastMultisigSpend := fun _ _ => notPorted "Multisig accounts"
 
 instance : Nonempty Backend := ⟨Backend.pending⟩
 

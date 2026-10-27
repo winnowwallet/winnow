@@ -1,4 +1,4 @@
-import WinnowApp.Common
+import WinnowApp.Multisig
 
 /-! HomeView.swift and BeginnerHomeView.swift: the balance, sync and activity; HistoryRow,
 PaymentDetailView (recipients, receive labels, sender, details, transaction) and FeeBumpView. -/
@@ -149,6 +149,7 @@ def syncSection (m : Model) : H :=
 def walletSections (m : Model) : List H :=
   [ .section "" "" [caption "Balance · confirmed", .text (satsText m.status.balance) .title, caption s!"{m.status.utxoCount} UTXO(s)"]
   , syncSection m
+  , multisigSection m
   , .section "Transactions" ""
       (if m.status.history.isEmpty then [caption "No transactions yet. Payments appear here once they confirm in a block."]
        else m.status.history.map (historyRow m)) ]

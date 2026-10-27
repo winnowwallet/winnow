@@ -51,7 +51,7 @@ def description : MultisigAccountError → String
   | .invalidDescriptor reason => s!"The multisig descriptor is invalid: {reason}."
   | .scriptMismatch index choice => s!"Multisig key {choice}/{index} does not produce the stored Bitcoin output."
   | .noSignerKey input => s!"This device holds no signer key for input {input + 1}."
-  | .invalidSpend reason => s!"This multisig spend is refuse: {reason}."
+  | .invalidSpend reason => s!"This multisig spend is unsafe: {reason}."
 end MultisigAccountError
 
 inductive MultisigFailure where

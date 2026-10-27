@@ -76,6 +76,8 @@ def rollBackStores (env : Env) (dir : Option String) (w : Wallet) (b : TxBroadca
   let some dir := dir | failWith .noStorage
   writeAtomic (dirFile dir rollbackMarkerName) (toString fork).toUTF8
   env.walletOp (w.rollBack fork)
+  env.hooks.multisigRollBack fork
+  -- reactivates any own send whose confirming block fell (#157)
   runNet (b.rollBack fork)
 
 /-- `resumeInterruptedRollback()`: redo a rollback a crash interrupted, before anything scans. -/
@@ -86,6 +88,7 @@ def resumeInterruptedRollback (env : Env) (dir : String) (w : Option Wallet) (s 
   if fork > 0xFFFF_FFFF then return
   let fork := fork.toUInt32
   if let some w := w then env.walletOp (w.rollBack fork)
+  env.hooks.multisigRollBack fork
   runNet (s.broadcaster.rollBack fork)
   if let some f := s.filters then runNet (f.rollBack fork)
   finishRollback dir
@@ -232,8 +235,9 @@ def startPhasePolling (env : Env) (epoch : Nat) : IO Unit := do
 
 /-! ## One sync pass -/
 
-/-- `syncOnce()`: the wallet's scripts in one filter stream; matched blocks update the wallet and
-confirm pending broadcasts; the frontier is recorded either way. -/
+/-- `syncOnce()`: the wallet's and its multisig accounts' scripts in one filter stream (an account is
+just more watched scripts); matched blocks update the wallet and the accounts and confirm pending
+broadcasts; the frontier is recorded either way. -/
 def syncOnce (env : Env) : IO Unit := do
   let claim ← env.modifyGet fun c =>
     match c.wallet, c.stack with
@@ -247,11 +251,12 @@ def syncOnce (env : Env) : IO Unit := do
   let some (w, s, f, gen, dir) := claim | return
   try
     let pass : NetM Unit := do
-      let scripts ← WM.toNet w.watchScripts
+      let scripts := (← WM.toNet w.watchScripts) ++ (← (env.hooks.multisigWatchScripts w.network : IO _))
       let b := s.broadcaster
       f.sync scripts (onReorg := some fun fork => (rollBackStores env dir w b fork : IO Unit)) (onMatch := fun m => do
         let effect ← env.walletOpNet (w.apply m)
         for discarded in effect.discardedReplacements do b.cancel discarded
+        for discarded in ← (env.hooks.multisigApply m w.network : IO _) do b.cancel discarded
         let pending ← b.pendingTxids
         for tx in m.block.transactions do
           if pending.contains tx.txid then b.markConfirmed tx.txid m.height)

@@ -21,7 +21,9 @@ def Model.background (m : Model) : Model × List Cmd :=
     active := false
     onboarding := { m.onboarding with words := [], importText := "", busy := false }
     reveal := {}
-    exportState := {} }
+    exportState := {}
+    -- MultisigPSBTView's `clearState` on background
+    multisigSpend := m.multisigSpend.cleared }
   let (m2, cs) := match m1.sheets.findIdx? Sheet.isSensitive with
     | some i => m1.closeFrom i
     | none => (m1, [])
@@ -143,11 +145,24 @@ def onHost (h : Host) (m : Model) : Model × List Cmd :=
       m.editSend fun i => { i with destination := text.trimAscii.copy }
     | .person => m.setPersonPasted text
     | .importBundle => ({ m with onboarding := { m.onboarding with importText := text } }, [])
+    | .multisigDescriptor => stepMultisig (.setDescriptor text) m
+    | .multisigSignerKey =>
+      -- "Paste a signer's key": trimmed, not empty, not already listed
+      let key := Winnow.Keys.Unicode.trimWhitespace text
+      let b := m.multisigBuild
+      if key.isEmpty || b.otherKeys.contains key then (m, [])
+      else ({ m with multisigBuild := { b with otherKeys := b.otherKeys ++ [key] }.clamp }, [])
+    | .multisigRecoveryKey =>
+      ({ m with multisigBuild := { m.multisigBuild with recoveryKey := Winnow.Keys.Unicode.trimWhitespace text } }, [])
+    | .multisigPSBT => ({ m with multisigSpend := { m.multisigSpend with pasted := text } }, [])
+  | .multisig .. | .multisigChecked .. | .multisigAdded .. | .multisigCreated .. | .multisigRemoved ..
+  | .multisigFeeRate .. | .multisigPSBT .. | .multisigBroadcast .. => m.onMultisigHost h
   | .copiedExpired key => if m.copied == some key then ({ m with copied := none }, []) else (m, [])
   | .deleted g =>
     if !current g then (m, []) else
     let m' := m.nextGeneration
-    let m' := { m' with stage := Stage.onboarding, walletID := none, status := ({} : Status), records := ({} : Records) }
+    let m' := { m' with stage := Stage.onboarding, walletID := none, status := ({} : Status), records := ({} : Records),
+                        multisig := ({} : MultisigOverview), multisigSpend := m'.multisigSpend.cleared }
     let m' := { m' with phase := SyncPhase.idle, confirm := none, sheets := [], routes := [], tab := 0 }
     (m', [.stopNetworking])
   | .captured on => ({ m with captured := on }, [])
@@ -172,6 +187,7 @@ def Model.switchNetwork (m : Model) (net : Network) : Model × List Cmd :=
   let s := { m.settings with network := net }
   let m0 := m.nextGeneration
   let m' := { m0 with settings := s, stage := Stage.loading, status := ({} : Status), records := ({} : Records),
+                      multisig := ({} : MultisigOverview), multisigSpend := m0.multisigSpend.cleared,
                       phase := SyncPhase.idle, walletID := none, routes := [], sheets := [], confirm := none,
                       send := ({} : SendState), tab := 0 }
   (m', [.stopNetworking, .stopWatchingAddress, .saveSettings s, .openWallet m'.generation net false])
@@ -212,6 +228,8 @@ def step (msg : Msg) (m : Model) : Model × List Cmd :=
      [.saveSettings s, .journal "setting.advancedMode" [("enabled", toString b)]])
   | .dismissConfirm => ({ m with confirm := none }, [])
   | .selectTab i =>
+    -- leaving the Wallet tab makes MultisigPSBTView disappear: its `clearState` drops the PSBT in hand
+    let m := if i != 0 && m.tab == 0 && m.multisigPSBTRoute?.isSome then { m with multisigSpend := m.multisigSpend.cleared } else m
     let m' := { m with tab := i }
     (m', if i == 2 then m'.settingsAppear else if i == 1 then [.resolveRate g m.sendInputs m.status.feeFloorMilli] else [])
   | .openReceive => ({ m with receive := ({} : Receive) }.present .receive, [.receiveAddress g false])
@@ -232,6 +250,7 @@ def step (msg : Msg) (m : Model) : Model × List Cmd :=
   | .settings s => stepSettings s m
   | .backup b => stepBackup b m
   | .people p => stepPeople p m
+  | .multisig mm => stepMultisig mm m
   | .host h => onHost h m
 
 def update (msg : Msg) (m : Model) : Model := (step msg m).1

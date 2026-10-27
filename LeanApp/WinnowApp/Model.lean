@@ -43,6 +43,11 @@ inductive Route where
   | payment (txid : String)
   /-- Beginner mode's Back up page. -/
   | backup
+  /-- MultisigRoute (Advanced mode's Wallet tab): join with a descriptor, build, an account, its PSBT screen. -/
+  | multisigAdd
+  | multisigBuild
+  | multisigAccount (id : String)
+  | multisigPSBT (id : String)
   deriving Repr, BEq, Inhabited
 
 /-- A confirmation the user must answer (alerts and confirmation dialogs). -/
@@ -55,6 +60,8 @@ inductive Confirm where
   | inferSender
   /-- WarnedExplorerLink / DesignPaperView: an external URL, and what it exposes. -/
   | openExternal (url : String) (exposedItem : String)
+  /-- MultisigAccountView's "Remove this account from this phone?". -/
+  | removeMultisig (id : String)
   deriving Repr, BEq, Inhabited
 
 /-- Which clipboard policy a copy uses (`ClipboardPolicy`). -/
@@ -70,6 +77,10 @@ inductive PasteTarget where
   | destination
   | person
   | importBundle
+  | multisigDescriptor
+  | multisigSignerKey
+  | multisigRecoveryKey
+  | multisigPSBT
   deriving Repr, BEq, Inhabited
 
 /-! ## Area state -/
@@ -212,6 +223,54 @@ structure ShareCard where
   error : Option String := none
   deriving Repr, Inhabited
 
+/-- MultisigAddView's state. -/
+structure MultisigAddForm where
+  name : String := ""
+  descriptor : String := ""
+  /-- The validation and the trimmed text it was made for (`validation`; none while the text is empty). -/
+  check : Option (String × Except String MultisigCheck) := none
+  error : Option String := none
+  saving : Bool := false
+  deriving Repr, Inhabited
+
+/-- MultisigBuildView's state. -/
+structure MultisigBuildForm where
+  name : String := ""
+  otherKeys : List String := []
+  threshold : Nat := 2
+  withRecovery : Bool := false
+  /-- 0: fewer signers, 1: a recovery key. -/
+  recoveryMode : Nat := 0
+  recoveryThreshold : Nat := 1
+  recoveryKey : String := ""
+  recoveryDays : Nat := 30
+  creating : Bool := false
+  error : Option String := none
+  /-- The account created: id and descriptor. -/
+  created : Option (String × String) := none
+  deriving Repr, Inhabited
+
+def MultisigBuildForm.signerCount (f : MultisigBuildForm) : Nat := 1 + f.otherKeys.length
+
+/-- MultisigPSBTView's state. -/
+structure MultisigSpendForm where
+  address : String := ""
+  amount : String := ""
+  feeRate : String := ""
+  pasted : String := ""
+  /-- The path a new PSBT is created on. -/
+  recovery : Bool := false
+  working : Option MultisigPSBT := none
+  /-- The account state (`TrustedState`) the review in hand was made for. -/
+  trusted : String := ""
+  error : Option String := none
+  busy : Bool := false
+  broadcastTxid : Option String := none
+  /-- `SensitivePresentationEpoch`: bumped by each operation and when the screen is left or backgrounded; an
+  answer counts only for its epoch. -/
+  epoch : Nat := 0
+  deriving Repr, Inhabited
+
 /-- The wallet's answer at boot. -/
 inductive BootResult where
   | opened (walletID : String)
@@ -255,6 +314,13 @@ structure Model where
   person : PersonForm := {}
   shareCard : ShareCard := {}
   recipientsError : Option String := none
+  /-- Multisig accounts (Advanced mode), as the backend last reported them. -/
+  multisig : MultisigOverview := {}
+  multisigAdd : MultisigAddForm := {}
+  multisigBuild : MultisigBuildForm := {}
+  /-- MultisigAccountView's error. -/
+  multisigAccountError : Option String := none
+  multisigSpend : MultisigSpendForm := {}
   /-- Paper shown in the Design papers sheet. -/
   paper : Option Nat := none
   /-- Bumped on suspend, network switch and rebuild: an answer from an older generation is dropped. -/
@@ -309,6 +375,16 @@ inductive Host where
   | card (gen : Nat) (name : String) (card : String)
   | pasteParsed (gen : Nat) (text : String) (r : Except String PastePreview)
   | senderLookup (gen : Nat) (txid source : String) (addresses : List String)
+  | multisig (gen : Nat) (o : MultisigOverview)
+  | multisigChecked (gen : Nat) (text : String) (r : Except String MultisigCheck)
+  | multisigAdded (gen : Nat) (id : String)
+  | multisigCreated (gen : Nat) (id descriptor : String)
+  | multisigRemoved (gen : Nat) (id : String)
+  /-- The medium fee rate, thousandths of sat/vB (MultisigPSBTView's `.task`). -/
+  | multisigFeeRate (gen : Nat) (milli : Nat)
+  /-- `pasted`: the answer to "Use this PSBT" / "Combine", which empties the paste field. -/
+  | multisigPSBT (gen epoch : Nat) (id : String) (p : MultisigPSBT) (pasted : Bool := false)
+  | multisigBroadcast (gen epoch : Nat) (id txid : String)
   | pasted (target : PasteTarget) (text : String)
   | copiedExpired (key : String)
   | scene (active : Bool)
@@ -406,6 +482,46 @@ inductive PeopleMsg where
   | remove (personID : String)
   deriving Inhabited
 
+inductive MultisigMsg where
+  | openAdd
+  | openBuild
+  | openAccount (id : String)
+  | openPSBT (id : String)
+  | pop
+  -- MultisigAddView
+  | setName (s : String)
+  | setDescriptor (s : String)
+  | pasteDescriptor
+  | save
+  -- MultisigBuildView
+  | buildSetName (s : String)
+  | pasteSignerKey
+  | removeSignerKey (i : Nat)
+  | setThreshold (n : Nat)
+  | setWithRecovery (b : Bool)
+  | setRecoveryMode (i : Nat)
+  | setRecoveryThreshold (n : Nat)
+  | pasteRecoveryKey
+  | removeRecoveryKey
+  | setRecoveryDays (n : Nat)
+  | create
+  -- MultisigAccountView
+  | newAddress
+  | askRemove
+  | remove
+  -- MultisigPSBTView
+  | setAddress (s : String)
+  | setAmount (s : String)
+  | setFeeRate (s : String)
+  | setPath (i : Nat)
+  | createSpend
+  | setPasted (s : String)
+  | pastePSBT
+  | addPasted
+  | sign
+  | broadcast
+  deriving Inhabited
+
 inductive Msg where
   | createWallet
   | resumeBackup
@@ -438,6 +554,7 @@ inductive Msg where
   | settings (m : SettingsMsg)
   | backup (m : BackupMsg)
   | people (m : PeopleMsg)
+  | multisig (m : MultisigMsg)
   | host (h : Host)
   deriving Inhabited
 
@@ -496,6 +613,21 @@ inductive Cmd where
   | removeSenderLabel (gen : Nat) (txid : String)
   | lookupSender (gen : Nat) (txid baseURL : String)
   | paste (target : PasteTarget)
+  /-- Multisig accounts (`Backend.multisig*`). -/
+  | multisigOverview (gen : Nat)
+  | checkMultisigDescriptor (gen : Nat) (text : String)
+  | addMultisigAccount (gen : Nat) (name descriptor : String)
+  | removeMultisigAccount (gen : Nat) (id : String)
+  | newMultisigAddress (gen : Nat) (id : String)
+  | createMultisigAccount (gen : Nat) (advanced : Bool) (name : String) (threshold : Nat) (otherKeys : List String)
+      (recovery : Option MultisigRecovery)
+  | multisigFeeRate (gen : Nat)
+  | createMultisigSpend (gen epoch : Nat) (id address : String) (amount : Int) (feeRate : Float) (recovery : Bool)
+  | reviewMultisigPSBT (gen epoch : Nat) (id psbt : String)
+  | addMultisigPSBT (gen epoch : Nat) (id : String) (working : Option String) (pasted : String)
+  /-- After device authentication ("Sign this multisig payment"). -/
+  | signMultisigSpend (gen epoch : Nat) (id psbt : String)
+  | broadcastMultisigSpend (gen epoch : Nat) (id psbt : String)
   /-- `e2e?.journal(name, fields:)` for what happens in the Model (test mode only; nothing otherwise). -/
   | journal (name : String) (fields : List (String × String))
   deriving Inhabited

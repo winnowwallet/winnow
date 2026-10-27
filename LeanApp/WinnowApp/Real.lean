@@ -6,6 +6,7 @@ import WinnowApp.Real.Peers
 import WinnowApp.Real.Shell
 import WinnowApp.Real.Assemble
 import WinnowApp.Real.Full
+import WinnowApp.Real.MultisigStore
 
 /-! # `Backend.real` (aggregator): AppModel's wallet and network logic over the Lean WalletCore
 

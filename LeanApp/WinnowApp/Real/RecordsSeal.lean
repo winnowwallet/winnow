@@ -57,6 +57,14 @@ inductive PeopleStorageError where
   | tooMany
   deriving Repr, BEq, Inhabited
 
+/-- `MultisigStorageError` (MultisigStore.swift). -/
+inductive MultisigStorageError where
+  | invalidState (reason : String)
+  | damaged
+  | duplicate
+  | tooMany
+  deriving Repr, BEq, Inhabited
+
 /-- `ReceiveAddressLabelStore.StorageError`. -/
 inductive LabelStorageError where
   | unavailable | damaged | invalidLabel | full
@@ -75,6 +83,7 @@ inductive RecordsError where
   | keyVault (e : StoreKeyVaultError)
   | people (e : PeopleStorageError)
   | labels (e : LabelStorageError)
+  | multisig (e : MultisigStorageError)
   | app (e : AppError)
   /-- `SenderLookupError.unavailable`. -/
   | lookup (message : String)
@@ -94,6 +103,8 @@ def name : RecordsError → String
   | .people (.duplicate _) => "duplicate" | .people .unknownPerson => "unknownPerson" | .people .tooMany => "tooMany"
   | .labels .unavailable => "unavailable" | .labels .damaged => "damaged" | .labels .invalidLabel => "invalidLabel"
   | .labels .full => "full"
+  | .multisig (.invalidState _) => "invalidState" | .multisig .damaged => "damaged"
+  | .multisig .duplicate => "duplicate" | .multisig .tooMany => "tooMany"
   | .app .noWallet => "noWallet"
   | .app .sendReviewChanged => "sendReviewChanged" | .app .personCannotBePaid => "personCannotBePaid"
   | .lookup _ => "unavailable"
@@ -101,6 +112,7 @@ def name : RecordsError → String
   | .io _ => "ioError"
 
 def maximumPeople : Nat := 1_000
+def maximumMultisigAccounts : Nat := 100
 
 /-- `localizedDescription`. -/
 def description : RecordsError → String
@@ -119,6 +131,11 @@ def description : RecordsError → String
     "Receive address labels could not be read safely. The saved file was left untouched. You can still receive without a label."
   | .labels .invalidLabel => "Use a single-line label of at most 120 characters."
   | .labels .full => "This wallet has reached its limit of 10,000 receive address labels."
+  | .multisig (.invalidState r) => s!"Invalid multisig storage: {r}"
+  | .multisig .damaged =>
+    "Winnow could not safely read its multisig accounts, so they cannot be changed until the file is readable again."
+  | .multisig .duplicate => "This multisig account is already on this phone."
+  | .multisig .tooMany => s!"Winnow keeps at most {maximumMultisigAccounts} multisig accounts."
   | .app .noWallet => "No wallet is open."
   | .app .sendReviewChanged => "The available coins, fee, or change changed. Review the payment again before signing."
   | .app .personCannotBePaid => "This person has no pay-to key or address yet. Ask them for their Winnow card."

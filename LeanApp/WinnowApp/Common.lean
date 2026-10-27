@@ -31,7 +31,14 @@ def Model.fail (m : Model) (context message : String) : Model :=
   -- a cancelled authentication prompt: revealing the phrase treats it as a decision (no error)
   if context == "create.cancelled" || context == "import.cancelled" then { m with onboarding := { m.onboarding with busy := false, error := none } } else
   if context == "reveal.cancelled" then { m with reveal := { m.reveal with revealing := false, error := none } } else
-  let context := if context.endsWith ".cancelled" then (context.dropEnd 10).copy else context
+  let cancelled := context.endsWith ".cancelled"
+  let context := if cancelled then (context.dropEnd 10).copy else context
+  if context.startsWith "multisigPSBT." then
+    -- MultisigPSBTView's `run`: only the current operation's failure shows (`accepts(token)`)
+    let m := { m with spendingInFlight := false }
+    if (context.drop 13).toString.toNat? != some m.multisigSpend.epoch || !m.active then m else
+    { m with multisigSpend := { m.multisigSpend with busy := false, error := if cancelled then none else some message } }
+  else
   match context with
   | "onboarding" | "create" | "import" => { m with onboarding := { m.onboarding with busy := false, error := some message } }
   | "receive" => { m with receive := { m.receive with error := some message, changing := false } }
@@ -49,6 +56,11 @@ def Model.fail (m : Model) (context message : String) : Model :=
   | "card" => { m with shareCard := { card := none, error := some message } }
   | "person" => { m with person := { m.person with saving := false, inferring := false, error := some message } }
   | "recipients" => { m with recipientsError := some message }
+  | "multisigAdd" => { m with multisigAdd := { m.multisigAdd with saving := false, error := some message } }
+  | "multisigBuild" => { m with multisigBuild := { m.multisigBuild with creating := false, error := some message } }
+  | "multisigAccount" => { m with multisigAccountError := some message }
+  -- the overview keeps what it last showed; the fee-rate field stays empty for the user to fill
+  | "multisigOverview" | "multisigRate" => m
   | _ => { m with status := { m.status with lastSyncError := some message } }
 
 /-! ## Sheets -/

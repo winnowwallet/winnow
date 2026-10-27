@@ -43,6 +43,24 @@ structure Hooks where
     fun _ => notPorted "Paying a saved person"
   /-- `advancePersonPaymentIndex(id:past:)` after a send to a person commits. -/
   advancePersonIndex : (personID : String) → UInt32 → IO Unit := fun _ _ => pure ()
+  -- The multisig account store (`MultisigStore`), which the scan, rollbacks, import, export and the
+  -- history's ownership read. Without it no account is watched, and a bundle carrying accounts is refused
+  -- rather than restored without them.
+  /-- `multisigStore.watchScripts(network:)`: every account's receive and change scripts. -/
+  multisigWatchScripts : Tx.BitcoinNetwork → IO (Array ByteArray) := fun _ => pure #[]
+  /-- `multisigStore.apply(match:network:)`: the in-flight spends a conflict in the block beat. -/
+  multisigApply : Net.BlockMatch → Tx.BitcoinNetwork → IO (Array ByteArray) := fun _ _ => pure #[]
+  /-- `multisigStore.rollBack(to:)`. -/
+  multisigRollBack : UInt32 → IO Unit := fun _ => pure ()
+  /-- `MultisigStore.validate(_:network:)` of a bundle's accounts, before anything is written. -/
+  multisigValidate : Array MultisigAccountRecord → Tx.BitcoinNetwork → IO Unit := fun rs _ => do
+    unless rs.isEmpty do notPorted "Restoring multisig accounts"
+  /-- `multisigStore.restore(_:)`. -/
+  multisigRestore : Array MultisigAccountRecord → IO Unit := fun _ => pure ()
+  /-- `multisigStore.backupRecords()`. -/
+  multisigBackup : IO (Array MultisigAccountRecord) := pure #[]
+  /-- `ownedMultisigScripts`: the scripts the accounts watch (a payment to one is not a recipient). -/
+  multisigOwnedScripts : IO (Array ByteArray) := pure #[]
 
 instance : Inhabited Hooks := ⟨{}⟩
 

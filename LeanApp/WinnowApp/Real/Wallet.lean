@@ -109,7 +109,10 @@ def snapshot (env : Env) : IO (Status × SyncPhase) := do
   let mut s : Status := {}
   if let some w := c.wallet then
     let st ← w.state
-    let owned : Std.HashSet ByteArray := ((← (w.watchScripts).run).toOption.getD #[]).foldl (·.insert ·) {}
+    -- `ownWatchScripts.union(ownedMultisigScripts)`: an account payment is not a recipient
+    let multisigScripts ← try env.hooks.multisigOwnedScripts catch _ => pure #[]
+    let owned : Std.HashSet ByteArray :=
+      (((← (w.watchScripts).run).toOption.getD #[]) ++ multisigScripts).foldl (·.insert ·) {}
     let utxos := st.utxos
     s := { s with balance := (utxos.foldl (fun (a : Int64) (u : WalletUTXO) => a + u.amount) 0).toInt, utxoCount := utxos.size
                   history := st.history.toList.map (historyItem · owned w.network)
@@ -143,7 +146,7 @@ def adopt (env : Env) (w : Wallet) (startSync : Bool) : IO Unit := do
     ((c.stack, c.dir, c.network), { c with loopToken := c.loopToken + 1, syncLoop := none })
   let some dir := dir | failWith .noWallet
   if let some s := stack then s.broadcaster.shutdown
-  for name in ["filters.json", "broadcast.json", "vaults.json", "receive-labels.json"] do
+  for name in ["filters.json", "broadcast.json", "vaults.json", "multisig.json", "receive-labels.json"] do
     removeQuietly (dirFile dir name)
   if let some n := n then
     if let some message ← env.hooks.configure n dir then failWith (.storageDamaged message)
@@ -247,10 +250,14 @@ def importBundle (env : Env) (n : WinnowApp.Network) (dir : String) (json : Stri
     | .ok b => pure b
     | .error e => failText (importFailureText e)
   unless bundle.network == n.name do failWith (.wrongNetwork bundle.network)
+  -- before anything is written: a bundle whose multisig accounts cannot be restored must not replace the
+  -- wallet half-way
+  env.hooks.multisigValidate (bundle.vaults.getD #[]) (Network.tx n)
   env.journal "import.started" (bundleFields bundle)
   switchTo env n dir
   let w ← runWM (Wallet.importing bundle env.deps.keyStore (some (walletPath dir)) env.deps.random)
   adopt env w false
+  env.hooks.multisigRestore (bundle.vaults.getD #[])
   try
     buildStackIfNeeded env
     let c ← env.get
@@ -261,7 +268,9 @@ def importBundle (env : Env) (n : WinnowApp.Network) (dir : String) (json : Stri
     let some filters := stack.filters | waiting "sync stack unavailable"
     stack.pool.start
     if !(← waitForPeer env stack.pool 60_000 c.generation) then return ← waiting "public peers unavailable"
-    let report ← runWM (w.verifyImport bundle (scanSource filters))
+    let additional ← env.hooks.multisigWatchScripts (Network.tx n)
+    let report ← runWM (w.verifyImport bundle (scanSource filters) additional fun m => do
+      discard <| WM.io (env.hooks.multisigApply m (Network.tx n)))
     -- `await refresh()`, then the journal reads the refreshed status
     let (s, _) ← snapshot env
     env.journal "import.verified"
@@ -283,6 +292,8 @@ def exportBundle (env : Env) (includeMnemonic : Bool) : IO String := do
   let some w := c.wallet | failWith .noWallet
   if let some f := c.stack.bind (·.filters) then env.walletOp (w.recordScanHeight (← f.nextScanHeight))
   let b ← runWM (w.exportBundle includeMnemonic)
+  let accounts ← env.hooks.multisigBackup
+  let b := { b with vaults := if accounts.isEmpty then none else some accounts }
   let serialized := b.serialized
   env.journal "wallet.exported" (bundleFields b)
   return serialized
@@ -302,7 +313,7 @@ def deleteWallet (env : Env) : IO Unit := do
   | .ok () => pure ()
   | .error e => failText (keyStoreErrorText e)
   if let some dir := c.dir then
-    for name in ["wallet.json", "filters.json", "broadcast.json", "vaults.json", "receive-labels.json"] do
+    for name in ["wallet.json", "filters.json", "broadcast.json", "vaults.json", "multisig.json", "receive-labels.json"] do
       removeQuietly (dirFile dir name)
   env.modify fun c => { c with wallet := none, lastSyncError := none, relayStoreQuarantined := none, phase := .idle,
                                reviews := #[], bumps := #[] }

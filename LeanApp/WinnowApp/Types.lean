@@ -228,3 +228,106 @@ inductive RelayEvent where
   deriving Repr, Inhabited
 
 end WinnowApp
+
+namespace WinnowApp
+
+/-! ## Multisig accounts (Advanced mode) -/
+
+/-- One live coin of a multisig account, as MultisigAccountView lists it. -/
+structure MultisigCoin where
+  amount : Nat
+  /-- "txid…:vout · receive 3 · block 120" -/
+  line : String
+  /-- `recoveryUnlockHeight(of:)`. -/
+  recoveryFrom : Option Nat := none
+  deriving Repr, Inhabited, BEq
+
+/-- A `MultisigAccountRecord` and its account, as the multisig screens show them. -/
+structure MultisigInfo where
+  id : String
+  name : String
+  descriptor : String
+  balance : Int
+  /-- "2 of 3"; none when the descriptor no longer reads as an account. -/
+  policy : Option String := none
+  /-- `MultisigAccountView.recoveryText`. -/
+  recovery : Option String := none
+  /-- The paired Ledger's master fingerprint (`%08x`). -/
+  ledgerFingerprint : Option String := none
+  nextReceiveIndex : Nat := 0
+  receiveAddress : Option String := none
+  coins : List MultisigCoin := []
+  /-- What a PSBT's review depends on (`TrustedState`: coins and frontiers): a change re-reviews it. -/
+  trusted : String := ""
+  deriving Repr, Inhabited, BEq
+
+def MultisigInfo.hasRecovery (a : MultisigInfo) : Bool := a.recovery.isSome
+
+/-- `multisigAccounts`, `multisigStorageNotice` and this wallet's key expression (`multisigKeyExpression`). -/
+structure MultisigOverview where
+  accounts : List MultisigInfo := []
+  notice : Option String := none
+  keyExpression : Option String := none
+  deriving Repr, Inhabited, BEq
+
+/-- What a pasted descriptor reads as (MultisigAddView's `validation`). -/
+structure MultisigCheck where
+  policy : String
+  firstAddress : Option String
+  deriving Repr, Inhabited, BEq
+
+/-- `MultisigBuildView.recoveryPlan`. -/
+inductive MultisigRecovery where
+  | fewerSigners (threshold blocks : Nat)
+  | separateKey (key : String) (blocks : Nat)
+  deriving Repr, Inhabited, BEq
+
+/-- One output of a reviewed spend. -/
+structure MultisigOutputLine where
+  owned : Bool
+  amount : Nat
+  /-- The address, or the script in hex. -/
+  address : String
+  deriving Repr, Inhabited, BEq
+
+/-- `MultisigSigningProgress`. -/
+structure MultisigProgress where
+  complete : Bool := false
+  phoneHolds : Bool := false
+  phoneUnsigned : Bool := false
+  ledgerHolds : Bool := false
+  ledgerUnsigned : Bool := false
+  deriving Repr, Inhabited, BEq
+
+def MultisigProgress.signedHere (p : MultisigProgress) : Bool := p.phoneHolds && !p.phoneUnsigned
+
+/-- `MultisigSigningProgress.nextStep`: the signing screen's footer. -/
+def MultisigProgress.nextStep (p : MultisigProgress) : String :=
+  if p.complete then "Enough signatures verify. Finalize and broadcast."
+  else if p.ledgerUnsigned then
+    if p.signedHere then "Sign with the Ledger: check the payment on its screen before approving."
+    else "Add this phone's signature and the Ledger's, in either order. Check the payment on the Ledger's screen."
+  else if p.signedHere then "Share the PSBT below with the other signers, then combine their signed copies here."
+  else "Check the payment, then add this phone's signature. Signers can sign in any order."
+
+/-- `MultisigSigningScreen`: the review, the verified signatures per usable path, and the progress. -/
+structure MultisigScreen where
+  outputs : List MultisigOutputLine
+  inputTotal : Nat
+  fee : Nat
+  /-- Per usable path: is it the recovery path, verified signatures, threshold. -/
+  signatures : List (Bool × Nat × Nat)
+  progress : MultisigProgress
+  deriving Repr, Inhabited, BEq
+
+def MultisigScreen.recoveryUsable (s : MultisigScreen) : Bool := s.signatures.any (·.1)
+
+/-- A PSBT in hand: its v2 Base64 (the working copy), the BIP174 v0 text to share, and its review. -/
+structure MultisigPSBT where
+  psbt : String
+  output : Option String
+  screen : Option MultisigScreen
+  reviewError : Option String := none
+  deriving Repr, Inhabited, BEq
+
+end WinnowApp

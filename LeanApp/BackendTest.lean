@@ -10,8 +10,10 @@ and `curlFetch`, the app's settings on the regtest network with the node as the 
 
 create → start networking → sync to tip → receive address → fund + mine → syncNow → balance and
 history → fee rate + preview → send → the node's mempool → mine → confirmed, balance arithmetic →
-a second send, fee bump (RBF accepted by the node) → mine → export → import into a fresh directory
-(same balance) → stop networking (no loop, no peer, no file change while blocks arrive) → reopen from
+a second send, fee bump (RBF accepted by the node) → mine → a 2-of-2 multisig account with a test key
+(funded, credited by the sync, a spend created, signed by the phone and by the other key in Lean,
+combined, finalized, broadcast, confirmed) → export (carrying the account) → import into a fresh
+directory (same balance, the account restored) → stop networking (no loop, no peer, no file change while blocks arrive) → reopen from
 disk → delete. One `ok`/`FAIL` line per check; the exit code is the verdict. -/
 
 def bitcoind := "/opt/homebrew/bin/bitcoind"
@@ -173,6 +175,117 @@ def showPhase : SyncPhase → String
   | .idle => "idle" | .connecting c t => s!"connecting {c}/{t}" | .headers s e => s!"headers {s}/{e}"
   | .filters s t => s!"filters {s}/{t}" | .synced => "synced" | .peerDiscoveryFailed => "peerDiscoveryFailed"
 
+
+/-! ## A multisig account end to end -/
+
+structure MultisigResult where
+  id : String
+  balance : Int
+  txid : String
+  firstAddress : String
+
+/-- `[fp/86'/1'/0']tpub…/<0;1>/*` of a master from 16 repeated bytes (TestKeys), and the master. -/
+def testSigner (entropyByte : UInt8) : IO (Keys.HDKey × String) := do
+  let some words := (Keys.BIP39.mnemonic (ByteArray.mk (Array.replicate 16 entropyByte))).toOption
+    | throw (IO.userError "mnemonic")
+  let some master := (Keys.HDKey.ofSeed (Keys.BIP39.seed words)).toOption | throw (IO.userError "master")
+  let some account := (master.derived "m/86'/1'/0'").toOption | throw (IO.userError "account")
+  return (master, s!"[{Descriptor.hex8 master.fingerprint}/86'/1'/0']{account.neutered.serialized .testnet}/<0;1>/*")
+
+def multisigAccount? (b : Backend) (id : String) : IO (Option MultisigInfo) := do
+  return (← b.multisigOverview).accounts.find? (·.id == id)
+
+/-- Create a 2-of-2 with a test key, receive to it, see the coin credited by the sync loop, create the
+spend, sign with the phone and with the other key in Lean, combine, finalize and broadcast, confirm. -/
+def multisigFlow (n : Node) (a : Backend) (msA : Real.MultisigApp) (mineAddr : String) : IO MultisigResult := do
+  let (otherMaster, otherKey) ← testSigner 0xB2
+  let refusedSimple ← attempt (a.createMultisigAccount false "Shared" 2 [otherKey] none)
+  check "multisig: the builder is Advanced mode only" (refusedSimple matches .error _)
+  let (id, descriptor) ← a.createMultisigAccount true "Shared" 2 [otherKey] none
+  let account ← match MultisigAccount.parse descriptor .regtest with
+    | .ok acc => pure acc
+    | .error e => throw (IO.userError s!"account: {e.name}")
+  let some info ← multisigAccount? a id | throw (IO.userError "the account is not listed")
+  check "multisig: 2 of 2, listed with no coins" (info.policy == some "2 of 2" && info.balance == 0 && info.coins.isEmpty)
+  let some address := info.receiveAddress | throw (IO.userError "no receive address")
+  check "multisig: the receive address is the descriptor's first" ((account.address 0).toOption == some address && address.startsWith "bcrt1p")
+  let again ← a.createMultisigAccount true "Shared" 2 [otherKey] none
+  check "multisig: building the same account again returns it" (again.1 == id && (← a.multisigOverview).accounts.length == 1)
+  let check1 ← attempt (a.checkMultisigDescriptor descriptor)
+  check "multisig: the descriptor checks as 2 of 2 for this phone" (match check1 with
+    | .ok c => c.policy == "2 of 2" && c.firstAddress == some address | .error _ => false)
+  -- 1. Receive.
+  let fundTxid ← n.wallet #["sendtoaddress", address, "0.5"]
+  discard <| waitUntil 20_000 (do return (← n.mempool).contains fundTxid)
+  n.mine 1 mineAddr
+  let fundHeight ← n.height
+  n.waitFilterIndex
+  let credited ← waitUntil 90_000 (do
+    a.syncNow
+    return ((← multisigAccount? a id).map (·.balance)) == some 50_000_000)
+  let some funded ← multisigAccount? a id | throw (IO.userError "account gone")
+  check "multisig: the sync credits the account's coin" (credited && funded.coins.length == 1)
+    s!"{funded.balance}, {funded.coins.map (·.line)}"
+  check "multisig: the coin row" (funded.coins.any fun c => c.amount == 50_000_000 &&
+    (c.line.splitOn s!"receive 0 · block {fundHeight}").length > 1)
+  check "multisig: the receive frontier moved past the paid address" (funded.nextReceiveIndex == 1)
+  let (sw, _) ← a.snapshot
+  check "multisig: the account's coin is not the wallet's" (sw.history.all (·.txid != fundTxid))
+  -- 2. Create, review.
+  let dest ← n.wallet #["getnewaddress"]
+  let created ← a.createMultisigSpend id dest 20_000_000 2.0 false
+  let some screen := created.screen | throw (IO.userError s!"review: {created.reviewError}")
+  check "multisig: the review pays the node and returns change to the account"
+    (screen.outputs.length == 2 && screen.outputs.any (fun o => !o.owned && o.address == dest && o.amount == 20_000_000) &&
+     screen.outputs.any (·.owned) && screen.inputTotal == 50_000_000 && screen.fee > 0)
+  check "multisig: no signature yet, this phone's is wanted" (screen.signatures == [(false, 0, 2)] &&
+    screen.progress.phoneUnsigned && !screen.progress.complete)
+  check "multisig: the shared text is BIP174 v0" (created.output.any (·.startsWith "cHNidP8B"))
+  -- 3. Sign with the phone, then with the other key in Lean, combine.
+  let mine ← a.signMultisigSpend id created.psbt
+  check "multisig: the phone's signature verifies" ((mine.screen.map (·.signatures)) == some [(false, 1, 2)])
+  let finalizeEarly ← attempt (a.broadcastMultisigSpend id mine.psbt)
+  check "multisig: one signature cannot be finalized" (finalizeEarly matches .error _)
+  let record ← Real.record msA id
+  let unsigned ← match PSBT.ofBase64 created.psbt with
+    | .ok p => pure p
+    | .error _ => throw (IO.userError "psbt")
+  let tip ← n.height
+  let theirs ← match account.sign unsigned otherMaster record.utxos (Real.ownedCoordinates record) tip.toUInt32
+      (← IO.getRandomBytes 32) with
+    | .ok p => pure p
+    | .error e => throw (IO.userError s!"other signer: {e.name}")
+  let some theirText := theirs.base64V0.toOption | throw (IO.userError "v0")
+  let combined ← a.addMultisigPSBT id (some mine.psbt) theirText
+  check "multisig: combined, enough signatures verify" ((combined.screen.map (·.progress.complete)) == some true &&
+    (combined.screen.map (·.signatures)) == some [(false, 2, 2)])
+  -- 4. Finalize and broadcast.
+  let txid ← a.broadcastMultisigSpend id combined.psbt
+  let inMempool ← waitUntil 20_000 (do return (← n.mempool).contains txid)
+  check "multisig: the node's mempool holds the spend" inMempool txid
+  let some pending ← multisigAccount? a id | throw (IO.userError "account gone")
+  let change := 50_000_000 - 20_000_000 - (screen.fee : Int)
+  check "multisig: the change waits as a pending coin" (pending.balance == change &&
+    pending.coins.any fun c => (c.line.splitOn "change 0 · pending").length > 1) s!"{pending.balance} vs {change}"
+  let again2 ← attempt (a.broadcastMultisigSpend id combined.psbt)
+  check "multisig: a spent coin cannot be spent again" (again2 matches .error _)
+  -- 5. Confirm.
+  n.mine 1 mineAddr
+  let spendHeight ← n.height
+  n.waitFilterIndex
+  let confirmed ← waitUntil 90_000 (do
+    a.syncNow
+    let r ← Real.record msA id
+    return r.allUtxos.any fun u => u.spent.any (·.height == some spendHeight.toUInt32))
+  let final ← Real.record msA id
+  check "multisig: the spent coin is tombstoned at the confirming block" confirmed
+  check "multisig: the change confirmed in the same block" (final.utxos.size == 1 &&
+    final.utxos.all (·.height == spendHeight.toUInt32) && final.balance.toInt == change)
+  let blockHash ← n.cli #["getblockhash", toString spendHeight]
+  let blk ← n.json #["getblock", blockHash]
+  check "multisig: the node's block holds the spend" ((blk.getObjValAs? (List String) "tx").toOption.any (·.contains txid))
+  return { id, balance := change, txid, firstAddress := address }
+
 def flow (dir : String) (n : Node) : IO Unit := do
   say s!"node: bitcoind regtest pid {n.pid}, p2p {n.p2p}"
   discard <| n.cli #["createwallet", "w"]
@@ -181,7 +294,7 @@ def flow (dir : String) (n : Node) : IO Unit := do
   n.waitFilterIndex
   let settings := regtestSettings n
   let keysA ← IO.mkRef ({} : Keys.InMemorySecrets)
-  let (a, envA) ← Backend.realWithEnv (deps keysA)
+  let (a, envA, msA) ← Backend.realWithMultisig (deps keysA)
   let dirA := s!"{dir}/A/BTCSwift/regtest"
   IO.FS.createDirAll dirA
   -- 1. Boot with no wallet, networking, create.
@@ -321,10 +434,13 @@ def flow (dir : String) (n : Node) : IO Unit := do
   let r1 ← a.addPerson "Bob" (some cardBob) (some .supplied) none none
   check "addPerson Bob from his card: paid at fresh addresses"
     ((r1.people.find? (·.name == "Bob")).any (·.payTo == some true))
+  -- 7c. A 2-of-2 multisig account with another signer's key, funded, spent and confirmed.
+  let ms ← multisigFlow n a msA mineAddr
   -- 8. Export, and import into a fresh directory.
   let bundle ← a.exportBundle false
   check "exportBundle (watch-only)" ((bundle.splitOn "\"regtest\"").length > 1 && (bundle.splitOn "mnemonic").length == 1)
-  check "exportBundle carries no accounts" ((bundle.splitOn "\"vaults\"").length == 1)
+  check "exportBundle carries the multisig account" (match ImportBundle.decode bundle with
+    | .ok b => (b.vaults.map (·.map (·.id))) == some #[ms.id] | .error _ => false)
   -- A bundle from the shared-account Winnow (accounts under "vaults") is refused, not restored without them.
   -- a well-formed account record as the shared-account Winnow wrote it (a MuSig2 account: upstream refuses
   -- it with unsupportedWalletData; a malformed record would be a decoding error there)
@@ -352,6 +468,9 @@ def flow (dir : String) (n : Node) : IO Unit := do
     s!"{sb.balance} vs {s7.balance}"
   check "import report: scanned and confirmed every claim" (report.startsWith "Scanned from block" &&
     (report.splitOn "Claimed but spent since: 0").length > 1)
+  let restored := (← bImp.multisigOverview).accounts.find? (·.id == ms.id)
+  check "importBundle restores the multisig account with its balance" ((restored.map (·.balance)) == some ms.balance)
+    s!"{restored.map (·.balance)} vs {ms.balance}"
   bImp.stopNetworking
   -- 9. Stop networking: nothing keeps running.
   a.stopNetworking
@@ -424,6 +543,14 @@ def flow (dir : String) (n : Node) : IO Unit := do
     ((← journaled "import.started").all (·.1 == "B") && (← journaled "import.verified").all (·.1 == "B"))
   check "journal: no import.verificationWaiting (the import verified)" (← journaled "import.verificationWaiting").isEmpty
   checkJournal "wallet.destroyed" ["walletID"] (field · "walletID" == walletID)
+  checkJournal "multisig.accountAdded" ["id", "descriptor", "height", "firstAddress"]
+    (fun f => field f "id" == ms.id && field f "firstAddress" == ms.firstAddress && (field f "height").toNat?.isSome)
+  for stage in ["multisig-created", "multisig-signed", "multisig-combined"] do
+    checkJournal "psbt.generated" ["stage", "base64", "inputCount", "outputCount"]
+      (fun f => field f "stage" == stage && field f "inputCount" == "1" && field f "outputCount" == "2") stage
+  checkJournal "multisig.spendBroadcast" ["id", "txid"] (fun f => field f "id" == ms.id && field f "txid" == ms.txid)
+  check "journal: the multisig spend's transaction.broadcast raw decodes to its txid"
+    ((← journaled "transaction.broadcast").any fun (_, f) => field f "txid" == ms.txid && rawIsTxid (field f "raw") ms.txid)
   checkJournal "peers.status" ["connected", "target", "dialing", "exhausted", "peers", "rejected"]
     (fun f => field f "connected" == "1" && field f "dialing" ∈ ["true", "false"] && (field f "peers").startsWith "127.0.0.1:")
   checkJournal "wallet.snapshot" ["walletID", "balance", "utxoCount", "historyCount", "nextScanHeight", "tipHeight",

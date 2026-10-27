@@ -202,6 +202,7 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit := do
         let (s, p) ← b.snapshot
         return .snapshot g s p
       background fx g "refresh" do return .records g (← b.records)
+      background fx g "multisigOverview" do return .multisig g (← b.multisigOverview)
   | .syncNow g => background fx g "sync" do
       b.syncNow
       let (s, p) ← b.snapshot
@@ -233,6 +234,7 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit := do
       let token ← watcherToken.modifyGet fun t => (t + 1, t + 1)
       discard <| IO.asTask do
         let mut last := ""
+        let mut lastMultisig : Option MultisigOverview := none
         while (← watcherToken.get) == token do
           try
             let (st, p) ← b.snapshot
@@ -241,6 +243,11 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit := do
               last := key
               trace s!"watcher {g} posts balance {st.balance} peers {st.peerCount} tip {st.tipHeight} scan {st.nextScanHeight} error {st.lastSyncError}"
               fx.post (.snapshot g st p)
+            -- `refresh()` also mirrors `multisigAccounts`: what the sync credited reaches the screens
+            let o ← b.multisigOverview
+            if lastMultisig != some o then
+              lastMultisig := some o
+              fx.post (.multisig g o)
           catch e => trace s!"watcher {g}: {e}"
           IO.sleep 1000
   | .stopNetworking => do
@@ -307,6 +314,34 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit := do
   | .labelSender g txid pid => background fx g "person" (records g .senderLabeled (b.labelSender txid pid))
   | .removeSenderLabel g txid => background fx g "payment" (records g .none (b.removeSenderLabel txid))
   | .lookupSender g txid base => background fx g "person" do return .senderLookup g txid base (← b.lookupSender txid base)
+  | .multisigOverview g => background fx g "multisigOverview" do return .multisig g (← b.multisigOverview)
+  | .checkMultisigDescriptor g text => discard <| IO.asTask do
+      try fx.post (.multisigChecked g text (.ok (← b.checkMultisigDescriptor text)))
+      catch e => fx.post (.multisigChecked g text (.error (toString e)))
+  | .addMultisigAccount g name d => background fx g "multisigAdd" do
+      return .multisigAdded g (← b.addMultisigAccount name d)
+  | .removeMultisigAccount g id => background fx g "multisigAccount" do
+      b.removeMultisigAccount id
+      return .multisigRemoved g id
+  | .newMultisigAddress g id => background fx g "multisigAccount" do
+      b.newMultisigReceiveAddress id
+      return .multisig g (← b.multisigOverview)
+  | .createMultisigAccount g adv name k keys rec => background fx g "multisigBuild" do
+      let (id, d) ← b.createMultisigAccount adv name k keys rec
+      return .multisigCreated g id d
+  | .multisigFeeRate g => background fx g "multisigRate" do
+      return .multisigFeeRate g (← b.resolveFeeRate 1 none)
+  | .createMultisigSpend g e id address amount rate recovery => background fx g s!"multisigPSBT.{e}" do
+      return .multisigPSBT g e id (← b.createMultisigSpend id address amount rate recovery)
+  | .reviewMultisigPSBT g e id psbt => background fx g s!"multisigPSBT.{e}" do
+      return .multisigPSBT g e id (← b.reviewMultisigPSBT id psbt)
+  | .addMultisigPSBT g e id working pasted => background fx g s!"multisigPSBT.{e}" do
+      return .multisigPSBT g e id (← b.addMultisigPSBT id working pasted) true
+  | .signMultisigSpend g e id psbt =>
+      authenticated fx g s!"multisigPSBT.{e}" "Sign this multisig payment" do
+        return .multisigPSBT g e id (← b.signMultisigSpend id psbt)
+  | .broadcastMultisigSpend g e id psbt => background fx g s!"multisigPSBT.{e}" do
+      return .multisigBroadcast g e id (← b.broadcastMultisigSpend id psbt)
   | .journal name fields => journal name fields
   | .paste target => discard <| IO.asTask do
       -- `pasteboardText()`: the runner's control file under test mode, the pasteboard otherwise

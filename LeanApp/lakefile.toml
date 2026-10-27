@@ -44,3 +44,8 @@ root = "OracleE2E"
 [[lean_exe]]
 name = "ledger-transport-test"
 root = "LedgerTransportTest"
+
+# Upstream's MultisigStoreTests and the non-Ledger MultisigAccountFlowTests (WinnowApp/Real/Multisig*.lean).
+[[lean_exe]]
+name = "multisig-app-test"
+root = "MultisigAppTest"
