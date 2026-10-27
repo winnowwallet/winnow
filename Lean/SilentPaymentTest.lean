@@ -1,6 +1,7 @@
 import Lean.Data.Json
 import Winnow.Keys
 import Winnow.Keys.BIP86
+import Winnow.Wallet.People
 
 /-! `silent-payment-test`: upstream's `SilentPaymentTests`: every sending case of the official BIP352
 vectors (`Vectors/bip352-send-receive-vectors.json`: eligibility, the key sum, the shared secrets and the
@@ -96,6 +97,8 @@ def failsWith {α} (r : Except SilentPaymentAddressError α) (e : SilentPaymentA
   | .error x => x == e
   | .ok _ => false
 
+def errOf {α} (r : Except String α) : Option String := match r with | .error e => some e | .ok _ => none
+
 def sameSet (a b : List String) : Bool := a.length == b.length && a.all b.contains && b.all a.contains
 
 def main : IO UInt32 := do
@@ -187,6 +190,26 @@ def main : IO UInt32 := do
   let p2pkh := ByteArray.mk #[0x76, 0xA9, 0x14] ++ hash160 pub ++ ByteArray.mk #[0x88, 0xAC]
   let scriptSig := ByteArray.mk #[0x47] ++ ByteArray.mk (Array.replicate 71 0x30) ++ ByteArray.mk #[0x21] ++ pub
   check "P2PKH key from the scriptSig" (eligiblePublicKey p2pkh scriptSig [] == some pub)
+  -- PeopleTests.silentPaymentCodePaste: a code is a reusable pay-to of its own kind
+  let some master := (HDKey.ofSeed (ByteArray.mk (Array.replicate 32 0x5A))).toOption | throw (IO.userError "master")
+  let scan := (master.derived "m/352'/1'/0'/1'/0").toOption.get!.neutered.publicKey
+  let spend := (master.derived "m/352'/1'/0'/0'/0").toOption.get!.neutered.publicKey
+  let signet := ((SilentPaymentAddress.make scan spend "tsp").toOption.bind (·.encoded.toOption)).getD ""
+  let mainnetCode := ((SilentPaymentAddress.make scan spend "sp").toOption.bind (·.encoded.toOption)).getD ""
+  match PersonPaste.parse s!" {signet.toUpper}\n" .signet with
+  | .ok imported =>
+    check "person: a pasted code" (imported == { name := none, payTo := some (.silentPayment signet), source := .address })
+    let payTo := imported.payTo.get!
+    check "person: a code is a silent payment, not fresh addresses" (payTo.isSilentPayment && !payTo.derivesFreshAddresses)
+    check "person: its address at any index is the code" ((payTo.addressAt 7 .signet).toOption == some signet)
+    check "person: no scripts to watch" ((payTo.scripts 20 .signet).toOption == some #[])
+    check "person: identified by its keys" ((payTo.identity .signet).toOption == some (scan ++ spend))
+    check "person: no fixed script" (errOf (payTo.scriptPubKeyAt 0 .signet) == some "noFixedScript")
+  | .error e => check s!"person: a pasted code ({e})" false
+  check "person: a mainnet code on signet says so" (errOf (PersonPaste.parse mainnetCode .signet) == some "wrongHRP")
+  check "person: a code-shaped paste that is not one" (errOf (PersonPaste.parse "sp1qqexample" .signet) == some "unrecognised")
+  let card : PersonCard := { network := "signet", name := "Robin", payTo := some signet }
+  check "person: a card paying a code" ((PersonPaste.parse card.serialized .signet).toOption.bind (·.payTo) == some (.silentPayment signet))
   let p ← passes.get
   let f ← failures.get
   IO.println s!"silent-payment-test: {p} passed, {f} failed"

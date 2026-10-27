@@ -7,7 +7,7 @@ Pay-to keys (`PersonPayTo`), the person card (`PersonCard`) in Winnow's one card
 unescaped slashes, a `winnow` kind field, a 64 KiB ceiling), `DisplayName` and the Add-person paste
 parser. Upstream (1cf93fb) removed signer keys, cosigner fingerprints, the shared-savings and approval
 cards and the savings payment labels with vaults; a card or record written with a `signerKey` still
-decodes, the field ignored. Silent payment codes (upstream's `.silentPayment`) are not ported yet. -/
+decodes, the field ignored. A person may be paid by a silent payment code (`.silentPayment`). -/
 
 namespace Winnow
 open SwiftJSON Keys
@@ -18,20 +18,27 @@ open Tx (BitcoinNetwork)
 inductive PersonPayTo where
   | descriptor (canonical : String)
   | address (address : String)
+  /-- A BIP352 code, canonical lower case: reusable like a descriptor, but the address is derived from the
+  sender's inputs, so there is no script to watch for or match against. -/
+  | silentPayment (code : String)
   deriving Inhabited, BEq
 
 inductive PersonPayToError where
   | malformed | privateKey | singleAddressKey | notSingleKey
   | wrongNetwork (expected : BitcoinNetwork)
   | unsupportedDerivation
+  /-- a silent payment code has no script of its own -/
+  | noFixedScript
   deriving Inhabited, BEq
 
 namespace PersonPayToError
 def name : PersonPayToError → String
   | .malformed => "malformed" | .privateKey => "privateKey" | .singleAddressKey => "singleAddressKey"
   | .notSingleKey => "notSingleKey" | .wrongNetwork _ => "wrongNetwork" | .unsupportedDerivation => "unsupportedDerivation"
+  | .noFixedScript => "noFixedScript"
 
 def description : PersonPayToError → String
+  | .noFixedScript => "A silent payment code has no fixed address; its payments are derived when they are sent."
   | .malformed => "That isn't a valid pay-to key. Paste the person's Winnow card or their public account key."
   | .privateKey => "That is a private key. For safety, paste only the public account key—never a seed phrase or private key."
   | .singleAddressKey => "This key gives one address only — paste the address itself instead."
@@ -76,8 +83,15 @@ def ofAddress (text : String) (network : BitcoinNetwork) : Except String PersonP
   discard <| (AddressDecoder.scriptPubKey trimmed network).mapError (·.name)
   return .address trimmed
 
+/-- Validates a silent payment code on `network` and returns it in canonical (lower-case) form. -/
+def ofSilentPayment (text : String) (network : BitcoinNetwork) : Except SilentPaymentAddressError PersonPayTo := do
+  let code ← SilentPaymentAddress.decode (Unicode.trimWhitespace text) (some (SilentPayment.hrp (network == .mainnet)))
+  return .silentPayment (← code.encoded.mapError .encoding)
+
+/-- Whether the payment index moves with each payment (a code is reusable by derivation, not counting). -/
 def derivesFreshAddresses : PersonPayTo → Bool | .descriptor _ => true | _ => false
-def text : PersonPayTo → String | .descriptor v | .address v => v
+def isSilentPayment : PersonPayTo → Bool | .silentPayment _ => true | _ => false
+def text : PersonPayTo → String | .descriptor v | .address v | .silentPayment v => v
 
 def derivedAt (text : String) (index : UInt32) (network : BitcoinNetwork) : PM Descriptor.DerivedOutput := do
   let d ← (Descriptor.parse text).mapError (·.name)
@@ -87,24 +101,35 @@ def derivedAt (text : String) (index : UInt32) (network : BitcoinNetwork) : PM D
 
 def addressAt (p : PersonPayTo) (index : UInt32) (network : BitcoinNetwork) : PM String :=
   match p with
-  | .address a => pure a
+  | .address a | .silentPayment a => pure a
   | .descriptor t => return (← derivedAt t index network).address
 
 def scriptPubKeyAt (p : PersonPayTo) (index : UInt32) (network : BitcoinNetwork) : PM ByteArray :=
   match p with
   | .address a => (AddressDecoder.scriptPubKey a network).mapError (·.name)
   | .descriptor t => return (← derivedAt t index network).scriptPubKey
+  | .silentPayment _ => throw PersonPayToError.noFixedScript.name
 
 def scripts (p : PersonPayTo) (count : UInt32) (network : BitcoinNetwork) : PM (Array ByteArray) :=
   match p with
   | .address _ => return #[← p.scriptPubKeyAt 0 network]
   | .descriptor _ => (Array.range count.toNat).mapM fun i => p.scriptPubKeyAt i.toUInt32 network
+  -- a code's outputs are labelled from the send that made them
+  | .silentPayment _ => return #[]
 
-def identity (p : PersonPayTo) (network : BitcoinNetwork) : PM ByteArray := p.scriptPubKeyAt 0 network
+/-- What makes two pay-to keys one person's: the script at index 0, or a code's two keys (66 bytes, longer
+than any script Winnow pays, so the kinds cannot collide). -/
+def identity (p : PersonPayTo) (network : BitcoinNetwork) : PM ByteArray :=
+  match p with
+  | .silentPayment code => do
+    let a ← (SilentPaymentAddress.decode code).mapError (·.name)
+    return a.scanKey ++ a.spendKey
+  | _ => p.scriptPubKeyAt 0 network
 
 def toJV : PersonPayTo → JV
   | .descriptor v => .obj #[("kind", .str "descriptor"), ("value", .str v)]
   | .address v => .obj #[("kind", .str "address"), ("value", .str v)]
+  | .silentPayment v => .obj #[("kind", .str "silentPayment"), ("value", .str v)]
 
 def ofJV (v : JV) : D PersonPayTo := do
   let kvs ← asObject v
@@ -113,6 +138,7 @@ def ofJV (v : JV) : D PersonPayTo := do
   match kind with
   | "descriptor" => pure (.descriptor value)
   | "address" => pure (.address value)
+  | "silentPayment" => pure (.silentPayment value)
   | _ => dataCorrupted
 
 end PersonPayTo
@@ -260,6 +286,7 @@ def parseCard (text : String) (network : BitcoinNetwork) : PM PersonImport := do
   if let some raw := card.payTo.map Unicode.trimWhitespace then
     if !raw.isEmpty then
       payTo ← if raw.startsWith "tr(" then (PersonPayTo.ofDescriptor raw network).mapError (·.name) |>.map some
+        else if SilentPaymentAddress.looksLikeCode raw then (PersonPayTo.ofSilentPayment raw network).mapError (·.name) |>.map some
         else (PersonPayTo.ofAddress raw network).map some
   return { name := DisplayName.normalized card.name, payTo, source := .card }
 
@@ -283,6 +310,12 @@ def parse (text : String) (network : BitcoinNetwork) : PM PersonImport := do
   if trimmed.startsWith "tr(" || trimmed.startsWith "rawtr(" then
     let payTo ← (PersonPayTo.ofDescriptor trimmed network).mapError (·.name)
     return { name := none, payTo := some payTo, source := .descriptor }
+  -- a code: a wrong network is worth saying; anything else that merely looks like one is unrecognised
+  if SilentPaymentAddress.looksLikeCode trimmed then
+    match PersonPayTo.ofSilentPayment trimmed network with
+    | .ok payTo => return { name := none, payTo := some payTo, source := .address }
+    | .error e@(.wrongHRP ..) => throw e.name
+    | .error _ => throw "unrecognised"
   if let .ok payTo := PersonPayTo.ofAddress trimmed network then
     return { name := none, payTo := some payTo, source := .address }
   if let some e := addressError trimmed network then throw e

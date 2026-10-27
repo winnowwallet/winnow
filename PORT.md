@@ -101,7 +101,10 @@ every official sending vector), `Wallet.buildSend` derives the outputs after coi
 gate binds them (multisig-test's SilentPaymentSendTests), the Send screen takes a code, notes that the
 address is derived and shows it on the receipt; backend-test and the UI test `testSilentPaymentSend` hold
 the node's transaction to a receiver written from the BIP's receiving side, and Core's watch-only wallet
-finds the coin. Not yet: saving a person who is paid by a code (People's `.silentPayment` pay-to).
+finds the coin. A person can be paid by a code (People's `.silentPayment` pay-to: pasted, on a card,
+identified by its two keys; upstream's PeopleTests case in `silent-payment-test`). As upstream, the review
+of a payment to such a person shows the reused-address warning (the code has no payment index), and
+Activity does not name the person on a code's output (the Lean history rows carry no code).
 
 The layer table below was written for the 0.7.3 port. Phase A removed its MuSig2 (layer 4), musig()
 descriptors and MuSig2 rounds (layer 7), vaults and vault records (layer 8), fallback peers and the signed,

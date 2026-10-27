@@ -170,7 +170,7 @@ sentence. These are the `errorDescription`s of the errors the records operations
 
 def describe (name : String) (network : Tx.BitcoinNetwork) : String :=
   let payTo : List PersonPayToError := [.malformed, .privateKey, .singleAddressKey, .notSingleKey,
-    .unsupportedDerivation]
+    .unsupportedDerivation, .noFixedScript]
   if let some e := payTo.find? (·.name == name) then e.description
   else if name == "wrongNetwork" then (PersonPayToError.wrongNetwork network).description
   else if name == "notACard" then PersonCardError.notACard.description

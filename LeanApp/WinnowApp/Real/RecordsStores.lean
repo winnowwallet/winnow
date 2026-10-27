@@ -154,6 +154,7 @@ def validatePayTo (r : PersonRecord) (network : BitcoinNetwork) (seen : Std.Hash
   let canonical ← match payTo with
     | .descriptor t => RM.lift (fun e => .named e.name e.description) (PersonPayTo.ofDescriptor t network)
     | .address t => liftNamed network (PersonPayTo.ofAddress t network)
+    | .silentPayment t => liftNamed network ((PersonPayTo.ofSilentPayment t network).mapError (·.name))
   unless canonical == payTo do invalid "pay-to key is not in canonical form"
   let id ← payIdentity payTo network
   if seen.contains id then invalid "two people share a pay-to key"
