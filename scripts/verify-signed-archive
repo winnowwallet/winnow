@@ -3,8 +3,9 @@
 
     scripts/verify-signed-archive <WinnowLean.app> [--distribution]
 
-The same identity as the Swift app it replaces (com.btcswift.app, team 2858MX5336, so its Keychain items
-stay readable), the version release.yml set, arm64 only, no Swift. Unlike upstream's check there is no
+The same identity as the Swift app it replaces (com.btcswift.app, team 2858MX5336, meant to keep an
+installed wallet's Keychain items and files; an update over a Swift build has not been tried), the
+version release.yml set, arm64 only, no Swift. Unlike upstream's check there is no
 iCloud container: the Lean app has no iCloud backup yet."""
 import argparse
 import os

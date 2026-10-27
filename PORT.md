@@ -129,7 +129,10 @@ Upstream's Swift tests, UI tests and workflows went with the Swift code; their L
   Debug builds with test mode's environment and requires Debug to start the run and Release to ignore it.
   `check-no-swift` fails on any Swift source, compile step or library.
 * **TestFlight**: `release.yml` as upstream's (tag → CI → archive → verify → upload → internal group), as
-  `com.btcswift.app`. Not run yet: it needs a tag push. `asc-jwt` replaces `asc-jwt.swift`;
+  `com.btcswift.app`. Not run yet: it needs a tag push. Whether an update from a Swift build keeps its
+  wallet (the same Keychain service and storage names, read in place) has not been tried; it must be
+  before a tag reaches testers. The tag must also be above the last version uploaded for the app, or App
+  Store Connect refuses the build. `asc-jwt` replaces `asc-jwt.swift`;
   `verify-signed-archive` no longer requires the iCloud container (iCloud backup is not ported).
 
 ## Layers and status

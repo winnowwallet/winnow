@@ -47,7 +47,8 @@ targets:
     settings:
       base:
         # the Swift app's identity, which this app replaces on TestFlight: the same bundle identifier and team,
-        # so an installed wallet's Keychain items stay readable (release.yml sets the versions from the tag)
+        # meant to let an update keep an installed wallet's Keychain items and files (not yet tried over an
+        # installed Swift build); release.yml sets the versions from the tag
         PRODUCT_BUNDLE_IDENTIFIER: com.btcswift.app
         DEVELOPMENT_TEAM: 2858MX5336
         CODE_SIGN_STYLE: Automatic
