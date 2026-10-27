@@ -51,12 +51,14 @@ def withKey (j : Json) (f : HDKey → Json) : Except String Json := do
 def secretJ (s : WalletSecret) : Json := match s with
   | .mnemonic w => Json.mkObj [("kind", "mnemonic"), ("value", Json.str w)]
   | .masterKey x => Json.mkObj [("kind", "xprv"), ("value", Json.str x)]
+  | .accountKey x fp => Json.mkObj [("kind", "account"), ("value", Json.str x), ("fingerprint", Json.num fp.toNat)]
 
 def walletSecret (j : Json) : Except String WalletSecret := do
   let v ← str j "value"
   match ← str j "kind" with
   | "mnemonic" => pure (.mnemonic v)
   | "xprv" => pure (.masterKey v)
+  | "account" => pure (.accountKey v (← nat j "fingerprint").toUInt32)
   | k => throw s!"kind {k}"
 
 partial def tree (j : Json) : Except String Taproot.Tree := do

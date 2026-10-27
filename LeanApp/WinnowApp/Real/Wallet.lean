@@ -42,6 +42,7 @@ def keyStoreErrorDescribing : Keys.KeyStoreError → String
   | .notFound w => s!"notFound(walletID: {swiftQuoted w})"
   | .alreadyExists w => s!"alreadyExists(walletID: {swiftQuoted w})"
   | .malformedSecret => "malformedSecret"
+  | .unsupportedSecretVersion label => s!"unsupportedSecretVersion({swiftQuoted label})"
   | .keychain status => s!"keychain({status})"
 
 /-- `boot()` / `openPersistedWallet(at:)` for `dir`. -/
@@ -165,7 +166,7 @@ def adopt (env : Env) (w : Wallet) (startSync : Bool) : IO Unit := do
 def readMnemonic (env : Env) (walletID : String) : IO (Option String) := do
   match ← (env.deps.keyStore.load walletID).run with
   | .ok (.mnemonic words) => return some words
-  | .ok (.masterKey _) => return none
+  | .ok (.masterKey _) | .ok (.accountKey ..) => return none
   | .error e => failText (keyStoreErrorText e)
 
 /-- `createWallet()`: a fresh wallet dated at the chain tip, adopted; its recovery words. -/

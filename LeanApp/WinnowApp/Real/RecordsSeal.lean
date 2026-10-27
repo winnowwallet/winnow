@@ -216,7 +216,7 @@ def StoreKeyVault.ofKeyStore (ks : Keys.KeyStore IO) : StoreKeyVault where
       match ofHex? h with
       | some k => if k.size == keyBytes then pure (some k) else throw (.keyVault .malformedKey)
       | none => throw (.keyVault .malformedKey)
-    | .ok (.mnemonic _) => throw (.keyVault .malformedKey)
+    | .ok (.mnemonic _) | .ok (.accountKey ..) => throw (.keyVault .malformedKey)
     | .error (.notFound _) => pure none
     | .error (.keychain s) => throw (.keyVault (.keychain s))
     | .error _ => throw (.keyVault .malformedKey)
