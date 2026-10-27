@@ -6,4 +6,5 @@ import Winnow.Keys.BIP39
 import Winnow.Keys.BIP86
 import Winnow.Keys.KeyStore
 import Winnow.Keys.Taproot
+import Winnow.Keys.SilentPayments
 import Winnow.Keys.Unicode

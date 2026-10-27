@@ -53,3 +53,8 @@ root = "MultisigDifferential"
 [[lean_exe]]
 name = "ledger-test"
 root = "LedgerTest"
+
+# BIP352 silent payments, send side: every official sending vector and upstream's SilentPaymentTests.
+[[lean_exe]]
+name = "silent-payment-test"
+root = "SilentPaymentTest"
