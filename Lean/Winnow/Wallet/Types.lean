@@ -3,7 +3,7 @@ import Winnow.Tx.Transaction
 import Winnow.Tx.TransactionBuilder
 import Winnow.Tx.SighashBIP341
 import Winnow.Tx.PSBT
-import Winnow.Wallet.SilentPaymentAddress
+import Winnow.Keys.SilentPayments
 
 /-! # Wallet data types and the wallet file
 
@@ -334,6 +334,20 @@ def Outputs.validateAgainst (o : Outputs) (tx : Transaction) : Except WalletErro
     unless ok do throw (.invalidBundle "history outputs do not match the transaction")
   unless o.change.all (·.toNat < tx.outputs.size) do
     throw (.invalidBundle "history change index is outside the transaction")
+
+/-- Names the code each silent payment was derived for on the first unclaimed recipient output with its
+amount and script (`annotateSilentPayments`). -/
+def Outputs.annotateSilentPayments (o : Outputs) (resolved : Array (Int64 × ByteArray)) (codes : Array String) : Outputs := Id.run do
+  let mut external := o.external
+  let mut claimed : Array Nat := #[]
+  for ((amount, script), code) in resolved.zip codes do
+    match (List.range external.size).find? fun i =>
+        !claimed.contains i && external[i]!.amount == amount && external[i]!.scriptPubKey == script with
+    | some i =>
+      external := external.modify i fun e => { e with silentPaymentAddress := some code }
+      claimed := claimed.push i
+    | none => pure ()
+  return { o with external }
 
 /-- Copies silent payment codes from a replaced transaction's outputs onto the outputs of its replacement
 that carry the same script. -/

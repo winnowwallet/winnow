@@ -10,10 +10,11 @@ not receive at one. Here: the address codec, which inputs count, the sum of thei
 over the smallest outpoint, the shared secret with the scan key, and the output keys tweaked from the
 spend key. The curve work is `Secp256k1` (the proven `Secp`); errors and their order are Swift's.
 
-Differences: Swift's `SegwitAddress.convertBits` throws its own `Bech32Error` out of the address
-initializer; here it is the case `SilentPaymentAddressError.encoding`. -/
+The code (`SilentPaymentAddress`) lives in `Winnow`: wallet records name the code a history output was
+paid to and are validated with `parse`. Differences: Swift's `SegwitAddress.convertBits` throws its own
+`Bech32Error` out of the address initializer; here it is the case `SilentPaymentAddressError.encoding`. -/
 
-namespace Winnow.Keys
+namespace Winnow
 
 inductive SilentPaymentAddressError where
   /-- not a bech32m string (silent payment codes always use bech32m) -/
@@ -26,7 +27,12 @@ inductive SilentPaymentAddressError where
   | invalidPublicKey
   /-- `convertBits` refused the payload (Swift lets its `Bech32Error` escape) -/
   | encoding (e : Bech32Error)
-  deriving Repr, BEq
+  deriving Repr, BEq, Inhabited
+
+def SilentPaymentAddressError.name : SilentPaymentAddressError → String
+  | .invalidEncoding => "invalidEncoding" | .wrongHRP .. => "wrongHRP" | .unsupportedVersion _ => "unsupportedVersion"
+  | .invalidDataLength _ => "invalidDataLength" | .invalidPublicKey => "invalidPublicKey"
+  | .encoding e => e.name
 
 /-- A BIP352 code: the receiver's compressed scan key and spend key (label-tweaked when the receiver handed
 out a labeled code; senders treat it as opaque), and the HRP. -/
@@ -48,7 +54,7 @@ def looksLikeCode (text : String) : Bool :=
   let lowered := text.trimAscii.toString.toLower
   lowered.startsWith "sp1" || lowered.startsWith "tsp1"
 
-def isValidPublicKey (key : ByteArray) : Bool := key.size == 33 && (parsePublicKey key).toBool
+def isValidPublicKey (key : ByteArray) : Bool := key.size == 33 && (Keys.parsePublicKey key).toBool
 
 def make (scanKey spendKey : ByteArray) (hrp : String) : Except SilentPaymentAddressError SilentPaymentAddress :=
   if isValidPublicKey scanKey && isValidPublicKey spendKey then .ok { scanKey, spendKey, hrp }
@@ -78,7 +84,13 @@ def decode (s : String) (expectedHRP : Option String := none) :
   let bytes := ByteArray.mk payload.toArray
   make (bytes.extract 0 33) (bytes.extract 33 66) hrp
 
+/-- `decode`, by the name the wallet's record validation uses. -/
+def parse (s : String) (expectedHRP : Option String := none) : Except SilentPaymentAddressError SilentPaymentAddress :=
+  decode s expectedHRP
+
 end SilentPaymentAddress
+
+namespace Keys
 
 namespace SilentPaymentSending
 
@@ -292,7 +304,7 @@ end SilentPaymentSending
 /-- A payment to a code: its output script is derived at signing time, once coin selection has fixed the
 inputs. -/
 structure SilentPayment where
-  amount : Int
+  amount : Int64
   address : SilentPaymentAddress
 
 namespace SilentPayment
@@ -305,4 +317,5 @@ def sizingScriptPubKey : ByteArray := ByteArray.mk #[0x51, 0x20] ++ ByteArray.mk
 
 end SilentPayment
 
-end Winnow.Keys
+end Keys
+end Winnow

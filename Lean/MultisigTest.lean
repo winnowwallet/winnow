@@ -748,6 +748,85 @@ def tempPath (name : String) : IO System.FilePath := do
   IO.FS.createDirAll dir
   return dir / name
 
+/-! ## SilentPaymentSendTests (BIP352 sends from the wallet) -/
+
+/-- The wallet funded with one matured coin of `amount` at receive 0, and that coin's txid. -/
+def fundedWalletWith (amount : Int64) : TM (Wallet × ByteArray) := do
+  let w ← wmT "create" (Wallet.create .signet (← newKeyStore) none (some (ByteArray.mk (Array.replicate 16 0))) 100 0 pinned)
+  let script ← wmT "spk" (w.scriptPubKey .receive 0)
+  let funding : Transaction := { version := 2, inputs := #[coinbaseInput], outputs := #[{ value := amount, scriptPubKey := script }], locktime := 0 }
+  discard (wmT "fund" (w.apply (fakeMatch 100 #[funding])))
+  wmT "mature" (w.recordScanHeight (100 + Wallet.coinbaseMaturity))
+  return (w, funding.txid)
+
+/-- m/86'/1'/0'/0/0 of the test mnemonic, BIP86-tweaked: derived here, not by the wallet. -/
+def tweakedReceiveKey0 : TM ByteArray := do
+  let words ← needE "mnemonic" (fun _ => "bip39") (BIP39.mnemonic (ByteArray.mk (Array.replicate 16 0)))
+  let key ← needE "derive" (·.name) (do (← HDKey.ofSeed (BIP39.seed words)).derived "m/86'/1'/0'/0/0")
+  needE "tweak" (·.name) (BIP86.tweakedPrivateKey key.privateKey.get!)
+
+/-- A throwaway code (valid keys, secrets thrown away). -/
+def spRecipient (mainnet : Bool := false) : TM SilentPaymentAddress := do
+  let key : TM ByteArray := do
+    let mut s ← IO.getRandomBytes 32
+    while !isValidSecret s do s ← IO.getRandomBytes 32
+    needE "pub" (·.name) (publicKeyOf s)
+  needE "code" (·.name) (SilentPaymentAddress.make (← key) (← key) (SilentPayment.hrp mainnet))
+
+def expectedSPScripts (w : Wallet) (funding : ByteArray) (recipients : List SilentPaymentAddress) : TM (List ByteArray) := do
+  let input : SilentPaymentSending.Input :=
+    { txid := funding, vout := 0, prevoutScriptPubKey := ← wmT "spk" (w.scriptPubKey .receive 0), privateKey := ← tweakedReceiveKey0 }
+  needE "derive" (·.name) (SilentPaymentSending.outputScripts [input] recipients)
+
+def silentPaymentSend : TM Unit := do
+  let (w, funding) ← fundedWalletWith 150_000
+  let address ← spRecipient
+  let prepared ← wmT "send" (w.buildSend #[] 2 testChainTip (silentPayments := #[{ amount := 100_000, address }]))
+  let tx := prepared.built.transaction
+  check "sp send: one signed input" (tx.inputs.size == 1 && tx.inputs[0]!.witness.size == 1)
+  check "sp send: change" prepared.built.changeAmount.isSome
+  let expected ← expectedSPScripts w funding [address]
+  check "sp send: pays the independently derived script" (tx.outputs.any fun o => o.value == 100_000 && o.scriptPubKey == expected[0]!)
+  check "sp send: a P2TR script, not the change" (expected[0]!.size == 34 && expected[0]! != (← wmT "spk" (w.scriptPubKey .change 0)))
+  check "sp send: the review gate gets the same script"
+    (prepared.resolvedSilentPayments.map (fun p => (p.amount, p.scriptPubKey)) == #[((100_000 : Int64), expected[0]!)])
+  wmT "commit" (w.commit prepared)
+  let some outputs := ((← w.history).back?).bind (·.outputs) | throw "no outputs"
+  check "sp send: the history names the code"
+    (outputs.external.size == 1 && outputs.external[0]!.scriptPubKey == expected[0]! &&
+     outputs.external[0]!.silentPaymentAddress == address.encoded.toOption)
+
+def silentPaymentSameCodeTwice : TM Unit := do
+  let (w, funding) ← fundedWalletWith 250_000
+  let address ← spRecipient
+  let tx := (← wmT "send" (w.buildSend #[] 2 testChainTip
+    (silentPayments := #[{ amount := 100_000, address }, { amount := 50_000, address }]))).built.transaction
+  let expected ← expectedSPScripts w funding [address, address]
+  check "sp twice: distinct scripts" (expected[0]! != expected[1]!)
+  check "sp twice: both paid" (tx.outputs.any (fun o => o.value == 100_000 && o.scriptPubKey == expected[0]!) &&
+    tx.outputs.any (fun o => o.value == 50_000 && o.scriptPubKey == expected[1]!))
+
+def silentPaymentMixed : TM Unit := do
+  let (w, _) ← fundedWalletWith 250_000
+  let address ← spRecipient
+  let tx := (← wmT "send" (w.buildSend #[{ amount := 40_000, scriptPubKey := p2trDestination }] 2 testChainTip
+    (silentPayments := #[{ amount := 100_000, address }]))).built.transaction
+  check "sp mixed: the ordinary payment" (tx.outputs.any fun o => o.value == 40_000 && o.scriptPubKey == p2trDestination)
+  check "sp mixed: the silent payment" (tx.outputs.any fun o => o.value == 100_000 && o.scriptPubKey != p2trDestination)
+  check "sp mixed: every input signed" (tx.inputs.all (·.witness.size == 1))
+
+def silentPaymentValidation : TM Unit := do
+  let (w, _) ← fundedWalletWith 150_000
+  let mainnet ← spRecipient (mainnet := true)
+  let code := mainnet.encoded.toOption.getD ""
+  check "sp validation: a mainnet code is refused on signet"
+    (match SilentPayment.ofCode 1_000 code .signet with | .error (.wrongHRP "tsp" "sp") => true | _ => false)
+  let signet ← spRecipient
+  check "sp validation: a signet code is accepted" (SilentPayment.ofCode 1_000 (signet.encoded.toOption.getD "") .signet).toBool
+  check "sp validation: an empty send is refused"
+    (match ← (w.buildSend #[] 2 testChainTip (silentPayments := #[])).run with
+     | .error (.wallet .noPayments) => true | _ => false)
+
 def sendRecordsItsOutputs : TM Unit := do
   let w ← fundedWallet (← newKeyStore)
   let prepared ← wmT "send" (w.buildSend #[{ amount := 100_000, scriptPubKey := p2trDestination }] 2 testChainTip)
@@ -983,6 +1062,10 @@ def main : IO UInt32 := do
   runTest "admissionRefusals" admissionRefusals
   runTest "scriptPathVectors" scriptPathVectors
   runTest "sendRecordsItsOutputs" sendRecordsItsOutputs
+  runTest "silentPaymentSend" silentPaymentSend
+  runTest "silentPaymentSameCodeTwice" silentPaymentSameCodeTwice
+  runTest "silentPaymentMixed" silentPaymentMixed
+  runTest "silentPaymentValidation" silentPaymentValidation
   runTest "sendToOwnAddressIsNotExternal" sendToOwnAddressIsNotExternal
   runTest "feeBumpRecordsItsOutputs" feeBumpRecordsItsOutputs
   runTest "recordedOutputsRoundTrip" recordedOutputsRoundTrip

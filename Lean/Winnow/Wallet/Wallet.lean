@@ -5,6 +5,7 @@ import Winnow.Wallet.PSBTRoles
 import Winnow.Keys.BIP39
 import Winnow.Keys.BIP86
 import Winnow.Keys.KeyStore
+import Winnow.Keys.SilentPayments
 import Winnow.Tx.FundingSources
 import Winnow.Net.FilterSync
 
@@ -114,6 +115,11 @@ structure Wallet where
 /-- A fully signed send whose selection is not yet committed. -/
 structure PreparedSend where
   built : BuiltTransaction
+  /-- The silent payments with their derived P2TR scripts, in the order given; the review gate binds them
+  (only the wallet can derive them: it needs the selected inputs' keys). -/
+  resolvedSilentPayments : Array Payment := #[]
+  /-- Their codes, encoded, for the history. -/
+  silentPaymentAddresses : Array String := #[]
   selected : Array WalletUTXO
   change : Option Payment
   changeIndex : UInt32
@@ -655,25 +661,51 @@ def locktime (tip : UInt32) (draw : IO Float) : WM UInt32 := do
 
 /-! ### Sending -/
 
-/-- Builds, signs and finalizes a send (mutation-free); change goes to the next unused internal address. -/
+/-- `SilentPayment(amount:address:network:)`: the code must carry the network's HRP (`sp` on mainnet,
+`tsp` on the test networks). -/
+def _root_.Winnow.Keys.SilentPayment.ofCode (amount : Int64) (code : String) (network : Tx.BitcoinNetwork) :
+    Except SilentPaymentAddressError SilentPayment := do
+  return { amount, address := ← SilentPaymentAddress.decode code (some (SilentPayment.hrp (network == .mainnet))) }
+
+/-- The P2TR scripts of a send's silent payments, in order (`resolveSilentPayments`): BIP352 commits them to
+the selected inputs, so this runs after coin selection, with the inputs' BIP86 key-path secrets (every coin
+the wallet spends is one, the case where all inputs count). -/
+def resolveSilentPayments (w : Wallet) (silentPayments : Array SilentPayment) (selected : Array WalletUTXO) :
+    WM (Array Payment) := do
+  if silentPayments.isEmpty then return #[]
+  let account ← w.accountPrivateKey
+  let inputs ← selected.toList.mapM fun u => do
+    return ({ txid := u.txid, vout := u.vout, prevoutScriptPubKey := u.scriptPubKey,
+              privateKey := ← w.tweakedPrivateKey u.chain u.index account } : SilentPaymentSending.Input)
+  let scripts ← WM.liftE (·.name) (SilentPaymentSending.outputScripts inputs (silentPayments.toList.map (·.address)))
+  return (silentPayments.zip scripts.toArray).map fun (p, script) => { amount := p.amount, scriptPubKey := script }
+
+/-- Builds, signs and finalizes a send (mutation-free); change goes to the next unused internal address.
+Silent payments are sized with a P2TR placeholder, and their scripts derived once coin selection has fixed
+the inputs. -/
 def buildSend (w : Wallet) (payments : Array Payment) (feeRateSatPerVByte : Float) (chainTip : UInt32)
-    (draw : Option (IO Float) := none) : WM PreparedSend := do
-  if payments.isEmpty then throw (.wallet .noPayments)
+    (draw : Option (IO Float) := none) (silentPayments : Array SilentPayment := #[]) : WM PreparedSend := do
+  if payments.isEmpty && silentPayments.isEmpty then throw (.wallet .noPayments)
   let s ← w.state
   let changeIndex := s.nextChangeIndex
   let changeScript ← w.scriptPubKey .change changeIndex
-  let selection ← WM.liftE (·.name) (CoinSelection.select (spendableUtxosOf s) payments changeScript feeRateSatPerVByte)
+  let sizing := payments ++ silentPayments.map fun p => { amount := p.amount, scriptPubKey := SilentPayment.sizingScriptPubKey }
+  let selection ← WM.liftE (·.name) (CoinSelection.select (spendableUtxosOf s) sizing changeScript feeRateSatPerVByte)
+  let resolved ← w.resolveSilentPayments silentPayments selection.selected
+  let all := payments ++ resolved
   let change : Option Payment := selection.changeAmount.map fun a => { amount := a, scriptPubKey := changeScript }
   let lt ← locktime chainTip (draw.getD w.random.draw)
   let position ← match change with
-    | some _ => some <$> WM.io (w.random.changePosition payments.size)
+    | some _ => some <$> WM.io (w.random.changePosition all.size)
     | none => pure none
-  let tx ← WM.liftE (·.name) (TransactionBuilder.build (selection.selected.map (·.outpoint)) payments change
+  let tx ← WM.liftE (·.name) (TransactionBuilder.build (selection.selected.map (·.outpoint)) all change
     (changePosition := position.map Int.ofNat) (locktime := lt))
   let changeOutputIndex := change.bind fun c => tx.outputs.findIdx? fun o => o.scriptPubKey == c.scriptPubKey && o.value == c.amount
   let (psbt, signed) ← w.sign tx selection.selected (changeOutputIndex.map fun _ => changeIndex) changeOutputIndex
   WM.wallet (checkStandardSize signed)
+  let codes ← silentPayments.mapM fun p => WM.liftE (·.name) p.address.encoded
   return { built := { psbt, transaction := signed, fee := selection.fee, changeAmount := selection.changeAmount },
+           resolvedSilentPayments := resolved, silentPaymentAddresses := codes,
            selected := selection.selected, change, changeIndex,
            changeOutputIndex := changeOutputIndex.map (·.toUInt32), fee := selection.fee }
 
@@ -708,7 +740,8 @@ def commit (w : Wallet) (prepared : PreparedSend) : WM Unit := do
       allUtxos := updated.allUtxos.push { txid := txid, vout := vout, amount := change.amount, scriptPubKey := change.scriptPubKey,
                                           chain := .change, index := prepared.changeIndex, height := 0 }
       nextChangeIndex := updated.nextChangeIndex + 1 }
-  let outputs ← w.classifyOutputs updated signed
+  let outputs := (← w.classifyOutputs updated signed).annotateSilentPayments
+    (prepared.resolvedSilentPayments.map fun p => (p.amount, p.scriptPubKey)) prepared.silentPaymentAddresses
   updated := { updated with
     history := updated.history.push {
       txid := txid, height := 0, received := (prepared.change.map (·.amount)).getD 0,
