@@ -462,6 +462,147 @@ def rangeChecks (dir : String) (pool : PeerPool) (store : HeaderStore) (fs : Fil
   check "range: pruning keeps the anchor below the range" ((RangeScan.prunedRangeHeaders wide 3201 1).contains "0" == false &&
     (RangeScan.prunedRangeHeaders wide 3201 2).contains "1" && !(FilterSync.prunedFilterHeaders wide 3201).contains "2")
 
+/-- Copies `src` to `dst` until either side closes. -/
+partial def pump (src dst : Std.Async.TCP.Socket.Client) : IO Unit := do
+  match ← (src.recv? 65536).block.toBaseIO with
+  | .ok (some chunk) =>
+    if chunk.isEmpty then discard <| dst.shutdown.toIO
+    else match ← (dst.send chunk).block.toBaseIO with
+      | .ok () => pump src dst
+      | .error _ => discard <| src.shutdown.toIO
+  | _ => discard <| dst.shutdown.toIO
+
+/-- A SOCKS5 gateway stand-in: the no-authentication greeting, then CONNECT by name (address type 3), every
+name forwarded to `target`. Records the names it was asked for; with `refuse`, answers CONNECT with reply 5. -/
+def fakeSocks (target : PeerEndpoint) (refuse : Bool := false) : IO (PeerEndpoint × IO.Ref (Array String)) := do
+  let asked ← IO.mkRef (#[] : Array String)
+  let server ← Std.Async.TCP.Socket.Server.mk
+  server.bind (.v4 ⟨Std.Net.IPv4Addr.ofParts 127 0 0 1, 0⟩)
+  server.listen 8
+  let port := (← server.getSockName).port
+  spawn do
+    let keep := server
+    repeat
+      let sock ← keep.accept.block
+      spawn do
+        let buf ← IO.mkRef ByteArray.empty
+        let take (n : Nat) : IO (Option ByteArray) := do
+          while (← buf.get).size < n do
+            let some chunk ← (sock.recv? 4096).block | return none
+            if chunk.isEmpty then return none
+            buf.modify (· ++ chunk)
+          let b ← buf.get
+          buf.set (b.extract n b.size)
+          return some (b.extract 0 n)
+        let some hello ← take 3 | return
+        unless hello == ByteArray.mk #[5, 1, 0] do discard <| sock.shutdown.toIO; return
+        (sock.send (ByteArray.mk #[5, 0])).block
+        let some head ← take 5 | return
+        unless head[0]! == 5 && head[1]! == 1 && head[3]! == 3 do discard <| sock.shutdown.toIO; return
+        let some rest ← take (head[4]!.toNat + 2) | return
+        asked.modify (·.push (String.fromUTF8! (rest.extract 0 head[4]!.toNat)))
+        if refuse then
+          (sock.send (ByteArray.mk #[5, 5, 0, 1, 0, 0, 0, 0, 0, 0])).block
+          discard <| sock.shutdown.toIO
+          return
+        let up ← Std.Async.TCP.Socket.Client.mk
+        (up.connect (.v4 ⟨Std.Net.IPv4Addr.ofParts 127 0 0 1, target.port⟩)).block
+        (sock.send (ByteArray.mk #[5, 0, 0, 1, 127, 0, 0, 1, 0, 0])).block
+        let left ← buf.get
+        if !left.isEmpty then (up.send left).block
+        spawn (pump up sock)
+        pump sock up
+  return ({ host := "127.0.0.1", port }, asked)
+
+/-- A MagicDNS answer for `host`: `addresses` as A records under a compression pointer to the question. -/
+def dnsAnswer (id : UInt16) (host : String) (addresses : List (List UInt8)) (flags : UInt16 := 0x8180) : ByteArray := Id.run do
+  let u16 (v : UInt16) : ByteArray := ByteArray.mk #[(v >>> 8).toUInt8, (v &&& 255).toUInt8]
+  let mut b := u16 id ++ u16 flags ++ u16 1 ++ u16 addresses.length.toUInt16 ++ u16 0 ++ u16 0
+  b := b ++ ByteArray.mk #[host.utf8ByteSize.toUInt8] ++ host.toUTF8 ++ ByteArray.mk #[0] ++ u16 1 ++ u16 1
+  for a in addresses do
+    b := b ++ ByteArray.mk #[0xc0, 12] ++ u16 1 ++ u16 1 ++ ByteArray.mk #[0, 0, 0, 60] ++ u16 4 ++ ByteArray.mk a.toArray
+  return b
+
+/-- 10. Tor and I2P gateways (#181, #189, #190, #193): configuration, MagicDNS answers, discovery, and a
+regtest node reached by an onion name through a SOCKS5 stand-in. -/
+def gatewayChecks (n : Node) : IO Unit := do
+  say "gateways (Tor/I2P through SOCKS5)"
+  let onion : PeerEndpoint := { host := String.ofList (List.replicate 56 'a') ++ ".onion", port := 18444 }
+  let garlic : PeerEndpoint := { host := String.ofList (List.replicate 52 'b') ++ ".b32.i2p", port := 0 }
+  let gw : PeerEndpoint := { host := "100.101.102.103", port := 9050 }
+  check "parseProxy: host:port and [IPv6]:port"
+    ((PeerGatewayConfiguration.parseProxy " 100.101.102.103:9050 ").toOption == some gw &&
+     (PeerGatewayConfiguration.parseProxy "[::1]:4447").toOption == some { host := "::1", port := 4447 } &&
+     (PeerGatewayConfiguration.parseProxy "gateway.local:9050").toOption == some { host := "gateway.local", port := 9050 })
+  check "parseProxy refuses URLs, bare IPv6, port 0, overlay hosts"
+    (["http://x:1", "::1:9050", "x:0", "x:70000", "x", "a@b:1", onion.host ++ ":9050", ""].all fun t =>
+      match PeerGatewayConfiguration.parseProxy t with | .error .address => true | _ => false)
+  let tor : PeerGatewayConfiguration := { networks := [.tor], torProxy := some gw }
+  check "a selected overlay needs its gateway" (!({ networks := [.tor] } : PeerGatewayConfiguration).isValid &&
+    !({ networks := [] } : PeerGatewayConfiguration).isValid && tor.isValid && ({} : PeerGatewayConfiguration).isValid)
+  check "Tor-only permits canonical onions, not clearnet or I2P"
+    (tor.permits onion && !tor.permits { host := "1.2.3.4", port := 8333 } && !tor.permits garlic &&
+     !tor.permits { onion with host := "short.onion" } && !tor.permits { onion with port := 0 })
+  check "an onion goes through the Tor gateway, clearnet direct"
+    (tor.proxy onion == some gw && ({} : PeerGatewayConfiguration).proxy { host := "1.2.3.4", port := 8333 } == none)
+  check "HTTP without clearnet goes through Tor; I2P alone has none"
+    (tor.permitsHTTP && tor.httpProxy == some gw && ({} : PeerGatewayConfiguration).httpProxy == none &&
+     !({ networks := [.i2p], i2pProxy := some gw } : PeerGatewayConfiguration).permitsHTTP)
+  let both : PeerGatewayConfiguration := { networks := [.i2p, .tor], torProxy := some gw, i2pProxy := some { gw with port := 4447 } }
+  check "configuration JSON round trip (networks in canonical order)"
+    (PeerGatewayConfiguration.ofJson? both.toJson == some { both with networks := [.tor, .i2p] } &&
+     PeerGatewayConfiguration.ofJson? ({} : PeerGatewayConfiguration).toJson == some {})
+  -- MagicDNS
+  let q : GatewayDNSQuery := { host := "winnow-tor-gateway", id := 0x1234 }
+  check "DNS query bytes" (q.bytes == ByteArray.mk #[0x12, 0x34, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 18] ++
+    "winnow-tor-gateway".toUTF8 ++ ByteArray.mk #[0, 0, 1, 0, 1])
+  check "DNS answer: tailnet A records only"
+    (q.addresses (dnsAnswer 0x1234 "winnow-tor-gateway" [[100, 101, 102, 103], [8, 8, 8, 8], [100, 100, 100, 100], [100, 128, 0, 1]])
+      == ["100.101.102.103"])
+  check "DNS answer: wrong id, truncated, error rcode, other name give nothing"
+    (q.addresses (dnsAnswer 0x4321 "winnow-tor-gateway" [[100, 101, 102, 103]]) == [] &&
+     q.addresses ((dnsAnswer 0x1234 "winnow-tor-gateway" [[100, 101, 102, 103]]).extract 0 40) == [] &&
+     q.addresses (dnsAnswer 0x1234 "winnow-tor-gateway" [[100, 101, 102, 103]] (flags := 0x8183)) == [] &&
+     q.addresses (dnsAnswer 0x1234 "winnow-i2p-gateway" [[100, 101, 102, 103]]) == [])
+  check "tailnet range is 100.64/10 without MagicDNS"
+    (isTailnetIPv4 "100.64.0.1" && isTailnetIPv4 "100.127.255.254" && !isTailnetIPv4 "100.128.0.1" &&
+     !isTailnetIPv4 "100.63.0.1" && !isTailnetIPv4 "100.100.100.100" && !isTailnetIPv4 "10.0.0.1")
+  let resolveTor : String → IO (List String) := fun h => pure (if h == "winnow-tor-gateway" then ["8.8.8.8", "100.101.102.103"] else [])
+  let found ← discoverGateways resolveTor (fun _ => pure true)
+  check "discovery: a Tor gateway alone drops clearnet" (found == { networks := [.tor], torProxy := some gw })
+  let none_ ← discoverGateways resolveTor (fun _ => pure false)
+  check "discovery: no gateway answering keeps clearnet" (none_ == {})
+  -- Through the stand-in, to the regtest node.
+  let (proxy, asked) ← fakeSocks n.endpoint
+  check "SOCKS probe: the stand-in answers 05 00" (← probeSOCKS proxy)
+  check "SOCKS probe: a Bitcoin node is not a gateway" !(← probeSOCKS n.endpoint)
+  let c ← PeerConnection.new onion regtest (socksProxy := some proxy)
+  runNet "connect through SOCKS5" (c.connect 10_000)
+  check "an onion peer handshakes through the gateway"
+    ((← c.isConnected) && (← c.peerUserAgent).startsWith "/Satoshi:")
+  check "the gateway was given the onion name, unresolved" ((← asked.get).contains onion.host) s!"{← asked.get}"
+  c.disconnect
+  let (refusing, _) ← fakeSocks n.endpoint (refuse := true)
+  let r ← PeerConnection.new onion regtest (socksProxy := some refusing)
+  check "a gateway that cannot reach the peer is a transport failure"
+    (match ← (r.connect 5_000).attempt with
+      | .error e@(.peer (.disconnected m)) => e.isTransportPeerError && m == "SOCKS5 proxy: connection refused"
+      | _ => false)
+  -- The pool: Tor only, so the clearnet manual peer is never dialled and no seed is resolved.
+  let seedAsks ← IO.mkRef 0
+  let counting : SeedResolver := { lookup := fun _ _ _ => do seedAsks.modify (· + 1); pure #[] }
+  asked.set #[]
+  let pool ← PeerPool.new regtest (peerCount := 2) (manualPeers := #[n.endpoint, onion]) (seedResolver := some counting)
+    (gateways := { networks := [.tor], torProxy := some proxy })
+  pool.start
+  check "Tor-only pool seats the onion through the gateway"
+    (← waitUntil 10_000 (do return (← pool.connectedPeers).any (·.endpoint == onion)))
+  discard <| waitUntil 3_000 (do return (← pool.connectionStatus).exhausted)
+  let seated := (← pool.connectedPeers).map (·.endpoint)
+  check "Tor-only pool never dials clearnet nor resolves seeds"
+    (seated == #[onion] && (← seedAsks.get) == 0 && (← asked.get) == #[onion.host]) s!"{seated.map (·.host)}"
+  pool.stop
+
 def nodeChecks (dir : String) (n : Node) (swift : Option String) : IO Unit := do
   say s!"node: bitcoind regtest pid {n.pid}, p2p {n.p2p}"
   discard <| n.cli #["createwallet", "w"]
@@ -727,6 +868,7 @@ def main (args : List String) : IO UInt32 := do
     offlineChecks dir
     fakeChecks dir
     nodeChecks dir n swift
+    gatewayChecks n
   catch e =>
     failures.modify (·.push s!"exception: {e}")
     say s!"  FAIL exception: {e}"

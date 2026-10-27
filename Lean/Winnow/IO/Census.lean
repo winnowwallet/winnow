@@ -147,13 +147,40 @@ private def validatedEntries (tip : Int32) (entries : Array CensusEntry) (minimu
     out := out.push e
   return out.qsort fun a b => a.host < b.host || (a.host == b.host && a.port < b.port)
 
+/-- `validatedOverlayEntries`: canonical Tor or I2P names on any port, near the tip, no duplicates; every
+verified overlay peer is kept (only the bound every list has applies). -/
+private def validatedOverlayEntries (tip : Int32) (entries : Array CensusEntry) (network : PeerNetwork) :
+    Except CensusInvalid (Array CensusEntry) := do
+  if entries.size > maximumEntries then throw .size
+  let mut seen : Array PeerEndpoint := #[]
+  let mut out := #[]
+  for input in entries do
+    if !(input.port > 0) || input.userAgent.utf8ByteSize > 256 || input.userAgent.toList.any (fun c => c.toNat < 32 || c.toNat == 127) then
+      throw .endpoint
+    let some host := network.canonicalOverlayHost input.host | throw .endpoint
+    if !nearTip input.startHeight tip then throw .height
+    let e := { input with host }
+    if seen.contains e.endpoint then throw .duplicate
+    seen := seen.push e.endpoint
+    out := out.push e
+  return out.qsort fun a b => a.host < b.host || (a.host == b.host && a.port < b.port)
+
 /-- `validated(minimumEntries:)`: `minimumEntries` is the floor the wallet applies to a list it will use
-(`minimumClearnetEntries`); the tests validate shape alone. -/
+(`minimumClearnetEntries`); the tests validate shape alone. The Tor and I2P lists are kept, validated, for
+a pool that routes through gateways. -/
 def validated (c : CensusCatalog) (minimumEntries : Nat := 0) : Except CensusInvalid CensusCatalog := do
   let some entries := (if c.schemaVersion == 1 then c.clearnet else none) | throw .schema
   if (day c.date).isNone then throw .date
   if !(c.tip > 0) then throw .height
-  return { c with networks := #[("clearnet", ← validatedEntries c.tip entries minimumEntries)] }
+  let mut networks := #[("clearnet", ← validatedEntries c.tip entries minimumEntries)]
+  for n in [PeerNetwork.tor, .i2p] do
+    if let some overlay := (c.networks.find? (·.1 == n.rawValue)).map (·.2) then
+      networks := networks.push (n.rawValue, ← validatedOverlayEntries c.tip overlay n)
+  return { c with networks }
+
+/-- The entries of one network, if the list carries it. -/
+def entries (c : CensusCatalog) (n : PeerNetwork) : Array CensusEntry :=
+  ((c.networks.find? (·.1 == n.rawValue)).map (·.2)).getD #[]
 
 private def entryOf (j : Json) : Except String CensusEntry := do
   let .str host ← j.getObjVal? "host" | throw "host"

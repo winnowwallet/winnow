@@ -3,6 +3,7 @@ import Std.Data.HashSet
 import Winnow.IO.Headers
 import Winnow.IO.Seeds
 import Winnow.IO.Census
+import Winnow.IO.Gateways
 
 /-! # The peer pool (`Network/Peers/PeerPool.swift`)
 
@@ -13,6 +14,11 @@ DNS seeds only when those cannot fill the pool. A round dials up to `maxParallel
 each with `dialTimeout` (5 s), at most `maxDialAttempts` (50) per round, skipping candidates the
 diversity policy refuses (re-checked on arrival); stragglers are awaited and disconnected; a round
 that ends below target is `exhausted`. A monitor prunes dead connections and replenishes every 30 s.
+
+Gateways (#181, #190): only endpoints `gateways` permits are candidates, an overlay one dialled through
+its network's SOCKS5 gateway by name; DNS seeds are resolved only on a route that includes clearnet, and
+the census's lists for every selected network are interleaved. Tor and I2P without clearnet must mix
+seats across the two, a rule the round after an exhausted one drops.
 
 Judgement, as in Swift (#82): `misbehaving` (a data fault) disconnects, removes from the persisted
 good list and refuses for the session; `transportFailure` (slow, dropped) cools the endpoint off for
@@ -59,6 +65,8 @@ structure PoolState where
   mode : PoolMode := .full
   /-- seats a relay-only session was asked to keep; zero in `.full` -/
   relaySeats : Nat := 0
+  /-- the round after an exhausted one drops the Tor-and-I2P mix rule, so a thin overlay still fills -/
+  relaxOverlayMix : Bool := false
 
 /-- The UI snapshot (`ConnectionStatus`). -/
 structure ConnectionStatus where
@@ -81,6 +89,8 @@ structure PeerPool where
   seedResolver : SeedResolver
   /-- The shipped census, validated at construction (an invalid one is dropped). -/
   censusCatalog : Option CensusCatalog
+  /-- The networks this pool may use and the SOCKS gateway for each overlay. -/
+  gateways : PeerGatewayConfiguration
   avoidOnReset : Array PeerEndpoint
   /-- Monotonic milliseconds for cooldowns (`now`). -/
   now : IO Nat
@@ -107,7 +117,7 @@ capability): the default `curlFetch` runs a `curl` subprocess and exists for tes
 def new (params : NetworkParams) (peerCount : Nat := 3) (manualPeers : Array PeerEndpoint := #[])
     (peersFile : Option System.FilePath := none) (relayPreference : Bool := false) (dialTimeoutMs : Nat := 5_000)
     (maxParallelDials : Nat := 5) (maxDialAttempts : Nat := 50) (seedResolver : Option SeedResolver := none)
-    (censusCatalog : Option CensusCatalog := none)
+    (censusCatalog : Option CensusCatalog := none) (gateways : PeerGatewayConfiguration := {})
     (avoidOnReset : Array PeerEndpoint := #[]) (now : IO Nat := monoMs) (monitorIntervalMs : Nat := 30_000)
     (httpFetch : HttpFetch := curlFetch) : IO PeerPool := do
   let resolver : SeedResolver ← match seedResolver with
@@ -123,7 +133,7 @@ def new (params : NetworkParams) (peerCount : Nat := 3) (manualPeers : Array Pee
             st := { st with knownGood := st.knownGood.push c.endpoint,
                             knownSource := st.knownSource.insert c.endpoint c.source }
   return { params, peerCount, manualPeers, peersFile, relayPreference, dialTimeoutMs, maxParallelDials,
-           maxDialAttempts, seedResolver := resolver, censusCatalog, avoidOnReset, now, monitorIntervalMs,
+           maxDialAttempts, seedResolver := resolver, censusCatalog, gateways, avoidOnReset, now, monitorIntervalMs,
            state := ← IO.mkRef st }
 
 /-- Seats `enterRelayOnly` keeps unless asked otherwise. -/
@@ -179,7 +189,25 @@ private def rememberedSource (p : PeerPool) (s : PoolState) (e : PeerEndpoint) :
 private def seatedCandidates (s : PoolState) : Array PeerCandidate :=
   s.peers.map fun c => { endpoint := c.endpoint, source := s.seatedSources[c.endpoint]?.getD .persisted }
 
-private def policy (p : PeerPool) : DiversityPolicy := { peerCount := p.peerCount }
+/-- The diversity rules, sized to the pool: overlay seats must mix Tor and I2P when both are the only networks. -/
+private def policy (p : PeerPool) (s : PoolState) : DiversityPolicy :=
+  let n := p.gateways.networks
+  { peerCount := p.peerCount, clearnetSelected := n.contains .clearnet,
+    overlayMix := !n.contains .clearnet && n.contains .tor && n.contains .i2p && !s.relaxOverlayMix }
+
+/-- Shuffled within each selected network, then interleaved, so a long Tor list does not take every first
+dial while a clearnet candidate waits (`interleavedCatalogEndpoints`). -/
+private def interleavedCatalogEndpoints (p : PeerPool) : IO (Array PeerEndpoint) := do
+  let mut lists : Array (Array PeerEndpoint) := #[]
+  for n in PeerNetwork.allCases do
+    if p.gateways.networks.contains n then
+      lists := lists.push (← shuffle ((p.censusCatalog.map (·.entries n)).getD #[] |>.map (·.endpoint)))
+  let longest := lists.foldl (fun m l => max m l.size) 0
+  let mut out := #[]
+  for i in [0:longest] do
+    for l in lists do
+      if h : i < l.size then out := out.push l[i]
+  return out
 
 /-- Manual peers, then persisted good peers, then the shipped census. -/
 def localCandidates (p : PeerPool) (excluded : Std.HashSet PeerEndpoint) : IO (Array PeerCandidate) := do
@@ -187,26 +215,26 @@ def localCandidates (p : PeerPool) (excluded : Std.HashSet PeerEndpoint) : IO (A
   let mut ordered : Array PeerCandidate := p.manualPeers.map ({ endpoint := ·, source := .manual })
   for e in s.knownGood do
     if !p.manualPeers.contains e then ordered := ordered.push { endpoint := e, source := p.rememberedSource s e }
-  let automatic ← shuffle (match p.censusCatalog.bind (·.clearnet) with
-    | some entries => entries.map (·.endpoint)
-    | none => #[])
+  let automatic ← p.interleavedCatalogEndpoints
   let preferred := automatic.filter (!p.avoidOnReset.contains ·)
   let previous := automatic.filter (p.avoidOnReset.contains ·)
   ordered := ordered ++ (preferred ++ previous).map ({ endpoint := ·, source := .census })
   let mut seen := excluded
   let mut out := #[]
   for c in ordered do
-    if !seen.contains c.endpoint then
+    if p.gateways.permits c.endpoint && !seen.contains c.endpoint then
       seen := seen.insert c.endpoint
       out := out.push c
   return out
 
+/-- Seeds only on a valid route that includes clearnet: an overlay-only pool resolves no DNS. -/
 private def seedCandidates (p : PeerPool) (excluded : Std.HashSet PeerEndpoint) : IO (Array PeerCandidate) := do
+  unless p.gateways.isValid && p.gateways.networks.contains .clearnet do return #[]
   let seeds ← p.seedResolver.resolveSeeds p.params.dnsSeeds p.params.defaultPort p.params.allowsPrivateSeedAddresses
   let mut seen := excluded
   let mut out := #[]
   for e in seeds do
-    if !seen.contains e then
+    if p.gateways.permits e && !seen.contains e then
       seen := seen.insert e
       out := out.push { endpoint := e, source := .dnsSeed }
   return out
@@ -249,7 +277,7 @@ private def seatArrival (p : PeerPool) (peer : PeerConnection) (endpoint : PeerE
   let candidate : PeerCandidate := { endpoint, source }
   let r ← p.state.modifyGet fun s =>
     if !(s.started && s.peers.size < p.peerCount && !s.peers.any (·.endpoint == endpoint) &&
-        p.policy.admits candidate (seatedCandidates s)) then (none, s)
+        (p.policy s).admits candidate (seatedCandidates s)) then (none, s)
     else
       let isNew := !s.knownGood.contains endpoint
       let s := { s with peers := s.peers.push peer, staleTipJudged := s.staleTipJudged.erase endpoint,
@@ -267,7 +295,7 @@ mutual
 partial def replenish (p : PeerPool) : IO Unit := do
   let go ← p.state.modifyGet fun s =>
     if s.started && s.mode == .full && !s.replenishing && s.peers.size < p.peerCount then
-      (true, { s with replenishing := true, attemptsThisRound := 0, exhausted := false })
+      (true, { s with replenishing := true, attemptsThisRound := 0, relaxOverlayMix := s.exhausted, exhausted := false })
     else (false, s)
   if !go then return
   let s ← p.state.get
@@ -288,10 +316,12 @@ partial def replenish (p : PeerPool) : IO Unit := do
     while next < queue.size && running < p.maxParallelDials && (← p.state.get).attemptsThisRound < p.maxDialAttempts do
       let candidate := queue[next]!
       next := next + 1
-      if !p.policy.admits candidate (seatedCandidates (← p.state.get)) then continue
+      let st ← p.state.get
+      if !(p.gateways.permits candidate.endpoint && (p.policy st).admits candidate (seatedCandidates st)) then continue
       running := running + 1
       let endpoint := candidate.endpoint
       let peer ← PeerConnection.new endpoint p.params (relayPreference := p.relayPreference)
+        (socksProxy := p.gateways.proxy endpoint)
       p.state.modify fun st => { st with attemptsThisRound := st.attemptsThisRound + 1,
                                          inFlight := st.inFlight.push (endpoint, peer) }
       spawn do

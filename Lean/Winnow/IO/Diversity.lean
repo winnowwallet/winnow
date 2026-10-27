@@ -1,4 +1,5 @@
 import Winnow.IO.Base
+import Winnow.Keys.Unicode
 
 /-! # Peer provenance and diversity (`Network/Peers/PeerDiversity.swift`, `SeedAddressFilter` of
 `SeedResolver.swift`), and the persisted peers file
@@ -156,10 +157,44 @@ structure PeerCandidate where
   source : PeerSource
   deriving BEq, Inhabited, Repr
 
-/-- Ceilings, not quotas: no two peers from one netblock (unless the block is unknown), and no source
-class may hold every slot (manual peers are exempt from the second rule). -/
+/-- Which network a peer is on (`PeerNetwork`, PeerGateways.swift): `.onion` names are Tor, `.i2p` I2P. -/
+inductive PeerNetwork where
+  | clearnet | tor | i2p
+  deriving BEq, Repr, Inhabited, DecidableEq, Hashable
+
+namespace PeerNetwork
+def allCases : List PeerNetwork := [.clearnet, .tor, .i2p]
+def rawValue : PeerNetwork → String | .clearnet => "clearnet" | .tor => "tor" | .i2p => "i2p"
+def ofRaw? : String → Option PeerNetwork
+  | "clearnet" => some .clearnet | "tor" => some .tor | "i2p" => some .i2p | _ => none
+
+/-- `PeerNetwork(host:)`: lower-cased, leading and trailing dots trimmed, by suffix. -/
+def ofHost (host : String) : PeerNetwork :=
+  let h := String.ofList ((host.toLower.toList.dropWhile (· == '.')).reverse.dropWhile (· == '.')).reverse
+  if h.endsWith ".onion" then .tor else if h.endsWith ".i2p" then .i2p else .clearnet
+
+/-- The canonical name of a Tor (56 base32 characters + `.onion`) or I2P (52 + `.b32.i2p`) host. -/
+def canonicalOverlayHost (n : PeerNetwork) (host : String) : Option String :=
+  if host != Winnow.Keys.Unicode.trimWhitespace host then none else
+  let host := host.toLower
+  let (suffix, length) := match n with
+    | .tor => (".onion", 56) | .i2p => (".b32.i2p", 52) | .clearnet => ("", 0)
+  if n == .clearnet || !host.endsWith suffix then none else
+  let name := (host.toList.take (host.length - suffix.length))
+  if name.length == length && name.all (fun c => ('a' ≤ c && c ≤ 'z') || ('2' ≤ c && c ≤ '7')) then some host else none
+end PeerNetwork
+
+/-- A Tor or I2P destination, reached through its gateway by name. -/
+def _root_.Winnow.Net.PeerEndpoint.isOverlay (e : PeerEndpoint) : Bool := PeerNetwork.ofHost e.host != .clearnet
+
+/-- The seating rules (`DiversityPolicy`), each a ceiling rather than a quota: one seat per netblock; no
+source class in every seat; while clearnet is selected, Tor and I2P together never in every seat (their
+names have no netblock); and with Tor and I2P both selected and clearnet off (`overlayMix`), neither overlay
+in every seat. Manual peers are exempt from all but the netblock rule. -/
 structure DiversityPolicy where
   peerCount : Nat
+  clearnetSelected : Bool := true
+  overlayMix : Bool := false
 
 def DiversityPolicy.admits (p : DiversityPolicy) (candidate : PeerCandidate) (seated : Array PeerCandidate) : Bool :=
   let blocked := match candidate.endpoint.netblock with
@@ -167,6 +202,10 @@ def DiversityPolicy.admits (p : DiversityPolicy) (candidate : PeerCandidate) (se
     | none => false
   if blocked then false
   else if candidate.source == .manual || !(p.peerCount > 1) then true
+  else if p.clearnetSelected && candidate.endpoint.isOverlay &&
+      (seated.filter (·.endpoint.isOverlay)).size ≥ p.peerCount - 1 then false
+  else if p.overlayMix && candidate.endpoint.isOverlay &&
+      (seated.filter (PeerNetwork.ofHost ·.endpoint.host == PeerNetwork.ofHost candidate.endpoint.host)).size ≥ p.peerCount - 1 then false
   else (seated.filter (·.source == candidate.source)).size < p.peerCount - 1
 
 /-! ## `peers.json` -/

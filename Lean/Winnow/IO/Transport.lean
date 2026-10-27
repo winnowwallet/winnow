@@ -88,6 +88,9 @@ structure PeerConnection where
   backlogByteLimit : Nat
   pingIntervalMs : Nat
   readIdleTimeoutMs : Nat
+  /-- An external SOCKS5 gateway (a Tor or I2P proxy): dialled instead of the peer, which is named to it
+  unresolved, so `.onion` and `.i2p` hosts reach the gateway as names. -/
+  socksProxy : Option PeerEndpoint := none
   state : IO.Ref ConnState
 
 instance : BEq PeerConnection := ⟨fun a b => a.uid == b.uid⟩
@@ -106,12 +109,12 @@ def maximumRelayedTransactionBytes : Nat := 400_000
 def new (endpoint : PeerEndpoint) (params : NetworkParams) (localServices : UInt64 := 0)
     (localStartHeight : Int32 := 0) (relayPreference : Bool := false)
     (backlogByteLimit : Nat := defaultBacklogByteLimit) (pingIntervalMs : Nat := 60_000)
-    (readIdleTimeoutMs : Nat := 150_000) : IO PeerConnection := do
+    (readIdleTimeoutMs : Nat := 150_000) (socksProxy : Option PeerEndpoint := none) : IO PeerConnection := do
   if backlogByteLimit == 0 then throw (IO.userError "the gossip buffer needs a positive ceiling")
   let uid ← connectionCounter.modifyGet fun n => (n, n + 1)
   let now ← monoMs
   return { uid, endpoint, params, localServices, localStartHeight, relayPreference, backlogByteLimit,
-           pingIntervalMs, readIdleTimeoutMs,
+           pingIntervalMs, readIdleTimeoutMs, socksProxy,
            state := ← IO.mkRef { framer := { magic := params.magic }, lastReceivedAt := now } }
 
 def peerServices (c : PeerConnection) : BaseIO UInt64 := do return (← c.state.get).peerServices
@@ -428,7 +431,57 @@ private def exchangeVersion (c : PeerConnection) (timeoutMs : Nat) : NetM Unit :
   c.state.modify fun st => { st with isConnected := true }
   c.startKeepalive
 
-/-- TCP connect + version handshake; `missingCompactFilters` when the peer cannot serve BIP157. -/
+/-! ## SOCKS5 (RFC 1928) -/
+
+def socksReplyDescription (code : UInt8) : String :=
+  match code with
+  | 0x01 => "general failure" | 0x02 => "connection not allowed by ruleset" | 0x03 => "network unreachable"
+  | 0x04 => "host unreachable" | 0x05 => "connection refused" | 0x06 => "TTL expired"
+  | 0x07 => "command not supported" | 0x08 => "address type not supported"
+  | c => s!"reply code {c}"
+
+/-- Exactly `n` bytes off the proxy, or why not. -/
+private partial def recvExactly (sock : TCP.Socket.Client) (n : Nat) (acc : ByteArray := .empty) :
+    Async (Except PeerError ByteArray) := do
+  if acc.size ≥ n then return .ok acc
+  match ← sock.recv? (n - acc.size).toUInt64 with
+  | none => return .error (.disconnected "proxy closed the connection")
+  | some chunk =>
+    if chunk.isEmpty then return .error (.disconnected "empty read from proxy")
+    recvExactly sock n (acc ++ chunk)
+
+/-- `negotiateSOCKS5`: the no-authentication greeting, then CONNECT with the destination as a name
+(address type 3, unresolved), then the reply and its bound address. A proxy that cannot reach the peer is
+the peer being unreachable (`disconnected`), not a protocol fault. -/
+def negotiateSOCKS5 (sock : TCP.Socket.Client) (destination : PeerEndpoint) : Async (Except PeerError Unit) := do
+  sock.send (ByteArray.mk #[0x05, 0x01, 0x00])
+  let chosen ← match ← recvExactly sock 2 with | .ok b => pure b | .error e => return .error e
+  unless chosen == ByteArray.mk #[0x05, 0x00] do
+    return .error (.handshakeFailed "SOCKS5 proxy refused an unauthenticated connection")
+  let name := destination.host.toUTF8
+  unless 0 < name.size && name.size ≤ 255 do return .error (.handshakeFailed "SOCKS5 destination name too long")
+  sock.send (ByteArray.mk #[0x05, 0x01, 0x00, 0x03, name.size.toUInt8] ++ name ++
+    ByteArray.mk #[(destination.port >>> 8).toUInt8, (destination.port &&& 0xFF).toUInt8])
+  let head ← match ← recvExactly sock 4 with | .ok b => pure b | .error e => return .error e
+  unless head[0]! == 0x05 && head[2]! == 0 do return .error (.handshakeFailed "SOCKS5 proxy returned an invalid reply header")
+  let reply := head[1]!
+  unless reply == 0 do return .error (.disconnected s!"SOCKS5 proxy: {socksReplyDescription reply}")
+  let rest : Except PeerError Nat ← match head[3]! with
+    | 0x01 => pure (.ok (4 + 2))
+    | 0x04 => pure (.ok (16 + 2))
+    | 0x03 => do
+      match ← recvExactly sock 1 with
+      | .ok len => pure (.ok (len[0]!.toNat + 2))
+      | .error e => pure (.error e)
+    | _ => pure (.error (.handshakeFailed "SOCKS5 proxy answered with an unknown address type"))
+  match rest with
+  | .error e => return .error e
+  | .ok n => match ← recvExactly sock n with
+    | .ok _ => return .ok ()
+    | .error e => return .error e
+
+/-- TCP connect (through `socksProxy` when set) + version handshake; `missingCompactFilters` when the peer
+cannot serve BIP157. -/
 def connect (c : PeerConnection) (timeoutMs : Nat := 20_000) : NetM Unit := do
   let sock ← TCP.Socket.Client.mk
   let ready ← IO.Promise.new
@@ -440,9 +493,17 @@ def connect (c : PeerConnection) (timeoutMs : Nat := 20_000) : NetM Unit := do
   | none => return
   | some false => throw (.peer .notConnected)
   | some true => pure ()
-  let dial ← (do let addr ← resolveAddress c.endpoint.host c.endpoint.port; sock.connect addr : Async Unit).toIO
+  -- through a gateway, the proxy is dialled and the peer named to it inside the same deadline
+  let target := c.socksProxy.getD c.endpoint
+  let dial ← (do
+      let addr ← resolveAddress target.host target.port
+      sock.connect addr
+      match c.socksProxy with
+      | none => return Except.ok ()
+      | some _ => negotiateSOCKS5 sock c.endpoint : Async (Except PeerError Unit)).toIO
   discard <| IO.mapTask (t := dial) fun r => ready.resolve (match r with
-    | .ok () => .ok ()
+    | .ok (.ok ()) => .ok ()
+    | .ok (.error e) => .error (.peer e)
     | .error e => .error (.peer (.disconnected (toString e))))
   after timeoutMs (ready.resolve (.error (.peer .timeout)))
   match ← IO.wait ready.result? with
