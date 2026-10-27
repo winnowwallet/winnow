@@ -25,6 +25,8 @@ open Lean
 inductive FilterSyncError where
   | busy
   | noPeers
+  /-- the pool is in a relay-only session (`PeerPool.enterRelayOnly`), which does not read the chain -/
+  | relayOnly
   | peersCoolingDown (count : Nat)
   | checkpointMismatch (reason : String)
   | badPeerResponse (reason : String)
@@ -33,7 +35,7 @@ inductive FilterSyncError where
   deriving Repr, BEq, Inhabited
 
 def FilterSyncError.name : FilterSyncError → String
-  | .busy => "busy" | .noPeers => "noPeers" | .peersCoolingDown _ => "peersCoolingDown"
+  | .busy => "busy" | .noPeers => "noPeers" | .relayOnly => "relayOnly" | .peersCoolingDown _ => "peersCoolingDown"
   | .checkpointMismatch _ => "checkpointMismatch" | .badPeerResponse _ => "badPeerResponse"
   | .filterHeaderMismatch _ => "filterHeaderMismatch" | .unexpectedBlockHash => "unexpectedBlockHash"
 

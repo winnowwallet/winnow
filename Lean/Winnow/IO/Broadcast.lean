@@ -35,6 +35,19 @@ def AnnouncementState.rawValue : AnnouncementState → String
   | .announced => "announced" | .requested => "requested" | .served => "served" | .failed => "failed"
   | .deprioritized => "deprioritized"
 
+/-- Why a relay-only session ended (`RelaySessionEnd`). -/
+inductive RelaySessionEnd where
+  /-- nothing left to relay: confirmed, cancelled or replaced -/
+  | drained
+  /-- no seat left that can hear about anything pending -/
+  | seatsGone
+  /-- a retry could not be saved, so the backoff loop stopped -/
+  | persistenceBlocked
+  deriving Repr, BEq, Inhabited
+
+def RelaySessionEnd.rawValue : RelaySessionEnd → String
+  | .drained => "drained" | .seatsGone => "seatsGone" | .persistenceBlocked => "persistenceBlocked"
+
 inductive TxEvent where
   | announced (txid : ByteArray) (peerCount : Nat)
   | requested (txid : ByteArray) (peer : PeerEndpoint)
@@ -45,6 +58,9 @@ inductive TxEvent where
   | cancelled (txid : ByteArray)
   | feeFloorExceeded (txid : ByteArray) (floor : Int64)
   | persistenceFailed (reason : String)
+  /-- the relay-only session this broadcaster opened has ended; the pool it narrowed is stopped unless the
+  caller had resumed full service, and anything pending stays saved for the next start -/
+  | relaySessionEnded (reason : RelaySessionEnd)
   deriving Inhabited
 
 inductive BroadcastPersistenceState where
@@ -78,6 +94,8 @@ structure BroadcastState where
   stopped : Bool := false
   rebroadcastGeneration : Nat := 0
   nextId : Nat := 0
+  /-- a relay-only session this broadcaster opened (`enterRelayOnly`) is open -/
+  relayOnlySession : Bool := false
 
 structure TxBroadcaster where
   pool : PeerPool
@@ -464,8 +482,42 @@ private def ensurePeerListeners (b : TxBroadcaster) : IO Unit := do
     let stream ← peer.events
     spawn (b.listen peer stream)
 
+/-- Anything still being relayed (a confirmed entry held for a reorg is not relay work). -/
+private def hasPendingRelay (st : BroadcastState) : Bool := st.pending.any fun _ e => e.confirmedAtHeight.isNone
+
+/-- Ends the session, stops the pool it narrowed (re-reading its mode, so a caller who resumed full service
+keeps it), and says why. -/
+private def endRelayOnlySession (b : TxBroadcaster) (reason : RelaySessionEnd) : IO Unit := do
+  let was ← b.state.modifyGet fun st => (st.relayOnlySession, { st with relayOnlySession := false })
+  if !was then return
+  b.pool.stopIfRelayOnly
+  b.emit (.relaySessionEnded reason)
+
+/-- Whether any of `peers` can still hear about something pending: a seat that has not given up on a
+transaction (requested or served it, or has announcements left and was not deprioritized). -/
+private def canAnnounce (b : TxBroadcaster) (st : BroadcastState) (peers : Array PeerConnection) : Bool :=
+  let unconfirmed := st.pending.toArray.filter (·.2.confirmedAtHeight.isNone)
+  peers.any fun peer =>
+    let key := peer.endpoint.description
+    unconfirmed.any fun (_, e) =>
+      match e.peers[key]? with
+      | none => true
+      | some r => r.state == .requested || r.state == .served ||
+          (r.state != .deprioritized && r.announcements < b.maxAnnouncementsPerPeer)
+
+/-- A session whose seats are gone ends rather than outliving them: an empty pool in a mode that dials
+nothing announces to nobody, and no confirmation can arrive over a pool that refuses filter sync. -/
+private def endRelayOnlySessionIfSeatsGone (b : TxBroadcaster) : IO Unit := do
+  let st ← b.state.get
+  if !st.relayOnlySession then return
+  let peers ← b.pool.connectedPeers
+  if peers.isEmpty || !b.canAnnounce st peers then b.endRelayOnlySession .seatsGone
+
 /-- Announces every due transaction after advancing its schedule durably. -/
 private def fireDueAttempts (b : TxBroadcaster) : IO Bool := do
+  -- where a session that lost its seats is noticed; the attempt then runs as always (the payment stays
+  -- pending and saved for the next start)
+  b.endRelayOnlySessionIfSeatsGone
   b.ensurePeerListeners
   let firedAt ← b.now
   let st ← b.state.get
@@ -481,6 +533,8 @@ private def fireDueAttempts (b : TxBroadcaster) : IO Bool := do
   | .error e =>
     b.state.modify fun s => { s with persistenceBlocked := true }
     b.emit (.persistenceFailed e.description)
+    -- the loop stops here, and a session must not outlive it
+    b.endRelayOnlySession .persistenceBlocked
     return false
   | .ok () =>
     -- Merge the schedule into the live state (listeners may have changed relay state meanwhile).
@@ -500,7 +554,11 @@ private def fireDueAttempts (b : TxBroadcaster) : IO Bool := do
 partial def scheduleRebroadcast (b : TxBroadcaster) : IO Unit := do
   let gen ← b.state.modifyGet fun st => (st.rebroadcastGeneration + 1, { st with rebroadcastGeneration := st.rebroadcastGeneration + 1 })
   let st ← b.state.get
-  if st.stopped || st.persistenceBlocked || !st.pending.any (fun _ e => e.confirmedAtHeight.isNone) then return
+  if st.stopped || st.persistenceBlocked || !hasPendingRelay st then
+    -- the drain, wherever it came from (a confirmation, a cancellation, a replacement): a relay-only
+    -- session with no work left ends, and the pool stops itself
+    if !hasPendingRelay st then b.endRelayOnlySession .drained
+    return
   let rec loop : IO Unit := do
     let st ← b.state.get
     if st.rebroadcastGeneration != gen then return
@@ -534,8 +592,35 @@ def shutdown (b : TxBroadcaster) : IO Unit := do
   let subs ← b.state.modifyGet fun st =>
     if st.stopped then (#[], st)
     else (st.subscribers, { st with stopped := true, rebroadcastGeneration := st.rebroadcastGeneration + 1,
-                                    pending := {}, subscribers := #[] })
+                                    pending := {}, subscribers := #[], relayOnlySession := false })
   for s in subs do s.finish none
+
+/-- Whether a relay-only session this broadcaster opened is still open (a test seam: `pool.mode` is the
+truth about the pool, which a caller's `start` takes back without telling this). -/
+def isRelayOnly (b : TxBroadcaster) : BaseIO Bool := do return (← b.state.get).relayOnlySession
+
+/-- `enterRelayOnly(seats:)`: goes on relaying with the pool narrowed to a relay-only session, and stops the
+pool once nothing is left to relay (the drain, a lost seat or a halted backoff loop ends the session and
+emits `relaySessionEnded`). False when no session was opened, and then the pool goes quiet: nothing
+pending, a halted loop, or no seat kept (a zero-seat session would announce to nobody and never drain).
+The checks are made again after the narrowing, which another task may have run inside; a stop from there
+re-reads the mode, so a caller who resumed full service in the gap keeps the pool. -/
+def enterRelayOnly (b : TxBroadcaster) (seats : Nat := PeerPool.defaultRelaySeats) : NetM Bool := do
+  let st ← b.state.get
+  if st.stopped then throw (.broadcast .stopped)
+  if !hasPendingRelay st || st.persistenceBlocked then
+    b.state.modify fun s => { s with relayOnlySession := false }
+    b.pool.stop
+    return false
+  if (← b.pool.enterRelayOnly seats) == 0 then
+    b.state.modify fun s => { s with relayOnlySession := false }
+    b.pool.stopIfRelayOnly
+    return false
+  let opened ← b.state.modifyGet fun s =>
+    if s.stopped || s.persistenceBlocked || !hasPendingRelay s then (false, { s with relayOnlySession := false })
+    else (true, { s with relayOnlySession := true })
+  if !opened then b.pool.stopIfRelayOnly
+  return opened
 
 /-- Validates, stores and announces a raw signed transaction; returns its txid (internal order). -/
 def broadcast (b : TxBroadcaster) (rawTx : ByteArray) (feeRate : Option Float := none) : NetM ByteArray := do

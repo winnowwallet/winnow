@@ -29,6 +29,15 @@ through an `EventStream`. The clock is injectable (`now`, monotonic milliseconds
 namespace Winnow.IO
 open Winnow.Net
 
+/-- What a pool is doing for its owner (`PeerPool.Mode`). -/
+inductive PoolMode where
+  /-- dial up to `peerCount`, replace dead seats, sync headers and filters, relay -/
+  | full
+  /-- keep a few of the peers already seated so a pending payment goes on being announced; dial nothing,
+  resolve no addresses, run no replacement monitor, refuse header (and so filter) sync -/
+  | relayOnly
+  deriving Repr, BEq, Inhabited
+
 structure PoolState where
   peers : Array PeerConnection := #[]
   /-- Insertion-ordered set (Swift's `Set`, whose order is unspecified). -/
@@ -47,6 +56,9 @@ structure PoolState where
   validatedTip : Option UInt32 := none
   staleTipJudged : Std.HashSet PeerEndpoint := {}
   monitorGeneration : Nat := 0
+  mode : PoolMode := .full
+  /-- seats a relay-only session was asked to keep; zero in `.full` -/
+  relaySeats : Nat := 0
 
 /-- The UI snapshot (`ConnectionStatus`). -/
 structure ConnectionStatus where
@@ -114,9 +126,17 @@ def new (params : NetworkParams) (peerCount : Nat := 3) (manualPeers : Array Pee
            maxDialAttempts, seedResolver := resolver, censusCatalog, avoidOnReset, now, monitorIntervalMs,
            state := ← IO.mkRef st }
 
+/-- Seats `enterRelayOnly` keeps unless asked otherwise. -/
+def defaultRelaySeats : Nat := 1
+
+def mode (p : PeerPool) : BaseIO PoolMode := do return (← p.state.get).mode
+def isRunning (p : PeerPool) : BaseIO Bool := do return (← p.state.get).started
+
 def connectionStatus (p : PeerPool) : BaseIO ConnectionStatus := do
   let s ← p.state.get
-  return { connected := s.peers.size, target := p.peerCount, dialing := s.replenishing,
+  -- the seats of the current mode, so a paused pool does not read as permanently short of peers
+  let target := if s.mode == .full then p.peerCount else s.relaySeats
+  return { connected := s.peers.size, target, dialing := s.replenishing,
            attempts := s.attemptsThisRound, exhausted := s.exhausted }
 
 /-- Currently connected peers (snapshot). -/
@@ -246,7 +266,7 @@ mutual
 /-- Dials until the pool is full or the round's candidates are used up. -/
 partial def replenish (p : PeerPool) : IO Unit := do
   let go ← p.state.modifyGet fun s =>
-    if s.started && !s.replenishing && s.peers.size < p.peerCount then
+    if s.started && s.mode == .full && !s.replenishing && s.peers.size < p.peerCount then
       (true, { s with replenishing := true, attemptsThisRound := 0, exhausted := false })
     else (false, s)
   if !go then return
@@ -259,7 +279,7 @@ partial def replenish (p : PeerPool) : IO Unit := do
   let mut next := 0
   let mut running := 0
   let done : EventStream (PeerEndpoint × Option PeerConnection) Unit ← EventStream.new 0 1_000_000
-  while (← p.state.get).peers.size < p.peerCount && (← p.state.get).started do
+  while (← p.state.get).peers.size < p.peerCount && (← p.state.get).started && (← p.state.get).mode == .full do
     if next ≥ queue.size && !resolvedSeeds then
       resolvedSeeds := true
       let seen := queue.foldl (fun acc c => acc.insert c.endpoint) excluded
@@ -291,6 +311,11 @@ partial def replenish (p : PeerPool) : IO Unit := do
     running := running - 1
     p.state.modify fun st => { st with inFlight := st.inFlight.filter (·.1 != endpoint) }
     if let some c := peer then c.disconnect
+  -- a round that ended because the pool narrowed is not one that came up short: a relay-only session
+  -- neither evicts nor refills
+  if (← p.state.get).mode != .full then
+    p.state.modify fun st => { st with replenishing := false }
+    return
   let evicted ← p.evictStaleTips
   let st ← p.state.modifyGet fun st =>
     let st := { st with exhausted := st.peers.size < p.peerCount, replenishing := false }
@@ -311,10 +336,17 @@ end
 /-- Dials again immediately (the UI retry after exhaustion). -/
 def retry (p : PeerPool) : IO Unit := p.replenish
 
-/-- Connects to `peerCount` peers and starts the replacement monitor. -/
+/-- Connects to `peerCount` peers and starts the replacement monitor. Also the way back from
+`.relayOnly`: a narrowed pool is still running, so this restores full service, refills the seats the
+session dropped and starts the monitor again (the relay prune, which runs on the same generation, ends). -/
 def start (p : PeerPool) : IO Unit := do
   let (go, gen) ← p.state.modifyGet fun s =>
-    if s.started then ((false, 0), s) else ((true, s.monitorGeneration), { s with started := true })
+    let resuming := s.started && s.mode == .relayOnly
+    if s.started && !resuming then ((false, 0), s)
+    else
+      let gen := s.monitorGeneration + 1
+      ((true, gen), { s with started := true, mode := .full, relaySeats := 0, monitorGeneration := gen,
+                             rejectedForSession := if resuming then s.rejectedForSession else {} })
   if !go then return
   p.replenish
   spawn do
@@ -327,11 +359,48 @@ def start (p : PeerPool) : IO Unit := do
 /-- Disconnects everything and persists the good-peers list. -/
 def stop (p : PeerPool) : IO Unit := do
   let (inFlight, peers) ← p.state.modifyGet fun s =>
-    ((s.inFlight, s.peers), { s with started := false, monitorGeneration := s.monitorGeneration + 1, inFlight := #[] })
+    ((s.inFlight, s.peers), { s with started := false, monitorGeneration := s.monitorGeneration + 1, inFlight := #[],
+                                     mode := .full, relaySeats := 0 })
   for (_, c) in inFlight do c.disconnect
   for c in peers do c.disconnect
   p.state.modify fun s => { s with peers := #[], rejectedForSession := {} }
   p.persistKnownGood
+
+/-- Narrows the pool to transaction relay (`enterRelayOnly(seats:)`): keeps at most `seats` of the peers it
+has, disconnects the rest, stops dialling and the replacement monitor; header and filter sync are refused
+while it lasts. A relay prune drops seats whose connection closed (replacing one would mean dialling).
+The split is taken and written in one step before anything is awaited, so the seats kept are the seats
+looked at. Returns the seats held once the rest are disconnected; a stopped pool is not narrowed (0). -/
+def enterRelayOnly (p : PeerPool) (seats : Nat := defaultRelaySeats) : IO Nat := do
+  let r ← p.state.modifyGet fun s =>
+    if !s.started then (none, s)
+    else
+      let gen := s.monitorGeneration + 1
+      (some (s.peers.extract seats s.peers.size, gen),
+       { s with mode := .relayOnly, relaySeats := seats, monitorGeneration := gen, attemptsThisRound := 0,
+                exhausted := false, peers := s.peers.extract 0 seats })
+  let some (dropped, gen) := r | return 0
+  for peer in dropped do peer.disconnect
+  p.persistKnownGood
+  -- a `start` inside the disconnects took the pool back: no relay prune on a pool in full service
+  let s ← p.state.get
+  if s.mode == .relayOnly && s.monitorGeneration == gen then
+    spawn do
+      repeat
+        sleepMs p.monitorIntervalMs
+        let s ← p.state.get
+        if !s.started || s.mode != .relayOnly || s.monitorGeneration != gen then break
+        let mut dead : Array Nat := #[]
+        for c in s.peers do
+          if !(← c.isConnected) then dead := dead.push c.uid
+        unless dead.isEmpty do
+          p.state.modify fun st => { st with peers := st.peers.filter (!dead.contains ·.uid) }
+  return (← p.state.get).peers.size
+
+/-- `stopIfRelayOnly()`: stops the pool if it is still the relay-only session, as one step; a pool back
+in full service is left as its caller put it. -/
+def stopIfRelayOnly (p : PeerPool) : IO Unit := do
+  if (← p.state.get).mode == .relayOnly then p.stop
 
 /-- Forgets every remembered good peer (manual peers survive). Call after `stop`. -/
 def forgetKnownGood (p : PeerPool) : IO Unit := do
@@ -407,6 +476,7 @@ private def settledSync (p : PeerPool) (chain : HeaderStore) (peer : PeerConnect
 /-- Syncs headers against connected peers with bounded failover. -/
 def syncHeaders (p : PeerPool) (chain : HeaderStore) (timeoutPerPeerMs : Nat := 30_000) (maxAttempts : Nat := 6)
     (maxTransportRetries : Nat := 12) : NetM SyncOutcome := do
+  if (← p.state.get).mode != .full then throw (.pool .relayOnly)
   let mut attempts := 0
   let mut transportRetries := 0
   let mut lastError : Option NetError := none

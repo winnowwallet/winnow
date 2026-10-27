@@ -264,6 +264,8 @@ def sync (f : FilterSyncIO) (watchScripts : Array ByteArray) (maxBlocks : Option
     (onReorg : Option (UInt32 → NetM Unit) := none) (onMatch : BlockMatch → NetM Unit) : NetM Unit := do
   f.beginRequest
   try
+    -- a pool holding seats so a signed payment can go out is not a pool to scan over
+    if (← f.pool.mode) != .full then throw (.filters .relayOnly)
     let peers ← f.pool.connectedPeers
     if peers.isEmpty then throw (← f.noPeersError)
     let headerOutcome ← f.pool.syncHeaders f.chain

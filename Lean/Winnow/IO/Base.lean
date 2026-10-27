@@ -53,15 +53,20 @@ end PeerError
 /-- `PeerPoolHeaderSyncError` (Network/Peers/PeerPool.swift). -/
 inductive PoolError where
   | noPeers
+  /-- the pool is in a relay-only session, which does not read the chain -/
+  | relayOnly
   | exhausted (attempts : Nat) (lastError : String)
   | allPeersCoolingDown (cooling : Nat) (lastError : String)
   deriving Repr, BEq, Inhabited
 
 namespace PoolError
 def name : PoolError → String
-  | .noPeers => "noPeers" | .exhausted .. => "exhausted" | .allPeersCoolingDown .. => "allPeersCoolingDown"
+  | .noPeers => "noPeers" | .relayOnly => "relayOnly" | .exhausted .. => "exhausted"
+  | .allPeersCoolingDown .. => "allPeersCoolingDown"
 def description : PoolError → String
   | .noPeers => "No Bitcoin peers are available for block-header sync."
+  | .relayOnly =>
+    "Winnow is keeping Bitcoin peers connected only to finish relaying a payment. Resume syncing to download block headers."
   | .exhausted a e =>
     s!"Winnow tried {a} Bitcoin peer{if a == 1 then "" else "s"}, but none supplied a usable block-header chain. Last error: {e}"
   | .allPeersCoolingDown c e =>
@@ -84,6 +89,8 @@ def HeaderChainError.description : HeaderChainError → String
 def FilterSyncError.description : FilterSyncError → String
   | .busy => "Finishing sync. Try loading the payment again in a moment."
   | .noPeers => "No Bitcoin peers are available for compact-filter synchronization."
+  | .relayOnly =>
+    "Winnow is keeping Bitcoin peers connected only to finish relaying a payment. Resume syncing to scan for new blocks."
   | .peersCoolingDown c =>
     s!"{c} Bitcoin peer{if c == 1 then " is" else "s are"} resting briefly after a slow reply. Scanning will resume on its own."
   | .checkpointMismatch r => s!"Bitcoin peers disagreed about compact-filter checkpoints ({r})."

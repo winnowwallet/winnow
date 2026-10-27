@@ -514,8 +514,29 @@ def nodeChecks (dir : String) (n : Node) (swift : Option String) : IO Unit := do
   let b2 ← runNet "broadcaster reload" (TxBroadcaster.new pool (some broadcastPath))
   check "broadcast.json round trip" (b2.persistenceState == .loaded 1 && (← b2.pendingTxids) == #[txid] &&
     (← b2.rawTransaction txid) == some raw && (← b2.wasServed txid))
+  -- 7b. A relay-only session over the pending payment (#226): the pool keeps one seat, refuses header and
+  -- filter sync, comes back with start(); the drain then ends the session and leaves the resumed pool alone.
+  let b2events ← collect (← b2.events)
+  check "relay-only: the pool is running with its seat" ((← pool.isRunning) && (← pool.connectedPeers).size == 1)
+  check "relay-only: a session opens over a pending payment" (← runNet "enterRelayOnly" (b2.enterRelayOnly 1))
+  check "relay-only: the pool is narrowed to one seat" ((← pool.mode) == .relayOnly && (← pool.connectedPeers).size == 1 &&
+    (← pool.connectionStatus).target == 1)
+  check "relay-only: header sync is refused"
+    (match ← (pool.syncHeaders store).toBaseIO with | .error (.pool .relayOnly) => true | _ => false)
+  check "relay-only: filter sync is refused"
+    (match ← (fs.sync #[spk] (onMatch := fun _ => pure ())).toBaseIO with | .error (.filters .relayOnly) => true | _ => false)
+  pool.start
+  check "relay-only: start() resumes full service" ((← pool.mode) == .full && (← pool.isRunning))
   n.mine 1 mineAddr
   runNet "markConfirmed" (b2.markConfirmed txid (← n.height).toUInt32)
+  let drained ← waitUntil 5_000 (do
+    return (← b2events.get).any fun | .relaySessionEnded .drained => true | _ => false)
+  check "relay-only: the drain ends the session" (drained && !(← b2.isRelayOnly))
+  check "relay-only: and leaves a pool its caller resumed running" ((← pool.isRunning) && (← pool.mode) == .full)
+  check "relay-only: nothing pending, no session, and the pool goes quiet"
+    (!(← runNet "enterRelayOnly again" (b2.enterRelayOnly 1)) && !(← pool.isRunning))
+  pool.start
+  discard <| waitUntil 20_000 (do return (← pool.connectedPeers).size == 1)
   b2.shutdown
   let b3 ← runNet "broadcaster reload 2" (TxBroadcaster.new pool (some broadcastPath))
   check "confirmed tombstone persists and is silent" ((← b3.pendingTxids).isEmpty && (← b3.rawTransaction txid).isNone &&
