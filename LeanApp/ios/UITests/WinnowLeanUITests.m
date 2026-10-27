@@ -424,4 +424,22 @@ static NSArray<NSNumber *> *WLWitnessSizes(NSArray<NSString *> *witness, NSUInte
     XCTAssertTrue([tip[@"tx"] containsObject:txid], @"the payment was not mined");
 }
 
+/// The census list the build ships (project.yml bundles build/census/peers.json; CensusCatalog.bundled
+/// reads it beside the executable): Advanced mode's Settings on mainnet show its date and count, not the
+/// sentence for a build without one.
+- (void)testShippedCensus {
+    XCUIApplication *app = [self launch:@"census" extra:@{@"WINNOW_E2E_NETWORK": @"mainnet", @"WINNOW_E2E_ADVANCED": @"1"}];
+    [self createWallet:app];
+    XCUIElement *settings = app.tabBars.buttons[@"Settings"];
+    XCTAssertTrue([settings waitForExistenceWithTimeout:15]);
+    [settings tap];
+    XCUIElement *census = WLElement(app, @"censusCatalogText");
+    XCTAssertTrue([census waitForExistenceWithTimeout:20] && WLScrollTo(app, census), @"Settings show no census line");
+    NSString *line = WLText(census);
+    NSRegularExpression *shipped = [NSRegularExpression regularExpressionWithPattern:@"^Observed \\d{4}-\\d{2}-\\d{2}: \\d+ candidates\\.$" options:0 error:nil];
+    XCTAssertNotNil([shipped firstMatchInString:line options:0 range:NSMakeRange(0, line.length)], @"census line: %@", line);
+    XCTAssertGreaterThan(WLDigits([line substringFromIndex:[line rangeOfString:@": "].location]), 100);
+    WLShot(self, app, @"30-settings-census");
+}
+
 @end

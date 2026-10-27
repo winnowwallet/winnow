@@ -78,7 +78,7 @@ def settingsSections (m : Model) : List H :=
   [backupSection m] ++
   (if s.advancedMode then
     [.section "Mainnet peer list" "Each release carries the census of its day, the list it starts from. Every selected peer still undergoes Winnow's normal checks."
-      (match d.catalog with | some line => [body line] | none => [])] else []) ++
+      (match d.catalog with | some line => [.identified "censusCatalogText" (body line)] | none => [])] else []) ++
   (if s.showsManualPeers then
     [.section "Manual peers" "Manual peers are tried first. Seeds resolve over HTTPS (Cloudflare 1.1.1.1), with system DNS as the fallback. The default port is 8333 (mainnet) / 38333 (signet). Peers must advertise compact filters and pass Winnow's checks."
       ((s.manualPeers.zipIdx.map fun (p, i) => .row [caption p, .spacer, .button "Remove" .destructive (some (.settings (.removeManualPeer i)))]) ++

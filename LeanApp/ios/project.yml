@@ -26,6 +26,9 @@ targets:
       - { path: ../../docs/read-side.html, buildPhase: resources }
       - { path: ../../docs/write-side.html, buildPhase: resources }
       - { path: ../../docs/import.html, buildPhase: resources }
+      # the census list this build ships (CensusCatalog.bundled reads peers.json beside the executable),
+      # fetched by scripts/import-census (scripts/build-ios runs it when the list is missing)
+      - { path: ../../build/census/peers.json, buildPhase: resources }
     info:
       path: build/Info.plist
       properties:

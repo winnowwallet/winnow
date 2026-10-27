@@ -22,6 +22,7 @@
 - [signet-fixture](signet-fixture) provisions a disposable custom-signet bitcoind (`up`, `down`, `status`,
   `snapshot DIR`, `destroy`). For a regtest node with a funded wallet, use `LeanApp`'s `backend-test --fixture <dir>`.
 - [import-census](import-census) fetches the census's `census/peers.json` at a census commit (default: its
-  `main`) into `build/census/`, the peer list the app ships. Run it before XcodeGen.
+  `main`) into `build/census/`, the peer list the app ships (`project.yml` bundles it). `build-ios` runs it
+  when the list is missing; `IMPORT_CENSUS=1` fetches the latest again.
 
 Run commands from the repository root unless their help specifies otherwise.

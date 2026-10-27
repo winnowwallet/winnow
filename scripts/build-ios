@@ -19,6 +19,8 @@ case "$PLATFORM" in
   *) echo "platform: iossim or ios" >&2; exit 2 ;;
 esac
 (cd "$APP" && lake build WinnowApp)
+# the census list the app ships (project.yml bundles it); IMPORT_CENSUS=1 fetches the latest again
+if [ "${IMPORT_CENSUS:-0}" = 1 ] || [ ! -f "$ROOT/build/census/peers.json" ]; then "$ROOT/scripts/import-census"; fi
 # ios_lean_sources.sh reuses retargeted libraries newer than the toolchain's, whatever platform they were
 # retargeted to: start over when the platform changes
 mkdir -p "$OUT/lib"

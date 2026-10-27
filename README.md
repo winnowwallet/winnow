@@ -117,7 +117,8 @@ give them (`Html.identified`, the shell's `accessibilityIdentifier`) and checks 
   first address is Core's, the phone and both Cores sign, Core accepts a witness with exactly two
   signatures; after the one-day delay the phone alone spends on the recovery path;
 - `testLedgerPairVerifySpend`: pair test mode's simulated Ledger, have it verify the receive address,
-  and spend with the phone's and the Ledger's signatures.
+  and spend with the phone's and the Ledger's signatures;
+- `testShippedCensus`: the census peer list the build ships shows in Settings on mainnet.
 
 `scripts/ci-ui-journey` starts the node, runs them on a throwaway simulator (or `UI_SIMULATOR`) and keeps
 the result bundle, a screen recording, screenshots and the app's test-mode journal.
