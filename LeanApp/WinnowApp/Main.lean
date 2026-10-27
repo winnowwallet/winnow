@@ -24,6 +24,9 @@ initialize watcherToken : IO.Ref Nat ← IO.mkRef 0
 initialize e2eRef : IO.Ref (Option E2E.Mode) ← IO.mkRef none
 /-- `<Application Support>` itself: test mode's journal lives in its run directory there. -/
 initialize supportDir : IO.Ref String ← IO.mkRef ""
+/-- A Debug build, as the shell's `build` capability answers at boot. Test mode, sample data and tracing
+are Debug-only: a Release build ignores their environment variables. -/
+initialize debugBuild : IO.Ref Bool ← IO.mkRef false
 
 /-- `e2e?.journal(_:fields:)`: nothing outside test mode. -/
 def journal (name : String) (fields : List (String × String) := []) : IO Unit := do
@@ -72,7 +75,7 @@ def loadSettingsNoting : IO (Settings × Bool) := do
   | .error _ => return ({}, false)
 
 def trace (msg : String) : IO Unit := do
-  if (← IO.getEnv "WINNOW_LEAN_TRACE") == some "1" then IO.eprintln s!"[trace] {msg}"
+  if (← debugBuild.get) && (← IO.getEnv "WINNOW_LEAN_TRACE") == some "1" then IO.eprintln s!"[trace] {msg}"
 
 /-- Run `act` in a task and post its answer, or `failed gen ctx message`. -/
 def background (fx : Effects Host) (gen : Nat) (ctx : String) (act : IO Host) : IO Unit :=
@@ -103,9 +106,9 @@ def clipPolicyArgs (text : String) : ClipPolicy → Json
 
 /-- The backend, chosen once at boot: `Backend.real` over the shell's Keychain and `http.get`
 capabilities. `WINNOW_LEAN_SAMPLE=1` (passed with `SIMCTL_CHILD_` by `simctl launch`) runs the screens
-on sample data instead — a UI harness like Winnow's E2EMode. -/
+on sample data instead — a UI harness like Winnow's E2EMode (Debug builds only). -/
 def chooseBackend (fx : Effects Host) (mode : Option E2E.Mode := none) : IO Unit := do
-  if (← IO.getEnv "WINNOW_LEAN_SAMPLE") == some "1" then backendRef.set Backend.sample
+  if (← debugBuild.get) && (← IO.getEnv "WINNOW_LEAN_SAMPLE") == some "1" then backendRef.set Backend.sample
   else
     let service := (mode.map (·.keychainService)).getD Real.walletService
     let deps : Real.Deps := { keyStore := Real.shellKeyStore fx.ask service, fetch := Real.shellFetch fx.ask }
@@ -149,7 +152,9 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit := do
   match c with
   | .boot => discard <| IO.asTask do
       let build := (← IO.wait (← fx.ask "build" Json.null))
-      let mode ← if (build.getObjValAs? Bool "debug").toOption.getD false then resolveE2E else pure none
+      let debug := (build.getObjValAs? Bool "debug").toOption.getD false
+      debugBuild.set debug
+      let mode ← if debug then resolveE2E else pure none
       let paths := (← IO.wait (← fx.ask "paths" Json.null))
       let support := (paths.getObjValAs? String "support").toOption.getD "."
       supportDir.set support

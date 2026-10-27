@@ -58,3 +58,5 @@ targets:
         # ad-hoc signed in the simulator: an unsigned app has no Keychain entitlement (errSecMissingEntitlement)
         "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]": "-"
         "CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]": "NO"
+        # Lean's runtime is arm64 only (build/lib): no Intel simulator slice
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
