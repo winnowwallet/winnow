@@ -97,10 +97,15 @@ inductive AppError where
   | spendAlreadyInFlight
   | noStorage
   | paymentDetailsUnavailable
+  | feeDecisionRequired (rate floor : Float)
 
 def AppError.text : AppError → String
   | .noWallet => "No wallet is open."
   | .paymentDetailsUnavailable => "Payment details aren’t available on this phone."
+  | .feeDecisionRequired rate floor =>
+    s!"Connected peers require at least {SwiftDouble.description floor} sat/vB to relay this payment, above the selected {SwiftDouble.description rate} sat/vB. " ++
+    s!"Enter an explicit rate of at least {SwiftDouble.description floor} sat/vB, or wait for the floor to change. " ++
+    "Winnow will not raise an automatic rate that far on its own."
   | .noStack => "The sync stack is not running."
   | .noPeers => "No peers reachable. Check the network connection or add a manual peer in Settings."
   | .mnemonicUnavailable => "The new wallet's mnemonic could not be read back from the Keychain."

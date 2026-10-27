@@ -4,7 +4,7 @@ Strongest first: an explicit user override, else the median rate observed in the
 transactions, else a static preset per priority; the result is clamped from below by the peers' BIP133
 `feefilter` floor. Rates are sat/vB as `Float` (Swift's `Double`). Upstream 1cf93fb adds `resolution`, with
 an explicit cap on a peer-driven increase and the clamped floor reported, `acceptsRate` and
-`seatMajorityFloor` (the pure parts; the pool's floor aggregation is not ported). -/
+`seatMajorityFloor`; the pool's aggregation is `WinnowApp.Real.feeFloor`. -/
 
 namespace Winnow.FeePolicy
 

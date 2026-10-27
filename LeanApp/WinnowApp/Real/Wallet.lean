@@ -79,12 +79,32 @@ def historyItem (e : HistoryEntry) (owned : Std.HashSet ByteArray) (net : Tx.Bit
     fee := e.fee.map (·.toInt), replacedBy := e.replacedBy.map Winnow.displayHex, outputs,
     fundingAddresses := e.fundingScripts.toList.filterMap (AddressDecoder.address · net) }
 
-/-- `feeFilterFloorSatPerVByte()` in thousandths: the strictest BIP133 filter (sat/kvB). -/
-def feeFloorMilli (pool : PeerPool) : IO (Option Nat) := do
-  let mut floors : Array Int64 := #[]
+/-- `FeePolicy.FloorAggregation`: how the connected peers' BIP133 floors become one. -/
+inductive FloorAggregation where
+  /-- the highest floor any connected peer reports -/
+  | strictest
+  /-- the lower median across the configured seats, a missing report counting as zero -/
+  | seatMajority
+  /-- the lowest floor any connected peer reports; none while a connected peer has not reported -/
+  | mostLenient
+
+/-- `feeFilterFloorSatPerVByte(aggregation:)` (sat/vB; feefilter is sat/kvB). -/
+def feeFloor (pool : PeerPool) (aggregation : FloorAggregation := .seatMajority) : IO (Option Float) := do
+  let mut reports : Array Float := #[]
+  let mut unreported := 0
   for peer in ← pool.connectedPeers do
-    if let some f ← peer.feeFilter then floors := floors.push f
-  return floors.foldl (fun acc f => some (max (acc.getD 0) (natOf f))) none
+    match ← peer.feeFilter with
+    | some f => reports := reports.push (f.toInt.toFloat / 1000)
+    | none => unreported := unreported + 1
+  return match aggregation with
+    | .strictest => reports.foldl (fun acc r => some (max (acc.getD r) r)) none
+    | .seatMajority => FeePolicy.seatMajorityFloor reports pool.peerCount
+    | .mostLenient => if unreported > 0 then none else reports.foldl (fun acc r => some (min (acc.getD r) r)) none
+
+/-- `feeFilterFloorSatPerVByte()` in thousandths of sat/vB: the seat majority (the floor a quote is priced
+against; a lone peer's floor cannot set the wallet's). -/
+def feeFloorMilli (pool : PeerPool) : IO (Option Nat) := do
+  return (← feeFloor pool .seatMajority).map milliOf
 
 /-- `journalSnapshotIfChanged()`: public facts only (txids, heights, counts),
 journaled when they changed. `status.history` is the display order (`historyForDisplay`). -/

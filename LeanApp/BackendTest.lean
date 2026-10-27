@@ -485,6 +485,9 @@ def flow (dir : String) (n : Node) : IO Unit := do
   check "previewSend: amount, fee, one input, change" (p.amount == amount && p.fee > 0 && p.inputCount == 1 &&
     p.change == some (100_000_000 - amount - p.fee) && p.feeRateMilli == 5000) s!"fee {p.fee}, change {p.change}"
   check "previewSend: synced, so the locktime does not lag" (!p.locktimeLagsTip)
+  -- the node's BIP133 feefilter, as the seat majority of the one configured seat (bitcoind rounds its floor)
+  let (sFloor, _) ← a.snapshot
+  check "fee floor: the node's feefilter, as the seat majority" (sFloor.feeFloorMilli.any (· > 0)) s!"{sFloor.feeFloorMilli}"
   -- A summary the review never produced is refused.
   let forged ← attempt (a.sendPayment inputs { p with fee := p.fee + 1 })
   check "sendPayment refuses a summary that was not reviewed" (match forged with

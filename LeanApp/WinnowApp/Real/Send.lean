@@ -20,17 +20,34 @@ def priorityOf : Nat → FeePolicy.Priority
   | 2 => .high
   | _ => .medium
 
-/-- `resolvedFeeRate(priority:override:)`: override, the wallet's observed median, the preset; never
-below the peers' strictest BIP133 floor. -/
-def resolveRate (env : Env) (priority : Nat) (overrideMilli : Option Nat) : IO Float := do
+/-- `resolvedFee(priority:override:)`: override, the wallet's observed median, the preset; raised to the
+peers' seat-majority BIP133 floor up to the 120 sat/vB cap, which `clampedFloor` reports. -/
+def resolveFee (env : Env) (priority : Nat) (overrideMilli : Option Nat) : IO FeePolicy.Resolution := do
   let c ← env.get
   let observed ← match c.wallet with
     | some w => w.observedFeeRates
     | none => pure #[]
   let floor ← match c.stack with
-    | some s => (·.map rateOfMilli) <$> feeFloorMilli s.pool
+    | some s => feeFloor s.pool .seatMajority
     | none => pure none
-  return FeePolicy.resolve (priorityOf priority) (overrideMilli.map rateOfMilli) observed floor
+  return FeePolicy.resolution (priorityOf priority) (overrideMilli.map rateOfMilli) none observed floor
+
+/-- `resolvedFeeRate(priority:override:)`. -/
+def resolveRate (env : Env) (priority : Nat) (overrideMilli : Option Nat) : IO Float := do
+  return (← resolveFee env priority overrideMilli).rate
+
+/-- `requireRelayFee(rate:floor:)`. -/
+def requireRelayFee (rate : Float) (floor : Option Float) : IO Unit := do
+  if let some f := floor then
+    if rate < f then failWith (.feeDecisionRequired rate f)
+
+/-- `requireRelayFloors(rate:)`: the live floors a rate must clear before anything is signed or announced:
+the seat majority, which prices the quote, and the most lenient connected peer, below which nobody
+connected would relay (so empty seats cannot outvote a lone peer's floor). No stack, no floor. -/
+def requireRelayFloors (env : Env) (rate : Float) : IO Unit := do
+  let some s := (← env.get).stack | return
+  requireRelayFee rate (← feeFloor s.pool .seatMajority)
+  requireRelayFee rate (← feeFloor s.pool .mostLenient)
 
 /-- `SendPreview.authorizes(_:resolvedSilentPayments:)`: fee, change, inputs in order, and the outputs
 exactly. A silent payment's script comes from the wallet (`resolved`, one per reviewed silent payment, same
@@ -58,7 +75,13 @@ def sameSummary (a b : Preview) : Bool :=
 
 /-- `previewSend(destination:…)` / `previewSend(to:…)` for the everyday wallet. -/
 def previewSend (env : Env) (inputs : SendInputs) : IO Preview := do
-  let feeRate ← resolveRate env inputs.priority (parseRateMilli inputs.override)
+  -- `requireUsableOverride`: an override outside the band is refused where it was typed
+  if let some o := parseRateMilli inputs.override then
+    unless FeePolicy.acceptsRate (rateOfMilli o) do failText (CoinSelectionError.invalidFeeRate (rateOfMilli o)).description
+  let resolution ← resolveFee env inputs.priority (parseRateMilli inputs.override)
+  requireRelayFee resolution.rate resolution.clampedFloor
+  requireRelayFloors env resolution.rate
+  let feeRate := resolution.rate
   let (destination, recipient) ← match inputs.personID with
     | some id => do
       let (address, index, r) ← env.hooks.personPayment id
@@ -105,6 +128,8 @@ def exclusively {α} (env : Env) (act : IO α) : IO α := do
 /-- `broadcast(_:feeRateSatPerVByte:)`: P2P relay only. -/
 def broadcastTx (env : Env) (tx : Transaction) (rate : Option Float) : IO ByteArray := do
   let some s := (← env.get).stack | failWith .noStack
+  -- the final gate: the live floors again, as the review saw them may have moved
+  if let some r := rate then requireRelayFloors env r
   let raw := tx.serialized true
   let txid ← runNet (s.broadcaster.broadcast raw rate)
   env.journal "transaction.broadcast" [("txid", Winnow.displayHex txid), ("raw", hex raw)]
@@ -151,6 +176,8 @@ def bumpSummary (p : Winnow.FeeBumpPreview) : WinnowApp.FeeBumpPreview :=
 /-- `previewFeeBump(txid:feeRateSatPerVByte:)`; the full preview is kept for `bumpFee`. -/
 def previewFeeBump (env : Env) (txid : String) (milli : Nat) : IO WinnowApp.FeeBumpPreview := do
   let some w := (← env.get).wallet | failWith .noWallet
+  -- refused at review, before authentication and signing; `broadcastTx` asks again
+  requireRelayFloors env (rateOfMilli milli)
   let p ← runWM (w.previewFeeBump (ofDisplayHex! txid) (rateOfMilli milli))
   env.modify fun c => { c with bumps := ((c.bumps.filter (·.1 != txid)).push (txid, p)).extract 0 16 }
   return bumpSummary p
