@@ -38,3 +38,9 @@ root = "OraclePure"
 [[lean_exe]]
 name = "oracle-e2e"
 root = "OracleE2E"
+
+# The app's Ledger transport over the shell's ble.* capabilities, against a fake peripheral backed by
+# the Lean Ledger simulator.
+[[lean_exe]]
+name = "ledger-transport-test"
+root = "LedgerTransportTest"

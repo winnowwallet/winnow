@@ -41,6 +41,8 @@ targets:
               - UISceneConfigurationName: Default
                 UISceneDelegateClassName: ELSceneDelegate
         NSFaceIDUsageDescription: "Approve payments and reveal your recovery words."
+        # a paired Ledger signs multisig spends over the shell's ble.* capabilities (upstream's text)
+        NSBluetoothAlwaysUsageDescription: "Winnow talks to your Ledger over Bluetooth to have it sign multisig payments you approve on its screen."
         ITSAppUsesNonExemptEncryption: false
     settings:
       base:
