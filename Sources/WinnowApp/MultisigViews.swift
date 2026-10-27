@@ -7,7 +7,6 @@ import SwiftUI
 enum MultisigRoute: Hashable {
     case add
     case build
-    case pairLedger
     case account(String)
     case psbt(String)
 }
@@ -34,12 +33,10 @@ struct MultisigSection: View {
                 .accessibilityIdentifier("multisigBuildButton")
             NavigationLink(value: MultisigRoute.add) { Text("Join with a descriptor") }
                 .accessibilityIdentifier("multisigAddButton")
-            NavigationLink(value: MultisigRoute.pairLedger) { Text("Pair a Ledger (2-of-2)") }
-                .accessibilityIdentifier("multisigPairLedgerButton")
         } header: {
             Text("Multisig")
         } footer: {
-            Text("k-of-n Taproot accounts with other Winnows, a Ledger or any signer, shared as a descriptor and spent with PSBTs. Any k signers spend at once; an optional recovery path lets fewer signers, or a separate key, spend a coin that has not moved for a set number of blocks.")
+            Text("k-of-n Taproot accounts with other Winnows, a Ledger or any signer, shared as a descriptor and spent with PSBTs. Any k signers spend at once; a phone and its Ledger can count as one signer; an optional recovery path lets fewer signers, or a separate key, spend a coin that has not moved for a set number of blocks. Pair a Ledger and save other people's keys under Settings → Signers.")
         }
     }
 
@@ -48,7 +45,6 @@ struct MultisigSection: View {
         switch route {
         case .add: MultisigAddView()
         case .build: MultisigBuildView()
-        case .pairLedger: LedgerPairView()
         case let .account(id): MultisigAccountView(recordID: id)
         case let .psbt(id): MultisigPSBTView(recordID: id)
         }
@@ -108,6 +104,7 @@ struct MultisigAddView: View {
     @State private var name = ""
     @State private var error: String?
     @State private var saving = false
+    @State private var saved = false
 
     private var keyExpression: String? { try? model.multisigKeyExpression() }
 
@@ -133,6 +130,7 @@ struct MultisigAddView: View {
                     CopyableIdentifier(
                         value: "tr(\(Taproot.unspendableInternalKey.hex),sortedmulti_a(2,\(keyExpression),OTHER_KEY))",
                         abbreviated: true, label: "Copy 2-of-2 template", accessibilityID: "multisigTemplateCopy")
+                    MemberShareRows(phoneKey: keyExpression)
                 } else {
                     Text("This wallet has no shareable account key.")
                         .foregroundStyle(.secondary)
@@ -140,7 +138,7 @@ struct MultisigAddView: View {
             } header: {
                 Text("This phone's key")
             } footer: {
-                Text("One signer must be this key. Every signer is an extended public key with its origin and the /<0;1>/* suffix; the internal key is the unspendable NUMS point.")
+                Text("One signer must be this key. Every signer is an extended public key with its origin and the /<0;1>/* suffix; the internal key is the unspendable NUMS point. To count this phone and its Ledger as one signer of someone else's account, send both keys together.")
             }
 
             Section("Descriptor") {
@@ -154,12 +152,17 @@ struct MultisigAddView: View {
                     .accessibilityIdentifier("multisigDescriptorPasteButton")
                 switch validation {
                 case let .success(account):
-                    LabeledContent("Policy", value: "\(account.threshold) of \(account.signers.count)")
+                    LabeledContent("Policy", value: account.policySummary)
                     if let address = try? account.address(index: 0) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("First address").font(.caption).foregroundStyle(.secondary)
                             ReviewAddress(address: address)
                         }
+                    }
+                    if let ledger = model.pairedLedgers(in: account).first {
+                        Text("\(ledger.name) holds a key of this account and approves it on its screen after Save.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("multisigJoinLedgerNotice")
                     }
                 case let .failure(failure):
                     Text(failure.localizedDescription)
@@ -178,22 +181,36 @@ struct MultisigAddView: View {
         .navigationTitle("Add multisig account")
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button(saving ? "Saving…" : "Save") { save() }
-                    .accessibilityIdentifier("multisigSaveButton")
-                    .disabled(saving || DisplayName.normalized(name) == nil
-                        || (try? validation?.get()) == nil)
+                if saved {
+                    Button("Done") { dismiss() }
+                        .accessibilityIdentifier("multisigSaveButton")
+                } else {
+                    Button(saving ? "Saving…" : "Save") { save() }
+                        .accessibilityIdentifier("multisigSaveButton")
+                        .disabled(saving || DisplayName.normalized(name) == nil
+                            || (try? validation?.get()) == nil)
+                }
             }
         }
     }
 
+    /// Files the account, then has this phone's paired Ledger approve it
+    /// when one holds a key of it; a Ledger that did not can still register
+    /// it from the account screen.
     private func save() {
         saving = true
         error = nil
         Task {
             defer { saving = false }
             do {
-                try await model.addMultisigAccount(name: name, descriptor: descriptor)
-                dismiss()
+                let record = try await model.addMultisigAccount(name: name, descriptor: descriptor)
+                saved = true
+                do {
+                    _ = try await model.registerPairedLedger(record: record)
+                    dismiss()
+                } catch {
+                    self.error = "The account is on this phone, but the Ledger did not register it: \(error.localizedDescription) Register on Ledger from the account screen."
+                }
             } catch {
                 self.error = error.localizedDescription
             }
@@ -217,17 +234,22 @@ struct MultisigAccountView: View {
             if let record, let account = try? model.multisigAccount(for: record) {
                 Section {
                     MultisigValueRow(title: "Balance", value: satsText(record.balance), identifier: "multisigBalance")
-                    MultisigValueRow(title: "Policy", value: "\(account.threshold) of \(account.signers.count)",
-                                     identifier: "multisigPolicy")
+                    MultisigValueRow(title: "Policy", value: account.policySummary, identifier: "multisigPolicy")
                     if let recovery = account.recovery {
                         MultisigValueRow(title: "Recovery", value: Self.recoveryText(recovery, account: account),
                                          identifier: "multisigRecovery")
                     }
                     if let ledger = record.ledger {
-                        MultisigValueRow(title: "Ledger", value: String(format: "%08x", ledger.masterFingerprint),
+                        let fingerprint = String(format: "%08x", ledger.masterFingerprint)
+                        MultisigValueRow(title: "Ledger",
+                                         value: model.signerNames(for: record)[ledger.masterFingerprint].map { "\($0) · \(fingerprint)" }
+                                             ?? fingerprint,
                                          identifier: "multisigLedgerFingerprint")
+                    } else if LedgerMultisig.namesALedgerKey(account) {
+                        LedgerRegisterButton(record: record)
                     }
                 }
+                if account.isNested { groupsSection(record, account) }
                 receiveSection(record, account)
                 Section("Spend") {
                     NavigationLink(value: MultisigRoute.psbt(record.id)) { Text("New or pasted PSBT") }
@@ -258,8 +280,13 @@ struct MultisigAccountView: View {
         }
     }
 
-    /// "after 4320 blocks: any 1 of the signers", or "… the recovery key".
+    /// "after 4320 blocks: any 1 of the signers", "… any 1 of the members"
+    /// for a nested account with a timelocked leaf per group of them, or
+    /// "… the recovery key".
     static func recoveryText(_ recovery: MultisigAccount.Recovery, account: MultisigAccount) -> String {
+        if let members = account.recoveryMembers {
+            return "after \(recovery.blocks) blocks: any \(members.threshold) of the members"
+        }
         let signerKeys = Set(account.signers.compactMap { signer -> Data? in
             guard case let .extended(key, _) = signer.base else { return nil }
             return key.publicKey
@@ -271,6 +298,57 @@ struct MultisigAccountView: View {
         let who = reused ? "any \(recovery.threshold) of the signers"
             : recovery.keys.count == 1 ? "the recovery key" : "\(recovery.threshold) of \(recovery.keys.count) recovery keys"
         return "after \(recovery.blocks) blocks: \(who)"
+    }
+
+    /// A nested account's members, or its leaves when they do not read as
+    /// members: each key by its fingerprint, this phone's, the paired
+    /// Ledger's and saved signers' named. Pinned by
+    /// AppTests/NestedMultisigFlowTests.
+    @ViewBuilder
+    private func groupsSection(_ record: MultisigAccountRecord, _ account: MultisigAccount) -> some View {
+        let ownKey = model.multisigOwnAccountKey
+        let names = model.signerNames(for: record)
+        if let members = account.members {
+            Section {
+                ForEach(members.groups.indices, id: \.self) { index in
+                    Text(Self.memberText(members, index, ownKey: ownKey, names: names))
+                        .font(.system(.caption, design: .monospaced))
+                        .accessibilityIdentifier("multisigMember-\(index)")
+                }
+            } header: {
+                Text("Members · any \(members.threshold) of \(members.groups.count)")
+            } footer: {
+                Text("A member signs with every key it has, or with its own threshold of them: any 2 of a 2-of-3 account's. Any \(members.threshold) members together can spend; fewer cannot, whatever keys they hold.")
+            }
+        } else {
+            Section("Ways to spend") {
+                ForEach(account.signersLeaves.indices, id: \.self) { index in
+                    let leaf = account.signersLeaves[index]
+                    Text("\(leaf.threshold) of: " + Self.groupText(leaf.keys, ownKey: ownKey, names: names))
+                        .font(.system(.caption, design: .monospaced))
+                }
+            }
+        }
+    }
+
+    /// A member's keys, "any 2 of: " first when it signs with fewer than
+    /// all of them. Pinned by AppTests/NestedMultisigFlowTests.
+    static func memberText(_ members: MultisigAccount.Members, _ index: Int, ownKey: Data?,
+                           names: [UInt32: String]) -> String {
+        let keys = members.groups[index]
+        let prefix = members.thresholds[index] < keys.count ? "any \(members.thresholds[index]) of: " : ""
+        return prefix + groupText(keys, ownKey: ownKey, names: names)
+    }
+
+    /// "6824f543 (this phone) · 5992698d (Nano X) · 1a2b3c4d (Bob)".
+    static func groupText(_ keys: [Descriptor.SingleKey], ownKey: Data?, names: [UInt32: String]) -> String {
+        keys.map { key in
+            guard let origin = key.origin else { return "no origin" }
+            let fingerprint = String(format: "%08x", origin.fingerprint)
+            if case let .extended(xpub, _) = key.base, xpub.publicKey == ownKey { return fingerprint + " (this phone)" }
+            if let name = names[origin.fingerprint] { return fingerprint + " (\(name))" }
+            return fingerprint
+        }.joined(separator: " · ")
     }
 
     @ViewBuilder
@@ -347,18 +425,34 @@ struct MultisigAccountView: View {
 /// read the same values the screen does.
 struct MultisigSigningScreen {
     var review: MultisigAccount.SpendReview
+    /// The leaves that can finish the spend: every signers' leaf always, the
+    /// recovery leaf too when every input's sequence meets its lock, which a
+    /// recovery spend does and so may a co-signer's BIP326 sequences on old
+    /// coins. Any one finishing is enough.
+    var paths: [MultisigAccount.SpendPath]
     /// Verified keys per usable path, by position among that path's keys.
     var approvals: [MultisigAccount.SpendPath: Set<Int>]
     var progress: MultisigSigningProgress
 
-    /// The leaves that can finish the spend: the signers' always, the
-    /// recovery leaf too when every input's sequence meets its lock, which a
-    /// recovery spend does and so may a co-signer's BIP326 sequences on old
-    /// coins. Either one finishing is enough.
-    var paths: [MultisigAccount.SpendPath] { Self.paths(for: review) }
+    static func paths(for review: MultisigAccount.SpendReview, account: MultisigAccount) -> [MultisigAccount.SpendPath] {
+        account.signersPaths + (review.path.isRecovery ? account.recoveryPaths : [])
+    }
 
-    static func paths(for review: MultisigAccount.SpendReview) -> [MultisigAccount.SpendPath] {
-        review.path == .recovery ? [.signers, .recovery] : [.signers]
+    /// The signature count row's title for `path`: a nested account names
+    /// its groups, on the recovery path too when that has a leaf per group.
+    static func signaturesTitle(_ path: MultisigAccount.SpendPath, account: MultisigAccount) -> String {
+        if let leaf = path.recoveryLeaf {
+            return account.recoveryLeaves.count > 1 ? "Recovery group \(leaf + 1) signatures" : "Recovery signatures"
+        }
+        return account.isNested ? "Group \((path.signersLeaf ?? 0) + 1) signatures" : "Signatures"
+    }
+
+    static func signatureCountIdentifier(_ path: MultisigAccount.SpendPath) -> String {
+        if let leaf = path.recoveryLeaf {
+            return leaf == 0 ? "multisigRecoverySignatureCount" : "multisigRecoverySignatureCount-\(leaf)"
+        }
+        let leaf = path.signersLeaf ?? 0
+        return leaf == 0 ? "multisigSignatureCount" : "multisigSignatureCount-\(leaf)"
     }
 }
 
@@ -551,9 +645,9 @@ struct MultisigPSBTView: View {
                 if let account, let screen {
                     ForEach(screen.paths, id: \.self) { path in
                         MultisigValueRow(
-                            title: path == .recovery ? "Recovery signatures" : "Signatures",
+                            title: MultisigSigningScreen.signaturesTitle(path, account: account),
                             value: "\(screen.approvals[path, default: []].count) of \(account.threshold(on: path))",
-                            identifier: path == .recovery ? "multisigRecoverySignatureCount" : "multisigSignatureCount")
+                            identifier: MultisigSigningScreen.signatureCountIdentifier(path))
                     }
                 }
             } else {

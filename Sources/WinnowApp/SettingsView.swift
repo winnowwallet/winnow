@@ -41,6 +41,7 @@ struct SettingsView: View {
             Form {
                 networkPickerSection
                 backupSections
+                SignersSection()
                 peerCatalogSection
                 manualPeersSection
                 explorerSection

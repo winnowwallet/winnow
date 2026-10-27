@@ -6,7 +6,17 @@ A Ledger with the Bitcoin app (version 2.1.2 or later; Bitcoin Test on signet)
 can be the second signer of a [multisig account](../Wallet/README.md): a 2-of-2
 `tr(NUMS, sortedmulti_a(2, phone, Ledger))` where the phone adds one
 script-path signature and the Ledger adds the other after showing the payment
-on its own screen. Nothing here depends on Ledger code: the client is written
+on its own screen. A phone and its Ledger can also count as one member of a
+nested account, one with a signers' leaf per group of members, or the Ledger
+can be one key of a 2-of-3 account that is a member: the Ledger then
+registers the whole tree as one policy and signs every leaf its key is in.
+The Bitcoin app takes a descriptor template of at most 512 characters
+(`MAX_DESCRIPTOR_TEMPLATE_LENGTH_V2` in its `src/common/wallet.h`, checked
+before the policy is shown) and 15 keys: a 2-of-3 account with two one-key
+members, seven leaves, is 335 characters; with a separate recovery key,
+368; three 2-of-3 accounts, any two, 27 leaves, do not fit, and
+`LedgerWalletPolicy` refuses them before the device is asked. The phone can
+hold such an account without a Ledger. Nothing here depends on Ledger code: the client is written
 from the app's documented protocol and its open-source Python client, and
 talks to any `LedgerTransport` (Bluetooth in the app, a simulator in tests).
 
