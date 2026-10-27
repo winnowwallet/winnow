@@ -9,6 +9,15 @@
 - [check-no-swift](check-no-swift) fails on any Swift source, Swift compile step or Swift library in the app.
 - [verify-release-no-test-mode](verify-release-no-test-mode) launches the Release and Debug simulator builds
   with test mode's environment: Debug must start the test run, Release must ignore it.
+- [ci-lane](ci-lane) runs one CI lane (`lean`, `regtest`, `ios`, `journey`); the workflows call it.
+- [ci-ui-journey](ci-ui-journey) runs the Objective-C UI journeys against a regtest fixture and keeps the
+  evidence.
+- [install-lean](install-lean) installs elan and the Lean toolchain on CI and release runners.
+- [testflight.sh](testflight.sh) drives App Store Connect (processing, notes, the internal group);
+  [asc-jwt](asc-jwt) mints its token, [ci-sign.sh](ci-sign.sh) writes the API key,
+  [check-release-policy](check-release-policy) checks the tag, and
+  [verify-signed-archive](verify-signed-archive) / [verify-exported-ipa](verify-exported-ipa) check what
+  is uploaded.
 - [ios-simulator](ios-simulator) prints one available iPhone (default) or iPad on the newest iOS runtime.
 - [signet-fixture](signet-fixture) provisions a disposable custom-signet bitcoind (`up`, `down`, `status`,
   `snapshot DIR`, `destroy`). For a regtest node with a funded wallet, use `LeanApp`'s `backend-test --fixture <dir>`.

@@ -88,18 +88,59 @@ well. The
 ## Build & test
 
 ```sh
-scripts/import-census                       # the census peer list the app ships (build/census)
 cd LeanApp
 lake build backend-test records-test        # Lean toolchain leanprover/lean4:v4.35.0 (elan)
 ./.lake/build/bin/backend-test               # end to end against a fresh regtest bitcoind
 ./.lake/build/bin/records-test
-<framework>/native/scripts/ios_lean_sources.sh . WinnowApp ios/build iossim
-cd ios && xcodegen generate && xcodebuild -scheme WinnowLean -destination 'platform=iOS Simulator,id=<udid>' build
+cd ..
+scripts/build-ios Debug                      # the app for the simulator, from a clean checkout
+scripts/ci-ui-journey                        # the Objective-C UI journeys against a regtest fixture
 ```
 
-`backend-test --fixture <dir>` leaves a funded regtest node running for manual simulator runs.
-`scripts/install-xcodegen` installs XcodeGen 2.46.0. Simulator builds are ad-hoc signed (an unsigned
-app has no Keychain entitlement).
+LeanApp pins the ElmLean framework by git (`LeanApp/lakefile.toml`); `lake` fetches it into
+`LeanApp/.lake/packages/elmlean`. `scripts/build-ios <Debug|Release> [iossim|ios]` builds WinnowApp,
+gathers the generated C, prints the Objective-C shell, writes the Xcode project (XcodeGen 2.46.0, from
+`scripts/install-xcodegen`) and builds it. Simulator builds are ad-hoc signed (an unsigned app has no
+Keychain entitlement). `backend-test --fixture <dir>` leaves a funded regtest node running for manual
+simulator runs. Tests find Bitcoin Core through `WINNOW_BITCOIND` / `WINNOW_BITCOIN_CLI`, Homebrew or the
+PATH.
+
+### UI tests
+
+`LeanApp/ios/UITests` holds XCUITest journeys in Objective-C (target `WinnowLeanUITests`). Each launches
+the app in test mode on the regtest node of `backend-test --fixture`, finds controls by the ids the views
+give them (`Html.identified`, the shell's `accessibilityIdentifier`) and checks the app against the node:
+
+- `testCreateReceiveSendConfirm`: create a wallet, receive from the node, review and send a payment the
+  node accepts, see it confirm;
+- `testMultisigTwoOfThreeWithRecovery`: a 2-of-3 with two Bitcoin Core wallets, built in the app; the
+  first address is Core's, the phone and both Cores sign, Core accepts a witness with exactly two
+  signatures; after the one-day delay the phone alone spends on the recovery path;
+- `testLedgerPairVerifySpend`: pair test mode's simulated Ledger, have it verify the receive address,
+  and spend with the phone's and the Ledger's signatures.
+
+`scripts/ci-ui-journey` starts the node, runs them on a throwaway simulator (or `UI_SIMULATOR`) and keeps
+the result bundle, a screen recording, screenshots and the app's test-mode journal.
+
+### CI and TestFlight
+
+`.github/workflows/ci.yml` runs the lanes of `scripts/ci-lane` on every pull request and push to main:
+on WarpBuild runners in parallel (`ci-parallel.yml`), or one after another on GitHub's hosted macOS for
+forks and on request (`ci-hosted.yml`):
+
+| lane | what |
+|---|---|
+| `lean` | builds `Lean/` and `LeanApp/` (every proof) and runs multisig-test, ledger-test, records-test, multisig-app-test, ledger-transport-test |
+| `regtest` | io-test, backend-test and multisig-differential against a disposable regtest bitcoind |
+| `ios` | Debug and Release for the simulator, Release for devices; `check-no-swift` on each; `verify-release-no-test-mode` |
+| `journey` | `scripts/ci-ui-journey` |
+
+`.github/workflows/release.yml`: a `vMAJOR.MINOR.PATCH` tag runs the whole CI, then archives the app as
+`com.btcswift.app` (team 2858MX5336, the identity of the Swift app it replaces), checks the archive and
+the exported IPA (`verify-signed-archive`, `verify-exported-ipa`, `check-no-swift`), uploads it and adds
+it to TestFlight's internal group (`scripts/testflight.sh`, whose App Store Connect token comes from
+`scripts/asc-jwt`). It uses the repository's secrets `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_PRIVATE_KEY`,
+`DEV_CERT_P12` and `DEV_CERT_P12_PASSWORD`. Dispatched by hand it runs the gates only.
 
 The public website is maintained in
 [winnowwallet/website](https://github.com/winnowwallet/website). This repository

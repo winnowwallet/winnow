@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+"""Check the archived or exported Lean app's identity and signature before it goes to TestFlight.
+
+    scripts/verify-signed-archive <WinnowLean.app> [--distribution]
+
+The same identity as the Swift app it replaces (com.btcswift.app, team 2858MX5336, so its Keychain items
+stay readable), the version release.yml set, arm64 only, no Swift. Unlike upstream's check there is no
+iCloud container: the Lean app has no iCloud backup yet."""
+import argparse
+import os
+from pathlib import Path
+import plistlib
+import subprocess
+
+
+def verify(app, distribution=False):
+    info = plistlib.loads((app / 'Info.plist').read_bytes())
+    assert info['CFBundleShortVersionString'] == os.environ['TESTFLIGHT_MARKETING_VERSION'], 'app version mismatch'
+    assert str(info['CFBundleVersion']) == os.environ['TESTFLIGHT_BUILD_NUMBER'], 'app build number mismatch'
+    assert info['CFBundleIdentifier'] == 'com.btcswift.app', 'app bundle mismatch'
+    assert info.get('ITSAppUsesNonExemptEncryption') is False, 'export compliance must be declared'
+    subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)
+    entitlements = plistlib.loads(subprocess.check_output(
+        ['codesign', '-d', '--entitlements', ':-', str(app)], stderr=subprocess.DEVNULL))
+    assert entitlements['application-identifier'] == '2858MX5336.com.btcswift.app', 'app signing identity mismatch'
+    assert entitlements['com.apple.developer.team-identifier'] == '2858MX5336', 'signing team mismatch'
+    if distribution or entitlements.get('get-task-allow') is not True:
+        assert entitlements.get('get-task-allow') is False, 'distribution must disable debugging'
+    binary = app / info['CFBundleExecutable']
+    architectures = subprocess.check_output(['lipo', '-archs', str(binary)], text=True).split()
+    assert architectures == ['arm64'], 'app must contain only the iPhone ARM64 executable'
+    linked = subprocess.check_output(['otool', '-L', str(binary)], text=True)
+    assert 'swift' not in linked.lower(), 'the app links a Swift library'
+    assert not (app / 'Frameworks').exists() or not any('swift' in p.name.lower() for p in (app / 'Frameworks').iterdir()), \
+        'the app bundles a Swift library'
+    print('Distribution identity, signature, ARM64 and no Swift verified.' if distribution
+          else 'Archive identity, signature, ARM64 and no Swift verified; distribution export is checked separately.')
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('app', type=Path)
+    parser.add_argument('--distribution', action='store_true')
+    args = parser.parse_args()
+    verify(args.app, args.distribution)

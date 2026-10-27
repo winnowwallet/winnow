@@ -56,7 +56,9 @@ This file is the plan and the status board; it is updated as each module lands.
 
 * The runtime libraries are macOS arm64 objects with their Mach-O `LC_BUILD_VERSION` rewritten to the
   iOS simulator (`retarget_ar.py`). Lean does not support this. Verified: the simulator runs Lean code
-  with GMP, tasks and libuv TCP (2026-10-26). Device (platform 2): the demo links (unsigned); not run on a device.
+  with GMP, tasks and libuv TCP (2026-10-26). Device (platform 2): the app links and archives for
+  `generic/platform=iOS` (2026-10-27, `scripts/build-ios Release ios`, unsigned); not run on a device. The
+  first TestFlight build is the first time Apple's processing and a device see it.
 * iOS suspends background apps and drops sockets: the peer layer needs reconnect-on-foreground.
 * HTTPS (census catalog, DNS-over-HTTPS, explorer) cannot be Lean: Lean's runtime links OpenSSL but exposes
   no TLS API, and `Std.Http` is server-only. It is the generic shell capability `http.get` (URLSession,
@@ -104,6 +106,31 @@ address on it.
 
 The simulator has no Bluetooth, so phases D and E are verified with a test-mode fake and the pure oracles.
 A device run with a Ledger is not claimed until one happens.
+
+## Tests, UI tests, CI and TestFlight
+
+Upstream's Swift tests, UI tests and workflows went with the Swift code; their Lean replacements:
+
+* **Lean tests**: multisig-test, ledger-test, records-test, multisig-app-test, ledger-transport-test, and
+  against a regtest bitcoind io-test, backend-test and multisig-differential (Bitcoin Core as the oracle).
+* **UI tests**: Objective-C XCUITest in `LeanApp/ios/UITests` (no Swift: the runner is Objective-C too),
+  driving the app in test mode against `backend-test --fixture`. Controls are found by id: ElmLean's
+  `Html.identified id child` (framework, with the erasure and Sat theorems extended to it) puts `"id"` on
+  the node's wire object and the shell sets it as the control's `accessibilityIdentifier`; the views use
+  upstream's identifier names where upstream had them. The journeys follow upstream's
+  `test01CreateReceiveSendConfirm` (without silent payments) and `MultisigJourney` (the account built in
+  the app's builder rather than pasted, so its recovery delay is a day, 144 blocks, not 3), plus a Ledger
+  journey on test mode's simulated device. Differences from upstream's harness: the node is regtest, not a
+  custom signet; Core co-signers are driven by bitcoin-cli from the runner (posix_spawn, as upstream).
+* **CI**: `scripts/ci-lane lean|regtest|ios|journey` on WarpBuild (`ci-parallel.yml`) or hosted macOS
+  (`ci-hosted.yml`), routed by `ci.yml` as upstream routes its lanes. The `ios` lane replaces upstream's
+  `strings`-based release check, which cannot work here (test mode is compiled into every build and
+  switched on only when the shell answers Debug): `verify-release-no-test-mode` launches the Release and
+  Debug builds with test mode's environment and requires Debug to start the run and Release to ignore it.
+  `check-no-swift` fails on any Swift source, compile step or library.
+* **TestFlight**: `release.yml` as upstream's (tag → CI → archive → verify → upload → internal group), as
+  `com.btcswift.app`. Not run yet: it needs a tag push. `asc-jwt` replaces `asc-jwt.swift`;
+  `verify-signed-archive` no longer requires the iCloud container (iCloud backup is not ported).
 
 ## Layers and status
 
