@@ -21,8 +21,8 @@ Differences of form from the Swift struct:
   closure, called once or twice) and the change position (Swift's `Int.random(in: 0 ... n)` inside
   `TransactionBuilder.build`); `sign` takes the BIP340 auxiliary randomness (Swift passes nil, so P256K
   draws it).
-* `MultisigAccountRecord.checkLedgerRegistration` needs `LedgerWalletPolicy` (Phase C); the record's
-  `ledger` field is carried and coded here, the check is not. -/
+* `MultisigAccountRecord.checkLedgerRegistration` needs `LedgerWalletPolicy`, so it is defined with the
+  Ledger signer (`Ledger/Multisig.lean`); the record's `ledger` field is carried and coded here. -/
 
 namespace Winnow
 open Keys SwiftJSON
