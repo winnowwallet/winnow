@@ -43,7 +43,7 @@ structure Backend where
   previewSend : SendInputs → IO Preview
   /-- Winnow's `send(preview:)` after authentication: rebuild, sign, check `authorizes`, broadcast,
   commit. The txid (display hex). -/
-  sendPayment : SendInputs → Preview → IO String
+  sendPayment : SendInputs → Preview → IO SentPayment
   rawTransactionHex : (txid : String) → IO (Option String)
   /-- Follow a broadcast: broadcaster events plus mempool-window echoes, until it confirms. -/
   watchRelay : (txid : String) → (RelayEvent → IO Unit) → IO Unit

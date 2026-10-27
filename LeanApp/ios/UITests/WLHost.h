@@ -9,11 +9,13 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// The run's configuration: the JSON file named by WINNOW_UI_CONFIG (xcodebuild passes it to the runner as
 /// TEST_RUNNER_WINNOW_UI_CONFIG), else `~/.winnow-lean-ui.json` on the host. Keys: `fixture` (the fixture
-/// directory), `bitcoinCli` and optionally `screenshots`.
+/// directory), `bitcoinCli`, `backendTest` (LeanApp's backend-test: the silent payment test receiver) and
+/// optionally `screenshots`.
 + (instancetype)shared;
 
 @property (readonly) NSString *fixtureDir;
 @property (readonly) NSString *bitcoinCli;
+@property (readonly) NSString *backendTest;
 @property (readonly, nullable) NSString *screenshotDir;
 @property (readonly) NSInteger p2p;
 @property (readonly) NSInteger rpc;
@@ -40,6 +42,10 @@ NS_ASSUME_NONNULL_BEGIN
 - (NSDictionary *)transaction:(NSString *)txid;
 /// The scriptPubKey (hex) the node derives for an address.
 - (NSString *)scriptPubKey:(NSString *)address;
+/// backend-test's silent payment test receiver (written from BIP352's receiving side): its code, and the
+/// output script it finds in a transaction on the node.
+- (NSString *)silentPaymentCode;
+- (NSString *)silentPaymentExpectedScript:(NSString *)txid;
 
 @end
 

@@ -122,6 +122,11 @@ def addressErrorText : AddressError → String
     s!"That address uses future Bitcoin witness version {v}. Winnow cannot safely send to it before the output type is activated."
   | .unsupportedWitnessProgram v l => s!"That address uses an unsupported witness-v{v} program length ({l} bytes)."
 
+/-- A refused silent payment code: `SilentPaymentAddressError` has no description of its own upstream, so
+the Send screen shows Swift's generic text for it. -/
+def silentPaymentErrorText (e : SilentPaymentAddressError) : String :=
+  s!"The operation couldn’t be completed. (WalletCore.SilentPaymentAddressError.{e.name})"
+
 /-- `KeyStoreError.errorDescription`. -/
 def keyStoreErrorText (e : Keys.KeyStoreError) : String :=
   match e.errorDescription with
@@ -218,6 +223,9 @@ structure SendReview where
   inputs : SendInputs
   summary : Preview
   payments : Array Payment
+  /-- BIP352 destinations: their scripts exist only once the wallet signs, so `authorizes` is handed the
+  scripts the wallet derived (SEC-018). -/
+  silentPayments : Array Keys.SilentPayment := #[]
   feeRate : Float
   fee : Int64
   changeAmount : Option Int64

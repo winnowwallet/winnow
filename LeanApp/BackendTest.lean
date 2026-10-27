@@ -370,6 +370,50 @@ def ledgerFlow (n : Node) (a : Backend) (msA : Real.MultisigApp) (device : IO.Re
     spends.all fun (_, t) => txs.contains t)
   return ids
 
+/-- BIP352 receiving for one output (k = 0), written from the BIP's receiver side (upstream's
+SilentPaymentTestReceiver): A = Σ the inputs' keys, input_hash over the smallest outpoint,
+ecdh = (input_hash · b_scan) · A, P = B_spend + t_0·G. The app computed a · B_scan; the two scripts agree
+only when its derivation is right. Prevouts come from the node's wallet `w`, which funded the coins. -/
+def receiverScript (n : Node) (tx : Json) (scanSecret spendKey : ByteArray) : IO ByteArray := do
+  let some vins := (tx.getObjValAs? (Array Json) "vin").toOption | throw (IO.userError "vin")
+  let mut keys : Array Keys.Point := #[]
+  let mut outpoints : Array ByteArray := #[]
+  for v in vins do
+    let txid := (v.getObjValAs? String "txid").toOption.getD ""
+    let vout := (v.getObjValAs? Nat "vout").toOption.getD 0
+    let funding ← n.json #["decoderawtransaction", (← n.json #["-rpcwallet=w", "gettransaction", txid]).getObjValD "hex" |>.getStr? |>.toOption |>.getD ""]
+    let some outs := (funding.getObjValAs? (Array Json) "vout").toOption | throw (IO.userError "prevout")
+    let script := ((outs[vout]!.getObjValD "scriptPubKey").getObjValAs? String "hex").toOption.getD ""
+    let witness := ((v.getObjValAs? (List String) "txinwitness").toOption.getD []).filterMap ofHex?
+    let scriptSig := (((v.getObjValD "scriptSig").getObjValAs? String "hex").toOption.bind ofHex?).getD .empty
+    let vo := vout.toUInt32
+    outpoints := outpoints.push (ByteArray.mk (ofHex? txid).get!.toList.reverse.toArray ++
+      ByteArray.mk #[vo.toUInt8, (vo >>> 8).toUInt8, (vo >>> 16).toUInt8, (vo >>> 24).toUInt8])
+    if let some key := Keys.SilentPaymentSending.eligiblePublicKey ((ofHex? script).getD .empty) scriptSig witness then
+      keys := keys.push (← IO.ofExcept ((Keys.parsePublicKey key).mapError (·.name)))
+  let sumA ← IO.ofExcept ((Keys.combine keys.toList).mapError (·.name))
+  let smallest := outpoints.foldl (fun m o => if Keys.SilentPaymentSending.bytesLess o m then o else m) outpoints[0]!
+  let inputHash := taggedHash "BIP0352/Inputs" (smallest ++ Keys.serializeCompressed sumA)
+  let scalar := (Secp.fromBE inputHash * Secp.fromBE scanSecret) % Keys.groupN
+  let shared ← IO.ofExcept ((Keys.publicMultiply sumA (Secp.toBE32 scalar)).mapError (·.name))
+  let t0 := taggedHash "BIP0352/SharedSecret" (Keys.serializeCompressed shared ++ ByteArray.mk #[0, 0, 0, 0])
+  let spend ← IO.ofExcept ((Keys.parsePublicKey spendKey).mapError (·.name))
+  let p ← IO.ofExcept (((do Keys.combine [spend, ← Keys.pointOfSecret (Secp.fromBE t0)] : Keys.PK Keys.Point)).mapError (·.name))
+  return ByteArray.mk #[0x51, 0x20] ++ Keys.xonlyBytes p
+
+/-- The test receiver's keys: fixed, so the UI journey can ask for its code and its expected output. -/
+def testScanSecret : ByteArray := Secp.toBE32 0x5ca1ab1e
+def testSpendSecret : ByteArray := Secp.toBE32 0x5be17
+
+def testReceiverCode : IO String := IO.ofExcept ((do
+  let scan ← (Keys.publicKeyOf testScanSecret).mapError (·.name)
+  let spend ← (Keys.publicKeyOf testSpendSecret).mapError (·.name)
+  let a ← (SilentPaymentAddress.make scan spend "tsp").mapError (·.name)
+  a.encoded.mapError (·.name) : Except String String))
+
+def testReceiverScript (n : Node) (tx : Json) : IO ByteArray := do
+  receiverScript n tx testScanSecret (← IO.ofExcept ((Keys.publicKeyOf testSpendSecret).mapError (·.name)))
+
 def flow (dir : String) (n : Node) : IO Unit := do
   say s!"node: bitcoind regtest pid {n.pid}, p2p {n.p2p}"
   discard <| n.cli #["createwallet", "w"]
@@ -446,7 +490,7 @@ def flow (dir : String) (n : Node) : IO Unit := do
   check "sendPayment refuses a summary that was not reviewed" (match forged with
     | .error e => e == "The available coins, fee, or change changed. Review the payment again before signing." | _ => false)
   -- 5. Send.
-  let txid ← a.sendPayment inputs p
+  let txid := (← a.sendPayment inputs p).txid
   let inMempool ← waitUntil 20_000 (do return (← n.mempool).contains txid)
   check "sendPayment: the node's mempool holds the txid" inMempool txid
   let raw ← a.rawTransactionHex txid
@@ -466,7 +510,7 @@ def flow (dir : String) (n : Node) : IO Unit := do
   let dest2 ← n.wallet #["getnewaddress"]
   let inputs2 : SendInputs := { destination := dest2, amount := "10000000", network := .regtest }
   let p2 ← a.previewSend inputs2
-  let txid2 ← a.sendPayment inputs2 p2
+  let txid2 := (← a.sendPayment inputs2 p2).txid
   discard <| waitUntil 20_000 (do return (← n.mempool).contains txid2)
   let (s4, _) ← a.snapshot
   check "the unconfirmed send is fee-bumpable" (s4.feeBumpable.contains txid2)
@@ -495,6 +539,33 @@ def flow (dir : String) (n : Node) : IO Unit := do
     (history? s6 replacement).any (·.height > 0)) s!"{s6.balance} vs {expected2}"
   let confirmedEvent ← waitUntil 10_000 (do return (← relayed.get).contains "confirmed")
   check "watchRelay reports the confirmation" confirmedEvent s!"{← relayed.get}"
+  -- 6b. A silent payment (BIP352) to a receiver this test holds the keys of.
+  let code ← testReceiverCode
+  let spInputs : SendInputs := { destination := code, amount := "150000", network := .regtest }
+  let sp ← a.previewSend spInputs
+  check "silent payment: the review knows it is one" (sp.silent && sp.destination == code && sp.amount == 150_000)
+  let sent ← a.sendPayment spInputs sp
+  discard <| waitUntil 20_000 (do return (← n.mempool).contains sent.txid)
+  let spTx ← n.json #["getrawtransaction", sent.txid, "true"]
+  let expectedScript ← testReceiverScript n spTx
+  let paid := ((spTx.getObjValAs? (Array Json) "vout").toOption.getD #[]).any fun o =>
+    ((o.getObjValD "scriptPubKey").getObjValAs? String "hex").toOption == some (hex expectedScript) &&
+    (o.getObjValAs? Float "value").toOption == some 0.0015
+  check "silent payment: the node's transaction pays the output the receiver finds" paid (hex expectedScript)
+  check "silent payment: the receipt's address is that output's"
+    (sent.derivedAddresses == [(AddressDecoder.address expectedScript .regtest).getD ""]) s!"{sent.derivedAddresses}"
+  -- Core, told only the derived key, sees the coin once it is mined
+  discard <| n.cli #["-named", "createwallet", "wallet_name=sp-watch", "disable_private_keys=true"]
+  let desc ← n.json #["getdescriptorinfo", s!"rawtr({hex (expectedScript.extract 2 34)})"]
+  let request := s!"[\{\"desc\":\"{(desc.getObjValAs? String "descriptor").toOption.getD ""}\",\"timestamp\":\"now\"}]"
+  discard <| n.cli #["-rpcwallet=sp-watch", "importdescriptors", request]
+  n.mine 1 mineAddr
+  n.waitFilterIndex
+  let watched ← n.json #["-rpcwallet=sp-watch", "listunspent", "1"]
+  check "silent payment: Core's watch-only wallet finds the coin"
+    (((watched.getArr?).toOption.getD #[]).any fun u => (u.getObjValAs? String "txid").toOption == some sent.txid)
+  let (s6b, _) ← syncUntil a 60_000 fun s _ => (history? s sent.txid).any (·.height > 0)
+  check "silent payment: confirmed in the app's history" ((history? s6b sent.txid).any (·.height > 0))
   -- 7. The receive window sees a relayed payment.
   let watched ← a.receiveAddress false
   let seen ← IO.mkRef (#[] : Array (String × Int))
@@ -507,7 +578,8 @@ def flow (dir : String) (n : Node) : IO Unit := do
   a.stopWatchingAddress
   n.mine 1 mineAddr
   n.waitFilterIndex
-  let expected3 := expected2 + 100_000
+  -- less the silent payment (6b) and its fee
+  let expected3 := expected2 - 150_000 - sp.fee + 100_000
   let (s7, _) ← syncUntil a 60_000 fun s _ => s.balance == expected3
   check "the watched payment confirms" (s7.balance == expected3) s!"{s7.balance}"
   -- 7b. A person from a second phone's card (pay-to only: signer keys went with vaults).
@@ -619,8 +691,11 @@ def flow (dir : String) (n : Node) : IO Unit := do
   checkJournal "transaction.broadcast" ["txid", "raw"] (fun f => field f "txid" == txid && rawIsTxid (field f "raw") txid)
   check "journal: every transaction.broadcast raw decodes to its txid"
     ((← journaled "transaction.broadcast").all fun (_, f) => rawIsTxid (field f "raw") (field f "txid"))
-  checkJournal "transaction.sent" ["txid", "raw"] (fun f => field f "txid" == txid && rawIsTxid (field f "raw") txid)
-    "its raw decodes to the sent txid"
+  checkJournal "transaction.sent" ["txid", "raw", "silent", "silentOutputs"]
+    (fun f => field f "txid" == txid && rawIsTxid (field f "raw") txid && field f "silent" == "false" && field f "silentOutputs" == "")
+    "its raw decodes to the sent txid; not a silent payment"
+  check "journal: the silent payment's transaction.sent names its derived output"
+    ((← journaled "transaction.sent").any fun (_, f) => field f "silent" == "true" && (field f "silentOutputs").startsWith "5120")
   checkJournal "transaction.replaced" ["original", "replacement", "raw"]
     (fun f => field f "original" == txid2 && field f "replacement" == replacement && rawIsTxid (field f "raw") replacement)
   checkJournal "person.added" ["name", "payToKind"]
@@ -700,6 +775,12 @@ def fixture (dir : String) : IO UInt32 := do
 
 def main (args : List String) : IO UInt32 := do
   if let ["--fixture", dir] := args then return ← fixture dir
+  -- for the UI journey: the test receiver's code, and the output it finds in a transaction on a fixture
+  if let ["--sp-code"] := args then IO.println (← testReceiverCode); return 0
+  if let ["--sp-expected", datadir, rpc, txid] := args then
+    let n : Node := { datadir, p2p := 0, rpc := rpc.toNat!.toUInt16, pid := 0 }
+    IO.println (hex (← testReceiverScript n (← n.json #["getrawtransaction", txid, "true"])))
+    return 0
   let tmp ← IO.FS.createTempDir
   let dir := tmp.toString
   say s!"backend-test: work dir {dir}"

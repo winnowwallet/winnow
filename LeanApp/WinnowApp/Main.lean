@@ -281,7 +281,8 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit := do
   | .previewSend g inputs => background fx g "send" do return .previewed g inputs (← b.previewSend inputs)
   | .sendPayment g inputs p =>
       authenticated fx g "send" s!"Send {satsText p.amount} to {p.destination}" do
-        return .sent g (← b.sendPayment inputs p)
+        let r ← b.sendPayment inputs p
+        return .sent g r.txid r.derivedAddresses
   | .rawTransaction g txid => background fx g "refresh" do return .rawTransaction g txid (← b.rawTransactionHex txid)
   | .watchRelay g txid => discard <| IO.asTask do
       try b.watchRelay txid (fun e => fx.post (.relay g txid e)) catch _ => pure ()

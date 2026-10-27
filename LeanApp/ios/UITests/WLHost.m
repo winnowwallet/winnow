@@ -28,6 +28,7 @@ static NSDictionary *WLReadJSON(NSString *path) {
     NSDictionary *config = WLReadJSON(path);
     _fixtureDir = config[@"fixture"];
     _bitcoinCli = config[@"bitcoinCli"] ?: @"/opt/homebrew/bin/bitcoin-cli";
+    _backendTest = config[@"backendTest"] ?: @"";
     _screenshotDir = config[@"screenshots"];
     NSDictionary *fixture = WLReadJSON([_fixtureDir stringByAppendingPathComponent:@"fixture.json"]);
     _p2p = [fixture[@"p2p"] integerValue];
@@ -143,6 +144,13 @@ static id WLParse(NSString *text, NSArray *arguments) {
 
 - (NSString *)scriptPubKey:(NSString *)address {
     return [self cliJSON:@[@"validateaddress", address]][@"scriptPubKey"];
+}
+
+- (NSString *)silentPaymentCode { return [self run:self.backendTest arguments:@[@"--sp-code"]]; }
+
+- (NSString *)silentPaymentExpectedScript:(NSString *)txid {
+    return [self run:self.backendTest arguments:@[@"--sp-expected", self.datadir,
+                                                  [NSString stringWithFormat:@"%ld", (long)self.rpc], txid]];
 }
 
 @end

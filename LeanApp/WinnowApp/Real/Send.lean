@@ -32,11 +32,16 @@ def resolveRate (env : Env) (priority : Nat) (overrideMilli : Option Nat) : IO F
     | none => pure none
   return FeePolicy.resolve (priorityOf priority) (overrideMilli.map rateOfMilli) observed floor
 
-/-- `SendPreview.authorizes(_:)`: fee, change, inputs in order, and the outputs exactly. -/
-def SendReview.authorizes (r : SendReview) (built : BuiltTransaction) : Bool := Id.run do
+/-- `SendPreview.authorizes(_:resolvedSilentPayments:)`: fee, change, inputs in order, and the outputs
+exactly. A silent payment's script comes from the wallet (`resolved`, one per reviewed silent payment, same
+order and amount) and is then matched like any reviewed payment. -/
+def SendReview.authorizes (r : SendReview) (built : BuiltTransaction) (resolved : Array Payment := #[]) : Bool := Id.run do
   if !(built.fee == r.fee && built.changeAmount == r.changeAmount &&
       built.transaction.inputs.map (·.previousOutput) == r.selected) then return false
-  let expected := match r.change with | some c => r.payments.push c | none => r.payments
+  if !(resolved.size == r.silentPayments.size &&
+      (r.silentPayments.zip resolved).all fun (s, p) => s.amount == p.amount) then return false
+  let reviewed := r.payments ++ resolved
+  let expected := match r.change with | some c => reviewed.push c | none => reviewed
   if built.transaction.outputs.size != expected.size then return false
   let mut unmatched := built.transaction.outputs
   for p in expected do
@@ -62,13 +67,19 @@ def previewSend (env : Env) (inputs : SendInputs) : IO Preview := do
   let amount := inputs.amount.trimAscii.copy.toNat?.getD 0
   let c ← env.get
   let some n := c.network | failWith .noWallet
-  let payment ← match Payment.ofAddress (i64 amount) destination (Network.tx n) with
-    | .ok p => pure p
-    | .error e => failText (addressErrorText e)
+  -- `parseDestination`: a silent payment code (its HRP checked against this network), else an address
+  let (payments, silent) ← if SilentPaymentAddress.looksLikeCode destination then
+      match Keys.SilentPayment.ofCode (i64 amount) destination (Network.tx n) with
+      | .ok p => pure (#[], #[p])
+      | .error e => failText (silentPaymentErrorText e)
+    else match Payment.ofAddress (i64 amount) destination (Network.tx n) with
+      | .ok p => pure (#[p], #[])
+      | .error e => failText (addressErrorText e)
   let some w := c.wallet | failWith .noWallet
   let utxos ← w.spendableUtxos
   let changeScript ← runWM (w.scriptPubKey .change (← w.nextChangeIndex))
-  let selection ← match CoinSelection.select utxos #[payment] changeScript feeRate with
+  let sizing := payments ++ silent.map fun p => { amount := p.amount, scriptPubKey := Keys.SilentPayment.sizingScriptPubKey }
+  let selection ← match CoinSelection.select utxos sizing changeScript feeRate with
     | .ok s => pure s
     | .error e => failText e.description
   let phase ← updateSyncPhase env
@@ -76,9 +87,9 @@ def previewSend (env : Env) (inputs : SendInputs) : IO Preview := do
     { destination, amount, fee := natOf selection.fee, feeRateMilli := milliOf feeRate,
       inputCount := selection.selected.size, change := selection.changeAmount.map natOf,
       locktimeLagsTip := phase.headerTipMayLagNetwork,
-      recipient := recipient.map fun (_, _, r) => r }
+      recipient := recipient.map fun (_, _, r) => r, silent := !silent.isEmpty }
   let review : SendReview :=
-    { inputs, summary, payments := #[payment], feeRate, fee := selection.fee, changeAmount := selection.changeAmount,
+    { inputs, summary, payments, silentPayments := silent, feeRate, fee := selection.fee, changeAmount := selection.changeAmount,
       selected := selection.selected.map (·.outpoint),
       change := selection.changeAmount.map fun a => { amount := a, scriptPubKey := changeScript }
       recipient := recipient.map fun (id, index, r) => (id, if r.derivesFreshAddresses then some index else none) }
@@ -100,15 +111,15 @@ def broadcastTx (env : Env) (tx : Transaction) (rate : Option Float) : IO ByteAr
   return txid
 
 /-- `send(preview:)` after authentication: rebuild, sign, check `authorizes`, broadcast, commit. -/
-def sendPayment (env : Env) (inputs : SendInputs) (p : Preview) : IO String := exclusively env do
+def sendPayment (env : Env) (inputs : SendInputs) (p : Preview) : IO SentPayment := exclusively env do
   let c ← env.get
   let some w := c.wallet | failWith .noWallet
   let some review := c.reviews.find? (fun r => r.inputs == inputs && sameSummary r.summary p) | failWith .sendReviewChanged
   let tip ← match c.stack with
     | some s => s.chain.height
     | none => pure 0
-  let prepared ← env.walletOp (w.buildSend review.payments review.feeRate tip)
-  unless review.authorizes prepared.built do failWith .sendReviewChanged
+  let prepared ← env.walletOp (w.buildSend review.payments review.feeRate tip (silentPayments := review.silentPayments))
+  unless review.authorizes prepared.built prepared.resolvedSilentPayments do failWith .sendReviewChanged
   let txid ← broadcastTx env prepared.built.transaction (some review.feeRate)
   env.walletOp (w.commit prepared)
   if let some (id, some index) := review.recipient then env.hooks.advancePersonIndex id index
@@ -116,8 +127,12 @@ def sendPayment (env : Env) (inputs : SendInputs) (p : Preview) : IO String := e
     env.journal "person.paid" [("name", r.name),
       ("paymentIndex", ((review.recipient.bind (·.2)).map toString).getD "fixed"), ("txid", Winnow.displayHex txid)]
   env.modify fun c => { c with reviews := c.reviews.filter (·.inputs != inputs) }
-  env.journal "transaction.sent" [("txid", Winnow.displayHex txid), ("raw", hex (prepared.built.transaction.serialized true))]
-  return Winnow.displayHex txid
+  env.journal "transaction.sent" [("txid", Winnow.displayHex txid), ("raw", hex (prepared.built.transaction.serialized true)),
+    ("silent", toString !review.silentPayments.isEmpty),
+    ("silentOutputs", ",".intercalate (prepared.resolvedSilentPayments.toList.map (hex ·.scriptPubKey)))]
+  let net := ((← env.get).network.map Network.tx).getD .signet
+  return { txid := Winnow.displayHex txid,
+           derivedAddresses := prepared.resolvedSilentPayments.toList.filterMap (AddressDecoder.address ·.scriptPubKey net) }
 
 /-- `rawTransactionHex(_:)`: the signed bytes of a still-pending transaction. -/
 def rawTransactionHex (env : Env) (txid : String) : IO (Option String) := do

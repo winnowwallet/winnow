@@ -95,9 +95,10 @@ def onHost (h : Host) (m : Model) : Model × List Cmd :=
     if current g && forInputs == m.sendInputs then
       ({ m with send := { m.send with preview := some p, reviewing := false, error := none } }, [])
     else ({ m with send := { m.send with reviewing := false } }, [])
-  | .sent g txid =>
+  | .sent g txid derived =>
     if !current g then (m, []) else
-    ({ m with send := { m.send with sending := false, sentTxid := some txid }, spendingInFlight := false },
+    ({ m with send := { m.send with sending := false, sentTxid := some txid, derivedAddresses := derived },
+              spendingInFlight := false },
      [.refresh g, .rawTransaction g txid, .watchRelay g txid])
   | .rawTransaction g txid hex =>
     if current g && m.send.sentTxid == some txid then ({ m with send := { m.send with rawTransaction := hex } }, []) else (m, [])

@@ -9,6 +9,7 @@
 static const int64_t WLFunding = 5000000;
 static const int64_t WLPayment = 1000000;
 static const int64_t WLRecoveryPayment = 500000;
+static const int64_t WLSilentPayment = 150000;
 /// The builder's shortest recovery delay: one day.
 static const NSInteger WLRecoveryBlocks = 144;
 
@@ -440,6 +441,51 @@ static NSArray<NSNumber *> *WLWitnessSizes(NSArray<NSString *> *witness, NSUInte
     XCTAssertNotNil([shipped firstMatchInString:line options:0 range:NSMakeRange(0, line.length)], @"census line: %@", line);
     XCTAssertGreaterThan(WLDigits([line substringFromIndex:[line rangeOfString:@": "].location]), 100);
     WLShot(self, app, @"30-settings-census");
+}
+
+/// Pays a BIP352 silent payment code (upstream's silentPaymentJourney). Core has no BIP352, so the receiver
+/// is backend-test's, written from the BIP's receiving side: the transaction the node accepts must pay the
+/// one output that receiver finds, the review must say the address is derived, and the receipt must show
+/// that output's address.
+- (void)testSilentPaymentSend {
+    WLHost *host = WLHost.shared;
+    NSString *code = host.silentPaymentCode;
+    XCTAssertTrue([code hasPrefix:@"tsp1"], @"not a test-network code: %@", code);
+    XCUIApplication *app = [self launch:@"silent" extra:@{}];
+    [self createWallet:app];
+    NSString *address = [self receiveAddress:app];
+    WLTap(self, app, @"closeReceiveButton");
+    [host fund:address sats:WLFunding];
+    XCTAssertTrue(WLPoll(90, 1, ^{ return (BOOL)([self balance:app] == WLFunding); }), @"balance %lld", [self balance:app]);
+
+    [self setClipboard:code];
+    WLTap(self, app, @"openSendButton");
+    WLTap(self, app, @"pasteDestinationButton");
+    WLType(self, app, @"amountField", [NSString stringWithFormat:@"%lld", WLSilentPayment]);
+    WLTap(self, app, @"reviewButton");
+    XCUIElement *send = WLElement(app, @"sendButton");
+    XCTAssertTrue([send waitForExistenceWithTimeout:30], @"the silent payment review did not open");
+    XCTAssertEqualObjects(WLText(WLElement(app, @"reviewDestination")), code);
+    XCTAssertTrue(WLElement(app, @"silentPaymentNote").exists, @"the review does not say the address is derived");
+    XCTAssertEqual(WLDigits(WLText(WLElement(app, @"reviewAmount"))), WLSilentPayment);
+    WLShot(self, app, @"40-silent-review");
+
+    NSSet *before = host.mempool;
+    WLTap(self, app, @"sendButton");
+    NSString *txid = [self newMempoolTransaction:before within:60];
+    XCTAssertNotNil(txid, @"the node never received the silent payment");
+    NSString *expected = [host silentPaymentExpectedScript:txid];
+    NSString *paidAddress = nil;
+    for (NSDictionary *output in [host transaction:txid][@"vout"])
+        if ([output[@"scriptPubKey"][@"hex"] isEqualToString:expected] && llround([output[@"value"] doubleValue] * 1e8) == WLSilentPayment)
+            paidAddress = output[@"scriptPubKey"][@"address"];
+    XCTAssertNotNil(paidAddress, @"the transaction pays no output the code's holder would find (%@)", expected);
+    XCUIElement *derived = WLElement(app, @"derivedOutputAddress");
+    XCTAssertTrue([derived waitForExistenceWithTimeout:20] && WLScrollTo(app, derived), @"the receipt does not show where the code was paid");
+    XCTAssertEqualObjects(WLText(derived), paidAddress);
+    [host mine:1];
+    XCTAssertTrue([WLElement(app, @"broadcastConfirmed") waitForExistenceWithTimeout:90], @"the receipt did not see it confirm");
+    WLShot(self, app, @"41-silent-confirmed");
 }
 
 @end

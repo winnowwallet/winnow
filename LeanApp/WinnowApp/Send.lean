@@ -127,7 +127,12 @@ def sendReview (m : Model) (p : Preview) : List H :=
      else [])
   let action := if m.send.sending then "Working…" else "Send payment"
   [ .section "To" "" ((match p.recipient with | some r => [body r.name] | none => []) ++
-                      [.identified "reviewDestination" (caption p.destination)])
+                      [.identified "reviewDestination" (caption p.destination)] ++
+                      -- the one visible difference of a BIP352 send: the chain shows an address never typed
+                      (if p.silent then
+                        [.identified "silentPaymentNote"
+                          (caption "Silent payment: the Bitcoin address this pays is created for this transaction only.")]
+                       else []))
   , paymentAmounts p ] ++ warnings ++
   [ .section "" ""
       [ .identified "sendButton" (.button action .primary (if m.send.sending then none else some (.send .sendPayment)))
@@ -149,6 +154,9 @@ def sendStatus (m : Model) (txid : String) : List H :=
          [.row [.icon "exclamationmark.triangle", caption "The network now requires a higher fee. This payment may be delayed. Advanced mode lets you raise its fee in Wallet."]]
         else [])) ] ++
   (match s.preview with | some p => [paymentAmounts p] | none => []) ++
+  -- Activity and explorers show the derived address, not the code: the receipt is where the two meet
+  (if s.derivedAddresses.isEmpty then [] else
+    [.section "Paid on chain to" "" (s.derivedAddresses.map fun a => .identified "derivedOutputAddress" (caption a))]) ++
   [ .section "" "" [ .button "New payment" .primary (some (.send .newPayment)) ]
   , .section "" ""
       [ .disclosure "Transaction details" (m.isExpanded "send.details") (Msg.setExpanded "send.details")

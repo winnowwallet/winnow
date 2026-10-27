@@ -38,7 +38,7 @@ run() {
 case "$lane" in
   lean)
     step "lake build Lean (every proof is checked here)"
-    (cd "$ROOT/Lean" && lake build && lake build multisig-test ledger-test io-test multisig-differential)
+    (cd "$ROOT/Lean" && lake build && lake build multisig-test ledger-test silent-payment-test io-test multisig-differential)
     endstep
     step "lake build LeanApp"
     (cd "$ROOT/LeanApp" && lake build && lake build records-test multisig-app-test ledger-transport-test backend-test)
@@ -46,6 +46,7 @@ case "$lane" in
     step "tests"
     run Lean multisig-test .lake/build/bin/multisig-test
     run Lean ledger-test .lake/build/bin/ledger-test
+    run Lean silent-payment-test .lake/build/bin/silent-payment-test
     run LeanApp records-test .lake/build/bin/records-test
     run LeanApp multisig-app-test .lake/build/bin/multisig-app-test
     run LeanApp ledger-transport-test .lake/build/bin/ledger-transport-test

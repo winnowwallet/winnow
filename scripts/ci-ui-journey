@@ -40,10 +40,10 @@ NODE_PID=$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1
 tail -1 "$OUT/fixture.log"
 
 CLI="${WINNOW_BITCOIN_CLI:-$(command -v bitcoin-cli || echo /opt/homebrew/bin/bitcoin-cli)}"
-/usr/bin/python3 - "$OUT" "$CLI" <<'PY'
+/usr/bin/python3 - "$OUT" "$CLI" "$APP/.lake/build/bin/backend-test" <<'PY'
 import json, sys
-out, cli = sys.argv[1:3]
-json.dump({"fixture": out + "/fixture", "bitcoinCli": cli, "screenshots": out + "/screenshots"},
+out, cli, backend_test = sys.argv[1:4]
+json.dump({"fixture": out + "/fixture", "bitcoinCli": cli, "backendTest": backend_test, "screenshots": out + "/screenshots"},
           open(out + "/ui.json", "w"), indent=2)
 PY
 

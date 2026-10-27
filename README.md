@@ -118,7 +118,9 @@ give them (`Html.identified`, the shell's `accessibilityIdentifier`) and checks 
   signatures; after the one-day delay the phone alone spends on the recovery path;
 - `testLedgerPairVerifySpend`: pair test mode's simulated Ledger, have it verify the receive address,
   and spend with the phone's and the Ledger's signatures;
-- `testShippedCensus`: the census peer list the build ships shows in Settings on mainnet.
+- `testShippedCensus`: the census peer list the build ships shows in Settings on mainnet;
+- `testSilentPaymentSend`: pay a BIP352 code; the node's transaction pays the one output backend-test's
+  receiver (written from the BIP's receiving side) finds, and the receipt shows its address.
 
 `scripts/ci-ui-journey` starts the node, runs them on a throwaway simulator (or `UI_SIMULATOR`) and keeps
 the result bundle, a screen recording, screenshots and the app's test-mode journal.
@@ -131,7 +133,7 @@ forks and on request (`ci-hosted.yml`):
 
 | lane | what |
 |---|---|
-| `lean` | builds `Lean/` and `LeanApp/` (every proof) and runs multisig-test, ledger-test, records-test, multisig-app-test, ledger-transport-test |
+| `lean` | builds `Lean/` and `LeanApp/` (every proof) and runs multisig-test, ledger-test, silent-payment-test, records-test, multisig-app-test, ledger-transport-test |
 | `regtest` | io-test, backend-test and multisig-differential against a disposable regtest bitcoind |
 | `ios` | Debug and Release for the simulator, Release for devices; `check-no-swift` on each; `verify-release-no-test-mode` |
 | `journey` | `scripts/ci-ui-journey` |

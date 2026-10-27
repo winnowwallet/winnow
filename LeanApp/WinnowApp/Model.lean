@@ -146,6 +146,14 @@ structure Preview where
   inputCount : Nat
   change : Option Nat
   locktimeLagsTip : Bool
+  /-- The destination is a silent payment code (BIP352): the chain shows an address derived at signing. -/
+  silent : Bool := false
+  deriving Repr, Inhabited
+
+/-- A broadcast send: its txid, and the addresses its silent payments were derived to (in order). -/
+structure SentPayment where
+  txid : String
+  derivedAddresses : List String := []
   deriving Repr, Inhabited
 
 structure SendState where
@@ -155,6 +163,8 @@ structure SendState where
   sending : Bool := false
   error : Option String := none
   sentTxid : Option String := none
+  /-- Where the silent payments of the sent transaction landed on chain (the receipt shows them). -/
+  derivedAddresses : List String := []
   rawTransaction : Option String := none
   relayLog : List String := []
   relayedPeers : List String := []
@@ -382,7 +392,7 @@ inductive Host where
   | deleted (gen : Nat)
   | resolvedRate (gen : Nat) (forInputs : SendInputs) (milli : Nat)
   | previewed (gen : Nat) (forInputs : SendInputs) (p : Preview)
-  | sent (gen : Nat) (txid : String)
+  | sent (gen : Nat) (txid : String) (derivedAddresses : List String)
   | rawTransaction (gen : Nat) (txid : String) (hex : Option String)
   | relay (gen : Nat) (txid : String) (e : RelayEvent)
   | paymentLoaded (gen : Nat) (txid : String)

@@ -90,12 +90,18 @@ third-party dependency.
 
 Scope, as the user set it on 2026-10-27: the Ledger signer and the Taproot multisig ("ledger, and the fancy
 multi, no need for musig2 right now"). The other upstream changes in this range are deferred, not ported
-yet: silent-payment sending (BIP352), automatic iCloud backup (CloudKit), background sync, Tor/I2P peer
+yet: automatic iCloud backup (CloudKit), background sync, Tor/I2P peer
 gateways over Tailscale, RangeScan, the peer-pool and broadcaster changes, and Onboarding/Home/Settings
 changes outside multisig. **The census shipped with the build is done** (2026-10-27): `project.yml`
 bundles `build/census/peers.json` (fetched by `scripts/import-census`, which `scripts/build-ios` runs when
 the list is missing), `CensusCatalog.bundled` reads it, and the UI test `testShippedCensus` requires
-Settings on mainnet to show the list's date and count.
+Settings on mainnet to show the list's date and count. **Silent-payment sending is done** (2026-10-27):
+`Winnow/Keys/SilentPayments.lean` (the code and the BIP352 derivation; `silent-payment-test`, 263 checks,
+every official sending vector), `Wallet.buildSend` derives the outputs after coin selection and the review
+gate binds them (multisig-test's SilentPaymentSendTests), the Send screen takes a code, notes that the
+address is derived and shows it on the receipt; backend-test and the UI test `testSilentPaymentSend` hold
+the node's transaction to a receiver written from the BIP's receiving side, and Core's watch-only wallet
+finds the coin. Not yet: saving a person who is paid by a code (People's `.silentPayment` pay-to).
 
 The layer table below was written for the 0.7.3 port. Phase A removed its MuSig2 (layer 4), musig()
 descriptors and MuSig2 rounds (layer 7), vaults and vault records (layer 8), fallback peers and the signed,
