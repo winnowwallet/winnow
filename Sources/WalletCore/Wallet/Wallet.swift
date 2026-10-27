@@ -1096,51 +1096,24 @@ public actor Wallet {
         return effect
     }
 
-    /// Confirms the transaction into history — updating a known pending send
-    /// or appending a new entry — retires its pending record, and samples the
-    /// feerate. The fee is exact only when every input was ours (the BIP341
-    /// sighash commits to amounts, so our own sends qualify).
+    /// Confirms the transaction into history through `HistoryLedger` (a known
+    /// pending send confirms in place, anything else is appended), retires
+    /// its pending record, and samples the feerate when the fee is exact:
+    /// only when every input was ours (the BIP341 sighash commits to amounts,
+    /// so our own sends qualify).
     private func recordConfirmedHistory(of tx: Transaction, txid: Data, height: UInt32, blockHash: Data,
                                         received: Int64, spent: Int64, feeIsExact: Bool) {
-        var fee: Int64? = nil
-        if feeIsExact, spent > 0 {
-            let candidate = spent - tx.outputs.reduce(0) { $0 + $1.value }
-            if candidate > 0 {
-                fee = candidate
-                let vsize = TransactionBuilder.vsize(of: tx)
-                if vsize > 0 {
-                    state.observedFeeRates.append(Double(candidate) / Double(vsize))
-                    if state.observedFeeRates.count > 20 { state.observedFeeRates.removeFirst() }
-                }
+        let fee = HistoryLedger.exactFee(spent: spent, of: tx, allInputsOurs: feeIsExact)
+        if let fee {
+            let vsize = TransactionBuilder.vsize(of: tx)
+            if vsize > 0 {
+                state.observedFeeRates.append(Double(fee) / Double(vsize))
+                if state.observedFeeRates.count > 20 { state.observedFeeRates.removeFirst() }
             }
         }
-        if let existing = state.history.firstIndex(where: { $0.txid == txid }) {
-            // Known pending send (height 0) reaching confirmation.
-            state.history[existing].height = height
-            state.history[existing].blockHash = blockHash
-            state.history[existing].rawTransaction = tx.serialized(includeWitness: false)
-            state.history[existing].fundingScripts = FundingSources.fundingScripts(of: tx)
-            state.history[existing].outputs = Self.outputsAgreeing(state.history[existing].outputs, with: tx)
-        } else {
-            state.history.append(HistoryEntry(txid: txid, height: height,
-                                              received: received, spent: spent, fee: fee,
-                                              rawTransaction: tx.serialized(includeWitness: false),
-                                              fundingScripts: FundingSources.fundingScripts(of: tx),
-                                              blockHash: blockHash))
-        }
+        HistoryLedger.record(&state.history, tx: tx, txid: txid, height: height, blockHash: blockHash,
+                             received: received, spent: spent, fee: fee)
         state.pendingSends.removeAll { $0.txid == txid }
-    }
-
-    /// The breakdown an entry may keep once its bytes are known. A breakdown
-    /// that arrived without bytes — an imported entry's display metadata —
-    /// is dropped when the real transaction contradicts it, rather than
-    /// persisted: `HistoryEntry` refuses to decode an entry whose metadata
-    /// disagrees with its transaction, and a state file the wallet cannot
-    /// reopen is worse than a payment without recipient names.
-    private static func outputsAgreeing(_ outputs: HistoryEntry.Outputs?,
-                                        with tx: Transaction) -> HistoryEntry.Outputs? {
-        guard let outputs, (try? outputs.validate(against: tx)) != nil else { return nil }
-        return outputs
     }
 
     /// Bitcoin's transaction-value rules for every output in the block,
@@ -1458,17 +1431,7 @@ public actor Wallet {
     /// Classify only positive outputs, using the same watch map as coin application.
     func classifyOutputs(of transaction: Transaction) throws -> HistoryEntry.Outputs {
         let map = try watchMap()
-        var result = HistoryEntry.Outputs()
-        for (vout, output) in transaction.outputs.enumerated() where output.value > 0 {
-            switch map[output.scriptPubKey]?.chain {
-            case .change: result.change.append(UInt32(vout))
-            case .receive: continue
-            case nil:
-                result.external.append(.init(vout: UInt32(vout), amount: output.value,
-                                             scriptPubKey: output.scriptPubKey))
-            }
-        }
-        return result
+        return HistoryLedger.classifyOutputs(of: transaction) { map[$0]?.chain }
     }
 
     /// Commits a prepared send to wallet state: the spent UTXOs leave the
@@ -1956,9 +1919,9 @@ public actor Wallet {
         // inputs are equally unsafe to select. Its entry re-pends the same
         // way; only the re-announcement half is ours-only, because only our
         // own transactions are in the broadcaster.
-        Self.rependSpenders(above: forkHeight, in: &candidate)
+        let repended = HistoryLedger.rewind(&candidate.history, above: forkHeight)
+        Self.keepReservations(of: repended, above: forkHeight, in: &candidate.allUtxos)
         Self.rewindCoins(above: forkHeight, in: &candidate.allUtxos)
-        candidate.history.removeAll { $0.height > forkHeight }
         // Never forward: a fork at or above the frontier leaves nothing that
         // was scanned in doubt, and advancing here would skip unread blocks.
         candidate.nextScanHeight = min(state.nextScanHeight,
@@ -1970,20 +1933,13 @@ public actor Wallet {
         state = candidate
     }
 
-    /// A disconnected spender is still live in mempools. Re-pend its receipt
-    /// and retain the corresponding input reservations before rewinding coins.
-    private static func rependSpenders(above forkHeight: UInt32, in candidate: inout WalletState) {
-        var rependedSpenders: Set<Data> = []
-        for index in candidate.history.indices
-            where candidate.history[index].height > forkHeight && candidate.history[index].spent > 0
-        {
-            rependedSpenders.insert(candidate.history[index].txid)
-            candidate.history[index].height = 0
-            candidate.history[index].blockHash = nil
-        }
-        for index in candidate.allUtxos.indices {
-            guard let marker = candidate.allUtxos[index].spent,
-                  let height = marker.height, height > forkHeight
+    /// A disconnected spender is still live in mempools (`HistoryLedger.rewind`
+    /// re-pended its entry): its input reservations are retained before the
+    /// coins rewind.
+    private static func keepReservations(of repended: Set<Data>, above forkHeight: UInt32,
+                                         in coins: inout [WalletUTXO]) {
+        for index in coins.indices {
+            guard let marker = coins[index].spent, let height = marker.height, height > forkHeight
             else { continue }
             // Spent by a transaction that is still live: back to in-flight,
             // which keeps the coin unselectable and lets the existing
@@ -1991,7 +1947,7 @@ public actor Wallet {
             // lands. Spent by something that fell with the fork entirely
             // (its entry was a pure receive from our side, or predates what
             // we track): restored, as before.
-            candidate.allUtxos[index].spent = rependedSpenders.contains(marker.spentBy)
+            coins[index].spent = repended.contains(marker.spentBy)
                 ? WalletUTXO.SpentMarker(spentBy: marker.spentBy, height: nil)
                 : nil
         }

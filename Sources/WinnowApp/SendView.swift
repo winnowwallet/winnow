@@ -16,6 +16,8 @@ struct SendReviewInputs: Equatable {
     var personID: String?
     var paymentIndex: UInt32?
     var walletID: String?
+    /// The multisig account the payment comes from; nil for the wallet.
+    var accountID: String?
 
     var trimmedDestination: String {
         destination.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -28,7 +30,12 @@ struct SendReviewInputs: Equatable {
 /// selection (FeePolicy presets + the peers' feefilter floor + override), a
 /// review step, then sign + broadcast via TxBroadcaster. Relay status comes
 /// from the broadcaster's events; confirmation arrives as a filter match
-/// ("seen in block N").
+/// ("seen in block N"). In Advanced mode a multisig account can be the
+/// source (From): the review is the PSBT this phone built, "Sign and
+/// continue" signs it and files it as the account's draft, and the
+/// signature-collection step (`MultisigSigningSections`) follows before the
+/// same receipt. Exercised by AppTests/MultisigAccountFlowTests and the
+/// signet journey.
 struct SendView: View {
     @Environment(AppModel.self) private var model
     /// Set from outside ("Send to <person>" on a received payment) to open
@@ -57,12 +64,21 @@ struct SendView: View {
     @State private var relayedPeers: Set<String> = []
     @State private var feeFloorNotice = false
     @State private var confirmedHeight: UInt32?
+    /// The multisig account picked under From; nil for the wallet.
+    @State private var sourceAccountID: String?
+    /// The account whose draft is collecting signatures, after "Sign and continue".
+    @State private var collecting: String?
     private enum Field { case destination, amount, fee }
     @FocusState private var focusedField: Field?
 
     private var selectedPerson: PersonRecord? {
         guard let selectedPersonID else { return nil }
         return model.people.first { $0.id == selectedPersonID && $0.isSavedRecipient }
+    }
+
+    private var sourceAccount: MultisigAccountRecord? {
+        guard model.advancedMode, let sourceAccountID else { return nil }
+        return model.multisigAccounts.first { $0.id == sourceAccountID }
     }
 
     private var reviewInputs: SendReviewInputs {
@@ -73,7 +89,8 @@ struct SendView: View {
                          network: model.network,
                          personID: selectedPerson?.id,
                          paymentIndex: selectedPerson?.nextPaymentIndex,
-                         walletID: model.walletID)
+                         walletID: model.walletID,
+                         accountID: sourceAccount?.id)
     }
 
     private var canReview: Bool {
@@ -87,6 +104,15 @@ struct SendView: View {
             Form {
                 if let sentTxid {
                     paymentStatus(sentTxid)
+                } else if let collecting {
+                    MultisigSigningSections(recordID: collecting, onBroadcast: { txid in
+                        sentTxid = txid
+                        self.collecting = nil
+                        Task { rawTransaction = await model.rawTransactionHex(txid) }
+                    }, onDiscard: {
+                        self.collecting = nil
+                        preview = nil
+                    })
                 } else if let preview {
                     paymentReview(preview)
                 } else {
@@ -103,8 +129,9 @@ struct SendView: View {
             }
             .disabled(sending)
             // Each step starts at the top, including after editing a long form.
-            .id(sentTxid != nil ? "sent" : preview != nil ? "review" : "form")
-            .navigationTitle(sentTxid != nil ? "Payment" : preview != nil ? "Review payment" : "Send")
+            .id(sentTxid != nil ? "sent" : collecting != nil ? "collect" : preview != nil ? "review" : "form")
+            .navigationTitle(sentTxid != nil ? "Payment" : collecting != nil ? "Collect signatures"
+                             : preview != nil ? "Review payment" : "Send")
             .navigationBarTitleDisplayMode(.inline)
             // iPad and hardware keyboards can supply Return even for a
             // decimal pad. End editing just as the accessory Done button does.
@@ -146,17 +173,18 @@ struct SendView: View {
             .onAppear { consumeRequestedPerson() }
             .onChange(of: personID) { _, _ in consumeRequestedPerson() }
             .onChange(of: model.walletID) { _, _ in reset() }
-            .onChange(of: model.status.history) { _, history in
+            .onChange(of: model.status.payments) { _, payments in
                 guard let sentTxid, confirmedHeight == nil,
-                      let entry = history.first(where: { $0.txid == sentTxid }), entry.height > 0
+                      let row = payments.first(where: { $0.txid == sentTxid }), row.entry.height > 0
                 else { return }
-                confirmedHeight = entry.height
+                confirmedHeight = row.entry.height
             }
         }
     }
 
     private var paymentForm: some View {
         Group {
+            if model.advancedMode, !model.multisigAccounts.isEmpty { sourceSection }
             Section("To") {
                 if let person = selectedPerson {
                     HStack {
@@ -203,6 +231,43 @@ struct SendView: View {
                     .disabled(!canReview || reviewing)
             }
         }
+    }
+
+    /// From: the wallet, or a multisig account, whose payment needs the
+    /// other signers before it goes out.
+    private var sourceSection: some View {
+        Section {
+            sourceRow(title: "Wallet", balance: model.status.balance, id: nil, identifier: "sendFromWallet")
+            ForEach(model.multisigAccounts) { account in
+                sourceRow(title: account.name + (account.draft == nil ? "" : " · awaiting signatures"),
+                          balance: account.balance, id: account.id, identifier: "sendFrom-\(account.id)")
+            }
+            if let sourceAccount, let account = try? model.multisigAccount(for: sourceAccount) {
+                Text("Needs \(account.policySummary). You sign here; the payment goes out once the other signatures are in.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("sendSourceNote")
+            }
+        } header: {
+            Text("From")
+        }
+    }
+
+    /// One source to pick, as the rows a journey can find by identifier.
+    private func sourceRow(title: String, balance: Int64, id: String?, identifier: String) -> some View {
+        Button {
+            sourceAccountID = id
+        } label: {
+            HStack {
+                Text("\(title) · \(satsText(balance))").foregroundStyle(.primary)
+                Spacer()
+                if sourceAccountID == id {
+                    Image(systemName: "checkmark").foregroundStyle(.tint)
+                }
+            }
+        }
+        .accessibilityIdentifier(identifier)
+        .accessibilityAddTraits(sourceAccountID == id ? .isSelected : [])
     }
 
     private var feeControls: some View {
@@ -259,6 +324,16 @@ struct SendView: View {
                 }
             }
             paymentAmounts(preview)
+            if let account = preview.account {
+                Section {
+                    LabeledContent("From", value: account.name)
+                    LabeledContent("Signatures", value: "needs \(account.threshold) of \(account.signerCount)")
+                        .accessibilityIdentifier("reviewSignatures")
+                        .accessibilityValue("needs \(account.threshold) of \(account.signerCount)")
+                } footer: {
+                    Text("Sign and continue adds this phone's signature and keeps the payment under Transactions until the other signers have signed.")
+                }
+            }
             reviewWarnings(preview)
             Section {
                 Button(actionTitle(preview)) { send() }
@@ -284,7 +359,8 @@ struct SendView: View {
     }
 
     private func actionTitle(_ preview: AppModel.SendPreview) -> String {
-        sending ? "Working…" : "Send payment"
+        if sending { return "Working…" }
+        return preview.account == nil ? "Send payment" : "Sign and continue"
     }
 
     private func reviewWarnings(_ preview: AppModel.SendPreview) -> some View {
@@ -341,20 +417,7 @@ struct SendView: View {
                         .accessibilityIdentifier("feeFloorNotice")
                 }
             }
-            if let preview { paymentAmounts(preview) }
-            if let preview, !preview.silentPayments.isEmpty,
-               let entry = model.status.history.first(where: { $0.txid == txid }) {
-                // Activity and explorers show the derived address, not the
-                // code, so the receipt is where the two meet.
-                Section("Paid on chain to") {
-                    ForEach(model.paymentRecipients(entry).filter { $0.silentPaymentAddress != nil }) { recipient in
-                        Text(recipient.address)
-                            .font(.system(.footnote, design: .monospaced))
-                            .textSelection(.enabled)
-                            .accessibilityIdentifier("derivedOutputAddress")
-                    }
-                }
-            }
+            if let preview { receiptDetails(preview, txid: txid) }
             Section {
                 Button("New payment") { reset() }
                     .accessibilityIdentifier("newPaymentButton")
@@ -395,6 +458,27 @@ struct SendView: View {
         }
     }
 
+    /// The receipt's amounts, the account it came from, and for a silent
+    /// payment the address the chain shows: Activity and explorers show the
+    /// derived address, not the code, so the receipt is where the two meet.
+    @ViewBuilder
+    private func receiptDetails(_ preview: AppModel.SendPreview, txid: Data) -> some View {
+        paymentAmounts(preview)
+        if let account = preview.account {
+            Section { LabeledContent("From", value: account.name) }
+        }
+        if !preview.silentPayments.isEmpty, let entry = model.displayedPayment(txid: txid)?.entry {
+            Section("Paid on chain to") {
+                ForEach(model.paymentRecipients(entry).filter { $0.silentPaymentAddress != nil }) { recipient in
+                    Text(recipient.address)
+                        .font(.system(.footnote, design: .monospaced))
+                        .textSelection(.enabled)
+                        .accessibilityIdentifier("derivedOutputAddress")
+                }
+            }
+        }
+    }
+
     private var feeInputs: String {
         "\(reviewInputs.priority.rawValue)|\(reviewInputs.overrideText)|\(model.status.feeFloorSatPerVByte ?? -1)"
     }
@@ -410,6 +494,7 @@ struct SendView: View {
             return
         }
         let person = selectedPerson
+        let source = sourceAccount
         reviewing = true
         Task {
             defer { reviewing = false }
@@ -417,6 +502,9 @@ struct SendView: View {
                 let override = Double(requested.overrideText.trimmingCharacters(in: .whitespaces))
                 let candidate = if let person {
                     try await model.previewSend(to: person, amount: amount,
+                                                priority: requested.priority, override: override, from: source)
+                } else if let source {
+                    try await model.previewSend(from: source, destination: requested.destination, amount: amount,
                                                 priority: requested.priority, override: override)
                 } else {
                     try await model.previewSend(
@@ -444,6 +532,18 @@ struct SendView: View {
         error = nil
         Task {
             do {
+                if let account = preview.account {
+                    // An account's payment is signed here and goes out from
+                    // the collection step once the other signatures are in.
+                    try await model.signAndDraftMultisigSpend(preview: preview)
+                    guard requested.walletID == model.walletID else {
+                        sending = false
+                        return
+                    }
+                    collecting = account.id
+                    sending = false
+                    return
+                }
                 let txid = try await model.send(preview: preview)
                 guard requested.walletID == model.walletID else {
                     sending = false
@@ -464,6 +564,8 @@ struct SendView: View {
     private func reset() {
         destination = ""
         selectedPersonID = nil
+        sourceAccountID = nil
+        collecting = nil
         amountText = ""
         preview = nil
         sentTxid = nil
@@ -528,8 +630,7 @@ struct SendView: View {
                 // The history snapshot here can still hold the pending
                 // (height 0) entry — the post-sync refresh lands the real
                 // height, and the onChange below then fills it in.
-                if let height = model.status.history.first(where: { $0.txid == txid })?.height,
-                   height > 0 {
+                if let height = model.displayedPayment(txid: txid)?.entry.height, height > 0 {
                     confirmedHeight = height
                 }
                 // Propagation tracking ends at confirmation.

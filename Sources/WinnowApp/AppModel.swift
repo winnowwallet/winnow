@@ -97,9 +97,16 @@ final class AppModel {
     /// UI-facing snapshot of wallet + sync state (refreshed after syncs and
     /// mutations; the wallet itself is an actor).
     struct Status: Equatable {
+        /// The wallet's own coins.
         var balance: Int64 = 0
+        /// The multisig accounts' live coins, which need co-signers to move.
+        var accountsBalance: Int64 = 0
         var utxoCount = 0
+        /// The wallet's own history, for its screens and tests.
         var history: [HistoryEntry] = []
+        /// The one Transactions list: wallet, accounts, transfers and drafts
+        /// (`DisplayedPayment`), newest first.
+        var payments: [DisplayedPayment] = []
         var feeBumpableTxids: [Data] = []
         var observedFeeRates: [Double] = []
         var peerCount = 0
@@ -316,6 +323,12 @@ final class AppModel {
     /// Set when `multisig.json` could not be read. Shown on the multisig
     /// screens; the store refuses mutations meanwhile. Never blocks boot.
     private(set) var multisigStorageNotice: String?
+    /// The signers this phone knows (Advanced mode only): paired Ledgers and
+    /// other people's keys, mirrored from the store.
+    private(set) var signers: [SignerRecord] = []
+    /// Set when `signers.json` could not be read. Shown on the Signers
+    /// screen; the store refuses mutations meanwhile. Never blocks boot.
+    private(set) var signerStorageNotice: String?
     private var ownedMultisigScripts: Set<Data> = []
     private(set) var wallet: Wallet?
     private(set) var stack: SyncStack?
@@ -343,6 +356,10 @@ final class AppModel {
     let keychainAuthentication = KeychainAuthentication()
     let peopleStore: PeopleStore
     let multisigStore: MultisigStore
+    let signerStore: SignerStore
+    /// How a Ledger signer is reached: Bluetooth on a phone, the simulator in
+    /// app tests.
+    var ledgerConnector: any LedgerConnector = LedgerBluetoothConnector()
     let cloudBackups: CloudBackupController
     private let allowsCloudBackup: Bool
     private var cloudPreparationTask: Task<Void, Never>?
@@ -475,6 +492,7 @@ final class AppModel {
         let storeKeys = storeKeys ?? KeychainStoreKeyVault(service: keychainService)
         peopleStore = PeopleStore(keys: storeKeys)
         multisigStore = MultisigStore(keys: storeKeys)
+        signerStore = SignerStore(keys: storeKeys)
         let defaults = e2e?.defaults ?? defaults
         self.defaults = defaults
         let initialGatewaySettings: PeerGatewaySettings
@@ -559,6 +577,7 @@ final class AppModel {
         }
         await configurePeople()
         await configureMultisig()
+        await configureSigners()
         guard let walletURL = walletURL() else {
             stage = .storageDamaged(
                 "Winnow could not access its protected local storage. No wallet files or keys were changed.")
@@ -1257,10 +1276,13 @@ final class AppModel {
         // on the refresh that runs moments after the stack is built, leaving
         // the user's relay queue silently gone.
         snapshot.relayStoreQuarantined = status.relayStoreQuarantined
-        status = snapshot
         people = await peopleStore.all
         senderByTxid = await peopleStore.senderLabels
         multisigAccounts = await multisigStore.all
+        snapshot.accountsBalance = multisigAccounts.reduce(0) { $0 + $1.balance }
+        snapshot.payments = Self.payments(wallet: snapshot.history, accounts: multisigAccounts,
+                                          drafts: multisigAccounts.compactMap { draftRow(for: $0) })
+        status = snapshot
         configureReceiveAddressLabels()
         journalSnapshotIfChanged()
         scheduleCloudBackup()
@@ -1350,9 +1372,10 @@ final class AppModel {
     private func importWallet(bundle: ImportBundle, authenticate: Bool,
                               afterCommit: (@MainActor (String) async throws -> Void)? = nil) async throws -> ImportReport? {
         guard bundle.network == network.rawValue else { throw AppError.wrongNetwork(bundle.network) }
-        // Before anything is written: a bundle whose multisig accounts cannot
-        // be restored must not replace the wallet half-way.
+        // Before anything is written: a bundle whose multisig accounts or
+        // signers cannot be restored must not replace the wallet half-way.
         try MultisigStore.validate(bundle.vaults ?? [], network: network)
+        try SignerStore.validateBackup(bundle.signers ?? [], network: network)
         if authenticate, bundle.mnemonic != nil {
             try await authenticateSensitiveAction(
                 reason: "Import this wallet's recovery phrase")
@@ -1377,6 +1400,7 @@ final class AppModel {
         try await adopt(wallet: wallet, startSync: false)
         try await multisigStore.restore(bundle.vaults ?? [])
         multisigAccounts = await multisigStore.all
+        try await mergeRestoredSigners(bundle.signers ?? [])
         defer { if isActive { startSyncLoop() } }
         if let afterCommit { try await afterCommit(wallet.id) }
         else { await prepareImportedCloudBackup(bundle) }
@@ -1415,6 +1439,18 @@ final class AppModel {
         return report
     }
 
+    /// The signer list is not the wallet's, so a bundle's joins the phone's
+    /// own: what is here stays, what it lacks is added. A damaged local list
+    /// is already reported under Settings → Signers and must not stop the
+    /// wallet from restoring. Pinned by AppTests/SignerRosterTests.
+    private func mergeRestoredSigners(_ restored: [SignerRecord]) async throws {
+        do {
+            let merged = try await signerStore.planRestore(restored)
+            try await signerStore.restore(merged)
+        } catch SignerStorageError.damaged {}
+        signers = await signerStore.all
+    }
+
     /// Live wallet as a v2 import-bundle JSON string (docs/import.html).
     /// Watch-only unless `includeMnemonic` is set; an xprv-only wallet
     /// throws ``WalletError/mnemonicUnavailable`` rather than a fake seed.
@@ -1434,6 +1470,8 @@ final class AppModel {
         var bundle = try await wallet.exportBundle(includeMnemonic: includeMnemonic)
         let accounts = try await multisigStore.backupRecords()
         bundle.vaults = accounts.isEmpty ? nil : accounts
+        let signers = try await signerStore.backup()
+        bundle.signers = signers.isEmpty ? nil : signers
         let serialized = try bundle.serialized()
         e2e?.journal("wallet.exported", fields: [
             "bundleVersion": String(bundle.version),
@@ -1470,6 +1508,7 @@ final class AppModel {
         }
         await configurePeople()
         await configureMultisig()
+        await configureSigners()
         receiveLabelStore = nil
         self.wallet = wallet
         walletID = await wallet.id
@@ -1611,6 +1650,7 @@ final class AppModel {
         syncPhase = .idle
         await configurePeople()
         await configureMultisig()
+        await configureSigners()
         stage = .onboarding
         e2e?.journal("wallet.destroyed", fields: ["walletID": walletID])
 
@@ -1826,6 +1866,18 @@ final class AppModel {
         /// The person this pays, for the review label only. `destination`
         /// stays the address: the authorization boundary is unchanged.
         var recipient: Recipient?
+        /// Set when the source is a multisig account: the PSBT this phone
+        /// built for the reviewed spend, which "Sign and continue" signs and
+        /// files as the account's draft (`signAndDraftMultisigSpend`).
+        var account: AccountSource?
+
+        struct AccountSource: Equatable {
+            var id: String
+            var name: String
+            var threshold: Int
+            var signerCount: Int
+            var psbtBase64: String
+        }
 
         struct Recipient: Equatable {
             var personID: String
@@ -1866,9 +1918,18 @@ final class AppModel {
         /// then matched against the outputs like any reviewed payment, and
         /// the count pin below means nothing else may be there (SEC-018).
         func authorizes(_ built: BuiltTransaction, resolvedSilentPayments: [Payment] = []) -> Bool {
-            guard built.fee == fee,
-                  built.changeAmount == changeAmount,
-                  built.transaction.inputs.map({
+            authorizes(transaction: built.transaction, fee: built.fee, changeAmount: built.changeAmount,
+                       resolvedSilentPayments: resolvedSilentPayments)
+        }
+
+        /// The same check on a transaction that is not yet signed: a
+        /// multisig account's PSBT, whose inputs, outputs and fee are fixed
+        /// before any signature.
+        func authorizes(transaction: WalletCore.Transaction, fee builtFee: Int64, changeAmount builtChange: Int64?,
+                        resolvedSilentPayments: [Payment] = []) -> Bool {
+            guard builtFee == fee,
+                  builtChange == changeAmount,
+                  transaction.inputs.map({
                       ReviewedOutpoint(txid: $0.previousOutput.txid, vout: $0.previousOutput.vout)
                   }) == selectedOutpoints
             else { return false }
@@ -1893,9 +1954,9 @@ final class AppModel {
             // fingerprint, so nothing may assume payments-then-change.
             var expected = payments + resolvedSilentPayments
             if let change { expected.append(change) }
-            guard built.transaction.outputs.count == expected.count else { return false }
+            guard transaction.outputs.count == expected.count else { return false }
 
-            var unmatched = built.transaction.outputs
+            var unmatched = transaction.outputs
             for payment in expected {
                 guard let index = unmatched.firstIndex(where: {
                     $0.value == payment.amount && $0.scriptPubKey == payment.scriptPubKey
@@ -1950,13 +2011,56 @@ final class AppModel {
         return ([try Payment(amount: amount, address: destination, network: network)], [])
     }
 
+    /// A payment from a multisig account, reviewed like a wallet send: the
+    /// PSBT this phone builds fixes the inputs, outputs and fee, and the
+    /// review shows them; "Sign and continue" then signs it and files it as
+    /// the account's draft. Advanced mode only; refused while the account
+    /// already has a draft, and for a silent payment code, which no account
+    /// can pay. Exercised by
+    /// AppTests/MultisigAccountFlowTests.testSendTabSpendsFromAnAccountAcrossTwoPhones.
+    func previewSend(from record: MultisigAccountRecord, destination: String, amount: Int64,
+                     priority: FeePolicy.Priority, override: Double?) async throws -> SendPreview {
+        guard advancedMode else { throw LedgerActionError.advancedModeOnly }
+        guard record.draft == nil else { throw MultisigActionError.draftInProgress }
+        try Self.requireUsableOverride(override)
+        let resolution = await resolvedFee(priority: priority, override: override)
+        try Self.requireRelayFee(rate: resolution.rate, floor: resolution.clampedFloor)
+        try await requireRelayFloors(rate: resolution.rate)
+        let trimmed = destination.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !SilentPaymentAddress.looksLikeCode(trimmed) else { throw MultisigActionError.silentPaymentUnsupported }
+        let payment = try Payment(amount: amount, address: trimmed, network: network)
+        let psbt = try await createMultisigSpend(record: record, address: trimmed, amount: amount,
+                                                 feeRateSatPerVByte: resolution.rate)
+        let review = try reviewMultisigSpend(psbt, record: record)
+        let account = try multisigAccount(for: record)
+        let unsigned = try psbt.unsignedTransaction()
+        let changeScript = try account.scriptPubKey(index: record.nextChangeIndex, choice: AddressChain.change.rawValue)
+        let change = unsigned.outputs.first { $0.scriptPubKey == changeScript }.map {
+            Payment(amount: $0.value, scriptPubKey: $0.scriptPubKey)
+        }
+        return SendPreview(destination: trimmed, payments: [payment], feeRateSatPerVByte: resolution.rate,
+                           fee: review.fee, changeAmount: change?.amount, inputCount: unsigned.inputs.count,
+                           selectedOutpoints: unsigned.inputs.map {
+                               .init(txid: $0.previousOutput.txid, vout: $0.previousOutput.vout)
+                           }, change: change, locktimeLagsTip: syncPhase.headerTipMayLagNetwork,
+                           account: .init(id: record.id, name: record.name, threshold: account.threshold,
+                                          signerCount: account.signers.count, psbtBase64: psbt.base64))
+    }
+
     /// A payment to a person in the address book: the next fresh address is
-    /// peeked here and the counter moves only when the send commits.
+    /// peeked here and the counter moves only when the send commits, or when
+    /// an account's draft of it is broadcast.
     func previewSend(to person: PersonRecord, amount: Int64, priority: FeePolicy.Priority,
-                     override: Double?) async throws -> SendPreview {
+                     override: Double?, from record: MultisigAccountRecord? = nil) async throws -> SendPreview {
         let (address, index) = try nextPaymentAddress(for: person)
-        var preview = try await previewSend(destination: address, amount: amount,
+        var preview: SendPreview
+        if let record {
+            preview = try await previewSend(from: record, destination: address, amount: amount,
                                             priority: priority, override: override)
+        } else {
+            preview = try await previewSend(destination: address, amount: amount,
+                                            priority: priority, override: override)
+        }
         preview.recipient = SendPreview.Recipient(
             personID: person.id, name: person.name,
             paymentIndex: person.derivesFreshAddresses ? index : nil,
@@ -2152,26 +2256,37 @@ final class AppModel {
     // MARK: - Multisig accounts (Advanced mode)
 
     enum MultisigActionError: LocalizedError, Equatable {
-        case advancedModeOnly
-        case invalidName
         case notASigner
         case accountHoldsCoins
         /// Broadcast, but the account's coins could not be updated: the spent
         /// coins must not be offered to the next spend.
         case spendNotRecorded(txid: Data, reason: String)
+        /// One draft per account: a second spend would take the same coins.
+        case draftInProgress
+        case noDraft
+        /// A pasted PSBT for another transaction than the draft's.
+        case draftMismatch
+        case silentPaymentUnsupported
+        case notInFlight
 
         var errorDescription: String? {
             switch self {
-            case .advancedModeOnly:
-                "Multisig accounts are part of Advanced mode. Turn on Advanced mode to use them."
-            case .invalidName:
-                "Use a name of 1 to \(DisplayName.maximumLength) characters, without line breaks."
             case .notASigner:
                 "No key of this descriptor is this wallet's key. Put this phone's key among the signers or the recovery keys."
             case .accountHoldsCoins:
                 "This account still holds coins or a pending payment. Spend them first: a removed account is not scanned, and adding it again does not find coins it already had."
             case let .spendNotRecorded(txid, reason):
                 "Sent as \(txid.displayHex), but the account could not be updated: \(reason) Do not spend from it again until it syncs."
+            case .draftInProgress:
+                "This account has a payment awaiting signatures. Finish or discard it under Transactions before starting another."
+            case .noDraft:
+                "This account has no payment awaiting signatures."
+            case .draftMismatch:
+                "That PSBT is for a different payment than the one awaiting signatures."
+            case .silentPaymentUnsupported:
+                "A silent payment code cannot be paid from a multisig account. Pay it from the wallet, or ask for an address."
+            case .notInFlight:
+                "This payment is not waiting to be confirmed."
             }
         }
     }
@@ -2250,6 +2365,14 @@ final class AppModel {
                                                      chainTip: status.tipHeight)
     }
 
+    /// This wallet's account public key (compressed), the one a multisig
+    /// descriptor lists it by; nil before a wallet exists.
+    var multisigOwnAccountKey: Data? {
+        guard let walletDescriptor, case let .tr(key) = walletDescriptor.expression,
+              case let .extended(accountKey, _) = key.base else { return nil }
+        return accountKey.publicKey
+    }
+
     /// The positions of this wallet's own key among the account's signers.
     func multisigOwnSignerPositions(_ record: MultisigAccountRecord,
                                     path: MultisigAccount.SpendPath = .signers) -> Set<Int> {
@@ -2265,23 +2388,24 @@ final class AppModel {
 
     /// The signing screen's view of `psbt`: the review, which fails closed;
     /// the verified signatures on each leaf that can finish it; and what this
-    /// phone still needs to add. Exercised on screen by the signet journey
-    /// (UITests/MultisigJourney.swift), and step by step by
+    /// phone and its paired Ledger still need to add. Exercised on screen by
+    /// the signet journey (UITests/MultisigJourney.swift), and step by step by
+    /// AppTests/LedgerPairingTests.testPairVerifyAndSpendWithBothSigners and
     /// AppTests/MultisigAccountFlowTests.testTwoPhonesSignACoSignersSpendWithBIP326Sequences.
     func multisigSigningScreen(_ psbt: PSBT, record: MultisigAccountRecord) throws -> MultisigSigningScreen {
         let account = try multisigAccount(for: record)
         let review = try reviewMultisigSpend(psbt, record: record)
-        let paths = MultisigSigningScreen.paths(for: review)
+        let paths = MultisigSigningScreen.paths(for: review, account: account)
         let approvals = Dictionary(uniqueKeysWithValues: paths.map {
             ($0, multisigApprovals(psbt, record: record, path: $0))
         })
-        return MultisigSigningScreen(review: review, approvals: approvals,
+        return MultisigSigningScreen(review: review, paths: paths, approvals: approvals,
                                      progress: multisigSigningProgress(record, account: account, paths: paths,
                                                                        approvals: approvals))
     }
 
-    /// What a reviewed PSBT still needs from this phone, over every leaf that
-    /// can finish it (`paths`): either one completing is
+    /// What a reviewed PSBT still needs from this phone and its paired Ledger,
+    /// over every leaf that can finish it (`paths`): either one completing is
     /// enough, and the phone signs every leaf its key is in at once.
     private func multisigSigningProgress(_ record: MultisigAccountRecord, account: MultisigAccount,
                                          paths: [MultisigAccount.SpendPath],
@@ -2293,8 +2417,18 @@ final class AppModel {
             let own = multisigOwnSignerPositions(record, path: path)
             progress.phoneHolds = progress.phoneHolds || !own.isEmpty
             progress.phoneUnsigned = progress.phoneUnsigned || !own.isSubset(of: approved)
+            if let ledger = Self.multisigLedgerPosition(record, keys: account.keys(on: path)) {
+                progress.ledgerHolds = true
+                progress.ledgerUnsigned = progress.ledgerUnsigned || !approved.contains(ledger)
+            }
         }
         return progress
+    }
+
+    /// The paired Ledger's position among `keys`, matched by its origin.
+    private static func multisigLedgerPosition(_ record: MultisigAccountRecord, keys: [Descriptor.SingleKey]) -> Int? {
+        guard let ledger = record.ledger else { return nil }
+        return keys.firstIndex { $0.origin?.fingerprint == ledger.masterFingerprint && $0.origin?.path == ledger.keyPath }
     }
 
     /// The keys of `path` (by position) whose signatures verify on every input.
@@ -2307,6 +2441,8 @@ final class AppModel {
     /// the signers' path or, once coins are old enough, the recovery path.
     func createMultisigSpend(record: MultisigAccountRecord, address: String, amount: Int64,
                              feeRateSatPerVByte: Double, path: MultisigAccount.SpendPath = .signers) async throws -> PSBT {
+        // One draft per account: a second spend would take the same coins.
+        guard record.draft == nil else { throw MultisigActionError.draftInProgress }
         let payment = try Payment(amount: amount, address: address.trimmingCharacters(in: .whitespacesAndNewlines),
                                   network: network)
         // The tip review, signing and broadcast judge the spend by, so a coin
@@ -2355,15 +2491,115 @@ final class AppModel {
             let hasChange = transaction.outputs.contains { $0.scriptPubKey == changeScript }
             do {
                 try await multisigStore.recordSpend(id: record.id, transaction: transaction,
-                                                    changeIndex: hasChange ? record.nextChangeIndex : nil)
+                                                    changeIndex: hasChange ? record.nextChangeIndex : nil,
+                                                    broadcastHeight: status.tipHeight)
             } catch {
                 multisigAccounts = await multisigStore.all
                 throw MultisigActionError.spendNotRecorded(txid: txid, reason: error.localizedDescription)
             }
-            multisigAccounts = await multisigStore.all
+            await refresh()
             e2e?.journal("multisig.spendBroadcast", fields: ["id": record.id, "txid": txid.displayHex])
             return txid
         }
+    }
+
+    // MARK: - Drafts: a spend collecting signatures
+
+    /// Signs the reviewed account spend with this phone's key and files it as
+    /// the account's draft, where the other signatures are collected. The
+    /// PSBT in hand must be the one reviewed: same inputs, outputs and fee.
+    /// Exercised by AppTests/MultisigAccountFlowTests.testSendTabSpendsFromAnAccountAcrossTwoPhones.
+    @discardableResult
+    func signAndDraftMultisigSpend(preview: SendPreview) async throws -> MultisigSpendDraft {
+        guard let source = preview.account,
+              let record = multisigAccounts.first(where: { $0.id == source.id }) else { throw AppError.sendReviewChanged }
+        guard record.draft == nil else { throw MultisigActionError.draftInProgress }
+        let psbt = try PSBT(base64: source.psbtBase64)
+        let unsigned = try psbt.unsignedTransaction()
+        guard preview.authorizes(transaction: unsigned, fee: preview.fee, changeAmount: preview.changeAmount)
+        else { throw AppError.sendReviewChanged }
+        let signed = try await signMultisigSpend(psbt, record: record)
+        let draft = MultisigSpendDraft(psbtBase64: signed.base64, personID: preview.recipient?.personID,
+                                       paymentIndex: preview.recipient?.paymentIndex, createdAtHeight: status.tipHeight)
+        try await multisigStore.setDraft(id: record.id, draft)
+        await refresh()
+        e2e?.journal("multisig.draftStarted", fields: ["id": record.id, "txid": unsigned.txid.displayHex])
+        return draft
+    }
+
+    /// The account's draft as a PSBT, for the collection screen.
+    func multisigDraft(for record: MultisigAccountRecord) throws -> PSBT {
+        guard let draft = record.draft else { throw MultisigActionError.noDraft }
+        return try draft.psbt()
+    }
+
+    /// Files a pasted co-signer's PSBT as the account's draft: combined into
+    /// the draft when the account has one (it must be the same transaction),
+    /// adopted as the draft when it has none.
+    func adoptMultisigDraft(_ pasted: PSBT, record: MultisigAccountRecord) async throws {
+        let combined: PSBT
+        if let draft = record.draft {
+            let current = try draft.psbt()
+            guard try current.unsignedTransaction().txid == pasted.unsignedTransaction().txid else {
+                throw MultisigActionError.draftMismatch
+            }
+            combined = try combineMultisigSpend(current, with: pasted, record: record)
+        } else {
+            _ = try reviewMultisigSpend(pasted, record: record)
+            combined = pasted
+        }
+        try await updateMultisigDraft(combined, record: record)
+        journalPSBT(stage: "multisig-combined", psbt: combined)
+    }
+
+    /// Replaces the draft's PSBT with a copy that gained signatures.
+    func updateMultisigDraft(_ psbt: PSBT, record: MultisigAccountRecord) async throws {
+        let previous = record.draft
+        try await multisigStore.setDraft(id: record.id, MultisigSpendDraft(
+            psbtBase64: psbt.base64, personID: previous?.personID, paymentIndex: previous?.paymentIndex,
+            createdAtHeight: previous?.createdAtHeight ?? status.tipHeight))
+        await refresh()
+    }
+
+    func discardMultisigDraft(record: MultisigAccountRecord) async throws {
+        try await multisigStore.setDraft(id: record.id, nil)
+        await refresh()
+        e2e?.journal("multisig.draftDiscarded", fields: ["id": record.id])
+    }
+
+    /// Finalizes and broadcasts the account's draft once enough signatures
+    /// verify, then moves the person's address index past the one it paid.
+    func broadcastMultisigDraft(record: MultisigAccountRecord) async throws -> Data {
+        guard let draft = record.draft else { throw MultisigActionError.noDraft }
+        let txid = try await broadcastMultisigSpend(try draft.psbt(), record: record)
+        if let personID = draft.personID, let index = draft.paymentIndex {
+            await advancePersonPaymentIndex(id: personID, past: index)
+            e2e?.journal("person.paid", fields: ["personID": personID, "paymentIndex": String(index),
+                                                 "txid": txid.displayHex])
+        }
+        return txid
+    }
+
+    /// Announces again a spend this phone broadcast that no block has taken,
+    /// from the bytes the account kept: after a restore the broadcaster has
+    /// none of its own. Exercised by
+    /// AppTests/MultisigAccountFlowTests.testAnInFlightAccountSpendSurvivesABackupAndCanBeRebroadcastOrGivenUp.
+    func rebroadcastMultisigSpend(record: MultisigAccountRecord, txid: Data) async throws {
+        guard let spend = record.inFlight.first(where: { $0.txid == txid }) else {
+            throw MultisigActionError.notInFlight
+        }
+        let transaction = try spend.transaction()
+        _ = try await broadcast(transaction, feeRateSatPerVByte: Self.feeRate(of: transaction, spending: record.allUtxos))
+        e2e?.journal("multisig.rebroadcast", fields: ["id": record.id, "txid": txid.displayHex])
+    }
+
+    /// Gives up on a spend no block has taken: its coins are the account's
+    /// again and the broadcaster stops announcing it.
+    func abandonMultisigSpend(record: MultisigAccountRecord, txid: Data) async throws {
+        try await multisigStore.abandonSpend(id: record.id, txid: txid)
+        try? await stack?.broadcaster.cancel(txid)
+        await refresh()
+        e2e?.journal("multisig.spendAbandoned", fields: ["id": record.id, "txid": txid.displayHex])
     }
 
     /// The fee rate of a spend of known coins, for the relay-floor gate a
@@ -2398,22 +2634,159 @@ final class AppModel {
         ])
     }
 
-    // MARK: - Multisig account builder (Advanced mode)
+    // MARK: - Ledger signer (Advanced mode)
 
-    /// The account builder: this phone's key and the other signers' pasted key
-    /// expressions (other Winnows, any signer's `[fp/path]xpub…/<0;1>/*`), any
-    /// `threshold` of them, with an optional timelocked recovery path. The
-    /// descriptor is then shared with the other signers, who add it by pasting.
+    enum LedgerActionError: LocalizedError, Equatable {
+        case advancedModeOnly
+        case invalidName
+        case notPaired
+        case oneLedgerPerAccount
+
+        var errorDescription: String? {
+            switch self {
+            case .advancedModeOnly:
+                "Multisig accounts and Ledger signing are part of Advanced mode. Turn on Advanced mode to use them."
+            case .invalidName:
+                "Use a name of 1 to 64 plain letters, digits and punctuation: the Ledger shows it on its screen."
+            case .notPaired:
+                "No Ledger is paired with this account."
+            case .oneLedgerPerAccount:
+                "Winnow registers one of this phone's Ledgers per account. Put one Ledger in it, or build the account from another phone."
+            }
+        }
+    }
+
+    // MARK: Signers
+
+    /// Pairs a Ledger: reads its signer key over Bluetooth and files it under
+    /// `name` among this phone's signers, for the account builder and the
+    /// Join screen's member share. Pairing the same Ledger again renames it.
+    /// Exercised by AppTests/SignerRosterTests and LedgerPairingTests.
     @discardableResult
-    func createMultisigAccount(name: String, threshold: Int, otherKeys: [String],
+    func pairLedger(name: String) async throws -> SignerRecord {
+        guard advancedMode else { throw LedgerActionError.advancedModeOnly }
+        guard DisplayName.normalized(name) != nil else {
+            throw SignerStorageError.invalidState("a signer needs a short, single-line name")
+        }
+        let session = try await ledgerConnector.connect()
+        let expression: String
+        let fingerprint: UInt32
+        do {
+            (expression, fingerprint) = try await LedgerMultisig.signerExpression(
+                client: LedgerBitcoinClient(transport: session), network: network)
+            await session.close()
+        } catch {
+            await session.close()
+            throw error
+        }
+        let record = try await signerStore.addLedger(name: name, key: expression, fingerprint: fingerprint)
+        signers = await signerStore.all
+        e2e?.journal("signer.ledgerPaired", fields: ["id": record.id, "fingerprint": String(format: "%08x", fingerprint)])
+        return record
+    }
+
+    /// Files keys someone sent as one signer: a single key, or a phone's
+    /// pasted together with its Ledger's, which then count as one member.
+    /// Exercised by AppTests/SignerRosterTests.
+    @discardableResult
+    func addSignerKeys(name: String, text: String) async throws -> SignerRecord {
+        guard advancedMode else { throw LedgerActionError.advancedModeOnly }
+        let keys = text.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !keys.isEmpty else { throw SignerStorageError.invalidState("paste at least one key") }
+        for key in keys { _ = try MultisigAccount.signerKey(key, network: network) }
+        let record = try await signerStore.addKeys(name: name, keys: keys)
+        signers = await signerStore.all
+        return record
+    }
+
+    func renameSigner(id: String, name: String) async throws {
+        try await signerStore.rename(id: id, name: name)
+        signers = await signerStore.all
+    }
+
+    func removeSigner(id: String) async throws {
+        try await signerStore.remove(id: id)
+        signers = await signerStore.all
+    }
+
+    /// The paired Ledgers holding a key of `account`.
+    func pairedLedgers(in account: MultisigAccount) -> [SignerRecord] {
+        signers.filter { signer in
+            signer.isLedger && signer.masterFingerprint.map { LedgerMultisig.hasLedgerSigner(account, fingerprint: $0) } == true
+        }
+    }
+
+    /// What to call each key of an account, by fingerprint: a paired
+    /// Ledger's or a saved signer's name, or "Ledger" for the registered
+    /// device when it is not in the list.
+    func signerNames(for record: MultisigAccountRecord) -> [UInt32: String] {
+        var names: [UInt32: String] = [:]
+        if let ledger = record.ledger { names[ledger.masterFingerprint] = "Ledger" }
+        for signer in signers {
+            for key in signer.keys {
+                if let fingerprint = (try? MultisigAccount.signerKey(key, network: network))?.origin?.fingerprint {
+                    names[fingerprint] = signer.name
+                }
+            }
+        }
+        return names
+    }
+
+    /// The account builder over members whose keys all sign:
+    /// `createMultisigAccount(name:threshold:members:recovery:)` over
+    /// `MultisigAccount.Member`s.
+    @discardableResult
+    func createMultisigAccount(name: String, threshold: Int, members: [[String]],
                                recovery: MultisigAccount.RecoveryPlan?) async throws -> MultisigAccountRecord {
-        guard advancedMode else { throw MultisigActionError.advancedModeOnly }
-        guard let name = DisplayName.normalized(name) else { throw MultisigActionError.invalidName }
-        let pasted = otherKeys.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-        let descriptor = try MultisigAccount.descriptor(threshold: threshold, signers: [multisigKeyExpression()] + pasted,
-                                                        recovery: recovery, network: network)
-        _ = try multisigAccount(validating: descriptor.serialized())
+        try await createMultisigAccount(name: name, threshold: threshold,
+                                        members: members.map { MultisigAccount.Member(keys: $0) }, recovery: recovery)
+    }
+
+    /// The account builder over members: each member is one signer's keys,
+    /// this phone's own among them wherever the user put it, a Ledger's, a
+    /// key someone sent, or several keys that sign together, such as a
+    /// phone's with its Ledger's, or a whole account's with that account's
+    /// own threshold. A member of more than one key makes the account
+    /// nested: any `threshold` of the members spend, each with every key it
+    /// has or with its own threshold of them. The descriptor is then shared
+    /// with the other signers, who add it by pasting; a paired Ledger in the
+    /// account registers it afterwards (`registerPairedLedger`), so an
+    /// account naming a Ledger key must fit a Ledger's policy. Exercised by
+    /// AppTests/MultisigAccountFlowTests, LedgerPairingTests,
+    /// NestedMultisigFlowTests and SignerRosterTests.
+    @discardableResult
+    func createMultisigAccount(name: String, threshold: Int, members: [MultisigAccount.Member],
+                               recovery: MultisigAccount.RecoveryPlan?) async throws -> MultisigAccountRecord {
+        guard advancedMode else { throw LedgerActionError.advancedModeOnly }
+        guard let name = DisplayName.normalized(name) else { throw LedgerActionError.invalidName }
+        let members = members.compactMap { member -> MultisigAccount.Member? in
+            let keys = member.keys.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+            return keys.isEmpty ? nil : MultisigAccount.Member(keys: keys, threshold: min(member.threshold, keys.count))
+        }
+        let descriptor = try MultisigAccount.descriptor(members: members, threshold: threshold, recovery: recovery,
+                                                        network: network)
+        let account = try multisigAccount(validating: descriptor.serialized())
+        // A Ledger shows the name and registers the policy, whoever's Ledger
+        // it is, so the name must be one it can show and the policy one it
+        // takes (at most 512 characters).
+        if LedgerMultisig.namesALedgerKey(account) {
+            guard LedgerWalletPolicy.isValidName(name) else { throw LedgerActionError.invalidName }
+            _ = try LedgerWalletPolicy(name: name, account: account)
+        }
+        guard pairedLedgers(in: account).count <= 1 else { throw LedgerActionError.oneLedgerPerAccount }
         return try await existingOrNewMultisigAccount(name: name, descriptor: descriptor)
+    }
+
+    /// Registers an account just built or joined on this phone's paired
+    /// Ledger when one holds a key of it: the Ledger shows the policy, the
+    /// user approves it there, and it must derive the phone's first address.
+    /// Nil when no paired Ledger is in the account. Exercised by
+    /// AppTests/LedgerPairingTests and NestedMultisigFlowTests.
+    @discardableResult
+    func registerPairedLedger(record: MultisigAccountRecord) async throws -> MultisigAccountRecord? {
+        let account = try multisigAccount(for: record)
+        guard record.ledger == nil, !pairedLedgers(in: account).isEmpty else { return nil }
+        return try await registerLedger(record: record)
     }
 
     /// The account already on this phone with this descriptor, or a new one.
@@ -2421,6 +2794,73 @@ final class AppModel {
         let id = String(descriptor.serialized().suffix(8))
         if let existing = multisigAccounts.first(where: { $0.id == id }) { return existing }
         return try await addMultisigAccount(name: name, descriptor: descriptor.serialized())
+    }
+
+    /// Shows the address at `index` on the Ledger, which must be the one this
+    /// phone derives.
+    func verifyLedgerAddress(record: MultisigAccountRecord, index: UInt32) async throws -> String {
+        guard advancedMode else { throw LedgerActionError.advancedModeOnly }
+        guard let registration = record.ledger else { throw LedgerActionError.notPaired }
+        let account = try multisigAccount(for: record)
+        let session = try await ledgerConnector.connect()
+        do {
+            let shown = try await LedgerMultisig.displayAddress(account, registration: registration, index: index,
+                                                                client: LedgerBitcoinClient(transport: session))
+            await session.close()
+            return shown
+        } catch {
+            await session.close()
+            throw error
+        }
+    }
+
+    /// Registers an account on the Ledger connected now, which must hold one
+    /// of the account's keys: the Ledger shows the policy, the user approves
+    /// it there, and it must derive the phone's first address. The account
+    /// screen offers this for a joined account whose paired Ledger did not
+    /// register it on joining. Exercised by AppTests/NestedMultisigFlowTests.
+    @discardableResult
+    func registerLedger(record: MultisigAccountRecord) async throws -> MultisigAccountRecord {
+        guard advancedMode else { throw LedgerActionError.advancedModeOnly }
+        guard LedgerWalletPolicy.isValidName(record.name) else { throw LedgerActionError.invalidName }
+        let account = try multisigAccount(for: record)
+        let session = try await ledgerConnector.connect()
+        do {
+            let client = LedgerBitcoinClient(transport: session)
+            let fingerprint = try await client.masterFingerprint()
+            let registration = try await LedgerMultisig.register(account, name: record.name, fingerprint: fingerprint,
+                                                                 client: client)
+            await session.close()
+            try await multisigStore.setLedger(id: record.id, registration: registration)
+            multisigAccounts = await multisigStore.all
+            e2e?.journal("multisig.ledgerRegistered", fields: ["id": record.id])
+            return multisigAccounts.first { $0.id == record.id } ?? record
+        } catch {
+            await session.close()
+            throw error
+        }
+    }
+
+    /// The phone reviews the spend first; the Ledger then shows it on its own
+    /// screen and adds a signature this phone keeps only once it verifies.
+    func signMultisigSpendWithLedger(_ psbt: PSBT, record: MultisigAccountRecord) async throws -> PSBT {
+        guard advancedMode else { throw LedgerActionError.advancedModeOnly }
+        guard let registration = record.ledger else { throw LedgerActionError.notPaired }
+        let account = try multisigAccount(for: record)
+        _ = try reviewMultisigSpend(psbt, record: record)
+        let session = try await ledgerConnector.connect()
+        do {
+            var signed = psbt
+            try await LedgerMultisig.sign(&signed, account: account, registration: registration,
+                                          client: LedgerBitcoinClient(transport: session))
+            await session.close()
+            _ = try reviewMultisigSpend(signed, record: record)
+            journalPSBT(stage: "multisig-ledger-signed", psbt: signed)
+            return signed
+        } catch {
+            await session.close()
+            throw error
+        }
     }
 
     // MARK: - People
@@ -2714,6 +3154,7 @@ final class AppModel {
         loadNetworkScopedSettings()
         await configurePeople()
         await configureMultisig()
+        await configureSigners()
         guard let walletURL = walletURL() else {
             stage = .storageDamaged(
                 "Winnow could not access its protected local storage. No wallet files or keys were changed.")
@@ -3015,6 +3456,22 @@ final class AppModel {
         multisigAccounts = await multisigStore.all
     }
 
+    private func signersURL() -> URL? {
+        storageDirectory()?.appending(path: "signers.json")
+    }
+
+    /// Reads the signers this phone knows. Damage is a notice, not a stage,
+    /// and the file is not a wallet's: it stays when a wallet is deleted.
+    func configureSigners() async {
+        switch await signerStore.configure(storageURL: signersURL(), network: network) {
+        case let .damaged(message):
+            signerStorageNotice = message
+        case .missing, .loaded:
+            signerStorageNotice = nil
+        }
+        signers = await signerStore.all
+    }
+
     private func peopleURL() -> URL? {
         storageDirectory()?.appending(path: "people.json")
     }
@@ -3129,7 +3586,10 @@ extension AppModel {
         let restoration = try await cloudBackups.restoreContents(id)
         let bundle = restoration.contents.bundle
         var appState = try CloudAppState.decode(restoration.contents.appState, for: bundle)
-        if let saved = appState { appState?.people = try await peopleStore.planRestore(saved.people) }
+        if let saved = appState {
+            appState?.people = try await peopleStore.planRestore(saved.people)
+            appState?.signers = try await signerStore.planRestore(saved.signers ?? [])
+        }
         try Task.checkCancellation()
         guard walletID == nil, network == selectedNetwork else { throw CancellationError() }
         let validatedState = appState
@@ -3178,6 +3638,10 @@ extension AppModel {
 
     private func applyCloudAppState(_ state: CloudAppState) async throws {
         try await peopleStore.restore(state.people)
+        if let signers = state.signers {
+            try await signerStore.restore(signers)
+            self.signers = await signerStore.all
+        }
         configureReceiveAddressLabels()
         guard let receiveLabelStore else { throw AppError.noWallet }
         try receiveLabelStore.restore(state.receiveLabels)

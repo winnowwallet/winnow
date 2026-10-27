@@ -36,7 +36,7 @@ struct MultisigSection: View {
         } header: {
             Text("Multisig")
         } footer: {
-            Text("k-of-n Taproot accounts with other Winnows or any signer, shared as a descriptor and spent with PSBTs. Any k signers spend at once; an optional recovery path lets fewer signers, or a separate key, spend a coin that has not moved for a set number of blocks.")
+            Text("k-of-n Taproot accounts with other Winnows, a Ledger or any signer, shared as a descriptor and spent with PSBTs. Any k signers spend at once; a phone and its Ledger can count as one signer; an optional recovery path lets fewer signers, or a separate key, spend a coin that has not moved for a set number of blocks. Pair a Ledger and save other people's keys under Settings → Signers.")
         }
     }
 
@@ -104,6 +104,7 @@ struct MultisigAddView: View {
     @State private var name = ""
     @State private var error: String?
     @State private var saving = false
+    @State private var saved = false
 
     private var keyExpression: String? { try? model.multisigKeyExpression() }
 
@@ -129,6 +130,7 @@ struct MultisigAddView: View {
                     CopyableIdentifier(
                         value: "tr(\(Taproot.unspendableInternalKey.hex),sortedmulti_a(2,\(keyExpression),OTHER_KEY))",
                         abbreviated: true, label: "Copy 2-of-2 template", accessibilityID: "multisigTemplateCopy")
+                    MemberShareRows(phoneKey: keyExpression)
                 } else {
                     Text("This wallet has no shareable account key.")
                         .foregroundStyle(.secondary)
@@ -136,7 +138,7 @@ struct MultisigAddView: View {
             } header: {
                 Text("This phone's key")
             } footer: {
-                Text("One signer must be this key. Every signer is an extended public key with its origin and the /<0;1>/* suffix; the internal key is the unspendable NUMS point.")
+                Text("One signer must be this key. Every signer is an extended public key with its origin and the /<0;1>/* suffix; the internal key is the unspendable NUMS point. To count this phone and its Ledger as one signer of someone else's account, send both keys together.")
             }
 
             Section("Descriptor") {
@@ -150,12 +152,17 @@ struct MultisigAddView: View {
                     .accessibilityIdentifier("multisigDescriptorPasteButton")
                 switch validation {
                 case let .success(account):
-                    LabeledContent("Policy", value: "\(account.threshold) of \(account.signers.count)")
+                    LabeledContent("Policy", value: account.policySummary)
                     if let address = try? account.address(index: 0) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("First address").font(.caption).foregroundStyle(.secondary)
                             ReviewAddress(address: address)
                         }
+                    }
+                    if let ledger = model.pairedLedgers(in: account).first {
+                        Text("\(ledger.name) holds a key of this account and approves it on its screen after Save.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("multisigJoinLedgerNotice")
                     }
                 case let .failure(failure):
                     Text(failure.localizedDescription)
@@ -174,22 +181,36 @@ struct MultisigAddView: View {
         .navigationTitle("Add multisig account")
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button(saving ? "Saving…" : "Save") { save() }
-                    .accessibilityIdentifier("multisigSaveButton")
-                    .disabled(saving || DisplayName.normalized(name) == nil
-                        || (try? validation?.get()) == nil)
+                if saved {
+                    Button("Done") { dismiss() }
+                        .accessibilityIdentifier("multisigSaveButton")
+                } else {
+                    Button(saving ? "Saving…" : "Save") { save() }
+                        .accessibilityIdentifier("multisigSaveButton")
+                        .disabled(saving || DisplayName.normalized(name) == nil
+                            || (try? validation?.get()) == nil)
+                }
             }
         }
     }
 
+    /// Files the account, then has this phone's paired Ledger approve it
+    /// when one holds a key of it; a Ledger that did not can still register
+    /// it from the account screen.
     private func save() {
         saving = true
         error = nil
         Task {
             defer { saving = false }
             do {
-                try await model.addMultisigAccount(name: name, descriptor: descriptor)
-                dismiss()
+                let record = try await model.addMultisigAccount(name: name, descriptor: descriptor)
+                saved = true
+                do {
+                    _ = try await model.registerPairedLedger(record: record)
+                    dismiss()
+                } catch {
+                    self.error = "The account is on this phone, but the Ledger did not register it: \(error.localizedDescription) Register on Ledger from the account screen."
+                }
             } catch {
                 self.error = error.localizedDescription
             }
@@ -213,17 +234,32 @@ struct MultisigAccountView: View {
             if let record, let account = try? model.multisigAccount(for: record) {
                 Section {
                     MultisigValueRow(title: "Balance", value: satsText(record.balance), identifier: "multisigBalance")
-                    MultisigValueRow(title: "Policy", value: "\(account.threshold) of \(account.signers.count)",
-                                     identifier: "multisigPolicy")
+                    MultisigValueRow(title: "Policy", value: account.policySummary, identifier: "multisigPolicy")
                     if let recovery = account.recovery {
                         MultisigValueRow(title: "Recovery", value: Self.recoveryText(recovery, account: account),
                                          identifier: "multisigRecovery")
                     }
+                    if let ledger = record.ledger {
+                        let fingerprint = String(format: "%08x", ledger.masterFingerprint)
+                        MultisigValueRow(title: "Ledger",
+                                         value: model.signerNames(for: record)[ledger.masterFingerprint].map { "\($0) · \(fingerprint)" }
+                                             ?? fingerprint,
+                                         identifier: "multisigLedgerFingerprint")
+                    } else if LedgerMultisig.namesALedgerKey(account) {
+                        LedgerRegisterButton(record: record)
+                    }
                 }
+                if account.isNested { groupsSection(record, account) }
                 receiveSection(record, account)
-                Section("Spend") {
-                    NavigationLink(value: MultisigRoute.psbt(record.id)) { Text("New or pasted PSBT") }
-                        .accessibilityIdentifier("multisigPSBTButton")
+                Section {
+                    NavigationLink(value: MultisigRoute.psbt(record.id)) {
+                        Text(record.draft == nil ? "New or pasted PSBT" : "Payment awaiting signatures")
+                    }
+                    .accessibilityIdentifier("multisigPSBTButton")
+                } header: {
+                    Text("Spend")
+                } footer: {
+                    Text("An ordinary payment starts from Send with this account picked under From. This page is for a pasted PSBT and the recovery path.")
                 }
                 coinsSection(record, account)
                 Section("Descriptor") {
@@ -250,8 +286,13 @@ struct MultisigAccountView: View {
         }
     }
 
-    /// "after 4320 blocks: any 1 of the signers", or "… the recovery key".
+    /// "after 4320 blocks: any 1 of the signers", "… any 1 of the members"
+    /// for a nested account with a timelocked leaf per group of them, or
+    /// "… the recovery key".
     static func recoveryText(_ recovery: MultisigAccount.Recovery, account: MultisigAccount) -> String {
+        if let members = account.recoveryMembers {
+            return "after \(recovery.blocks) blocks: any \(members.threshold) of the members"
+        }
         let signerKeys = Set(account.signers.compactMap { signer -> Data? in
             guard case let .extended(key, _) = signer.base else { return nil }
             return key.publicKey
@@ -265,6 +306,57 @@ struct MultisigAccountView: View {
         return "after \(recovery.blocks) blocks: \(who)"
     }
 
+    /// A nested account's members, or its leaves when they do not read as
+    /// members: each key by its fingerprint, this phone's, the paired
+    /// Ledger's and saved signers' named. Pinned by
+    /// AppTests/NestedMultisigFlowTests.
+    @ViewBuilder
+    private func groupsSection(_ record: MultisigAccountRecord, _ account: MultisigAccount) -> some View {
+        let ownKey = model.multisigOwnAccountKey
+        let names = model.signerNames(for: record)
+        if let members = account.members {
+            Section {
+                ForEach(members.groups.indices, id: \.self) { index in
+                    Text(Self.memberText(members, index, ownKey: ownKey, names: names))
+                        .font(.system(.caption, design: .monospaced))
+                        .accessibilityIdentifier("multisigMember-\(index)")
+                }
+            } header: {
+                Text("Members · any \(members.threshold) of \(members.groups.count)")
+            } footer: {
+                Text("A member signs with every key it has, or with its own threshold of them: any 2 of a 2-of-3 account's. Any \(members.threshold) members together can spend; fewer cannot, whatever keys they hold.")
+            }
+        } else {
+            Section("Ways to spend") {
+                ForEach(account.signersLeaves.indices, id: \.self) { index in
+                    let leaf = account.signersLeaves[index]
+                    Text("\(leaf.threshold) of: " + Self.groupText(leaf.keys, ownKey: ownKey, names: names))
+                        .font(.system(.caption, design: .monospaced))
+                }
+            }
+        }
+    }
+
+    /// A member's keys, "any 2 of: " first when it signs with fewer than
+    /// all of them. Pinned by AppTests/NestedMultisigFlowTests.
+    static func memberText(_ members: MultisigAccount.Members, _ index: Int, ownKey: Data?,
+                           names: [UInt32: String]) -> String {
+        let keys = members.groups[index]
+        let prefix = members.thresholds[index] < keys.count ? "any \(members.thresholds[index]) of: " : ""
+        return prefix + groupText(keys, ownKey: ownKey, names: names)
+    }
+
+    /// "6824f543 (this phone) · 5992698d (Nano X) · 1a2b3c4d (Bob)".
+    static func groupText(_ keys: [Descriptor.SingleKey], ownKey: Data?, names: [UInt32: String]) -> String {
+        keys.map { key in
+            guard let origin = key.origin else { return "no origin" }
+            let fingerprint = String(format: "%08x", origin.fingerprint)
+            if case let .extended(xpub, _) = key.base, xpub.publicKey == ownKey { return fingerprint + " (this phone)" }
+            if let name = names[origin.fingerprint] { return fingerprint + " (\(name))" }
+            return fingerprint
+        }.joined(separator: " · ")
+    }
+
     @ViewBuilder
     private func receiveSection(_ record: MultisigAccountRecord, _ account: MultisigAccount) -> some View {
         Section {
@@ -273,6 +365,9 @@ struct MultisigAccountView: View {
                     .frame(maxWidth: 220)
                     .frame(maxWidth: .infinity)
                 MultisigLiteralRow(text: address, copyIdentifier: "multisigReceiveAddressCopy")
+            }
+            if record.ledger != nil {
+                LedgerVerifyAddressButton(record: record, index: record.nextReceiveIndex)
             }
             Button("New address") {
                 Task {
@@ -331,27 +426,44 @@ struct MultisigAccountView: View {
 /// signers' copies, and broadcast once enough signatures verify. Signers
 /// sign independently and in any order; there is no round state to lose.
 /// A PSBT as the signing screen shows it: its review, the verified signatures
-/// on every leaf that can finish it, and what this phone still needs to add.
-/// `AppModel.multisigSigningScreen` builds it, so the app tests
+/// on every leaf that can finish it, and what this phone and its Ledger still
+/// need to add. `AppModel.multisigSigningScreen` builds it, so the app tests
 /// read the same values the screen does.
 struct MultisigSigningScreen {
     var review: MultisigAccount.SpendReview
+    /// The leaves that can finish the spend: every signers' leaf always, the
+    /// recovery leaf too when every input's sequence meets its lock, which a
+    /// recovery spend does and so may a co-signer's BIP326 sequences on old
+    /// coins. Any one finishing is enough.
+    var paths: [MultisigAccount.SpendPath]
     /// Verified keys per usable path, by position among that path's keys.
     var approvals: [MultisigAccount.SpendPath: Set<Int>]
     var progress: MultisigSigningProgress
 
-    /// The leaves that can finish the spend: the signers' always, the
-    /// recovery leaf too when every input's sequence meets its lock, which a
-    /// recovery spend does and so may a co-signer's BIP326 sequences on old
-    /// coins. Either one finishing is enough.
-    var paths: [MultisigAccount.SpendPath] { Self.paths(for: review) }
+    static func paths(for review: MultisigAccount.SpendReview, account: MultisigAccount) -> [MultisigAccount.SpendPath] {
+        account.signersPaths + (review.path.isRecovery ? account.recoveryPaths : [])
+    }
 
-    static func paths(for review: MultisigAccount.SpendReview) -> [MultisigAccount.SpendPath] {
-        review.path == .recovery ? [.signers, .recovery] : [.signers]
+    /// The signature count row's title for `path`: a nested account names
+    /// its groups, on the recovery path too when that has a leaf per group.
+    static func signaturesTitle(_ path: MultisigAccount.SpendPath, account: MultisigAccount) -> String {
+        if let leaf = path.recoveryLeaf {
+            return account.recoveryLeaves.count > 1 ? "Recovery group \(leaf + 1) signatures" : "Recovery signatures"
+        }
+        return account.isNested ? "Group \((path.signersLeaf ?? 0) + 1) signatures" : "Signatures"
+    }
+
+    static func signatureCountIdentifier(_ path: MultisigAccount.SpendPath) -> String {
+        if let leaf = path.recoveryLeaf {
+            return leaf == 0 ? "multisigRecoverySignatureCount" : "multisigRecoverySignatureCount-\(leaf)"
+        }
+        let leaf = path.signersLeaf ?? 0
+        return leaf == 0 ? "multisigSignatureCount" : "multisigSignatureCount-\(leaf)"
     }
 }
 
-/// What the leaves that can finish a PSBT still need from this phone.
+/// What the leaves that can finish a PSBT still need from this phone and its
+/// paired Ledger.
 struct MultisigSigningProgress: Equatable {
     /// Some leaf has its threshold of verified signatures.
     var complete = false
@@ -359,12 +471,19 @@ struct MultisigSigningProgress: Equatable {
     var phoneHolds = false
     /// One of those keys has not signed yet.
     var phoneUnsigned = false
+    var ledgerHolds = false
+    var ledgerUnsigned = false
 
     var signedHere: Bool { phoneHolds && !phoneUnsigned }
 
     /// The signing screen's footer.
     var nextStep: String {
         if complete { return "Enough signatures verify. Finalize and broadcast." }
+        if ledgerUnsigned {
+            return signedHere
+                ? "Sign with the Ledger: check the payment on its screen before approving."
+                : "Add this phone's signature and the Ledger's, in either order. Check the payment on the Ledger's screen."
+        }
         if signedHere {
             return "Share the PSBT below with the other signers, then combine their signed copies here."
         }
@@ -372,45 +491,28 @@ struct MultisigSigningProgress: Equatable {
     }
 }
 
+/// The account's PSBT page, for what Send cannot do: a pasted co-signer's
+/// PSBT when this phone has no draft, and a spend on the recovery path.
+/// While the account has a draft, the page is the signature-collection step
+/// (`MultisigSigningSections`), the same one Send shows after "Sign and
+/// continue". Exercised on screen by the signet journey
+/// (UITests/MultisigJourney.swift).
 struct MultisigPSBTView: View {
     let recordID: String
     @Environment(AppModel.self) private var model
-    @Environment(\.scenePhase) private var scenePhase
 
     @State private var address = ""
     @State private var amountText = ""
     @State private var feeRateText = ""
     @State private var pasted = ""
-    @State private var working: PSBT?
-    /// The PSBT in hand as the signing screen shows it, from its review.
-    @State private var screen: MultisigSigningScreen?
-    @State private var reviewError: String?
-    @State private var output: String?
     @State private var error: String?
     @State private var busy = false
     @State private var broadcastTxid: Data?
-    @State private var operationEpoch = SensitivePresentationEpoch()
-    @State private var operationTask: Task<Void, Never>?
     /// The path a new PSBT is created on.
     @State private var path: MultisigAccount.SpendPath = .signers
 
     private var record: MultisigAccountRecord? { model.multisigAccounts.first { $0.id == recordID } }
     private var account: MultisigAccount? { record.flatMap { try? model.multisigAccount(for: $0) } }
-
-    private var review: MultisigAccount.SpendReview? { screen?.review }
-
-
-    /// Rechecks the proposal whenever the account's coins or frontiers move.
-    private struct TrustedState: Equatable {
-        var utxos: [WalletUTXO]
-        var nextReceiveIndex: UInt32
-        var nextChangeIndex: UInt32
-    }
-
-    private var trustedState: TrustedState? {
-        record.map { TrustedState(utxos: $0.utxos, nextReceiveIndex: $0.nextReceiveIndex,
-                                  nextChangeIndex: $0.nextChangeIndex) }
-    }
 
     var body: some View {
         Form {
@@ -422,37 +524,25 @@ struct MultisigPSBTView: View {
                         .accessibilityIdentifier("multisigPaymentSent")
                     CopyableIdentifier(value: broadcastTxid.displayHex, accessibilityID: "multisigTxidCopy")
                 }
+            } else if record?.draft != nil {
+                MultisigSigningSections(recordID: recordID, onBroadcast: { broadcastTxid = $0 }, onDiscard: {})
             } else {
-                if working == nil { createSection }
+                createSection
                 pasteSection
-                if working != nil {
-                    reviewSection
-                    actionsSection
-                }
                 if let error {
                     Section {
                         Text(error).font(.footnote).foregroundStyle(.red)
                             .accessibilityIdentifier("multisigError")
                     }
                 }
-                if let output {
-                    Section("PSBT to share") {
-                        CopyableTextBlock(text: output)
-                    }
-                }
             }
         }
-        .navigationTitle("Multisig PSBT")
+        .navigationTitle(record?.draft == nil ? "Multisig PSBT" : "Awaiting signatures")
         .task {
             guard feeRateText.isEmpty else { return }
             let rate = await model.resolvedFeeRate(priority: .medium, override: nil)
             if feeRateText.isEmpty { feeRateText = String(format: "%.1f", rate) }
         }
-        .task(id: trustedState) { refreshReview() }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .background { clearState() }
-        }
-        .onDisappear { clearState() }
     }
 
     private var createSection: some View {
@@ -485,7 +575,7 @@ struct MultisigPSBTView: View {
         } footer: {
             Text(path == .recovery
                 ? "Only coins that have not moved for the recovery delay can be spent this way. Change returns to this account's next change address."
-                : "Change returns to this account's next change address. The fee may be at most a tenth of the coins spent.")
+                : "Change returns to this account's next change address. The fee may be at most a tenth of the coins spent. An ordinary payment can also start from Send, with this account picked under From.")
         }
     }
 
@@ -499,13 +589,118 @@ struct MultisigPSBTView: View {
                 .accessibilityIdentifier("psbtField")
             Button("Paste from clipboard") { pasted = model.pasteboardText() ?? "" }
                 .accessibilityIdentifier("psbtPasteButton")
-            Button(working == nil ? "Use this PSBT" : "Combine") { addPasted() }
+            Button("Use this PSBT") { addPasted() }
                 .accessibilityIdentifier("addPSBTButton")
                 .disabled(busy || pasted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         } header: {
-            Text(working == nil ? "Or paste a PSBT" : "Another signer's PSBT")
+            Text("Or paste a PSBT")
         } footer: {
-            Text("A pasted PSBT is combined with the one here. Winnow signs only a spend of coins this account already has.")
+            Text("A pasted PSBT becomes the payment this account is collecting signatures for. Winnow signs only a spend of coins this account already has.")
+        }
+    }
+
+    private func create() {
+        guard let record, let amount = Int64(amountText), let rate = Double(feeRateText) else { return }
+        error = nil
+        busy = true
+        Task {
+            defer { busy = false }
+            do {
+                let psbt = try await model.createMultisigSpend(record: record, address: address, amount: amount,
+                                                               feeRateSatPerVByte: rate, path: path)
+                try await model.updateMultisigDraft(psbt, record: record)
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    private func addPasted() {
+        guard let record else { return }
+        error = nil
+        busy = true
+        Task {
+            defer { busy = false }
+            do {
+                let incoming = try PSBT(base64: pasted.trimmingCharacters(in: .whitespacesAndNewlines))
+                try await model.adoptMultisigDraft(incoming, record: record)
+                pasted = ""
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+}
+
+/// The signature-collection step for an account's draft, shared by Send
+/// (after "Sign and continue") and the account's PSBT page: the review of
+/// the draft, the signature counts on every leaf that can finish it, this
+/// phone's and the Ledger's signatures, a pasted co-signer's copy, the PSBT
+/// to share, Finalize and broadcast, and Discard. Every change goes through
+/// the account's draft, so leaving the screen loses nothing. Exercised on
+/// screen by the signet journey (UITests/MultisigJourney.swift), and step by
+/// step by AppTests/MultisigAccountFlowTests.
+struct MultisigSigningSections: View {
+    let recordID: String
+    /// Called with the txid once the draft is broadcast.
+    var onBroadcast: (Data) -> Void
+    /// Called once the draft is discarded.
+    var onDiscard: () -> Void
+    @Environment(AppModel.self) private var model
+    @Environment(\.scenePhase) private var scenePhase
+
+    @State private var pasted = ""
+    /// The draft as the signing screen shows it, from its review.
+    @State private var screen: MultisigSigningScreen?
+    @State private var reviewError: String?
+    @State private var error: String?
+    @State private var busy = false
+    @State private var confirmDiscard = false
+    @State private var operationEpoch = SensitivePresentationEpoch()
+    @State private var operationTask: Task<Void, Never>?
+
+    private var record: MultisigAccountRecord? { model.multisigAccounts.first { $0.id == recordID } }
+    private var account: MultisigAccount? { record.flatMap { try? model.multisigAccount(for: $0) } }
+    private var review: MultisigAccount.SpendReview? { screen?.review }
+
+    /// Re-reviews whenever the draft, or the account's coins or frontiers, move.
+    private struct TrustedState: Equatable {
+        var draft: String?
+        var utxos: [WalletUTXO]
+        var nextReceiveIndex: UInt32
+        var nextChangeIndex: UInt32
+    }
+
+    private var trustedState: TrustedState? {
+        record.map { TrustedState(draft: $0.draft?.psbtBase64, utxos: $0.utxos,
+                                  nextReceiveIndex: $0.nextReceiveIndex, nextChangeIndex: $0.nextChangeIndex) }
+    }
+
+    var body: some View {
+        reviewSection
+            .task(id: trustedState) { refreshReview() }
+            .confirmationDialog("Discard this payment?", isPresented: $confirmDiscard, titleVisibility: .visible) {
+                Button("Discard", role: .destructive) { discard() }
+            } message: {
+                Text("The account keeps its coins. The signatures collected so far are lost.")
+            }
+        actionsSection
+        pasteSection
+        if let error {
+            Section {
+                Text(error).font(.footnote).foregroundStyle(.red)
+                    .accessibilityIdentifier("multisigError")
+            }
+        }
+        if let output = record?.draft?.psbtBase64 {
+            Section("PSBT to share") {
+                CopyableTextBlock(text: output)
+            }
+        }
+        Section {
+            Button("Discard draft", role: .destructive) { confirmDiscard = true }
+                .accessibilityIdentifier("multisigDiscardDraftButton")
+                .disabled(busy)
         }
     }
 
@@ -532,9 +727,9 @@ struct MultisigPSBTView: View {
                 if let account, let screen {
                     ForEach(screen.paths, id: \.self) { path in
                         MultisigValueRow(
-                            title: path == .recovery ? "Recovery signatures" : "Signatures",
+                            title: MultisigSigningScreen.signaturesTitle(path, account: account),
                             value: "\(screen.approvals[path, default: []].count) of \(account.threshold(on: path))",
-                            identifier: path == .recovery ? "multisigRecoverySignatureCount" : "multisigSignatureCount")
+                            identifier: MultisigSigningScreen.signatureCountIdentifier(path))
                     }
                 }
             } else {
@@ -560,6 +755,11 @@ struct MultisigPSBTView: View {
                 Button("Add this phone's signature") { sign() }
                     .accessibilityIdentifier("multisigSignButton")
                     .disabled(busy || review == nil || !state.phoneUnsigned || state.complete)
+                if state.ledgerHolds {
+                    Button("Sign with Ledger") { signWithLedger() }
+                        .accessibilityIdentifier("multisigLedgerSignButton")
+                        .disabled(busy || review == nil || !state.ledgerUnsigned || state.complete)
+                }
                 Button(busy ? "Working…" : "Finalize and broadcast") { broadcast() }
                     .accessibilityIdentifier("multisigBroadcastButton")
                     .disabled(busy || review == nil || !state.complete)
@@ -572,57 +772,36 @@ struct MultisigPSBTView: View {
         }
     }
 
+    private var pasteSection: some View {
+        Section {
+            TextField("Paste a PSBT (Base64)", text: $pasted, axis: .vertical)
+                .font(.system(.caption, design: .monospaced))
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .lineLimit(1 ... 4)
+                .accessibilityIdentifier("psbtField")
+            Button("Paste from clipboard") { pasted = model.pasteboardText() ?? "" }
+                .accessibilityIdentifier("psbtPasteButton")
+            Button("Combine") { addPasted() }
+                .accessibilityIdentifier("addPSBTButton")
+                .disabled(busy || pasted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        } header: {
+            Text("Another signer's PSBT")
+        } footer: {
+            Text("A pasted copy of this payment is combined with the signatures here.")
+        }
+    }
+
     // MARK: Actions
 
-    private func create() {
-        guard let record, let amount = Int64(amountText), let rate = Double(feeRateText) else { return }
-        error = nil
-        busy = true
-        Task {
-            defer { busy = false }
-            do {
-                install(try await model.createMultisigSpend(record: record, address: address, amount: amount,
-                                                            feeRateSatPerVByte: rate, path: path))
-            } catch {
-                self.error = error.localizedDescription
-            }
-        }
-    }
-
-    private func addPasted() {
-        error = nil
-        do {
-            guard let record else { return }
-            let incoming = try PSBT(base64: pasted.trimmingCharacters(in: .whitespacesAndNewlines))
-            let candidate: PSBT
-            if let working {
-                candidate = try model.combineMultisigSpend(working, with: incoming, record: record)
-            } else {
-                _ = try model.reviewMultisigSpend(incoming, record: record)
-                candidate = incoming
-            }
-            install(candidate)
-            pasted = ""
-            model.journalPSBT(stage: "multisig-combined", psbt: candidate)
-        } catch {
-            self.error = error.localizedDescription
-        }
-    }
-
-    private func install(_ psbt: PSBT) {
-        working = psbt
-        output = try? psbt.base64V0()
-        refreshReview()
-    }
-
     private func refreshReview() {
-        guard let working, let record else {
+        guard let record, let psbt = try? model.multisigDraft(for: record) else {
             screen = nil
             reviewError = nil
             return
         }
         do {
-            screen = try model.multisigSigningScreen(working, record: record)
+            screen = try model.multisigSigningScreen(psbt, record: record)
             reviewError = nil
         } catch {
             screen = nil
@@ -630,21 +809,49 @@ struct MultisigPSBTView: View {
         }
     }
 
-    private func sign() {
-        guard let working, let record else { return }
+    private func addPasted() {
+        guard let record else { return }
         run { token in
-            let signed = try await model.signMultisigSpend(working, record: record)
+            let incoming = try PSBT(base64: pasted.trimmingCharacters(in: .whitespacesAndNewlines))
+            try await model.adoptMultisigDraft(incoming, record: record)
             guard accepts(token) else { return }
-            install(signed)
+            pasted = ""
+        }
+    }
+
+    private func sign() {
+        guard let record else { return }
+        run { token in
+            let signed = try await model.signMultisigSpend(try model.multisigDraft(for: record), record: record)
+            guard accepts(token) else { return }
+            try await model.updateMultisigDraft(signed, record: record)
+        }
+    }
+
+    private func signWithLedger() {
+        guard let record else { return }
+        run { token in
+            let signed = try await model.signMultisigSpendWithLedger(try model.multisigDraft(for: record), record: record)
+            guard accepts(token) else { return }
+            try await model.updateMultisigDraft(signed, record: record)
         }
     }
 
     private func broadcast() {
-        guard let working, let record else { return }
+        guard let record else { return }
         run { token in
-            let txid = try await model.broadcastMultisigSpend(working, record: record)
+            let txid = try await model.broadcastMultisigDraft(record: record)
             guard accepts(token) else { return }
-            broadcastTxid = txid
+            onBroadcast(txid)
+        }
+    }
+
+    private func discard() {
+        guard let record else { return }
+        run { token in
+            try await model.discardMultisigDraft(record: record)
+            guard accepts(token) else { return }
+            onDiscard()
         }
     }
 
@@ -671,19 +878,5 @@ struct MultisigPSBTView: View {
 
     private func accepts(_ token: SensitivePresentationEpoch.Token) -> Bool {
         operationEpoch.accepts(token, whilePresentationIsAllowed: scenePhase != .background)
-    }
-
-    /// Leaving or backgrounding drops the proposal; the shared PSBT text is
-    /// the only copy that travels between signers.
-    private func clearState() {
-        operationEpoch.invalidate()
-        operationTask?.cancel()
-        operationTask = nil
-        busy = false
-        working = nil
-        output = nil
-        pasted = ""
-        screen = nil
-        reviewError = nil
     }
 }

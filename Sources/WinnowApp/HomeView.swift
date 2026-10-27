@@ -33,10 +33,11 @@ struct HomeView: View {
                         Text("Balance · confirmed")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
-                        Text(satsText(model.status.balance))
+                        Text(satsText(model.status.balance + model.status.accountsBalance))
                             .font(.system(.largeTitle, design: .rounded).bold())
                             .accessibilityIdentifier("balanceText")
-                            .accessibilityValue(satsText(model.status.balance))
+                            .accessibilityValue(satsText(model.status.balance + model.status.accountsBalance))
+                        AccountsBalanceLine()
                         Text("\(model.status.utxoCount) UTXO(s)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -102,14 +103,13 @@ struct HomeView: View {
                 MultisigSection()
 
                 Section("Transactions") {
-                    if model.status.history.isEmpty {
+                    if model.status.payments.isEmpty {
                         Text("No transactions yet. Payments appear here once they confirm in a block.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
-                    ForEach(Array(model.status.history.enumerated()), id: \.offset) { _, entry in
-                        NavigationLink(value: entry.txid) { HistoryRow(entry: entry) }
-                        .accessibilityIdentifier("historyPayment-\(entry.txid.displayHex)")
+                    ForEach(model.status.payments) { payment in
+                        PaymentLink(payment: payment, draftsOpenSigning: true)
                     }
                 }
             }
@@ -138,11 +138,58 @@ struct HomeView: View {
     }
 }
 
+/// Under the headline: how much of it sits in multisig accounts, which need
+/// co-signers to move. Nothing when the phone has no account.
+struct AccountsBalanceLine: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        if !model.multisigAccounts.isEmpty {
+            let count = model.multisigAccounts.count
+            Text("of which \(satsText(model.status.accountsBalance)) in \(count) multisig account\(count == 1 ? "" : "s"), needs co-signers")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("accountsBalanceText")
+        }
+    }
+}
+
+/// One row's link: a draft opens the account's signing page where that page
+/// is reachable (Advanced mode), anything else the payment.
+struct PaymentLink: View {
+    let payment: DisplayedPayment
+    var draftsOpenSigning: Bool
+
+    var body: some View {
+        if payment.isDraft, draftsOpenSigning, let accountID = payment.accountID {
+            NavigationLink(value: MultisigRoute.psbt(accountID)) { HistoryRow(payment: payment) }
+                .accessibilityIdentifier("historyDraft-\(accountID)")
+        } else {
+            NavigationLink(value: payment.txid) { HistoryRow(payment: payment) }
+                .accessibilityIdentifier(payment.isDraft ? "historyDraft-\(payment.accountID ?? "")"
+                                         : "historyPayment-\(payment.txid.displayHex)")
+        }
+    }
+}
+
 /// One payment in the list. Advanced mode shows the block, the fee and the
-/// replacement's id; beginner mode says Confirmed, Pending or Replaced.
+/// replacement's id; beginner mode says Confirmed, Pending or Replaced. An
+/// account's payment names the account, a move between the wallet and an
+/// account says so, and a draft says how many signatures it has.
 struct HistoryRow: View {
     @Environment(AppModel.self) private var model
-    let entry: HistoryEntry
+    let payment: DisplayedPayment
+
+    init(payment: DisplayedPayment) {
+        self.payment = payment
+    }
+
+    /// A wallet entry, as the payment screens pass one.
+    init(entry: HistoryEntry) {
+        payment = DisplayedPayment(entry: entry, source: .wallet, accountID: nil)
+    }
+
+    private var entry: HistoryEntry { payment.entry }
 
     /// Net effect on the wallet: received (incl. our own change) minus spent.
     private var net: Int64 { entry.received - entry.spent }
@@ -151,6 +198,12 @@ struct HistoryRow: View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title).font(.headline)
+                if case let .account(name) = payment.source {
+                    Text(name)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("paymentAccount-\(entry.txid.displayHex)")
+                }
                 let labels = Array(Set(model.labeledReceiveOutputs(entry).map(\.label))).sorted()
                 if !labels.isEmpty {
                     Text(labels.joined(separator: " · "))
@@ -161,10 +214,24 @@ struct HistoryRow: View {
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 2) {
-                Text("\(net >= 0 ? "+" : "−")\(abs(net).formatted()) sats")
-                    .foregroundStyle(net >= 0 ? .green : .primary)
-                if model.advancedMode { detailedStatus } else { plainStatus }
+                amount
+                if case let .draft(_, signatures) = payment.source {
+                    Text("\(signatures) signed · tap to continue")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .accessibilityIdentifier("transactionDraft-\(entry.txid.displayHex)")
+                } else if model.advancedMode { detailedStatus } else { plainStatus }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var amount: some View {
+        if case let .transfer(_, _, moved) = payment.source {
+            Text("\(moved.formatted()) sats").foregroundStyle(.secondary)
+        } else {
+            Text("\(net >= 0 ? "+" : "−")\(abs(net).formatted()) sats")
+                .foregroundStyle(net >= 0 ? .green : .primary)
         }
     }
 
@@ -214,6 +281,16 @@ struct HistoryRow: View {
     }
 
     private var title: String {
+        switch payment.source {
+        case .wallet, .account: paymentTitle
+        case let .draft(name, _): "Awaiting signatures · \(name)"
+        case let .transfer(from, to, _):
+            from == DisplayedPayment.walletName ? "Moved to \(to)"
+                : to == DisplayedPayment.walletName ? "Moved from \(from)" : "Moved from \(from) to \(to)"
+        }
+    }
+
+    private var paymentTitle: String {
         guard net < 0 else {
             if let sender = model.receivedSender(entry) { return "Received from \(sender.name)" }
             return "Received"
@@ -236,15 +313,19 @@ struct PaymentDetailView: View {
     @State private var editingReceiveLabel: AppModel.LabeledReceiveOutput?
     @State private var attachingDestination: PersonRecord?
     @State private var showFeeBump = false
+    @State private var confirmAbandon = false
     @State private var loading = false
     @State private var error: String?
 
-    private var entry: HistoryEntry? { model.status.history.first { $0.txid == txid } }
+    private var payment: DisplayedPayment? { model.displayedPayment(txid: txid) }
+    private var entry: HistoryEntry? { payment?.entry }
 
     var body: some View {
         Form {
-            if let entry {
-                Section { HistoryRow(entry: entry) }
+            if let payment {
+                let entry = payment.entry
+                Section { HistoryRow(payment: payment) }
+                accountSection(payment)
                 ForEach(model.paymentRecipients(entry)) { recipient in
                     Section {
                         if let person = recipient.person { Text(person.name).font(.headline) }
@@ -288,8 +369,8 @@ struct PaymentDetailView: View {
                 if let notice = model.receiveLabelStorageNotice {
                     Text(notice).foregroundStyle(.orange)
                 }
-                if entry.received > 0 { senderSection(entry) }
-                if entry.rawTransaction == nil, entry.spent > 0 {
+                if entry.received > 0, !payment.isDraft { senderSection(entry) }
+                if entry.rawTransaction == nil, entry.spent > 0, payment.accountID == nil {
                     Section {
                         if loading || model.status.syncing { BusyIndicator(text: "Loading payment details…") }
                         else { Button("Load payment details") { Task { await load() } } }
@@ -335,8 +416,66 @@ struct PaymentDetailView: View {
                           senderCandidates: entry.map { model.senderCandidates(for: $0) } ?? [])
         }
         .sheet(isPresented: $showFeeBump) { FeeBumpView(txid: txid) }
+        .confirmationDialog("Give up on this payment?", isPresented: $confirmAbandon, titleVisibility: .visible) {
+            Button("Give up", role: .destructive) { abandon() }
+        } message: {
+            Text("Its coins become the account's again. If the network confirms it after all, it shows up here again as a spend.")
+        }
         .task(id: model.status.syncing) {
             if !model.status.syncing { await load() }
+        }
+    }
+
+    /// The account a payment belongs to, with what can be done about it:
+    /// collecting a draft's signatures (Advanced mode), or announcing again
+    /// or giving up on a spend no block has taken. Exercised by
+    /// AppTests/MultisigAccountFlowTests.testAnInFlightAccountSpendSurvivesABackupAndCanBeRebroadcastOrGivenUp.
+    @ViewBuilder
+    private func accountSection(_ payment: DisplayedPayment) -> some View {
+        if let accountID = payment.accountID, let record = model.multisigAccounts.first(where: { $0.id == accountID }) {
+            Section("Account") {
+                Text(record.name).font(.headline).accessibilityIdentifier("paymentAccountName")
+                if payment.isDraft {
+                    draftActions(record)
+                } else if payment.entry.height == 0, record.inFlight.contains(where: { $0.txid == txid }) {
+                    inFlightActions(record)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func draftActions(_ record: MultisigAccountRecord) -> some View {
+        if model.advancedMode {
+            NavigationLink(value: MultisigRoute.psbt(record.id)) { Text("Collect signatures") }
+                .accessibilityIdentifier("collectSignaturesButton")
+        } else {
+            Text("This payment is waiting for the other signers. Signatures are collected in Advanced mode.")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func inFlightActions(_ record: MultisigAccountRecord) -> some View {
+        Button("Rebroadcast") {
+            Task {
+                do { try await model.rebroadcastMultisigSpend(record: record, txid: txid) }
+                catch { self.error = error.localizedDescription }
+            }
+        }
+        .accessibilityIdentifier("rebroadcastSpendButton")
+        Button("Give up on this payment", role: .destructive) { confirmAbandon = true }
+            .accessibilityIdentifier("abandonSpendButton")
+        Text("No block has taken this payment yet. Rebroadcast announces it to the network again; giving up frees its coins for another payment.")
+            .font(.footnote).foregroundStyle(.secondary)
+    }
+
+    private func abandon() {
+        guard let payment, let accountID = payment.accountID,
+              let record = model.multisigAccounts.first(where: { $0.id == accountID }) else { return }
+        Task {
+            do { try await model.abandonMultisigSpend(record: record, txid: txid) }
+            catch { self.error = error.localizedDescription }
         }
     }
 

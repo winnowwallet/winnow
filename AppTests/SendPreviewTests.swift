@@ -332,6 +332,9 @@ final class SendReviewBindingTests: XCTestCase {
         var otherWallet = baseline
         otherWallet.walletID = "another-wallet"
         XCTAssertNotEqual(baseline, otherWallet)
+        var fromAccount = baseline
+        fromAccount.accountID = "household"
+        XCTAssertNotEqual(baseline, fromAccount, "a review made for the wallet never signs for an account")
         XCTAssertNotEqual(
             baseline,
             SendReviewInputs(destination: "tb1p-new-destination", amountText: baseline.amountText,

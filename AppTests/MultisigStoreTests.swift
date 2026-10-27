@@ -49,6 +49,17 @@ final class MultisigStoreTests: XCTestCase {
         .init(txid: Data(repeating: byte, count: 32), vout: 0)
     }
 
+    /// A creator's PSBT for `spend`, as the draft a phone files.
+    private func psbt(for spend: Transaction, spending coins: [WalletUTXO]) throws -> PSBT {
+        try PSBT(unsignedTx: spend,
+                 inputs: spend.inputs.map { input in
+                     let coin = coins.first { $0.outpoint == input.previousOutput }
+                     return PSBT.InputInfo(spentOutput: .init(amount: coin?.amount ?? 1,
+                                                              scriptPubKey: coin?.scriptPubKey ?? Data([0x51])))
+                 },
+                 outputs: spend.outputs.map { _ in PSBT.OutputInfo() })
+    }
+
     func testBackupPreservesAccountsAndRejectsChangedOwnership() async throws {
         let keys = InMemoryStoreKeyVault()
         let url = tempFileURL("multisig.json")
@@ -79,15 +90,17 @@ final class MultisigStoreTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode([MultisigAccountRecord].self, from: unsealedPayload(of: url)), [record])
     }
 
-    func testBackupWaitsForPendingAccountPayments() async throws {
+    /// A backup carries what no block has taken yet, so a restored phone
+    /// keeps waiting for it instead of forgetting it.
+    func testBackupCarriesPendingAccountPayments() async throws {
         let account = try account()
         let store = MultisigStore(keys: InMemoryStoreKeyVault())
         await store.configure(storageURL: nil, network: .signet)
-        try await store.restore([record(account, coins: [try coin(account, amount: 80_000, height: 0)])])
-        do {
-            _ = try await store.backupRecords()
-            XCTFail("an unconfirmed account snapshot was exported")
-        } catch {}
+        let pending = record(account, coins: [try coin(account, amount: 80_000, height: 0)])
+        try await store.restore([pending])
+        var backup = ImportBundle(network: "signet", lastKnownHeight: 100)
+        backup.vaults = try await store.backupRecords()
+        XCTAssertEqual(try ImportBundle.decode(json: backup.serialized()).vaults, [pending])
     }
 
     /// Payments arrive, a spend goes out with change, a reorg drops a block:
@@ -126,29 +139,62 @@ final class MultisigStoreTests: XCTestCase {
         current = try await fetch(store, added.id)
         XCTAssertEqual(current.balance, 26_000)
         XCTAssertEqual(current.nextChangeIndex, 1)
-        let backupWhilePending = try? await store.backupRecords()
-        XCTAssertNil(backupWhilePending)
+        // The spend is in the account's history as pending, with its exact
+        // fee and breakdown, and its bytes are kept for announcing it again;
+        // a backup carries all of it.
+        let pendingEntry = try XCTUnwrap(current.history.first { $0.txid == spend.txid })
+        XCTAssertEqual(pendingEntry.height, 0)
+        XCTAssertEqual(pendingEntry.spent, 60_000)
+        XCTAssertEqual(pendingEntry.received, 19_000)
+        XCTAssertEqual(pendingEntry.fee, 1_000)
+        XCTAssertEqual(pendingEntry.outputs?.change, [1])
+        XCTAssertEqual(pendingEntry.outputs?.external.map(\.amount), [40_000])
+        XCTAssertEqual(current.inFlight.map(\.txid), [spend.txid])
+        XCTAssertEqual(try current.inFlight[0].transaction(), spend)
+        XCTAssertEqual(current.history.map(\.txid), [funding.txid, later.txid, spend.txid])
+        XCTAssertEqual(current.history[0].received, 60_000)
+        XCTAssertEqual(current.history[0].height, 101)
+        XCTAssertNil(current.history[0].fee, "a payment from elsewhere has no exact fee")
+        let backupWhilePending = try await store.backupRecords()
+        XCTAssertEqual(backupWhilePending, [current])
 
-        // A reorg below the later payment drops it, and keeps the in-flight
-        // spend's input reserved.
+        // A reorg below the later payment drops it, with its history entry,
+        // and keeps the in-flight spend's input reserved.
         try await store.rollBack(to: 101)
         current = try await fetch(store, added.id)
         XCTAssertEqual(current.balance, 19_000)
         XCTAssertEqual(current.nextReceiveIndex, 3, "a reorg never costs an address gap")
+        XCTAssertEqual(current.history.map(\.txid), [funding.txid, spend.txid])
 
-        // The spend confirms; a reorg below it puts it back in flight, so its
-        // input stays reserved and its change leaves with the block.
+        // The spend confirms in place; a reorg below it puts it back in
+        // flight, so its input stays reserved, its change leaves with the
+        // block, and its entry re-pends with its bytes still kept.
         try await store.apply(match: block(at: 103, [spend]), network: .signet)
         current = try await fetch(store, added.id)
         XCTAssertEqual(current.allUtxos.first { $0.txid == funding.txid }?.spent?.height, 103)
         XCTAssertEqual(current.utxos.first { $0.txid == spend.txid }?.height, 103)
-        let confirmedBackup = try? await store.backupRecords()
-        XCTAssertNotNil(confirmedBackup, "a confirmed spend can be backed up")
+        let confirmed = try XCTUnwrap(current.history.first { $0.txid == spend.txid })
+        XCTAssertEqual(confirmed.height, 103)
+        XCTAssertEqual(confirmed.fee, 1_000)
+        XCTAssertEqual(confirmed.outputs?.change, [1], "the breakdown survives confirmation")
+        XCTAssertEqual(current.history.count, 2, "confirmed in place, not appended again")
+        XCTAssertEqual(current.inFlight.map(\.txid), [spend.txid], "kept until the block is buried")
         try await store.rollBack(to: 102)
         current = try await fetch(store, added.id)
         XCTAssertEqual(current.allUtxos.first { $0.txid == funding.txid }?.spent,
                        WalletUTXO.SpentMarker(spentBy: spend.txid, height: nil))
         XCTAssertEqual(current.balance, 0)
+        XCTAssertEqual(current.history.first { $0.txid == spend.txid }?.height, 0, "re-pended")
+        XCTAssertEqual(current.inFlight.map(\.txid), [spend.txid])
+
+        // Buried deep enough, the bytes are no longer kept.
+        try await store.apply(match: block(at: 103, [spend]), network: .signet)
+        for height in 104 ... 103 + MultisigStore.inFlightDepth {
+            try await store.apply(match: block(at: height, [payment(to: Data([0x51]), amount: 1, from: foreign(UInt8(height)))]), network: .signet)
+        }
+        current = try await fetch(store, added.id)
+        XCTAssertEqual(current.inFlight, [])
+        XCTAssertEqual(current.history.first { $0.txid == spend.txid }?.height, 103)
 
         let restarted = MultisigStore(keys: keys)
         await restarted.configure(storageURL: url, network: .signet)
@@ -187,8 +233,10 @@ final class MultisigStoreTests: XCTestCase {
         XCTAssertEqual(current.utxos.map(\.outpoint), [.init(txid: other.txid, vout: 0)],
                        "only the coin no spend holds can go into a new one")
         XCTAssertEqual(current.balance, 5_000, "the change left with its block")
-        let backupWhileInFlight = try? await store.backupRecords()
-        XCTAssertNil(backupWhileInFlight, "a backup would restore the reserved coin as spendable")
+        let backupWhileInFlight = try await store.backupRecords()
+        XCTAssertEqual(backupWhileInFlight.first?.allUtxos.first { $0.outpoint == fundingCoin }?.spent,
+                       WalletUTXO.SpentMarker(spentBy: spend.txid, height: nil),
+                       "a backup carries the reservation, so a restore cannot double-spend it")
         try await store.rollBack(to: 102)
         let redone = try await fetch(store, added.id)
         XCTAssertEqual(redone, current, "a rollback redone after a crash changes nothing")
@@ -315,8 +363,13 @@ final class MultisigStoreTests: XCTestCase {
                        "the losing spends' outputs never existed")
         XCTAssertFalse(current.allUtxos.contains { $0.spent != nil && $0.spent?.height == nil },
                        "nothing stays reserved for a spend that cannot confirm")
-        let backup = try? await store.backupRecords()
-        XCTAssertNotNil(backup, "nothing is left in flight")
+        XCTAssertEqual(current.history.first { $0.txid == ours.txid }?.replacedBy, theirs.txid,
+                       "the losing spend stays listed beside the one that took its coin")
+        XCTAssertEqual(current.history.first { $0.txid == chained.txid }?.replacedBy, theirs.txid)
+        XCTAssertEqual(current.inFlight, [], "nothing is left to announce")
+        XCTAssertEqual(current.history.first { $0.txid == theirs.txid }?.spent, 60_000)
+        XCTAssertEqual(current.history.first { $0.txid == theirs.txid }?.fee, 1_000,
+                       "its one input was the account's, so the fee is exact")
 
         // A reorg below the winner: it is back in mempools, so the coin it
         // took stays reserved for it and its change leaves with the block...
@@ -331,6 +384,88 @@ final class MultisigStoreTests: XCTestCase {
         current = try await fetch(store, added.id)
         XCTAssertEqual(current.utxos.map(\.outpoint), [.init(txid: ours.txid, vout: 1)])
         XCTAssertEqual(current.balance, 19_000)
+        XCTAssertNil(current.history.first { $0.txid == ours.txid }?.replacedBy, "ours won after all")
+        XCTAssertEqual(current.history.first { $0.txid == theirs.txid }?.replacedBy, ours.txid)
+    }
+
+    /// A draft lives on the record until its coins are gone: this phone
+    /// broadcasting it, a co-signer's conflicting spend confirming, or a
+    /// reorg taking a coin all drop it. A spend given up on frees its coins.
+    func testDraftsFollowTheirCoinsAndAnAbandonedSpendFreesThem() async throws {
+        let keys = InMemoryStoreKeyVault()
+        let url = tempFileURL("multisig.json")
+        let account = try account()
+        let store = MultisigStore(keys: keys)
+        await store.configure(storageURL: url, network: .signet)
+        let added = try await store.add(name: "Shared", account: account, createdAtHeight: 100)
+        let funding = payment(to: try account.scriptPubKey(index: 0), amount: 60_000, from: foreign(0x71))
+        try await store.apply(match: block(at: 101, [funding]), network: .signet)
+        let fundingCoin = Transaction.Outpoint(txid: funding.txid, vout: 0)
+        let elsewhere = Data([0x51, 0x20] + repeatElement(0x77, count: 32))
+        let change = try account.scriptPubKey(index: 0, choice: AddressChain.change.rawValue)
+        let spend = payment(to: elsewhere, amount: 40_000, from: fundingCoin, change: .init(value: 19_000, scriptPubKey: change))
+        let coins = try await fetch(store, added.id).allUtxos
+        let draft = MultisigSpendDraft(psbtBase64: try psbt(for: spend, spending: coins).base64,
+                                       personID: "bob", paymentIndex: 3, createdAtHeight: 101)
+
+        // Filed, read back from disk, and carried by a backup.
+        try await store.setDraft(id: added.id, draft)
+        let filed = try await fetch(store, added.id)
+        XCTAssertEqual(filed.draft, draft)
+        let restarted = MultisigStore(keys: keys)
+        await restarted.configure(storageURL: url, network: .signet)
+        let reloaded = try await fetch(restarted, added.id)
+        XCTAssertEqual(reloaded.draft, draft)
+        let backup = try await store.backupRecords()
+        XCTAssertEqual(backup.first?.draft, draft)
+
+        // A draft of a coin the account does not hold is refused.
+        var stranger = draft
+        stranger.psbtBase64 = try psbt(for: payment(to: elsewhere, amount: 1, from: foreign(0x72)), spending: []).base64
+        do {
+            try await store.setDraft(id: added.id, stranger)
+            XCTFail("a draft of a foreign coin was filed")
+        } catch MultisigStorageError.invalidState {}
+
+        // Broadcast: the draft is retired with the coin it spent...
+        try await store.recordSpend(id: added.id, transaction: spend, changeIndex: 0, broadcastHeight: 102)
+        var current = try await fetch(store, added.id)
+        XCTAssertNil(current.draft)
+        XCTAssertEqual(current.inFlight.map(\.broadcastHeight), [102])
+        // ...and given up on, everything it took is back.
+        try await store.abandonSpend(id: added.id, txid: spend.txid)
+        current = try await fetch(store, added.id)
+        XCTAssertEqual(current.utxos.map(\.outpoint), [fundingCoin])
+        XCTAssertEqual(current.balance, 60_000)
+        XCTAssertEqual(current.history.map(\.txid), [funding.txid])
+        XCTAssertEqual(current.inFlight, [])
+        do {
+            try await store.abandonSpend(id: added.id, txid: funding.txid)
+            XCTFail("a confirmed transaction was given up on")
+        } catch MultisigStorageError.invalidState {}
+
+        // Filed again, then a co-signer's spend of the same coin confirms:
+        // the draft can never be broadcast, so it goes.
+        try await store.setDraft(id: added.id, draft)
+        let theirs = payment(to: elsewhere, amount: 50_000, from: fundingCoin)
+        try await store.apply(match: block(at: 103, [theirs]), network: .signet)
+        current = try await fetch(store, added.id)
+        XCTAssertNil(current.draft)
+        XCTAssertEqual(current.history.map(\.txid), [funding.txid, theirs.txid])
+
+        // And one whose coin a reorg takes away goes with it.
+        try await store.rollBack(to: 102)
+        let late = payment(to: try account.scriptPubKey(index: 1), amount: 9_000, from: foreign(0x73))
+        try await store.apply(match: block(at: 103, [late]), network: .signet)
+        let lateCoins = try await fetch(store, added.id).allUtxos
+        let lateDraft = MultisigSpendDraft(
+            psbtBase64: try psbt(for: payment(to: elsewhere, amount: 8_000, from: .init(txid: late.txid, vout: 0)),
+                                 spending: lateCoins).base64,
+            createdAtHeight: 103)
+        try await store.setDraft(id: added.id, lateDraft)
+        try await store.rollBack(to: 102)
+        let afterFork = try await fetch(store, added.id)
+        XCTAssertNil(afterFork.draft)
     }
 
     /// Each signer's phone hands out its own addresses, so a payment can

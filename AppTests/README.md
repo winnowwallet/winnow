@@ -25,16 +25,35 @@ actual locked-device behavior still needs [device evidence](../docs/security/REA
 isolation, atomic persistence, address rotation and relaunch, bounded metadata,
 and exact output matching without creating a sender contact.
 
+`LedgerBluetoothTests` check the Bluetooth transport's decisions without a radio:
+what each Bluetooth state means while connecting, and how notifications reach
+the step in flight. `LedgerPairingTests` drive the app model against the Ledger simulator:
+Ledger actions refused in Simple mode, pairing and re-pairing, the address
+shown on the device, a spend the phone and the Ledger both sign with the
+signing screen's counts and next step checked at each step, a device whose
+signatures name the wrong leaf, a refusal on the device, a forged registration
+refused by the store, and the account builder with a Ledger among the signers:
+two Winnows and a Ledger in a 2-of-3 with a recovery path.
+
 `MultisigAccountFlowTests` drive the account builder and spend signing through
 the app model with no hardware signer: two Winnows in a 2-of-2 with a recovery
 path, joining refused when the recovery leaf relabels a signer, a separate
 recovery key, two phones signing a co-signer's spend with BIP326 sequences,
-young coins refused on the recovery path, and nothing in Simple mode.
+young coins refused on the recovery path, and nothing in Simple mode; and the
+one-wallet flow: a Send-tab spend from an account across two phones (the
+review from the PSBT, "Sign and continue" filing a draft that survives a
+reload and shows in the one Transactions list, a second spend and a silent
+payment code refused, the other phone's signature combined, the broadcast
+named with the account on both phones, confirmed in place, re-pended by a
+reorg), a wallet-to-account transfer as one row, and an in-flight spend
+carried by a backup, announced again and given up on.
 
-`MultisigStoreTests` checks the sealed `multisig.json`: backups that wait for
-confirmations and refuse a changed coin, payments, spends and reorg rollback
-driven by the filter scan, and tampered, unsealed or oversized files left
-untouched and refused.
+`MultisigStoreTests` checks the sealed `multisig.json`: backups that carry
+pending payments and refuse a changed coin, payments, spends and reorg rollback
+driven by the filter scan with the account's history kept alongside its coins
+(pending spends with their exact fee, confirmation in place, losers marked
+replaced, re-pending), drafts that follow their coins, a spend given up on,
+and tampered, unsealed or oversized files left untouched and refused.
 
 `CloudBackupTests` checks automatic defaults, persistent opt-out, failed uploads, cancellation and wallet/account
 changes with in-memory cloud and key stores. It does not establish actual iCloud
