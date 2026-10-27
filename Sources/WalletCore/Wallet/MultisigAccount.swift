@@ -27,11 +27,13 @@ extension MultisigAccountError: LocalizedError {
     }
 }
 
-/// One stored multisig account: the descriptor, its address frontiers and
-/// the coins the wallet's filter scan found for it. Spent coins stay as
-/// tombstones so a reorg can restore them. The JSON keys match the vault
-/// records of the shared-account Winnow, so its backups of script-path
-/// accounts restore here.
+/// One stored multisig account: the descriptor, its address frontiers, the
+/// coins the wallet's filter scan found for it, what happened to them, and
+/// the spend this phone is collecting signatures for or has broadcast.
+/// Spent coins stay as tombstones so a reorg can restore them. The JSON keys
+/// match the vault records of the shared-account Winnow, so its backups of
+/// script-path accounts restore here; a record without history, a draft or
+/// in-flight spends encodes exactly as it did before they existed.
 public struct MultisigAccountRecord: Codable, Equatable, Identifiable, Sendable {
     /// The descriptor's BIP380 checksum.
     public var id: String
@@ -44,10 +46,21 @@ public struct MultisigAccountRecord: Codable, Equatable, Identifiable, Sendable 
     /// Present when a Ledger is one of the signers and has registered this
     /// account; absent in records written before Ledger support.
     public var ledger: LedgerRegistration?
+    /// What happened to the account's coins, as the wallet keeps its own
+    /// (`HistoryEntry`): receives and spends the scan found, and this
+    /// phone's broadcasts while they are pending. Absent in records written
+    /// before; `MultisigStore` fills it from the blocks it applies.
+    public var history: [HistoryEntry] = []
+    /// The one spend this phone is collecting signatures for, if any.
+    public var draft: MultisigSpendDraft?
+    /// Spends this phone broadcast that no block has confirmed, with the
+    /// bytes a restored phone needs to announce them again.
+    public var inFlight: [InFlightSpend] = []
 
     public init(id: String, name: String, descriptor: String, createdAtHeight: UInt32,
                 nextReceiveIndex: UInt32 = 0, nextChangeIndex: UInt32 = 0,
-                allUtxos: [WalletUTXO] = [], ledger: LedgerRegistration? = nil) {
+                allUtxos: [WalletUTXO] = [], ledger: LedgerRegistration? = nil,
+                history: [HistoryEntry] = [], draft: MultisigSpendDraft? = nil, inFlight: [InFlightSpend] = []) {
         self.id = id
         self.name = name
         self.descriptor = descriptor
@@ -56,6 +69,9 @@ public struct MultisigAccountRecord: Codable, Equatable, Identifiable, Sendable 
         self.nextChangeIndex = nextChangeIndex
         self.allUtxos = allUtxos
         self.ledger = ledger
+        self.history = history
+        self.draft = draft
+        self.inFlight = inFlight
     }
 
     public var utxos: [WalletUTXO] { allUtxos.filter { !$0.isSpent } }
@@ -75,6 +91,37 @@ public struct MultisigAccountRecord: Codable, Equatable, Identifiable, Sendable 
     private enum CodingKeys: String, CodingKey {
         case id, name, descriptor, createdAtHeight, nextReceiveIndex, nextChangeIndex, ledger
         case allUtxos = "utxos"
+        case history, draft, inFlight
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(id: try container.decode(String.self, forKey: .id),
+                  name: try container.decode(String.self, forKey: .name),
+                  descriptor: try container.decode(String.self, forKey: .descriptor),
+                  createdAtHeight: try container.decode(UInt32.self, forKey: .createdAtHeight),
+                  nextReceiveIndex: try container.decode(UInt32.self, forKey: .nextReceiveIndex),
+                  nextChangeIndex: try container.decode(UInt32.self, forKey: .nextChangeIndex),
+                  allUtxos: try container.decode([WalletUTXO].self, forKey: .allUtxos),
+                  ledger: try container.decodeIfPresent(LedgerRegistration.self, forKey: .ledger),
+                  history: try container.decodeIfPresent([HistoryEntry].self, forKey: .history) ?? [],
+                  draft: try container.decodeIfPresent(MultisigSpendDraft.self, forKey: .draft),
+                  inFlight: try container.decodeIfPresent([InFlightSpend].self, forKey: .inFlight) ?? [])
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(descriptor, forKey: .descriptor)
+        try container.encode(createdAtHeight, forKey: .createdAtHeight)
+        try container.encode(nextReceiveIndex, forKey: .nextReceiveIndex)
+        try container.encode(nextChangeIndex, forKey: .nextChangeIndex)
+        try container.encode(allUtxos, forKey: .allUtxos)
+        try container.encodeIfPresent(ledger, forKey: .ledger)
+        if !history.isEmpty { try container.encode(history, forKey: .history) }
+        try container.encodeIfPresent(draft, forKey: .draft)
+        if !inFlight.isEmpty { try container.encode(inFlight, forKey: .inFlight) }
     }
 }
 

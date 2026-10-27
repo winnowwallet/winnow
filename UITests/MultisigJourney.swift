@@ -134,6 +134,77 @@ extension WinnowAppUITests {
         Screenshots.capture(app, "28-savings-confirmed", testCase: self)
         print("SIGNET_MULTISIG_SECONDS=\(Date().timeIntervalSince(started))")
         try await multisigRecoveryLeg(app, change: (txid, change.vout, change.height))
+        try await multisigSendTabLeg(app, account: account, core: core, control: control)
+    }
+
+    nonisolated static let multisigSendTabPayment: Int64 = 300_000
+
+    /// The ordinary way to spend from an account: Send, From: the account.
+    /// The review is the PSBT the phone built, "Sign and continue" files the
+    /// draft signed by the phone, Core signs its copy, the phone finalizes
+    /// from the same screen, and the payment lands in the one Transactions
+    /// list named with the account, then confirms there.
+    private func multisigSendTabLeg(_ app: XCUIApplication, account: MultisigAccount, core: CoreSigner,
+                                    control: URL) async throws {
+        let started = Date()
+        let destination = try BitcoinCLI.newAddress(wallet: Self.bankWallet)
+        try multisigClipboard(destination, at: control)
+        app.tabBars.buttons["Send"].tap()
+        XCTAssertTrue(app.buttons["sendFromWallet"].appears(within: 20), "Send offers no From row")
+        multisigTap(app, "sendFrom-\(account.id)", up: true)
+        XCTAssertTrue(app.staticTexts["sendSourceNote"].appears(within: 10), "the account was not picked")
+        multisigTap(app, "pasteDestinationButton")
+        app.typeInto("amountField", String(Self.multisigSendTabPayment))
+        multisigTap(app, "reviewButton")
+        let signatures = app.staticTexts["reviewSignatures"]
+        XCTAssertTrue(signatures.appears(within: 30), "the review did not open for the account")
+        XCTAssertTrue(((signatures.value as? String) ?? signatures.label).contains("2 of 3"), "needs 2 of 3")
+        let feeText = try XCTUnwrap(app.staticTexts["reviewFee"].value as? String)
+        let fee = try XCTUnwrap(Int64(feeText.filter(\.isNumber)))
+        XCTAssertGreaterThan(fee, 0)
+        multisigTap(app, "sendButton")
+
+        // Sign and continue: the draft carries the phone's signature; Core adds its own.
+        let count = app.staticTexts["multisigSignatureCount"]
+        XCTAssertTrue(scrollUntilExists(app, count, up: true), "the collection step did not open")
+        XCTAssertTrue(poll(timeout: 30, interval: 0.2, "the phone's signature") { count.label == "1 of 2" })
+        let output = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'cHNidP'")).firstMatch
+        XCTAssertTrue(scrollUntilExists(app, output))
+        let phoneSigned = try PSBT(base64: output.label)
+        XCTAssertEqual(try phoneSigned.unsignedTransaction().outputs.filter {
+            $0.scriptPubKey == (try AddressDecoder.scriptPubKey(for: destination, network: .signet))
+        }.map(\.value), [Self.multisigSendTabPayment])
+        try multisigPaste(app, core.process(phoneSigned).base64V0(), control: control)
+        XCTAssertTrue(poll(timeout: 20, interval: 0.2, "2 of 2 signatures verify") { count.label == "2 of 2" })
+        let before = Set(try BitcoinCLI.mempoolTxids())
+        multisigTap(app, "multisigBroadcastButton")
+        XCTAssertTrue(app.staticTexts["broadcastPending"].appears(within: 30), "the receipt did not open")
+        var accepted: String?
+        XCTAssertTrue(poll(timeout: 30, interval: 0.2, "Core accepts the Send-tab payment") {
+            accepted = (try? Set(BitcoinCLI.mempoolTxids()))?.subtracting(before).first
+            return accepted != nil
+        })
+        let txid = try XCTUnwrap(accepted)
+        try await Self.mineBlock()
+
+        // One list: the payment, named with the account, confirms there. The
+        // Wallet tab was left on the account's PSBT page by the recovery leg.
+        app.tabBars.buttons["Wallet"].tap()
+        for _ in 0 ..< 3 where !app.staticTexts["balanceText"].exists {
+            let back = app.navigationBars.buttons.element(boundBy: 0)
+            if back.exists { back.tap() }
+        }
+        XCTAssertTrue(app.staticTexts["balanceText"].appears(within: 10), "the Wallet tab did not return to its list")
+        let row = app.buttons["historyPayment-\(txid)"]
+        XCTAssertTrue(scrollUntilExists(app, row), "the account's payment is missing from Transactions")
+        XCTAssertTrue(row.label.contains("Sent"), row.label)
+        XCTAssertTrue(row.label.contains("Phone and two Cores"), row.label)
+        XCTAssertTrue(poll(timeout: 60, interval: 0.5, "the payment confirms in the list") {
+            app.staticTexts["transactionConfirmation-\(txid)"].exists
+        })
+        XCTAssertTrue(scrollUntilExists(app, app.staticTexts["accountsBalanceText"], up: true),
+                      "the headline does not say what sits in accounts")
+        print("SIGNET_SEND_TAB_SECONDS=\(Date().timeIntervalSince(started))")
     }
 
     /// Past the delay, the phone alone spends the change on the recovery path.

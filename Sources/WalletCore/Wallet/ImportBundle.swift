@@ -270,6 +270,9 @@ public struct ImportBundle: Codable, Equatable, Sendable {
               (bundle.vaults ?? []).reduce(0, { $0 + $1.allUtxos.count }) <= maximumEntries else {
             throw WalletError.invalidBundle("too many multisig accounts or account coins")
         }
+        guard (bundle.vaults ?? []).reduce(0, { $0 + $1.history.count }) <= maximumEntries,
+              (bundle.vaults ?? []).allSatisfy({ ($0.draft?.psbtBase64.utf8.count ?? 0) <= MultisigSpendDraft.maximumBytes })
+        else { throw WalletError.invalidBundle("too many multisig account transactions, or a draft too large") }
         let network = BitcoinNetwork(rawValue: bundle.network)
         // MuSig2 accounts from the shared-account Winnow have no home here;
         // their coins must not vanish from a restore.

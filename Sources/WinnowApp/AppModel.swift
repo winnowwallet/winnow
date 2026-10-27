@@ -97,9 +97,16 @@ final class AppModel {
     /// UI-facing snapshot of wallet + sync state (refreshed after syncs and
     /// mutations; the wallet itself is an actor).
     struct Status: Equatable {
+        /// The wallet's own coins.
         var balance: Int64 = 0
+        /// The multisig accounts' live coins, which need co-signers to move.
+        var accountsBalance: Int64 = 0
         var utxoCount = 0
+        /// The wallet's own history, for its screens and tests.
         var history: [HistoryEntry] = []
+        /// The one Transactions list: wallet, accounts, transfers and drafts
+        /// (`DisplayedPayment`), newest first.
+        var payments: [DisplayedPayment] = []
         var feeBumpableTxids: [Data] = []
         var observedFeeRates: [Double] = []
         var peerCount = 0
@@ -1269,10 +1276,13 @@ final class AppModel {
         // on the refresh that runs moments after the stack is built, leaving
         // the user's relay queue silently gone.
         snapshot.relayStoreQuarantined = status.relayStoreQuarantined
-        status = snapshot
         people = await peopleStore.all
         senderByTxid = await peopleStore.senderLabels
         multisigAccounts = await multisigStore.all
+        snapshot.accountsBalance = multisigAccounts.reduce(0) { $0 + $1.balance }
+        snapshot.payments = Self.payments(wallet: snapshot.history, accounts: multisigAccounts,
+                                          drafts: multisigAccounts.compactMap { draftRow(for: $0) })
+        status = snapshot
         configureReceiveAddressLabels()
         journalSnapshotIfChanged()
         scheduleCloudBackup()
@@ -1856,6 +1866,18 @@ final class AppModel {
         /// The person this pays, for the review label only. `destination`
         /// stays the address: the authorization boundary is unchanged.
         var recipient: Recipient?
+        /// Set when the source is a multisig account: the PSBT this phone
+        /// built for the reviewed spend, which "Sign and continue" signs and
+        /// files as the account's draft (`signAndDraftMultisigSpend`).
+        var account: AccountSource?
+
+        struct AccountSource: Equatable {
+            var id: String
+            var name: String
+            var threshold: Int
+            var signerCount: Int
+            var psbtBase64: String
+        }
 
         struct Recipient: Equatable {
             var personID: String
@@ -1896,9 +1918,18 @@ final class AppModel {
         /// then matched against the outputs like any reviewed payment, and
         /// the count pin below means nothing else may be there (SEC-018).
         func authorizes(_ built: BuiltTransaction, resolvedSilentPayments: [Payment] = []) -> Bool {
-            guard built.fee == fee,
-                  built.changeAmount == changeAmount,
-                  built.transaction.inputs.map({
+            authorizes(transaction: built.transaction, fee: built.fee, changeAmount: built.changeAmount,
+                       resolvedSilentPayments: resolvedSilentPayments)
+        }
+
+        /// The same check on a transaction that is not yet signed: a
+        /// multisig account's PSBT, whose inputs, outputs and fee are fixed
+        /// before any signature.
+        func authorizes(transaction: WalletCore.Transaction, fee builtFee: Int64, changeAmount builtChange: Int64?,
+                        resolvedSilentPayments: [Payment] = []) -> Bool {
+            guard builtFee == fee,
+                  builtChange == changeAmount,
+                  transaction.inputs.map({
                       ReviewedOutpoint(txid: $0.previousOutput.txid, vout: $0.previousOutput.vout)
                   }) == selectedOutpoints
             else { return false }
@@ -1923,9 +1954,9 @@ final class AppModel {
             // fingerprint, so nothing may assume payments-then-change.
             var expected = payments + resolvedSilentPayments
             if let change { expected.append(change) }
-            guard built.transaction.outputs.count == expected.count else { return false }
+            guard transaction.outputs.count == expected.count else { return false }
 
-            var unmatched = built.transaction.outputs
+            var unmatched = transaction.outputs
             for payment in expected {
                 guard let index = unmatched.firstIndex(where: {
                     $0.value == payment.amount && $0.scriptPubKey == payment.scriptPubKey
@@ -1980,13 +2011,56 @@ final class AppModel {
         return ([try Payment(amount: amount, address: destination, network: network)], [])
     }
 
+    /// A payment from a multisig account, reviewed like a wallet send: the
+    /// PSBT this phone builds fixes the inputs, outputs and fee, and the
+    /// review shows them; "Sign and continue" then signs it and files it as
+    /// the account's draft. Advanced mode only; refused while the account
+    /// already has a draft, and for a silent payment code, which no account
+    /// can pay. Exercised by
+    /// AppTests/MultisigAccountFlowTests.testSendTabSpendsFromAnAccountAcrossTwoPhones.
+    func previewSend(from record: MultisigAccountRecord, destination: String, amount: Int64,
+                     priority: FeePolicy.Priority, override: Double?) async throws -> SendPreview {
+        guard advancedMode else { throw LedgerActionError.advancedModeOnly }
+        guard record.draft == nil else { throw MultisigActionError.draftInProgress }
+        try Self.requireUsableOverride(override)
+        let resolution = await resolvedFee(priority: priority, override: override)
+        try Self.requireRelayFee(rate: resolution.rate, floor: resolution.clampedFloor)
+        try await requireRelayFloors(rate: resolution.rate)
+        let trimmed = destination.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !SilentPaymentAddress.looksLikeCode(trimmed) else { throw MultisigActionError.silentPaymentUnsupported }
+        let payment = try Payment(amount: amount, address: trimmed, network: network)
+        let psbt = try await createMultisigSpend(record: record, address: trimmed, amount: amount,
+                                                 feeRateSatPerVByte: resolution.rate)
+        let review = try reviewMultisigSpend(psbt, record: record)
+        let account = try multisigAccount(for: record)
+        let unsigned = try psbt.unsignedTransaction()
+        let changeScript = try account.scriptPubKey(index: record.nextChangeIndex, choice: AddressChain.change.rawValue)
+        let change = unsigned.outputs.first { $0.scriptPubKey == changeScript }.map {
+            Payment(amount: $0.value, scriptPubKey: $0.scriptPubKey)
+        }
+        return SendPreview(destination: trimmed, payments: [payment], feeRateSatPerVByte: resolution.rate,
+                           fee: review.fee, changeAmount: change?.amount, inputCount: unsigned.inputs.count,
+                           selectedOutpoints: unsigned.inputs.map {
+                               .init(txid: $0.previousOutput.txid, vout: $0.previousOutput.vout)
+                           }, change: change, locktimeLagsTip: syncPhase.headerTipMayLagNetwork,
+                           account: .init(id: record.id, name: record.name, threshold: account.threshold,
+                                          signerCount: account.signers.count, psbtBase64: psbt.base64))
+    }
+
     /// A payment to a person in the address book: the next fresh address is
-    /// peeked here and the counter moves only when the send commits.
+    /// peeked here and the counter moves only when the send commits, or when
+    /// an account's draft of it is broadcast.
     func previewSend(to person: PersonRecord, amount: Int64, priority: FeePolicy.Priority,
-                     override: Double?) async throws -> SendPreview {
+                     override: Double?, from record: MultisigAccountRecord? = nil) async throws -> SendPreview {
         let (address, index) = try nextPaymentAddress(for: person)
-        var preview = try await previewSend(destination: address, amount: amount,
+        var preview: SendPreview
+        if let record {
+            preview = try await previewSend(from: record, destination: address, amount: amount,
                                             priority: priority, override: override)
+        } else {
+            preview = try await previewSend(destination: address, amount: amount,
+                                            priority: priority, override: override)
+        }
         preview.recipient = SendPreview.Recipient(
             personID: person.id, name: person.name,
             paymentIndex: person.derivesFreshAddresses ? index : nil,
@@ -2187,6 +2261,13 @@ final class AppModel {
         /// Broadcast, but the account's coins could not be updated: the spent
         /// coins must not be offered to the next spend.
         case spendNotRecorded(txid: Data, reason: String)
+        /// One draft per account: a second spend would take the same coins.
+        case draftInProgress
+        case noDraft
+        /// A pasted PSBT for another transaction than the draft's.
+        case draftMismatch
+        case silentPaymentUnsupported
+        case notInFlight
 
         var errorDescription: String? {
             switch self {
@@ -2196,6 +2277,16 @@ final class AppModel {
                 "This account still holds coins or a pending payment. Spend them first: a removed account is not scanned, and adding it again does not find coins it already had."
             case let .spendNotRecorded(txid, reason):
                 "Sent as \(txid.displayHex), but the account could not be updated: \(reason) Do not spend from it again until it syncs."
+            case .draftInProgress:
+                "This account has a payment awaiting signatures. Finish or discard it under Transactions before starting another."
+            case .noDraft:
+                "This account has no payment awaiting signatures."
+            case .draftMismatch:
+                "That PSBT is for a different payment than the one awaiting signatures."
+            case .silentPaymentUnsupported:
+                "A silent payment code cannot be paid from a multisig account. Pay it from the wallet, or ask for an address."
+            case .notInFlight:
+                "This payment is not waiting to be confirmed."
             }
         }
     }
@@ -2350,6 +2441,8 @@ final class AppModel {
     /// the signers' path or, once coins are old enough, the recovery path.
     func createMultisigSpend(record: MultisigAccountRecord, address: String, amount: Int64,
                              feeRateSatPerVByte: Double, path: MultisigAccount.SpendPath = .signers) async throws -> PSBT {
+        // One draft per account: a second spend would take the same coins.
+        guard record.draft == nil else { throw MultisigActionError.draftInProgress }
         let payment = try Payment(amount: amount, address: address.trimmingCharacters(in: .whitespacesAndNewlines),
                                   network: network)
         // The tip review, signing and broadcast judge the spend by, so a coin
@@ -2398,15 +2491,115 @@ final class AppModel {
             let hasChange = transaction.outputs.contains { $0.scriptPubKey == changeScript }
             do {
                 try await multisigStore.recordSpend(id: record.id, transaction: transaction,
-                                                    changeIndex: hasChange ? record.nextChangeIndex : nil)
+                                                    changeIndex: hasChange ? record.nextChangeIndex : nil,
+                                                    broadcastHeight: status.tipHeight)
             } catch {
                 multisigAccounts = await multisigStore.all
                 throw MultisigActionError.spendNotRecorded(txid: txid, reason: error.localizedDescription)
             }
-            multisigAccounts = await multisigStore.all
+            await refresh()
             e2e?.journal("multisig.spendBroadcast", fields: ["id": record.id, "txid": txid.displayHex])
             return txid
         }
+    }
+
+    // MARK: - Drafts: a spend collecting signatures
+
+    /// Signs the reviewed account spend with this phone's key and files it as
+    /// the account's draft, where the other signatures are collected. The
+    /// PSBT in hand must be the one reviewed: same inputs, outputs and fee.
+    /// Exercised by AppTests/MultisigAccountFlowTests.testSendTabSpendsFromAnAccountAcrossTwoPhones.
+    @discardableResult
+    func signAndDraftMultisigSpend(preview: SendPreview) async throws -> MultisigSpendDraft {
+        guard let source = preview.account,
+              let record = multisigAccounts.first(where: { $0.id == source.id }) else { throw AppError.sendReviewChanged }
+        guard record.draft == nil else { throw MultisigActionError.draftInProgress }
+        let psbt = try PSBT(base64: source.psbtBase64)
+        let unsigned = try psbt.unsignedTransaction()
+        guard preview.authorizes(transaction: unsigned, fee: preview.fee, changeAmount: preview.changeAmount)
+        else { throw AppError.sendReviewChanged }
+        let signed = try await signMultisigSpend(psbt, record: record)
+        let draft = MultisigSpendDraft(psbtBase64: signed.base64, personID: preview.recipient?.personID,
+                                       paymentIndex: preview.recipient?.paymentIndex, createdAtHeight: status.tipHeight)
+        try await multisigStore.setDraft(id: record.id, draft)
+        await refresh()
+        e2e?.journal("multisig.draftStarted", fields: ["id": record.id, "txid": unsigned.txid.displayHex])
+        return draft
+    }
+
+    /// The account's draft as a PSBT, for the collection screen.
+    func multisigDraft(for record: MultisigAccountRecord) throws -> PSBT {
+        guard let draft = record.draft else { throw MultisigActionError.noDraft }
+        return try draft.psbt()
+    }
+
+    /// Files a pasted co-signer's PSBT as the account's draft: combined into
+    /// the draft when the account has one (it must be the same transaction),
+    /// adopted as the draft when it has none.
+    func adoptMultisigDraft(_ pasted: PSBT, record: MultisigAccountRecord) async throws {
+        let combined: PSBT
+        if let draft = record.draft {
+            let current = try draft.psbt()
+            guard try current.unsignedTransaction().txid == pasted.unsignedTransaction().txid else {
+                throw MultisigActionError.draftMismatch
+            }
+            combined = try combineMultisigSpend(current, with: pasted, record: record)
+        } else {
+            _ = try reviewMultisigSpend(pasted, record: record)
+            combined = pasted
+        }
+        try await updateMultisigDraft(combined, record: record)
+        journalPSBT(stage: "multisig-combined", psbt: combined)
+    }
+
+    /// Replaces the draft's PSBT with a copy that gained signatures.
+    func updateMultisigDraft(_ psbt: PSBT, record: MultisigAccountRecord) async throws {
+        let previous = record.draft
+        try await multisigStore.setDraft(id: record.id, MultisigSpendDraft(
+            psbtBase64: psbt.base64, personID: previous?.personID, paymentIndex: previous?.paymentIndex,
+            createdAtHeight: previous?.createdAtHeight ?? status.tipHeight))
+        await refresh()
+    }
+
+    func discardMultisigDraft(record: MultisigAccountRecord) async throws {
+        try await multisigStore.setDraft(id: record.id, nil)
+        await refresh()
+        e2e?.journal("multisig.draftDiscarded", fields: ["id": record.id])
+    }
+
+    /// Finalizes and broadcasts the account's draft once enough signatures
+    /// verify, then moves the person's address index past the one it paid.
+    func broadcastMultisigDraft(record: MultisigAccountRecord) async throws -> Data {
+        guard let draft = record.draft else { throw MultisigActionError.noDraft }
+        let txid = try await broadcastMultisigSpend(try draft.psbt(), record: record)
+        if let personID = draft.personID, let index = draft.paymentIndex {
+            await advancePersonPaymentIndex(id: personID, past: index)
+            e2e?.journal("person.paid", fields: ["personID": personID, "paymentIndex": String(index),
+                                                 "txid": txid.displayHex])
+        }
+        return txid
+    }
+
+    /// Announces again a spend this phone broadcast that no block has taken,
+    /// from the bytes the account kept: after a restore the broadcaster has
+    /// none of its own. Exercised by
+    /// AppTests/MultisigAccountFlowTests.testAnInFlightAccountSpendSurvivesABackupAndCanBeRebroadcastOrGivenUp.
+    func rebroadcastMultisigSpend(record: MultisigAccountRecord, txid: Data) async throws {
+        guard let spend = record.inFlight.first(where: { $0.txid == txid }) else {
+            throw MultisigActionError.notInFlight
+        }
+        let transaction = try spend.transaction()
+        _ = try await broadcast(transaction, feeRateSatPerVByte: Self.feeRate(of: transaction, spending: record.allUtxos))
+        e2e?.journal("multisig.rebroadcast", fields: ["id": record.id, "txid": txid.displayHex])
+    }
+
+    /// Gives up on a spend no block has taken: its coins are the account's
+    /// again and the broadcaster stops announcing it.
+    func abandonMultisigSpend(record: MultisigAccountRecord, txid: Data) async throws {
+        try await multisigStore.abandonSpend(id: record.id, txid: txid)
+        try? await stack?.broadcaster.cancel(txid)
+        await refresh()
+        e2e?.journal("multisig.spendAbandoned", fields: ["id": record.id, "txid": txid.displayHex])
     }
 
     /// The fee rate of a spend of known coins, for the relay-floor gate a

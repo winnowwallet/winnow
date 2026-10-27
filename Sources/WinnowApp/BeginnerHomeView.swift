@@ -21,10 +21,11 @@ struct BeginnerHomeView: View {
                         Text("Balance")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
-                        Text(satsText(model.status.balance))
+                        Text(satsText(model.status.balance + model.status.accountsBalance))
                             .font(.system(.largeTitle, design: .rounded).bold())
                             .accessibilityIdentifier("balanceText")
-                            .accessibilityValue(satsText(model.status.balance))
+                            .accessibilityValue(satsText(model.status.balance + model.status.accountsBalance))
+                        AccountsBalanceLine()
                         HStack(spacing: 8) {
                             status
                             if model.network != .mainnet {
@@ -74,14 +75,13 @@ struct BeginnerHomeView: View {
                 }
 
                 Section("Activity") {
-                    if model.status.history.isEmpty {
+                    if model.status.payments.isEmpty {
                         Text("Nothing yet. Payments appear here once they are confirmed.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
-                    ForEach(Array(model.status.history.enumerated()), id: \.offset) { _, entry in
-                        NavigationLink(value: entry.txid) { HistoryRow(entry: entry) }
-                            .accessibilityIdentifier("historyPayment-\(entry.txid.displayHex)")
+                    ForEach(model.status.payments) { payment in
+                        PaymentLink(payment: payment, draftsOpenSigning: false)
                     }
                 }
 
