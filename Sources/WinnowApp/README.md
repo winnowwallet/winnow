@@ -28,9 +28,11 @@ sent, kept in the sealed per-network `signers.json`
 ([SignerStore](SignerStore.swift)), which like `people.json` survives deleting
 a wallet. "New multisig account" ([MultisigBuildView](MultisigBuildView.swift))
 builds a k-of-n account from members picked there, pasted, or an account
-already on this phone whose keys then sign together; a member of several keys,
-a phone with its Ledger, makes the account nested; an optional timelocked
-recovery path; the descriptor is shown for the others to join with, and a
+already on this phone, which signs as its own policy says (every key of a
+2-of-2, any 2 of a 2-of-3; this phone's key moves into it); a member of
+several keys, a phone with its Ledger, makes the account nested; an optional
+timelocked recovery path, fewer members or a separate key; the descriptor is
+shown for the others to join with, and a
 paired Ledger among the members approves the account on its screen. The PSBT
 screen then offers the signers' path or, for coins old enough, the recovery
 path. Or join a k-of-n account by pasting its descriptor (a paired Ledger

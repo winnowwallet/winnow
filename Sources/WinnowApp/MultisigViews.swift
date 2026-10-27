@@ -280,8 +280,13 @@ struct MultisigAccountView: View {
         }
     }
 
-    /// "after 4320 blocks: any 1 of the signers", or "… the recovery key".
+    /// "after 4320 blocks: any 1 of the signers", "… any 1 of the members"
+    /// for a nested account with a timelocked leaf per group of them, or
+    /// "… the recovery key".
     static func recoveryText(_ recovery: MultisigAccount.Recovery, account: MultisigAccount) -> String {
+        if let members = account.recoveryMembers {
+            return "after \(recovery.blocks) blocks: any \(members.threshold) of the members"
+        }
         let signerKeys = Set(account.signers.compactMap { signer -> Data? in
             guard case let .extended(key, _) = signer.base else { return nil }
             return key.publicKey
@@ -306,14 +311,14 @@ struct MultisigAccountView: View {
         if let members = account.members {
             Section {
                 ForEach(members.groups.indices, id: \.self) { index in
-                    Text(Self.groupText(members.groups[index], ownKey: ownKey, names: names))
+                    Text(Self.memberText(members, index, ownKey: ownKey, names: names))
                         .font(.system(.caption, design: .monospaced))
                         .accessibilityIdentifier("multisigMember-\(index)")
                 }
             } header: {
                 Text("Members · any \(members.threshold) of \(members.groups.count)")
             } footer: {
-                Text("A member signs with every key it has. Any \(members.threshold) members together can spend; fewer cannot, whatever keys they hold.")
+                Text("A member signs with every key it has, or with its own threshold of them: any 2 of a 2-of-3 account's. Any \(members.threshold) members together can spend; fewer cannot, whatever keys they hold.")
             }
         } else {
             Section("Ways to spend") {
@@ -324,6 +329,15 @@ struct MultisigAccountView: View {
                 }
             }
         }
+    }
+
+    /// A member's keys, "any 2 of: " first when it signs with fewer than
+    /// all of them. Pinned by AppTests/NestedMultisigFlowTests.
+    static func memberText(_ members: MultisigAccount.Members, _ index: Int, ownKey: Data?,
+                           names: [UInt32: String]) -> String {
+        let keys = members.groups[index]
+        let prefix = members.thresholds[index] < keys.count ? "any \(members.thresholds[index]) of: " : ""
+        return prefix + groupText(keys, ownKey: ownKey, names: names)
     }
 
     /// "6824f543 (this phone) · 5992698d (Nano X) · 1a2b3c4d (Bob)".
@@ -421,18 +435,23 @@ struct MultisigSigningScreen {
     var progress: MultisigSigningProgress
 
     static func paths(for review: MultisigAccount.SpendReview, account: MultisigAccount) -> [MultisigAccount.SpendPath] {
-        account.signersPaths + (review.path.isRecovery ? [.recovery] : [])
+        account.signersPaths + (review.path.isRecovery ? account.recoveryPaths : [])
     }
 
     /// The signature count row's title for `path`: a nested account names
-    /// its groups.
+    /// its groups, on the recovery path too when that has a leaf per group.
     static func signaturesTitle(_ path: MultisigAccount.SpendPath, account: MultisigAccount) -> String {
-        guard let leaf = path.signersLeaf else { return "Recovery signatures" }
-        return account.isNested ? "Group \(leaf + 1) signatures" : "Signatures"
+        if let leaf = path.recoveryLeaf {
+            return account.recoveryLeaves.count > 1 ? "Recovery group \(leaf + 1) signatures" : "Recovery signatures"
+        }
+        return account.isNested ? "Group \((path.signersLeaf ?? 0) + 1) signatures" : "Signatures"
     }
 
     static func signatureCountIdentifier(_ path: MultisigAccount.SpendPath) -> String {
-        guard let leaf = path.signersLeaf else { return "multisigRecoverySignatureCount" }
+        if let leaf = path.recoveryLeaf {
+            return leaf == 0 ? "multisigRecoverySignatureCount" : "multisigRecoverySignatureCount-\(leaf)"
+        }
+        let leaf = path.signersLeaf ?? 0
         return leaf == 0 ? "multisigSignatureCount" : "multisigSignatureCount-\(leaf)"
     }
 }

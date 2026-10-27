@@ -104,7 +104,7 @@ final class SignerRosterTests: XCTestCase {
         XCTAssertEqual(account.policySummary, "2 of 3 members")
         XCTAssertEqual(account.members?.groups.map(\.count).sorted(), [1, 2, 2])
         XCTAssertEqual(MultisigBuildView.previewText(account),
-                       "2 of 3 members: 3 ways to spend, each needing every key of its members, up to 4 keys. A member missing one of its keys cannot help.")
+                       "2 of 3 members: 3 ways to spend, each needing every key it lists, up to 4 keys. A member short of the keys it needs cannot help.")
         let approvedNested = try await model.registerPairedLedger(record: nested)
         let registered = try XCTUnwrap(approvedNested)
         XCTAssertEqual(registered.ledger?.masterFingerprint, try masters[1].fingerprint)

@@ -2523,31 +2523,46 @@ final class AppModel {
         return names
     }
 
-    /// The account builder over members: each member is one signer's keys,
-    /// this phone's own among them wherever the user put it, a Ledger's, a
-    /// key someone sent, or several keys that sign together, such as a
-    /// phone's with its Ledger's or a whole account's. A member of more than
-    /// one key makes the account nested: any `threshold` of the members
-    /// spend, each with every key it has. The descriptor is then shared with
-    /// the other signers, who add it by pasting; a paired Ledger in the
-    /// account registers it afterwards (`registerPairedLedger`). Exercised by
-    /// AppTests/MultisigAccountFlowTests, LedgerPairingTests,
-    /// NestedMultisigFlowTests and SignerRosterTests.
+    /// The account builder over members whose keys all sign:
+    /// `createMultisigAccount(name:threshold:members:recovery:)` over
+    /// `MultisigAccount.Member`s.
     @discardableResult
     func createMultisigAccount(name: String, threshold: Int, members: [[String]],
                                recovery: MultisigAccount.RecoveryPlan?) async throws -> MultisigAccountRecord {
+        try await createMultisigAccount(name: name, threshold: threshold,
+                                        members: members.map { MultisigAccount.Member(keys: $0) }, recovery: recovery)
+    }
+
+    /// The account builder over members: each member is one signer's keys,
+    /// this phone's own among them wherever the user put it, a Ledger's, a
+    /// key someone sent, or several keys that sign together, such as a
+    /// phone's with its Ledger's, or a whole account's with that account's
+    /// own threshold. A member of more than one key makes the account
+    /// nested: any `threshold` of the members spend, each with every key it
+    /// has or with its own threshold of them. The descriptor is then shared
+    /// with the other signers, who add it by pasting; a paired Ledger in the
+    /// account registers it afterwards (`registerPairedLedger`), so an
+    /// account naming a Ledger key must fit a Ledger's policy. Exercised by
+    /// AppTests/MultisigAccountFlowTests, LedgerPairingTests,
+    /// NestedMultisigFlowTests and SignerRosterTests.
+    @discardableResult
+    func createMultisigAccount(name: String, threshold: Int, members: [MultisigAccount.Member],
+                               recovery: MultisigAccount.RecoveryPlan?) async throws -> MultisigAccountRecord {
         guard advancedMode else { throw LedgerActionError.advancedModeOnly }
         guard let name = DisplayName.normalized(name) else { throw LedgerActionError.invalidName }
-        let members = members.map { member in
-            member.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-        }.filter { !$0.isEmpty }
+        let members = members.compactMap { member -> MultisigAccount.Member? in
+            let keys = member.keys.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+            return keys.isEmpty ? nil : MultisigAccount.Member(keys: keys, threshold: min(member.threshold, keys.count))
+        }
         let descriptor = try MultisigAccount.descriptor(members: members, threshold: threshold, recovery: recovery,
                                                         network: network)
         let account = try multisigAccount(validating: descriptor.serialized())
-        // A Ledger shows the name when it registers the account, whoever's
-        // Ledger it is, so the name must be one a Ledger can show.
-        guard !LedgerMultisig.namesALedgerKey(account) || LedgerWalletPolicy.isValidName(name) else {
-            throw LedgerActionError.invalidName
+        // A Ledger shows the name and registers the policy, whoever's Ledger
+        // it is, so the name must be one it can show and the policy one it
+        // takes (at most 512 characters).
+        if LedgerMultisig.namesALedgerKey(account) {
+            guard LedgerWalletPolicy.isValidName(name) else { throw LedgerActionError.invalidName }
+            _ = try LedgerWalletPolicy(name: name, account: account)
         }
         guard pairedLedgers(in: account).count <= 1 else { throw LedgerActionError.oneLedgerPerAccount }
         return try await existingOrNewMultisigAccount(name: name, descriptor: descriptor)
