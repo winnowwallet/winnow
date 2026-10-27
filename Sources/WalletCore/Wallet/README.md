@@ -15,13 +15,21 @@ timelocked recovery leaf `and_v(v:pk(K),older(N))` or
 `and_v(v:multi_a(m,…),older(N))` for N of 1 to 65535 blocks, whose keys are
 either the same signers on their `/<2;3>/*` path or other keys on `/<0;1>/*`.
 A nested account has several signers' leaves, one per group of members that
-can spend together, a member being keys that always sign as one (a phone and
-its Ledger); a key in several leaves takes `/<2;3>/*`, `/<4;5>/*`… in turn,
-so no derived key is shared between leaves. A recovery spend sets each
+can spend together and per way the group meets its members' own thresholds,
+a member being keys that always sign as one (a phone and its Ledger) or a
+threshold over its keys (a 2-of-3 account that is one member: each pair of
+its keys with each other member); a key in several leaves takes `/<2;3>/*`,
+`/<4;5>/*`… in turn, so no derived key is shared between leaves. Its
+recovery path is separate keys, or fewer of its members, a timelocked leaf
+per group of them, all opening after the same N. At most 32 leaves in all:
+every leaf travels in each PSBT input, and a Ledger takes fewer still (its
+policy template holds about ten three-key leaves). A recovery spend sets each
 input's sequence to N and selects only coins at
 least N blocks deep; when every input's sequence meets the lock, either kind
 of leaf may finish the spend, and the finalizer puts exactly a leaf's
-threshold of signatures in the witness. The account holds the shape and signer checks
+threshold of signatures in the witness. `members` reads the members back
+from a joined descriptor's leaves: keys the leaves cannot tell apart form
+one member, with the threshold the leaves show. The account holds the shape and signer checks
 from the shared-account Winnow's audit (SEC-009, SEC-019, SEC-020), spend
 creation, the review every signer repeats before signing (SEC-004),
 signing and finalization. New accounts write the internal key as an xpub on
@@ -32,7 +40,8 @@ record is read. Import bundles carry these accounts under `vaults`;
 a bundle carrying any other kind of account is refused rather than restored
 without it. [Account tests](../../../Tests/WalletCoreTests/MultisigAccountTests.swift)
 cover each rule; [nested tests](../../../Tests/WalletCoreTests/NestedMultisigTests.swift)
-the builder over members, what joining admits and spends on each leaf.
+the builder over members, with and without their own thresholds, what
+joining admits, spends on each leaf and a recovery path of fewer members.
 
 An embedding application can restore its reserved address ranges with
 `Wallet.advanceCursors(nextReceiveIndex:nextChangeIndex:)`. Each cursor is the

@@ -21,11 +21,28 @@ public struct LedgerWalletPolicy: Equatable, Sendable {
             && bytes.first != 0x20 && bytes.last != 0x20
     }
 
+    /// The longest descriptor template the Bitcoin app registers:
+    /// `MAX_DESCRIPTOR_TEMPLATE_LENGTH_V2` in its `src/common/wallet.h`,
+    /// checked in `read_wallet_policy_header` (app-bitcoin-new, 2.2.x). A
+    /// three-key leaf costs about 50 characters once its keys are on later
+    /// pairs, so a Ledger takes about ten such leaves; the phone can hold
+    /// an account of `MultisigAccount.maximumLeaves` without one.
+    public static let maximumTemplateLength = 512
+    /// The most keys in a policy, `MAX_N_KEYS_IN_WALLET_POLICY`, the
+    /// internal key included.
+    public static let maximumKeys = 15
+
     public init(name: String, template: String, keys: [String]) throws {
         guard Self.isValidName(name) else {
             throw LedgerError.mismatch("an account name must be 1 to 64 plain characters with no space at either end")
         }
-        guard !keys.isEmpty, keys.count <= 252 else { throw LedgerError.mismatch("a policy needs 1 to 252 keys") }
+        guard !keys.isEmpty, keys.count <= Self.maximumKeys else {
+            throw LedgerError.mismatch("a Ledger policy holds at most \(Self.maximumKeys - 1) signer keys")
+        }
+        guard template.utf8.count <= Self.maximumTemplateLength else {
+            throw LedgerError.mismatch(
+                "this account's policy is \(template.utf8.count) characters and a Ledger takes at most \(Self.maximumTemplateLength); fewer members, or members needing fewer of their keys, make it smaller")
+        }
         self.name = name
         self.template = template
         self.keys = keys

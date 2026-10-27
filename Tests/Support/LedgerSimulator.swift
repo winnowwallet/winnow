@@ -270,6 +270,11 @@ public actor LedgerSimulator: LedgerTransport {
             let keyCount = Int(try reader.readVarInt())
             let keysRoot = try reader.readBytes(32)
             try reader.requireEnd()
+            // The app's wallet.h limits: a template of at most 512 bytes
+            // (read_wallet_policy_header refuses the header), at most 15 keys
+            // (register_wallet answers SW_NOT_SUPPORTED).
+            guard templateLength <= 512 else { throw Failure(status: 0x6A80) }
+            guard keyCount <= 15 else { throw Failure(status: 0x6A82) }
             let templateBytes = try session.preimage(of: templateHash)
             guard templateBytes.count == templateLength, let template = String(data: templateBytes, encoding: .ascii) else {
                 throw Failure(status: 0x6A80)

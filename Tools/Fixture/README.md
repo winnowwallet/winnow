@@ -45,20 +45,27 @@ scripts/check-multisig-core                    # 24 cases from the default seed
 scripts/check-multisig-core --cases 40 --seed 1a2b
 ```
 
-Each seeded case is an account of two to five signers with any threshold,
+Each seeded case is an account of two to six signers with any threshold,
 where zero to two signers are Bitcoin Core wallets (keys Core generated and
 signs with its own libsecp256k1), the signers listed in a shuffled order, and
 an optional recovery leaf (fewer of the same signers, or separate keys, after
 1 to 4 blocks; 16, 144, 4,032 or 65,535 blocks are checked for addresses
-only). Core must agree with Winnow on the descriptor checksum, the first four
-receive and change addresses (and listing the keys in another order must
-build the same descriptor), which signers a PSBT carries valid signatures
-from, and every subset of exactly k signers: Winnow finalizes, Core's mempool
-accepts, Core's own finalizer produces the same bytes, and one spend is mined.
-k − 1 signers finish on neither side; k + 1 still finish. On the recovery
-leaf, both sides refuse every threshold subset one block before the lock
-opens and accept it in the block it opens, and the signers' leaf finishes a
-spend carrying the recovery sequence (BIP326).
+only). A third of the cases with three or more signers are nested: signers
+grouped into members of two or three keys, each signing with all of them or
+with a threshold of them (a 2-of-3 account that is one member), the
+threshold counting members, with a leaf per group of members and per way the
+group meets its thresholds, and a recovery path of fewer members as a
+timelocked leaf per group. Core must agree with Winnow on the descriptor
+checksum, the first four receive and change addresses (and listing the keys
+in another order must build the same descriptor), which members Winnow reads
+back, which signers a PSBT carries valid signatures from, and every subset of
+exactly k members each meeting its threshold exactly: Winnow finalizes,
+Core's mempool accepts, Core's own finalizer produces the same bytes, and one
+spend is mined. k − 1 members, or a member one key short, finish on neither
+side; k + 1 members, or a member signing with more keys than it needs, still
+finish. On every recovery leaf, both sides refuse its keys one block before
+the lock opens and accept them in the block it opens, and the signers' leaf
+finishes a spend carrying the recovery sequence (BIP326).
 
 [MultisigDifferential.swift](MultisigDifferential.swift) has the checks.
 The command prints how many checks of each kind agreed and every

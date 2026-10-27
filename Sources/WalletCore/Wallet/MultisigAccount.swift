@@ -127,23 +127,30 @@ public struct MultisigAccount: Sendable {
 
     /// One leaf the account can spend on: the signers' leaf at a position
     /// among `signersLeaves` (`.signers` is the first, every ordinary
-    /// account's only one), or the timelocked recovery leaf.
+    /// account's only one), or the timelocked recovery leaf at a position
+    /// among `recoveryLeaves` (`.recovery` is the first, every ordinary
+    /// account's only one).
     public struct SpendPath: Hashable, Sendable, CustomStringConvertible {
-        /// The position among the signers' leaves; nil for the recovery leaf.
+        /// The position among the signers' leaves; nil for a recovery leaf.
         public let signersLeaf: Int?
+        /// The position among the recovery leaves; nil for a signers' leaf.
+        public let recoveryLeaf: Int?
 
         /// Any `threshold` of the first leaf's signers, at once.
-        public static let signers = SpendPath(signersLeaf: 0)
-        /// The recovery keys, once each coin is `Recovery.blocks` old.
-        public static let recovery = SpendPath(signersLeaf: nil)
+        public static let signers = SpendPath(signersLeaf: 0, recoveryLeaf: nil)
+        /// The first recovery leaf's keys, once each coin is `Recovery.blocks` old.
+        public static let recovery = SpendPath(signersLeaf: nil, recoveryLeaf: 0)
 
         /// The signers' leaf at `leaf`.
-        public static func signers(_ leaf: Int) -> SpendPath { SpendPath(signersLeaf: leaf) }
+        public static func signers(_ leaf: Int) -> SpendPath { SpendPath(signersLeaf: leaf, recoveryLeaf: nil) }
+        /// The recovery leaf at `leaf`.
+        public static func recovery(_ leaf: Int) -> SpendPath { SpendPath(signersLeaf: nil, recoveryLeaf: leaf) }
 
         public var isRecovery: Bool { signersLeaf == nil }
 
         public var description: String {
-            signersLeaf.map { "signers(\($0))" } ?? "recovery"
+            if let signersLeaf { return "signers(\(signersLeaf))" }
+            return recoveryLeaf == 0 ? "recovery" : "recovery(\(recoveryLeaf ?? 0))"
         }
     }
 
@@ -156,15 +163,38 @@ public struct MultisigAccount: Sendable {
     }
 
     /// A nested account read back from its leaves: `threshold` of `groups`
-    /// spend, each group signing with all its keys.
+    /// spend, each group signing with `thresholds[i]` of its keys: all of
+    /// them for a phone and its Ledger, 2 of 3 for a 2-of-3 account that is
+    /// one member.
     public struct Members: Equatable, Sendable {
         public var threshold: Int
         public var groups: [[Descriptor.SingleKey]]
+        /// How many of each group's keys sign for it, by position in `groups`.
+        public var thresholds: [Int]
+
+        /// The positions of the groups that need fewer than all their keys.
+        public var thresholdGroups: [Int] { groups.indices.filter { thresholds[$0] < groups[$0].count } }
     }
 
-    /// An optional second leaf, `and_v(v:pk(K),older(N))` or
+    /// One member as the builder takes it: keys, `threshold` of which sign
+    /// for the member. All of them by default (a phone and its Ledger); an
+    /// account that is one member keeps its own threshold (2 of 3).
+    public struct Member: Equatable, Sendable {
+        public var keys: [String]
+        public var threshold: Int
+
+        public init(keys: [String], threshold: Int? = nil) {
+            self.keys = keys
+            self.threshold = threshold ?? keys.count
+        }
+    }
+
+    /// A timelocked leaf, `and_v(v:pk(K),older(N))` or
     /// `and_v(v:multi_a(m,…),older(N))`: after a coin has not moved for N
     /// blocks, `threshold` of these keys may spend it without the signers.
+    /// An ordinary account has at most one; a nested account whose recovery
+    /// path is fewer of its members has one per group of them, needing every
+    /// key it lists, all opening after the same N.
     public struct Recovery: Equatable, Sendable {
         public var threshold: Int
         public var keys: [Descriptor.SingleKey]
@@ -172,10 +202,12 @@ public struct MultisigAccount: Sendable {
         public var blocks: UInt32
     }
 
-    /// How a new account's recovery leaf is chosen.
+    /// How a new account's recovery path is chosen.
     public enum RecoveryPlan: Equatable, Sendable {
         /// After the delay, `threshold` of the same signers, each on its
-        /// second derivation path `/<2;3>/*`. An ordinary account only.
+        /// next derivation pair (`/<2;3>/*` in an ordinary account); for a
+        /// nested account, `threshold` of its members, with a timelocked
+        /// leaf per group of them.
         case fewerSigners(threshold: Int, blocks: UInt32)
         /// After the delay, `threshold` of these other keys (`…/<0;1>/*`).
         case separateKeys(threshold: Int, keys: [String], blocks: UInt32)
@@ -185,10 +217,17 @@ public struct MultisigAccount: Sendable {
     public let network: BitcoinNetwork
     /// The signers' leaves in tree order: one for an ordinary account.
     public let signersLeaves: [SignersLeaf]
-    /// The timelocked recovery leaf, if the account has one.
-    public let recovery: Recovery?
+    /// The timelocked recovery leaves in tree order, all opening after the
+    /// same delay: none or one for an ordinary account.
+    public let recoveryLeaves: [Recovery]
     /// Each leaf's path, in tree order.
     private let leafPaths: [SpendPath]
+
+    /// The first recovery leaf, if the account has one. Every recovery leaf
+    /// shares its delay, so it answers for the recovery path as a whole.
+    public var recovery: Recovery? { recoveryLeaves.first }
+    /// The recovery leaves' paths, in tree order.
+    public var recoveryPaths: [SpendPath] { recoveryLeaves.indices.map { .recovery($0) } }
 
     /// Signatures a spend on the first signers' leaf needs.
     public var threshold: Int { signersLeaves[0].threshold }
@@ -208,8 +247,14 @@ public struct MultisigAccount: Sendable {
 
     /// The longest relative lock accepted: BIP68's 16-bit block count.
     public static let maximumRecoveryBlocks: UInt32 = 0xFFFF
-    /// The most signers' leaves an account may have: a 3-of-5 of groups.
-    public static let maximumSignersLeaves = 10
+    /// The most leaves an account may have, signers' and recovery leaves
+    /// together. Every leaf travels in each PSBT input with its control
+    /// block and key origins, so 32 three-key leaves put about 20 KB per
+    /// input in a PSBT, and every address derives every leaf's keys. A
+    /// Ledger takes fewer: its policy template is at most
+    /// `LedgerWalletPolicy.maximumTemplateLength` characters, about ten
+    /// three-key leaves. A 3-of-5 of 2-of-3 accounts (270 leaves) is refused.
+    public static let maximumLeaves = 32
     /// A signer's key on its second path, for the recovery leaf of an
     /// ordinary account.
     static let recoverySuffix: [Descriptor.Derivation.Element] = pairSuffix(1)
@@ -243,27 +288,25 @@ public struct MultisigAccount: Sendable {
         guard case let .trTree(internalKey, tree) = descriptor.expression else {
             throw MultisigAccountError.invalidDescriptor("expected tr(NUMS, sortedmulti_a(k, …))")
         }
-        let (signersLeaves, recoveryLeaf, paths) = try Self.leaves(of: tree)
+        let (signersLeaves, recoveryLeaves, paths) = try Self.leaves(of: tree)
         // SEC-020: with a real internal key, whoever holds it spends alone,
         // whatever the threshold says.
         guard Self.isUnspendable(internalKey, network: network) else {
             throw MultisigAccountError.invalidDescriptor(
                 "the internal key can spend on its own, which would bypass the signers it lists")
         }
-        let keys = try Self.admit(signersLeaves, network: network)
+        var keys = try Self.admit(signersLeaves, network: network)
         self.descriptor = descriptor
         self.network = network
         self.signersLeaves = signersLeaves
         leafPaths = paths
-        recovery = try recoveryLeaf.map {
-            try Self.recovery(from: $0, appearances: keys.appearances, origins: keys.origins, network: network)
-        }
+        self.recoveryLeaves = try Self.recovery(from: recoveryLeaves, keys: &keys, network: network)
     }
 
-    /// The tree's leaves in order: the signers' leaves, at most one
-    /// timelocked recovery leaf, and each leaf's path.
+    /// The tree's leaves in order: the signers' leaves, the timelocked
+    /// recovery leaves, and each leaf's path.
     private static func leaves(of tree: Descriptor.ScriptTree) throws
-        -> (signers: [SignersLeaf], recovery: Descriptor.LeafExpression?, paths: [SpendPath]) {
+        -> (signers: [SignersLeaf], recovery: [Descriptor.LeafExpression], paths: [SpendPath]) {
         var leaves: [Descriptor.LeafExpression] = []
         func collect(_ node: Descriptor.ScriptTree) {
             switch node {
@@ -275,7 +318,7 @@ public struct MultisigAccount: Sendable {
         }
         collect(tree)
         var signersLeaves: [SignersLeaf] = []
-        var recoveryLeaf: Descriptor.LeafExpression?
+        var recoveryLeaves: [Descriptor.LeafExpression] = []
         var paths: [SpendPath] = []
         for leaf in leaves {
             switch leaf {
@@ -286,32 +329,31 @@ public struct MultisigAccount: Sendable {
                 paths.append(.signers(signersLeaves.count))
                 signersLeaves.append(SignersLeaf(threshold: k, keys: keys, isSorted: false))
             case .timelocked:
-                guard recoveryLeaf == nil else {
-                    throw MultisigAccountError.invalidDescriptor("a multisig account has at most one timelocked recovery leaf")
-                }
-                recoveryLeaf = leaf
-                paths.append(.recovery)
+                paths.append(.recovery(recoveryLeaves.count))
+                recoveryLeaves.append(leaf)
             case .pk:
                 throw MultisigAccountError.invalidDescriptor(
-                    "a multisig account has multi_a leaves, and at most one timelocked recovery leaf beside them")
+                    "a multisig account has multi_a leaves, and timelocked recovery leaves beside them")
             }
         }
         guard !signersLeaves.isEmpty else {
             throw MultisigAccountError.invalidDescriptor("a multisig account has exactly one multi_a leaf")
         }
-        guard signersLeaves.count <= maximumSignersLeaves else {
-            throw MultisigAccountError.invalidDescriptor("a multisig account has at most \(maximumSignersLeaves) signers' leaves")
+        guard leaves.count <= maximumLeaves else {
+            throw MultisigAccountError.invalidDescriptor("a multisig account has at most \(maximumLeaves) leaves")
         }
-        return (signersLeaves, recoveryLeaf, paths)
+        return (signersLeaves, recoveryLeaves, paths)
     }
 
-    /// The keys' bookkeeping across the signers' leaves: how often each
-    /// appeared, and the origin it carried.
+    /// The keys' bookkeeping across the leaves: how often each appeared,
+    /// and the origin it carried.
     private struct AdmittedKeys {
         var appearances: [Data: Int] = [:]
         var origins: [Data: Descriptor.KeyOrigin] = [:]
-        /// Each leaf's key set, so no group of signers appears twice.
+        /// Each signers' leaf's key set, so no group of signers appears twice.
         var groups: Set<Set<Data>> = []
+        /// Each recovery leaf's key set, likewise.
+        var recoveryGroups: Set<Set<Data>> = []
     }
 
     /// Every signers' leaf: at least two keys, a threshold within them,
@@ -359,36 +401,47 @@ public struct MultisigAccount: Sendable {
         keys.appearances[identity, default: 0] += 1
     }
 
-    /// The recovery leaf's rules: a timelock of 1...65535 blocks, distinct
-    /// keys, each an origin-bearing public key of this network. A key that is
-    /// also a signer appears with that signer's own origin on the path after
-    /// its last signers' leaf, `/<2;3>/*` in an ordinary account; any other
-    /// key on `/<0;1>/*` (SEC-019). No derived key is therefore shared
-    /// between the leaves, which BIP388 signers such as a Ledger also
-    /// require, and a signer finds its key in every leaf by the same
+    /// The recovery leaves' rules: one timelock of 1...65535 blocks that
+    /// every recovery leaf shares, distinct keys in each leaf and no key set
+    /// twice, each key an origin-bearing public key of this network. A key
+    /// that is also a signer appears with that signer's own origin on the
+    /// pair after its last leaf, `/<2;3>/*` in an ordinary account; any
+    /// other key on `/<0;1>/*` (SEC-019). No derived key is therefore
+    /// shared between the leaves, which BIP388 signers such as a Ledger
+    /// also require, and a signer finds its key in every leaf by the same
     /// fingerprint and path. Joining with a relabelled signer is refused in
     /// AppTests/MultisigAccountFlowTests.testBuilderMakesAccountWithAnotherWinnowAndRecovery;
-    /// the other look-alikes are in TimelockedMultisigTests.admissionRefusals.
-    private static func recovery(from leaf: Descriptor.LeafExpression, appearances: [Data: Int],
-                                 origins: [Data: Descriptor.KeyOrigin], network: BitcoinNetwork) throws -> Recovery {
-        guard case let .timelocked(condition, blocks) = leaf else {
-            throw MultisigAccountError.invalidDescriptor("the second leaf must be a timelocked recovery path")
+    /// the other look-alikes are in TimelockedMultisigTests.admissionRefusals
+    /// and NestedMultisigTests.admissionRefusals.
+    private static func recovery(from leaves: [Descriptor.LeafExpression], keys: inout AdmittedKeys,
+                                 network: BitcoinNetwork) throws -> [Recovery] {
+        var recoveries: [Recovery] = []
+        for leaf in leaves {
+            guard case let .timelocked(condition, blocks) = leaf else {
+                throw MultisigAccountError.invalidDescriptor("a leaf beside the signers' must be a timelocked recovery path")
+            }
+            guard (1 ... maximumRecoveryBlocks).contains(blocks) else {
+                throw MultisigAccountError.invalidDescriptor("a recovery delay must be 1 to 65535 blocks")
+            }
+            guard recoveries.allSatisfy({ $0.blocks == blocks }) else {
+                throw MultisigAccountError.invalidDescriptor("every recovery leaf must open after the same delay")
+            }
+            var seen: Set<Data> = []
+            for key in condition.keys {
+                try requireRecoveryKey(key, keys: &keys, seen: &seen, network: network)
+            }
+            guard keys.recoveryGroups.insert(seen).inserted else {
+                throw MultisigAccountError.invalidDescriptor("the same group of recovery keys appears in two leaves")
+            }
+            recoveries.append(Recovery(threshold: condition.threshold, keys: condition.keys, blocks: blocks))
         }
-        guard (1 ... maximumRecoveryBlocks).contains(blocks) else {
-            throw MultisigAccountError.invalidDescriptor("a recovery delay must be 1 to 65535 blocks")
-        }
-        var seen: Set<Data> = []
-        for key in condition.keys {
-            try requireRecoveryKey(key, appearances: appearances, origins: origins, seen: &seen, network: network)
-        }
-        return Recovery(threshold: condition.threshold, keys: condition.keys, blocks: blocks)
+        return recoveries
     }
 
     /// One recovery key: an extended key not seen before in the leaf; a
     /// signer's key carries that signer's origin and its next pair, any
-    /// other key `/<0;1>/*`.
-    private static func requireRecoveryKey(_ key: Descriptor.SingleKey, appearances: [Data: Int],
-                                           origins: [Data: Descriptor.KeyOrigin],
+    /// other key `/<0;1>/*`, then `/<2;3>/*` in a later recovery leaf.
+    private static func requireRecoveryKey(_ key: Descriptor.SingleKey, keys: inout AdmittedKeys,
                                            seen: inout Set<Data>, network: BitcoinNetwork) throws {
         guard case let .extended(xpub, _) = key.base else {
             throw MultisigAccountError.invalidDescriptor("every recovery key must be an extended public key")
@@ -396,13 +449,15 @@ public struct MultisigAccount: Sendable {
         guard seen.insert(xpub.publicKey).inserted else {
             throw MultisigAccountError.invalidDescriptor("the same recovery key appears more than once")
         }
-        let signerOrigin = origins[xpub.publicKey]
-        guard signerOrigin == nil || key.origin == signerOrigin else {
+        let knownOrigin = keys.origins[xpub.publicKey]
+        guard knownOrigin == nil || key.origin == knownOrigin else {
             throw MultisigAccountError.invalidDescriptor(
                 "a signer reused for recovery must keep its own fingerprint and path there")
         }
-        _ = try requireAccountKey(key, network: network, suffix: pairSuffix(appearances[xpub.publicKey, default: 0]),
+        _ = try requireAccountKey(key, network: network, suffix: pairSuffix(keys.appearances[xpub.publicKey, default: 0]),
                                   recovery: true)
+        keys.origins[xpub.publicKey] = key.origin
+        keys.appearances[xpub.publicKey, default: 0] += 1
     }
 
     public init(_ string: String, network: BitcoinNetwork) throws {
@@ -434,78 +489,176 @@ public struct MultisigAccount: Sendable {
         return try build(leaves: leaves, network: network)
     }
 
-    /// A nested account: `threshold` of `members` spend, each member a group
-    /// of keys that sign together (a phone and its Ledger). One leaf per
-    /// group of `threshold` members, needing every key of those members;
-    /// a key in several leaves takes `/<2;3>/*`, `/<4;5>/*`… in turn, in
-    /// tree order. Members are written in one canonical order, by their
-    /// lowest key, and the leaves in the order of the members they take,
-    /// so listing members or their keys differently gives the same
-    /// descriptor. When every member is one key, this is the ordinary
-    /// account. A recovery path takes separate keys only; fewer of the
-    /// same signers would need a timelocked leaf per group.
-    /// Checked against Bitcoin Core by `scripts/check-multisig-core`, and
-    /// in NestedMultisigTests.
+    /// A nested account whose members each sign with every key they have:
+    /// `descriptor(members:threshold:recovery:network:)` over `Member`s.
     public static func descriptor(members: [[String]], threshold: Int, recovery: RecoveryPlan? = nil,
                                   network: BitcoinNetwork) throws -> Descriptor {
-        guard members.count >= 2, members.allSatisfy({ !$0.isEmpty }) else {
-            throw MultisigAccountError.invalidDescriptor("a nested account needs at least two members, each with a key")
+        try descriptor(members: members.map { Member(keys: $0) }, threshold: threshold, recovery: recovery,
+                       network: network)
+    }
+
+    /// A nested account: `threshold` of `members` spend, each member a group
+    /// of keys that sign together (a phone and its Ledger), or a threshold
+    /// over its keys (a 2-of-3 account that is one member). One leaf per
+    /// group of `threshold` members and per way the members of the group
+    /// can meet their own thresholds: for a 2-of-3 member A and one-key
+    /// members B and C, the pair A and B is three leaves, `(a1, a2, b)`,
+    /// `(a1, a3, b)` and `(a2, a3, b)`, each needing every key it lists. A
+    /// key in several leaves takes `/<2;3>/*`, `/<4;5>/*`… in turn, in tree
+    /// order. Members are written in one canonical order, by their lowest
+    /// key, the leaves in the order of the members and keys they take, so
+    /// listing members or their keys differently gives the same descriptor.
+    /// When every member is one key, this is the ordinary account. A
+    /// recovery path of fewer members is a timelocked leaf per group of
+    /// them, built the same way; separate keys are one leaf. At most
+    /// `maximumLeaves` leaves in all.
+    /// Checked against Bitcoin Core by `scripts/check-multisig-core`, and
+    /// in NestedMultisigTests.
+    public static func descriptor(members: [Member], threshold: Int, recovery: RecoveryPlan? = nil,
+                                  network: BitcoinNetwork) throws -> Descriptor {
+        try checkMembers(members, threshold: threshold)
+        if members.allSatisfy({ $0.keys.count == 1 }) {
+            return try descriptor(threshold: threshold, signers: members.map(\.keys[0]), recovery: recovery, network: network)
         }
-        guard (1 ... members.count).contains(threshold) else {
-            throw MultisigAccountError.invalidDescriptor("the threshold must be between one and the number of members")
-        }
-        if members.allSatisfy({ $0.count == 1 }) {
-            return try descriptor(threshold: threshold, signers: members.map(\.[0]), recovery: recovery, network: network)
-        }
-        // A threshold of one gives every member a leaf of its own, and a
-        // one-key member a leaf one key spends alone, which no multisig
-        // account has. A threshold of all the members is one leaf of every
-        // key: the ordinary account, written as such.
-        guard threshold > 1 || members.allSatisfy({ $0.count > 1 }) else {
+        guard threshold > 1 || members.allSatisfy({ $0.threshold > 1 }) else {
             throw MultisigAccountError.invalidDescriptor(
-                "a threshold of one member would let a single key spend alone; give every member two keys or raise it")
+                "a threshold of one member would let a single key spend alone; give every member two keys that sign, or raise it")
         }
-        var leaves = try signersLeaves(members: members, threshold: threshold)
-        if let recovery {
-            guard case let .separateKeys(m, keys, blocks) = recovery else {
-                throw MultisigAccountError.invalidDescriptor("a nested account's recovery path takes separate keys")
-            }
+        let ordered = try orderedMembers(members)
+        try checkLeafCount(ordered, threshold: threshold, recovery: recovery)
+        var appearances: [String: Int] = [:]
+        var leaves = leafKeys(members: ordered, groupSize: threshold, appearances: &appearances).map { keys in
+            "sortedmulti_a(\(keys.count),\(keys.joined(separator: ",")))"
+        }
+        switch recovery {
+        case nil:
+            break
+        case let .separateKeys(m, keys, blocks):
             leaves.append(try recoveryLeaf(.separateKeys(threshold: m, keys: try canonicalOrder(keys), blocks: blocks),
                                            signers: []))
+        case let .fewerSigners(m, blocks):
+            guard (1 ... members.count).contains(m) else {
+                throw MultisigAccountError.invalidDescriptor("the recovery threshold must be between one and the number of members")
+            }
+            leaves += try leafKeys(members: ordered, groupSize: m, appearances: &appearances).map {
+                try timelockedLeaf(threshold: $0.count, keys: $0, blocks: blocks)
+            }
         }
         return try build(leaves: leaves, network: network)
     }
 
-    /// A nested account's signers' leaves, in canonical order, each key on
-    /// the pair its appearance calls for.
-    private static func signersLeaves(members: [[String]], threshold: Int) throws -> [String] {
-        let ordered = try members.map { member -> (key: Data, keys: [String]) in
-            let sorted = try canonicalOrder(member)
-            return (try accountKey(in: sorted[0]), sorted)
-        }.sorted { $0.key.lexicographicallyPrecedes($1.key) }.map(\.keys)
+    /// At least two members, each with a key and a threshold within its
+    /// keys; a threshold within the members. A threshold of one member
+    /// gives every member a leaf of its own, so each member must then need
+    /// two keys, or one key would spend alone, which no multisig account
+    /// has. A threshold of all the members, each signing with every key, is
+    /// one leaf of every key: the ordinary account, written as such.
+    private static func checkMembers(_ members: [Member], threshold: Int) throws {
+        guard members.count >= 2, members.allSatisfy({ !$0.keys.isEmpty }) else {
+            throw MultisigAccountError.invalidDescriptor("a nested account needs at least two members, each with a key")
+        }
+        guard members.allSatisfy({ (1 ... $0.keys.count).contains($0.threshold) }) else {
+            throw MultisigAccountError.invalidDescriptor("a member's threshold must be between one and its number of keys")
+        }
+        guard (1 ... members.count).contains(threshold) else {
+            throw MultisigAccountError.invalidDescriptor("the threshold must be between one and the number of members")
+        }
+    }
+
+    /// A member with its keys bare of the `/<0;1>/*` suffix, in canonical
+    /// order; members themselves ordered by their lowest key.
+    private struct OrderedMember {
+        var keys: [String]
+        var threshold: Int
+        /// How many ways its keys can meet its threshold.
+        var choices: Int { MultisigAccount.combinations(of: Array(keys.indices), size: threshold).count }
+    }
+
+    private static func orderedMembers(_ members: [Member]) throws -> [OrderedMember] {
         let suffix = pairSuffixText(0)
-        let bare = try ordered.map { member in try member.map { expression -> String in
-            guard expression.hasSuffix(suffix) else {
-                throw MultisigAccountError.invalidDescriptor(
-                    "every signer must use the /<0;1>/* suffix, so the signers can be shown to be independent")
+        let ordered = try members.map { member -> (key: Data, member: OrderedMember) in
+            let sorted = try canonicalOrder(member.keys)
+            let bare = try sorted.map { expression -> String in
+                guard expression.hasSuffix(suffix) else {
+                    throw MultisigAccountError.invalidDescriptor(
+                        "every signer must use the /<0;1>/* suffix, so the signers can be shown to be independent")
+                }
+                return String(expression.dropLast(suffix.count))
             }
-            return String(expression.dropLast(suffix.count))
-        } }
-        let keyCount = bare.reduce(0) { $0 + $1.count }
-        guard Set(bare.flatMap { $0 }).count == keyCount else {
+            return (try accountKey(in: sorted[0]), OrderedMember(keys: bare, threshold: member.threshold))
+        }.sorted { $0.key.lexicographicallyPrecedes($1.key) }.map(\.member)
+        let keyCount = ordered.reduce(0) { $0 + $1.keys.count }
+        guard Set(ordered.flatMap(\.keys)).count == keyCount else {
             throw MultisigAccountError.invalidDescriptor("the same signing key appears in two members")
         }
-        var appearances: [String: Int] = [:]
-        var leaves: [String] = []
-        for group in combinations(of: Array(ordered.indices), size: threshold) {
-            let keys = try canonicalOrder(group.flatMap { bare[$0].map { $0 + suffix } }).map { expression in
-                let key = String(expression.dropLast(suffix.count))
-                defer { appearances[key, default: 0] += 1 }
-                return key + pairSuffixText(appearances[key, default: 0])
+        return ordered
+    }
+
+    /// Refuses a tree of more than `maximumLeaves` leaves before any is
+    /// written, naming the count.
+    private static func checkLeafCount(_ members: [OrderedMember], threshold: Int, recovery: RecoveryPlan?) throws {
+        var count = leafCount(members.map(\.choices), groupSize: threshold)
+        switch recovery {
+        case nil: break
+        case .separateKeys: count += 1
+        case let .fewerSigners(m, _): count += leafCount(members.map(\.choices), groupSize: min(m, members.count))
+        }
+        guard count <= maximumLeaves else {
+            throw MultisigAccountError.invalidDescriptor(
+                "these members would make \(count) leaves, and an account has at most \(maximumLeaves)")
+        }
+    }
+
+    /// How many leaves every group of `groupSize` members makes when each
+    /// member in a group has `choices[i]` ways to sign: the coefficient of
+    /// x^groupSize in the product of (1 + choices[i]·x), saturating at
+    /// `Int.max` so an absurd tree cannot overflow.
+    static func leafCount(_ choices: [Int], groupSize: Int) -> Int {
+        var coefficients = [1] + Array(repeating: 0, count: groupSize)
+        for choice in choices {
+            for degree in stride(from: groupSize, through: 1, by: -1) {
+                let (term, overflow) = coefficients[degree - 1].multipliedReportingOverflow(by: choice)
+                let (sum, carried) = coefficients[degree].addingReportingOverflow(term)
+                coefficients[degree] = overflow || carried ? Int.max : sum
             }
-            leaves.append("sortedmulti_a(\(keys.count),\(keys.joined(separator: ",")))")
+        }
+        return coefficients[groupSize]
+    }
+
+    /// The key lists of one leaf per group of `groupSize` members and per
+    /// way the group's members meet their thresholds, in canonical order:
+    /// groups in member order, a member's choices in key order, each leaf's
+    /// keys sorted and each key on the pair its appearance so far calls
+    /// for. `appearances` carries across the signers' and recovery leaves.
+    private static func leafKeys(members: [OrderedMember], groupSize: Int,
+                                 appearances: inout [String: Int]) -> [[String]] {
+        var leaves: [[String]] = []
+        for group in combinations(of: Array(members.indices), size: groupSize) {
+            let choices = group.map { member in
+                combinations(of: Array(members[member].keys.indices), size: members[member].threshold)
+                    .map { $0.map { members[member].keys[$0] } }
+            }
+            for choice in product(choices) {
+                let keys = choice.flatMap { $0 }.sorted { bareKey($0).lexicographicallyPrecedes(bareKey($1)) }
+                leaves.append(keys.map { key in
+                    defer { appearances[key, default: 0] += 1 }
+                    return key + pairSuffixText(appearances[key, default: 0])
+                })
+            }
         }
         return leaves
+    }
+
+    /// The x-only account key of a bare key expression, for sorting; the
+    /// expressions were parsed by `orderedMembers`, so this cannot fail.
+    private static func bareKey(_ expression: String) -> Data {
+        (try? accountKey(in: expression)) ?? Data()
+    }
+
+    /// Every way to take one element from each list, first list varying
+    /// slowest.
+    static func product<T>(_ lists: [[T]]) -> [[T]] {
+        lists.reduce([[]]) { partial, list in partial.flatMap { prefix in list.map { prefix + [$0] } } }
     }
 
     /// The descriptor over leaves already in their final text and order:
@@ -579,6 +732,12 @@ public struct MultisigAccount: Sendable {
         case let .separateKeys(m, others, n):
             (threshold, keys, blocks) = (m, try canonicalOrder(others), n)
         }
+        return try timelockedLeaf(threshold: threshold, keys: keys, blocks: blocks)
+    }
+
+    /// `and_v(v:pk(K),older(N))` for one key, `and_v(v:multi_a(m,…),older(N))`
+    /// for several, the keys already on their paths.
+    private static func timelockedLeaf(threshold: Int, keys: [String], blocks: UInt32) throws -> String {
         guard (1 ... maximumRecoveryBlocks).contains(blocks) else {
             throw MultisigAccountError.invalidDescriptor("a recovery delay must be 1 to 65535 blocks")
         }
@@ -696,62 +855,183 @@ public struct MultisigAccount: Sendable {
     }
 
     /// Every key expression in the account: each signers' leaf's keys in
-    /// tree order, then the recovery keys. A signer in several leaves is
+    /// tree order, then each recovery leaf's. A signer in several leaves is
     /// listed once per leaf, each time on that leaf's path.
-    public var allKeys: [Descriptor.SingleKey] { signersLeaves.flatMap(\.keys) + (recovery?.keys ?? []) }
+    public var allKeys: [Descriptor.SingleKey] { signersLeaves.flatMap(\.keys) + recoveryLeaves.flatMap(\.keys) }
 
     /// The keys of `path`'s leaf, in descriptor order; none for a leaf the
     /// account does not have.
     public func keys(on path: SpendPath) -> [Descriptor.SingleKey] {
-        guard let leaf = path.signersLeaf else { return recovery?.keys ?? [] }
-        return signersLeaves.indices.contains(leaf) ? signersLeaves[leaf].keys : []
+        if let leaf = path.signersLeaf { return signersLeaves.indices.contains(leaf) ? signersLeaves[leaf].keys : [] }
+        guard let leaf = path.recoveryLeaf, recoveryLeaves.indices.contains(leaf) else { return [] }
+        return recoveryLeaves[leaf].keys
     }
 
     /// How many of `path`'s keys must sign.
     public func threshold(on path: SpendPath) -> Int {
-        guard let leaf = path.signersLeaf else { return recovery?.threshold ?? 0 }
-        return signersLeaves.indices.contains(leaf) ? signersLeaves[leaf].threshold : 0
+        if let leaf = path.signersLeaf { return signersLeaves.indices.contains(leaf) ? signersLeaves[leaf].threshold : 0 }
+        guard let leaf = path.recoveryLeaf, recoveryLeaves.indices.contains(leaf) else { return 0 }
+        return recoveryLeaves[leaf].threshold
     }
 
-    /// The members of a nested account, read from its leaves: keys that sit
-    /// in exactly the same leaves form a member, and the leaves must be
-    /// every group of `threshold` members, each needing all its keys. Nil
+    /// The members of a nested account, read from its signers' leaves. Nil
     /// for an ordinary account, or a tree of another shape.
     public var members: Members? {
         guard isNested else { return nil }
-        var membership: [Data: Set<Int>] = [:]
-        var byIdentity: [Data: Descriptor.SingleKey] = [:]
-        var order: [Data] = []
-        for (position, leaf) in signersLeaves.enumerated() {
-            guard leaf.threshold == leaf.keys.count else { return nil }
-            for key in leaf.keys {
-                let identity = Self.identity(of: key)
-                if membership[identity] == nil { order.append(identity) }
-                membership[identity, default: []].insert(position)
-                byIdentity[identity] = byIdentity[identity] ?? key
+        return Self.members(of: signersLeaves.map { ($0.threshold, $0.keys) })
+    }
+
+    /// The members a recovery path of fewer members reads back as, when the
+    /// account has a timelocked leaf per group of them; nil for one leaf.
+    public var recoveryMembers: Members? {
+        guard recoveryLeaves.count > 1 else { return nil }
+        return Self.members(of: recoveryLeaves.map { ($0.threshold, $0.keys) })
+    }
+
+    /// Members read from leaves that each need every key they list. Keys
+    /// the leaves cannot tell apart, in that swapping two of them maps every
+    /// leaf onto a leaf, belong to one member, whose threshold is how many
+    /// of them each leaf holds; keys symmetric only because each is a
+    /// member of its own (every leaf holds all of them, they are every key
+    /// there is, or any one member spends and they never share a leaf)
+    /// stay single members. The leaves must then be exactly every group of
+    /// `threshold` members, each member in every way it meets its own
+    /// threshold; nil otherwise. Pinned by NestedMultisigTests
+    /// (thresholdMember, admissionRefusals) and held to the builder by
+    /// `scripts/check-multisig-core`.
+    static func members(of leaves: [(threshold: Int, keys: [Descriptor.SingleKey])]) -> Members? {
+        guard leaves.allSatisfy({ $0.threshold == $0.keys.count }) else { return nil }
+        let family = LeafFamily(leaves.map(\.keys))
+        var groups: [[Data]] = []
+        var thresholds: [Int] = []
+        for keys in family.symmetryClasses() {
+            if let threshold = family.memberThreshold(of: keys) {
+                groups.append(keys)
+                thresholds.append(threshold)
+            } else {
+                groups += keys.map { [$0] }
+                thresholds += keys.map { _ in 1 }
             }
         }
-        var groups: [Set<Int>: [Descriptor.SingleKey]] = [:]
-        var groupOrder: [Set<Int>] = []
-        for identity in order {
-            let leaves = membership[identity]!
-            if groups[leaves] == nil { groupOrder.append(leaves) }
-            groups[leaves, default: []].append(byIdentity[identity]!)
+        if family.groupSize(groups) == 1 {
+            // Any one member spends: a member of which one key signs is the
+            // same leaves as that many one-key members, so read it as them.
+            let split = groups.indices.flatMap { thresholds[$0] == 1 ? groups[$0].map { [$0] } : [groups[$0]] }
+            thresholds = split.map { groups.contains($0) ? thresholds[groups.firstIndex(of: $0)!] : 1 }
+            groups = split
         }
-        let perLeaf = Set(signersLeaves.indices.map { leaf in groupOrder.filter { $0.contains(leaf) }.count })
-        guard perLeaf.count == 1, let threshold = perLeaf.first,
-              signersLeaves.count == Self.combinations(of: Array(groupOrder.indices), size: threshold).count,
-              groupOrder.allSatisfy({ $0.count == Self.combinations(of: Array(groupOrder.indices.dropFirst()), size: threshold - 1).count })
+        guard let threshold = family.groupSize(groups), family.matches(groups: groups, thresholds: thresholds, size: threshold)
         else { return nil }
-        return Members(threshold: threshold, groups: groupOrder.map { groups[$0]! })
+        return Members(threshold: threshold, groups: groups.map { $0.map { family.key[$0]! } }, thresholds: thresholds)
+    }
+
+    /// Leaves as sets of key identities, for reading members back.
+    private struct LeafFamily {
+        /// Key identities in first-appearance order, each with its first key.
+        var order: [Data] = []
+        var key: [Data: Descriptor.SingleKey] = [:]
+        var leaves: [Set<Data>] = []
+        var family: Set<Set<Data>> = []
+
+        init(_ lists: [[Descriptor.SingleKey]]) {
+            for keys in lists {
+                var leaf: Set<Data> = []
+                for single in keys {
+                    let identity = MultisigAccount.identity(of: single)
+                    if key[identity] == nil {
+                        order.append(identity)
+                        key[identity] = single
+                    }
+                    leaf.insert(identity)
+                }
+                leaves.append(leaf)
+                family.insert(leaf)
+            }
+        }
+
+        /// Whether swapping `first` and `second` maps every leaf onto a leaf.
+        func isSymmetric(_ first: Data, _ second: Data) -> Bool {
+            leaves.allSatisfy { leaf in
+                guard leaf.contains(first) != leaf.contains(second) else { return true }
+                return family.contains(leaf.symmetricDifference([first, second]))
+            }
+        }
+
+        /// The keys partitioned by symmetry, in first-appearance order.
+        func symmetryClasses() -> [[Data]] {
+            var classes: [[Data]] = []
+            for identity in order {
+                if let index = classes.firstIndex(where: { isSymmetric($0[0], identity) }) {
+                    classes[index].append(identity)
+                } else {
+                    classes.append([identity])
+                }
+            }
+            return classes
+        }
+
+        /// How a symmetry class reads: the threshold of one member made of
+        /// its keys, or nil to read each key as a member of its own: when
+        /// leaves hold varying numbers of its keys, when every leaf holds
+        /// all of them, or when it is every key there is.
+        func memberThreshold(of keys: [Data]) -> Int? {
+            let present = leaves.map { $0.intersection(keys).count }.filter { $0 > 0 }
+            let counts = Set(present)
+            guard counts.count == 1, let threshold = counts.first else { return nil }
+            let everywhere = present.count == leaves.count
+            return (threshold == keys.count && everywhere) || keys.count == order.count ? nil : threshold
+        }
+
+        /// The number of members in every leaf, when it is the same for all.
+        func groupSize(_ groups: [[Data]]) -> Int? {
+            let sizes = Set(leaves.map { leaf in groups.filter { !leaf.isDisjoint(with: $0) }.count })
+            return sizes.count == 1 ? sizes.first : nil
+        }
+
+        /// Whether the leaves are exactly every group of `size` members,
+        /// each member in every way it meets `thresholds[i]` of its keys.
+        func matches(groups: [[Data]], thresholds: [Int], size: Int) -> Bool {
+            var expected: Set<Set<Data>> = []
+            for group in MultisigAccount.combinations(of: Array(groups.indices), size: size) {
+                let choices = group.map { member in
+                    MultisigAccount.combinations(of: Array(groups[member].indices), size: thresholds[member])
+                        .map { Set($0.map { groups[member][$0] }) }
+                }
+                for pick in MultisigAccount.product(choices) {
+                    expected.insert(pick.reduce(into: Set<Data>()) { $0.formUnion($1) })
+                }
+            }
+            return expected == family && expected.count == leaves.count
+        }
     }
 
     /// "2 of 3" for an ordinary account, "2 of 3 members" for a nested one
-    /// whose leaves read as members, else how many ways it can spend.
+    /// whose leaves read as members, "2 of 3 members, one of them 2 of 3"
+    /// when a member is a threshold over its keys, else how many ways it
+    /// can spend.
     public var policySummary: String {
         guard isNested else { return "\(threshold) of \(signers.count)" }
-        if let members { return "\(members.threshold) of \(members.groups.count) members" }
-        return "\(signersLeaves.count) signing groups"
+        guard let members else { return "\(signersLeaves.count) signing groups" }
+        return "\(members.threshold) of \(members.groups.count) members" + Self.thresholdMembersText(members)
+    }
+
+    /// ", one of them 2 of 3"; ", two of them 2 of 3, one 1 of 2"; "" when
+    /// every member signs with all its keys.
+    static func thresholdMembersText(_ members: Members) -> String {
+        var counts: [(policy: String, count: Int)] = []
+        for group in members.thresholdGroups {
+            let policy = "\(members.thresholds[group]) of \(members.groups[group].count)"
+            if let index = counts.firstIndex(where: { $0.policy == policy }) {
+                counts[index].count += 1
+            } else {
+                counts.append((policy, 1))
+            }
+        }
+        let words = ["none", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"]
+        return counts.enumerated().map { position, entry in
+            let word = entry.count < words.count ? words[entry.count] : "\(entry.count)"
+            return ", \(word)\(position == 0 ? " of them" : "") \(entry.policy)"
+        }.joined()
     }
 
     /// Whether one signer is this account public key, whatever origin label
