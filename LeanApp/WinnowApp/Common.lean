@@ -59,6 +59,7 @@ def Model.fail (m : Model) (context message : String) : Model :=
   | "multisigAdd" => { m with multisigAdd := { m.multisigAdd with saving := false, error := some message } }
   | "multisigBuild" => { m with multisigBuild := { m.multisigBuild with creating := false, error := some message } }
   | "multisigAccount" => { m with multisigAccountError := some message }
+  | "ledgerPair" => { m with ledgerPair := { m.ledgerPair with pairing := false, error := some message } }
   -- the overview keeps what it last showed; the fee-rate field stays empty for the user to fill
   | "multisigOverview" | "multisigRate" => m
   | _ => { m with status := { m.status with lastSyncError := some message } }

@@ -2,6 +2,7 @@ import Std.Data.HashMap
 import Std.Sync.Mutex
 import Std.Data.HashSet
 import WinnowApp.Real.RecordsStores
+import Winnow.Ledger.Multisig
 
 /-! # The multisig account store (port of `Sources/WinnowApp/MultisigStore.swift`, upstream 1cf93fb)
 
@@ -19,9 +20,6 @@ the current value behind one mutex.
 Differences of form:
 * The file is the sealed `[MultisigAccountRecord]` array written by `SwiftJSON.write` (sorted keys,
   escaped slashes); Swift's `JSONEncoder()` writes the same values in its own key order. Either reads.
-* `checkLedgerRegistration` is the part that needs no Ledger policy code: both 32-byte fields, and a
-  signer whose origin is the registration's fingerprint and path. The policy-ID comparison
-  (`LedgerWalletPolicy`) is the Ledger phase's; `setLedger` comes with it.
 * The owner-map cache is part of the value (the next store carries it). -/
 
 namespace WinnowApp.RecordsReal
@@ -85,16 +83,6 @@ def watchCount (r : MultisigAccountRecord) : UInt32 := max r.nextReceiveIndex r.
 
 /-! ## Validation -/
 
-/-- The Ledger-free half of `MultisigAccountRecord.checkLedgerRegistration`. -/
-def ledgerRegistrationFits (r : MultisigAccountRecord) (account : MultisigAccount) : Bool :=
-  match r.ledger with
-  | none => true
-  | some l =>
-    l.policyID.size == 32 && l.hmac.size == 32 &&
-      account.signers.any fun s => match s.origin with
-        | some o => o.fingerprint == l.masterFingerprint && o.path == l.keyPath
-        | none => false
-
 /-- A usable name, a canonical descriptor whose checksum is the record's id, a supported account on this
 network, and indices in range. -/
 def validatedShape (r : MultisigAccountRecord) (network : BitcoinNetwork) : RM MultisigAccount := do
@@ -102,7 +90,8 @@ def validatedShape (r : MultisigAccountRecord) (network : BitcoinNetwork) : RM M
   let account ← liftAccount network (MultisigAccount.parse r.descriptor network)
   unless account.descriptor.serialized == r.descriptor && account.id == r.id do
     invalid "account descriptor identifier does not match"
-  unless ledgerRegistrationFits r account do invalid "an account's Ledger registration does not match it"
+  unless (r.checkLedgerRegistration account).toOption.isSome do
+    invalid "an account's Ledger registration does not match it"
   unless r.nextReceiveIndex ≤ maximumNextIndex && r.nextChangeIndex ≤ maximumNextIndex do
     invalid "account address index is out of range"
   return account
@@ -375,6 +364,17 @@ def advanceReceiveIndex (s : MultisigStore) (keys : StoreKeyVault) (writeData : 
   let some i := s.records.findIdx? (·.id == id) | return s
   unless s.records[i]!.nextReceiveIndex < maximumNextIndex do invalid "receive address index is out of range"
   s.mutate keys writeData (s.records.modify i fun r => { r with nextReceiveIndex := r.nextReceiveIndex + 1 })
+
+/-- `setLedger(id:registration:)`: files the Ledger registration for an account the Ledger signs for,
+once it is this account's own policy and names one of its signers. -/
+def setLedger (s : MultisigStore) (keys : StoreKeyVault) (writeData : WriteData) (id : String)
+    (registration : LedgerRegistration) : RM MultisigStore := do
+  s.requireReadable
+  let some i := s.records.findIdx? (·.id == id) | invalid "the account is no longer on this phone"
+  let updated := { s.records[i]! with ledger := some registration }
+  let account ← liftAccount s.network (MultisigAccount.parse updated.descriptor s.network)
+  liftAccount s.network (updated.checkLedgerRegistration account)
+  s.mutate keys writeData (s.records.set! i updated)
 
 /-- The spend's one output to the account's change address at `changeIndex`, as a pending coin. -/
 def pendingChange (tx : Transaction) (account : MultisigAccount) (changeIndex : UInt32) (network : BitcoinNetwork) :

@@ -42,12 +42,16 @@ structure Simulator where
   registrationKey : ByteArray
   command : Option ByteArray := none
   answers : Array ByteArray := #[]
+  /-- The network whose addresses the device shows: signet, as Swift's simulator and Ledger's "Bitcoin
+  Test" app do (`tb1…`); regtest for a device built for regtest (`bcrt1…`, as Ledger's regtest build of
+  the app shows), which a regtest node's tests need. -/
+  network : Tx.BitcoinNetwork := .signet
   deriving Inhabited
 
 namespace Simulator
 
-def new (master : HDKey) : Simulator :=
-  { master, registrationKey := sha256 ("winnow-ledger-simulator".toUTF8 ++ master.publicKey) }
+def new (master : HDKey) (network : Tx.BitcoinNetwork := .signet) : Simulator :=
+  { master, registrationKey := sha256 ("winnow-ledger-simulator".toUTF8 ++ master.publicKey), network }
 
 def setDecision (s : Simulator) (decision : Decision) : Simulator := { s with decision }
 
@@ -261,7 +265,7 @@ def address (body : ByteArray) : H ByteArray := do
   unless tag == s.hmac id && change ≤ 1 do fail 0xB008
   let p ← policy (← preimage id)
   let .ok d := Descriptor.parse p.descriptorText | fail 0x6A80
-  let .ok outputs := d.derived index .signet | fail 0x6A80
+  let .ok outputs := d.derived index s.network | fail 0x6A80
   let some output := outputs[change.toNat]? | fail 0x6A80
   if display then
     unless s.decision == .approve do fail 0x6985

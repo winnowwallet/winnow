@@ -199,9 +199,9 @@ def multisigAccount? (b : Backend) (id : String) : IO (Option MultisigInfo) := d
 spend, sign with the phone and with the other key in Lean, combine, finalize and broadcast, confirm. -/
 def multisigFlow (n : Node) (a : Backend) (msA : Real.MultisigApp) (mineAddr : String) : IO MultisigResult := do
   let (otherMaster, otherKey) ← testSigner 0xB2
-  let refusedSimple ← attempt (a.createMultisigAccount false "Shared" 2 [otherKey] none)
+  let refusedSimple ← attempt (a.createMultisigAccount false "Shared" 2 [otherKey] false none)
   check "multisig: the builder is Advanced mode only" (refusedSimple matches .error _)
-  let (id, descriptor) ← a.createMultisigAccount true "Shared" 2 [otherKey] none
+  let (id, descriptor) ← a.createMultisigAccount true "Shared" 2 [otherKey] false none
   let account ← match MultisigAccount.parse descriptor .regtest with
     | .ok acc => pure acc
     | .error e => throw (IO.userError s!"account: {e.name}")
@@ -209,7 +209,7 @@ def multisigFlow (n : Node) (a : Backend) (msA : Real.MultisigApp) (mineAddr : S
   check "multisig: 2 of 2, listed with no coins" (info.policy == some "2 of 2" && info.balance == 0 && info.coins.isEmpty)
   let some address := info.receiveAddress | throw (IO.userError "no receive address")
   check "multisig: the receive address is the descriptor's first" ((account.address 0).toOption == some address && address.startsWith "bcrt1p")
-  let again ← a.createMultisigAccount true "Shared" 2 [otherKey] none
+  let again ← a.createMultisigAccount true "Shared" 2 [otherKey] false none
   check "multisig: building the same account again returns it" (again.1 == id && (← a.multisigOverview).accounts.length == 1)
   let check1 ← attempt (a.checkMultisigDescriptor descriptor)
   check "multisig: the descriptor checks as 2 of 2 for this phone" (match check1 with
@@ -286,6 +286,83 @@ def multisigFlow (n : Node) (a : Backend) (msA : Real.MultisigApp) (mineAddr : S
   check "multisig: the node's block holds the spend" ((blk.getObjValAs? (List String) "tx").toOption.any (·.contains txid))
   return { id, balance := change, txid, firstAddress := address }
 
+/-- Pair a simulated Ledger (2-of-2), build a 2-of-3 with another key, the Ledger and a recovery path,
+verify an address of each on the Ledger, fund both, and spend from each with the phone's and the
+Ledger's signatures. The two accounts' ids. -/
+def ledgerFlow (n : Node) (a : Backend) (msA : Real.MultisigApp) (device : IO.Ref Ledger.Simulator) (mineAddr : String) :
+    IO (Array String) := do
+  let (_, otherKey) ← testSigner 0xB2
+  let refusedSimple ← attempt (a.pairLedger false "Phone and Ledger")
+  check "ledger: pairing is Advanced mode only" (refusedSimple matches .error _)
+  let pair ← a.pairLedger true "Phone and Ledger"
+  let family ← (·.1) <$> a.createMultisigAccount true "Family 2-of-3" 2 [otherKey] true (some (.fewerSigners 1 4320))
+  check "ledger: the Ledger approved both accounts by name"
+    ((← device.get).registeredNames == #["Phone and Ledger", "Family 2-of-3"])
+  let ids := #[pair, family]
+  let mut funding : Array (String × MultisigAccount) := #[]
+  for id in ids do
+    let r ← Real.record msA id
+    let account ← match MultisigAccount.parse r.descriptor .regtest with
+      | .ok acc => pure acc
+      | .error e => throw (IO.userError s!"account: {e.name}")
+    check s!"ledger: {r.name} has its registration" (r.ledger.isSome)
+    check s!"ledger: {r.name} is {account.threshold} of {account.signers.size}"
+      ((account.threshold, account.signers.size) == (if id == pair then (2, 2) else (2, 3)))
+    let shown ← a.verifyLedgerAddress true id 0
+    check s!"ledger: the Ledger shows {r.name}'s first address" ((account.address 0).toOption == some shown) shown
+    funding := funding.push (id, account)
+  check "ledger: both addresses were on the Ledger's screen" ((← device.get).displayedAddresses.size == 2)
+  -- Receive.
+  let mut fundTxids : Array String := #[]
+  for (_, account) in funding do
+    let some address := (account.address 0).toOption | throw (IO.userError "address")
+    fundTxids := fundTxids.push (← n.wallet #["sendtoaddress", address, "0.3"])
+  discard <| waitUntil 20_000 (do
+    let mp ← n.mempool
+    return fundTxids.all mp.contains)
+  n.mine 1 mineAddr
+  n.waitFilterIndex
+  let credited ← waitUntil 90_000 (do
+    a.syncNow
+    let o ← a.multisigOverview
+    return ids.all fun id => (o.accounts.find? (·.id == id)).any (·.balance == 30_000_000))
+  check "ledger: the sync credits both accounts" credited
+  -- Spend from each: the Ledger signs, then the phone, then broadcast.
+  let mut spends : Array (String × String) := #[]
+  for id in ids do
+    let dest ← n.wallet #["getnewaddress"]
+    let created ← a.createMultisigSpend id dest 10_000_000 2.0 false
+    let some s0 := created.screen | throw (IO.userError s!"review: {created.reviewError}")
+    check s!"ledger {id}: the phone and the Ledger both still sign" (s0.progress.phoneUnsigned && s0.progress.ledgerUnsigned &&
+      s0.progress.nextStep.startsWith "Add this phone's signature and the Ledger's")
+    let byLedger ← a.signMultisigSpendWithLedger true id created.psbt
+    check s!"ledger {id}: the Ledger's signature verifies" ((byLedger.screen.map (·.signatures)) == some [(false, 1, 2)] &&
+      (byLedger.screen.map (·.progress.ledgerUnsigned)) == some false)
+    let both ← a.signMultisigSpend id byLedger.psbt
+    check s!"ledger {id}: complete" ((both.screen.map (·.progress.complete)) == some true)
+    let txid ← a.broadcastMultisigSpend id both.psbt
+    spends := spends.push (id, txid)
+  let inMempool ← waitUntil 20_000 (do
+    let mp ← n.mempool
+    return spends.all fun (_, t) => mp.contains t)
+  check "ledger: the node's mempool holds both spends" inMempool
+  n.mine 1 mineAddr
+  let spendHeight ← n.height
+  n.waitFilterIndex
+  let confirmed ← waitUntil 90_000 (do
+    a.syncNow
+    let mut all := true
+    for (id, txid) in spends do
+      let r ← Real.record msA id
+      unless r.allUtxos.any (fun u => u.spent.any (·.height == some spendHeight.toUInt32)) &&
+          r.utxos.any (fun u => Winnow.displayHex u.txid == txid && u.height == spendHeight.toUInt32) do all := false
+    return all)
+  check "ledger: both spends confirmed, the coins tombstoned and the change confirmed" confirmed
+  let blk ← n.json #["getblock", ← n.cli #["getblockhash", toString spendHeight]]
+  check "ledger: the node's block holds both spends" ((blk.getObjValAs? (List String) "tx").toOption.any fun txs =>
+    spends.all fun (_, t) => txs.contains t)
+  return ids
+
 def flow (dir : String) (n : Node) : IO Unit := do
   say s!"node: bitcoind regtest pid {n.pid}, p2p {n.p2p}"
   discard <| n.cli #["createwallet", "w"]
@@ -294,7 +371,10 @@ def flow (dir : String) (n : Node) : IO Unit := do
   n.waitFilterIndex
   let settings := regtestSettings n
   let keysA ← IO.mkRef ({} : Keys.InMemorySecrets)
-  let (a, envA, msA) ← Backend.realWithMultisig (deps keysA)
+  -- the phone's Ledger: the simulated device, seeded from 0xC3 (`Tests/Support/TestKeys.swift`'s third master)
+  let (ledgerMaster, _) ← testSigner 0xC3
+  let device ← IO.mkRef (Ledger.Simulator.new ledgerMaster .regtest)
+  let (a, envA, msA) ← Backend.realWithMultisig (deps keysA) (Real.simulatedLedger device)
   let dirA := s!"{dir}/A/BTCSwift/regtest"
   IO.FS.createDirAll dirA
   -- 1. Boot with no wallet, networking, create.
@@ -436,11 +516,17 @@ def flow (dir : String) (n : Node) : IO Unit := do
     ((r1.people.find? (·.name == "Bob")).any (·.payTo == some true))
   -- 7c. A 2-of-2 multisig account with another signer's key, funded, spent and confirmed.
   let ms ← multisigFlow n a msA mineAddr
+  -- 7d. A Ledger: paired 2-of-2 and a 2-of-3 with recovery, registered, addresses verified, both funded,
+  -- each spend signed by the phone and the Ledger, broadcast and confirmed.
+  let ledgerIDs ← ledgerFlow n a msA device mineAddr
   -- 8. Export, and import into a fresh directory.
   let bundle ← a.exportBundle false
   check "exportBundle (watch-only)" ((bundle.splitOn "\"regtest\"").length > 1 && (bundle.splitOn "mnemonic").length == 1)
-  check "exportBundle carries the multisig account" (match ImportBundle.decode bundle with
-    | .ok b => (b.vaults.map (·.map (·.id))) == some #[ms.id] | .error _ => false)
+  check "exportBundle carries the multisig accounts, the Ledger's registrations with them" (match ImportBundle.decode bundle with
+    | .ok b => match b.vaults with
+      | some vs => vs.map (·.id) == #[ms.id] ++ ledgerIDs && (vs.filter (·.ledger.isSome)).size == 2
+      | none => false
+    | .error _ => false)
   -- A bundle from the shared-account Winnow (accounts under "vaults") is refused, not restored without them.
   -- a well-formed account record as the shared-account Winnow wrote it (a MuSig2 account: upstream refuses
   -- it with unsupportedWalletData; a malformed record would be a decoding error there)
@@ -549,6 +635,11 @@ def flow (dir : String) (n : Node) : IO Unit := do
     checkJournal "psbt.generated" ["stage", "base64", "inputCount", "outputCount"]
       (fun f => field f "stage" == stage && field f "inputCount" == "1" && field f "outputCount" == "2") stage
   checkJournal "multisig.spendBroadcast" ["id", "txid"] (fun f => field f "id" == ms.id && field f "txid" == ms.txid)
+  checkJournal "multisig.ledgerPaired" ["id"] (fun f => ledgerIDs.contains (field f "id"))
+  let paired ← journaled "multisig.ledgerPaired"
+  check "journal: multisig.ledgerPaired for both Ledger accounts" (ledgerIDs.all fun id => paired.any (field ·.2 "id" == id))
+  checkJournal "psbt.generated" ["stage", "base64", "inputCount", "outputCount"]
+    (fun f => field f "stage" == "multisig-ledger-signed") "multisig-ledger-signed"
   check "journal: the multisig spend's transaction.broadcast raw decodes to its txid"
     ((← journaled "transaction.broadcast").any fun (_, f) => field f "txid" == ms.txid && rawIsTxid (field f "raw") ms.txid)
   checkJournal "peers.status" ["connected", "target", "dialing", "exhausted", "peers", "rejected"]

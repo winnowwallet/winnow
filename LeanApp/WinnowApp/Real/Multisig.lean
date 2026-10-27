@@ -1,6 +1,7 @@
 import WinnowApp.Real.Send
 import WinnowApp.Real.Records
 import WinnowApp.Real.MultisigStore
+import WinnowApp.Real.LedgerTransport
 
 /-! # Multisig accounts in the app (AppModel.swift at upstream 1cf93fb, "Multisig accounts (Advanced mode)")
 
@@ -65,9 +66,16 @@ def runMAM {α} (x : MAM α) : IO α :=
 structure MultisigApp where
   host : MultisigHost
   overviewCache : IO.Ref (Option (Array MultisigAccountRecord × Option String × Option String × MultisigOverview))
+  /-- `ledgerConnector`: opens one Ledger connection (Bluetooth through the shell, or test mode's
+  simulated device); swappable, as Swift's `var ledgerConnector` is. -/
+  ledger : IO.Ref (IO LedgerSession)
 
-def MultisigApp.new (keys : StoreKeyVault) : IO MultisigApp := do
-  return { host := ← MultisigHost.new keys, overviewCache := ← IO.mkRef none }
+/-- Without a connector, every Ledger operation fails as a Ledger the phone cannot reach. -/
+def noLedger : IO LedgerSession :=
+  throw (IO.userError (LedgerError.transport "this device has no Bluetooth Low Energy").description)
+
+def MultisigApp.new (keys : StoreKeyVault) (ledger : IO LedgerSession := noLedger) : IO MultisigApp := do
+  return { host := ← MultisigHost.new keys, overviewCache := ← IO.mkRef none, ledger := ← IO.mkRef ledger }
 
 namespace MultisigApp
 
@@ -350,22 +358,92 @@ def recoveryPlan : MultisigRecovery → MultisigAccount.RecoveryPlan
   | .fewerSigners t b => .fewerSigners t b.toUInt32
   | .separateKey key b => .separateKeys 1 #[Wire.trimWhitespace key] b.toUInt32
 
-/-- `createMultisigAccount(name:threshold:otherKeys:includeLedger: false, recovery:)`: this phone's key
-and the other signers' pasted key expressions, any `threshold` of them, with an optional recovery path.
-The account already on this phone with this descriptor, or a new one. -/
-def createMultisigAccount (env : Env) (a : MultisigApp) (advanced : Bool) (name : String) (threshold : Nat)
-    (otherKeys : List String) (recovery : Option MultisigRecovery) : IO MultisigAccountRecord := do
-  unless advanced do failText advancedModeOnlyText
-  let some name := DisplayName.normalized name | failText invalidNameText
-  let pasted := (otherKeys.map Wire.trimWhitespace).filter (!·.isEmpty)
-  let w ← needWallet env
-  let own ← multisigKeyExpression env
-  let descriptor ← runMAM (MultisigAccount.makeDescriptor threshold (#[own] ++ pasted.toArray) (recovery.map recoveryPlan) w.network)
-  let text := descriptor.serialized
-  discard <| multisigAccountValidating w text
+/-- `LedgerActionError.notPaired`. -/
+def notPairedText : String := "No Ledger is paired with this account."
+
+/-- One Ledger connection for `body` (`ledgerConnector.connect()` … `session.close()`). -/
+def MultisigApp.withSession {α} (a : MultisigApp) (body : LedgerSession → IO α) : IO α := do
+  let session ← (← a.ledger.get)
+  try body session finally session.close
+
+/-- One step of a Ledger operation on an open connection; its failure as the Ledger error's text. -/
+def runOn {α} (session : LedgerSession) (p : Ledger.Program α) : IO α := do
+  match ← (Ledger.Program.runIO session.exchange p).run with
+  | .ok v => pure v
+  | .error e => failText e.description
+
+/-- `setLedger(id:registration:)` through the store. -/
+def setLedger (a : MultisigApp) (id : String) (registration : LedgerRegistration) : IO Unit :=
+  a.withStore fun s => do return (← s.setLedger a.host.keys a.host.writeData id registration, ())
+
+/-- `existingOrNewMultisigAccount(name:descriptor:)`. -/
+def existingOrNew (env : Env) (a : MultisigApp) (name text : String) : IO MultisigAccountRecord := do
   let id := String.ofList (text.toList.drop (text.length - 8))
   if let some existing := (← a.host.read).record? id then return existing
   addMultisigAccount env a name text
+
+/-- `createMultisigAccount(name:threshold:otherKeys:includeLedger:recovery:)`: this phone's key, the other
+signers' pasted key expressions and optionally a Ledger's key read over Bluetooth, any `threshold` of
+them, with an optional recovery path. A Ledger among the signers registers the account on its own
+screen; pairing the same Ledger again refiles the registration of the same account. -/
+def createMultisigAccount (env : Env) (a : MultisigApp) (advanced : Bool) (name : String) (threshold : Nat)
+    (otherKeys : List String) (includeLedger : Bool) (recovery : Option MultisigRecovery) : IO MultisigAccountRecord := do
+  unless advanced do failText advancedModeOnlyText
+  let some name := DisplayName.normalized name | failText invalidNameText
+  unless !includeLedger || Ledger.WalletPolicy.isValidName name do failText invalidNameText
+  let pasted := (otherKeys.map Wire.trimWhitespace).filter (!·.isEmpty)
+  let w ← needWallet env
+  let own ← multisigKeyExpression env
+  let plan := recovery.map recoveryPlan
+  if !includeLedger then
+    let descriptor ← runMAM (MultisigAccount.makeDescriptor threshold (#[own] ++ pasted.toArray) plan w.network)
+    discard <| multisigAccountValidating w descriptor.serialized
+    return ← existingOrNew env a name descriptor.serialized
+  let (descriptor, registration) ← a.withSession fun session => do
+    let (ledgerKey, fingerprint) ← runOn session (Ledger.Multisig.signerExpression w.network)
+    let descriptor ← runMAM (MultisigAccount.makeDescriptor threshold (#[own] ++ pasted.toArray ++ #[ledgerKey]) plan w.network)
+    let account ← multisigAccountValidating w descriptor.serialized
+    let registration ← runOn session (Ledger.Multisig.register account name fingerprint)
+    return (descriptor, registration)
+  let record ← existingOrNew env a name descriptor.serialized
+  setLedger a record.id registration
+  env.journal "multisig.ledgerPaired" [("id", record.id)]
+  return ((← a.host.read).record? record.id).getD record
+
+/-- `pairLedger(name:)`: the Ledger as the second signer of a new 2-of-2. -/
+def pairLedger (env : Env) (a : MultisigApp) (advanced : Bool) (name : String) : IO MultisigAccountRecord :=
+  createMultisigAccount env a advanced name 2 [] true none
+
+/-- `verifyLedgerAddress(record:index:)`: shows the address at `index` on the Ledger, which must be the
+one this phone derives. -/
+def verifyLedgerAddress (env : Env) (a : MultisigApp) (advanced : Bool) (id : String) (index : Nat) : IO String := do
+  unless advanced do failText advancedModeOnlyText
+  let r ← record a id
+  let some registration := r.ledger | failText notPairedText
+  let account ← accountOf r (← currentNetwork env)
+  a.withSession fun session => runOn session (Ledger.Multisig.displayAddress account registration 0 index.toUInt32)
+
+def signErrorText : Ledger.SignError → String
+  | .ledger e => e.description
+  | .psbt e => psbtErrorText e
+  | .signing e => namedText e.name
+
+/-- `signMultisigSpendWithLedger(_:record:)`: the phone reviews the spend first; the Ledger then shows it
+on its own screen and adds a signature this phone keeps only once it verifies. -/
+def signMultisigSpendWithLedger (env : Env) (a : MultisigApp) (advanced : Bool) (id text : String) : IO MultisigPSBT := do
+  unless advanced do failText advancedModeOnlyText
+  let r ← record a id
+  let some registration := r.ledger | failText notPairedText
+  let account ← accountOf r (← currentNetwork env)
+  let psbt ← parsePSBT text
+  discard <| reviewSpend env r account psbt
+  let signed ← a.withSession fun session => do
+    match ← runOn session (Ledger.Multisig.sign psbt account registration) with
+    | .ok (signed, _) => pure signed
+    | .error e => failText (signErrorText e)
+  discard <| reviewSpend env r account signed
+  journalPSBT env "multisig-ledger-signed" signed
+  present env r signed
 
 /-- MultisigAddView's `validation`: the pasted text read as an account for this phone. -/
 def checkMultisigDescriptor (env : Env) (text : String) : IO MultisigCheck := do

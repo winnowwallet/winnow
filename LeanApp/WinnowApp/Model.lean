@@ -46,6 +46,8 @@ inductive Route where
   /-- MultisigRoute (Advanced mode's Wallet tab): join with a descriptor, build, an account, its PSBT screen. -/
   | multisigAdd
   | multisigBuild
+  /-- LedgerPairView ("Pair a Ledger (2-of-2)"). -/
+  | ledgerPair
   | multisigAccount (id : String)
   | multisigPSBT (id : String)
   deriving Repr, BEq, Inhabited
@@ -244,13 +246,31 @@ structure MultisigBuildForm where
   recoveryThreshold : Nat := 1
   recoveryKey : String := ""
   recoveryDays : Nat := 30
+  includeLedger : Bool := false
   creating : Bool := false
   error : Option String := none
   /-- The account created: id and descriptor. -/
   created : Option (String × String) := none
   deriving Repr, Inhabited
 
-def MultisigBuildForm.signerCount (f : MultisigBuildForm) : Nat := 1 + f.otherKeys.length
+def MultisigBuildForm.signerCount (f : MultisigBuildForm) : Nat :=
+  1 + f.otherKeys.length + (if f.includeLedger then 1 else 0)
+
+/-- LedgerPairView's state. -/
+structure LedgerPairForm where
+  name : String := ""
+  pairing : Bool := false
+  error : Option String := none
+  deriving Repr, Inhabited
+
+/-- LedgerVerifyAddressButton's state, for the account and receive index it checks. -/
+structure LedgerVerify where
+  id : String := ""
+  index : Nat := 0
+  checking : Bool := false
+  /-- The result text, and whether it is a failure. -/
+  result : Option (String × Bool) := none
+  deriving Repr, Inhabited
 
 /-- MultisigPSBTView's state. -/
 structure MultisigSpendForm where
@@ -320,6 +340,8 @@ structure Model where
   multisigBuild : MultisigBuildForm := {}
   /-- MultisigAccountView's error. -/
   multisigAccountError : Option String := none
+  ledgerPair : LedgerPairForm := {}
+  ledgerVerify : LedgerVerify := {}
   multisigSpend : MultisigSpendForm := {}
   /-- Paper shown in the Design papers sheet. -/
   paper : Option Nat := none
@@ -385,6 +407,8 @@ inductive Host where
   /-- `pasted`: the answer to "Use this PSBT" / "Combine", which empties the paste field. -/
   | multisigPSBT (gen epoch : Nat) (id : String) (p : MultisigPSBT) (pasted : Bool := false)
   | multisigBroadcast (gen epoch : Nat) (id txid : String)
+  | ledgerPaired (gen : Nat) (id : String)
+  | ledgerAddressShown (gen : Nat) (id : String) (index : Nat) (r : Except String String)
   | pasted (target : PasteTarget) (text : String)
   | copiedExpired (key : String)
   | scene (active : Bool)
@@ -519,7 +543,14 @@ inductive MultisigMsg where
   | pastePSBT
   | addPasted
   | sign
+  | signWithLedger
   | broadcast
+  -- LedgerPairView, LedgerVerifyAddressButton, the builder's Ledger toggle
+  | openLedgerPair
+  | setLedgerName (s : String)
+  | pairLedger
+  | verifyAddress
+  | setIncludeLedger (b : Bool)
   deriving Inhabited
 
 inductive Msg where
@@ -620,7 +651,10 @@ inductive Cmd where
   | removeMultisigAccount (gen : Nat) (id : String)
   | newMultisigAddress (gen : Nat) (id : String)
   | createMultisigAccount (gen : Nat) (advanced : Bool) (name : String) (threshold : Nat) (otherKeys : List String)
-      (recovery : Option MultisigRecovery)
+      (includeLedger : Bool) (recovery : Option MultisigRecovery)
+  | pairLedger (gen : Nat) (advanced : Bool) (name : String)
+  | verifyLedgerAddress (gen : Nat) (advanced : Bool) (id : String) (index : Nat)
+  | signMultisigSpendWithLedger (gen epoch : Nat) (advanced : Bool) (id psbt : String)
   | multisigFeeRate (gen : Nat)
   | createMultisigSpend (gen epoch : Nat) (id address : String) (amount : Int) (feeRate : Float) (recovery : Bool)
   | reviewMultisigPSBT (gen epoch : Nat) (id psbt : String)

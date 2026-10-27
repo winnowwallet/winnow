@@ -34,7 +34,7 @@ def e2eVariables : List String :=
   ["WINNOW_E2E", "WINNOW_E2E_ENTROPY", "WINNOW_E2E_MNEMONIC", "WINNOW_E2E_RUN", "WINNOW_E2E_PEER",
    "WINNOW_E2E_CHALLENGE", "WINNOW_E2E_RESET", "WINNOW_E2E_CLIPBOARD", "WINNOW_E2E_NETWORK", "WINNOW_E2E_TAB",
    "WINNOW_E2E_DEVICE_AUTH", "WINNOW_E2E_ADVANCED", "WINNOW_E2E_CONTROL_FILE", "WINNOW_E2E_PEER_COUNT",
-   "WINNOW_E2E_SYNC_INTERVAL"]
+   "WINNOW_E2E_SYNC_INTERVAL", "WINNOW_E2E_LEDGER"]
 
 /-- `E2EMode.current` in a Debug build: inactive, active, or — without pinned entropy — a stop, because a
 capture run that generated a real seed would publish it. -/
@@ -44,7 +44,11 @@ def resolveE2E : IO (Option E2E.Mode) := do
     if let some v ← IO.getEnv k then env := (k, v) :: env
   match E2E.resolve (fun k => env.lookup k) with
   | .inactive => return none
-  | .active m => return some m
+  | .active m =>
+    if m.ledgerEntropy == some none then
+      IO.eprintln "WINNOW_E2E_LEDGER is not 16 to 32 bytes of hex entropy. A run asked for the simulated Ledger must not reach for a real one."
+      IO.Process.exit 1
+    return some m
   | .missingPinnedEntropy =>
     IO.eprintln "WINNOW_E2E=1 without a readable WINNOW_E2E_ENTROPY or WINNOW_E2E_MNEMONIC. A capture run must never generate a real seed: its screenshots are published."
     IO.Process.exit 1
@@ -114,7 +118,21 @@ def chooseBackend (fx : Effects Host) (mode : Option E2E.Mode := none) : IO Unit
           networkParams := m.networkParams
           entropy := m.entropy
           journal := fun n f => journal n f }
-    backendRef.set (← Backend.real deps)
+    -- the Ledger: Bluetooth through the shell, or test mode's simulated device with its pinned seed
+    let ledger ← match mode.bind (·.ledgerEntropy) |>.join with
+      | some entropy =>
+        match Winnow.Keys.BIP39.mnemonic entropy with
+        | .ok words =>
+          match Winnow.Keys.HDKey.ofSeed (Winnow.Keys.BIP39.seed words) with
+          | .ok master =>
+            -- a test locked to regtest gets a device that shows regtest addresses
+            let network := (mode.bind (·.forcedNetwork)).map Real.Network.tx |>.getD .signet
+            let device ← IO.mkRef (Winnow.Ledger.Simulator.new master network)
+            pure (Real.simulatedLedger device)
+          | .error _ => pure Real.noLedger
+        | .error _ => pure Real.noLedger
+      | none => pure (Real.openLedger fx.ask)
+    backendRef.set (← Backend.real deps ledger)
 
 def perform (c : Cmd) (fx : Effects Host) : IO Unit := do
   let b ← backendRef.get
@@ -326,9 +344,15 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit := do
   | .newMultisigAddress g id => background fx g "multisigAccount" do
       b.newMultisigReceiveAddress id
       return .multisig g (← b.multisigOverview)
-  | .createMultisigAccount g adv name k keys rec => background fx g "multisigBuild" do
-      let (id, d) ← b.createMultisigAccount adv name k keys rec
+  | .createMultisigAccount g adv name k keys ledger rec => background fx g "multisigBuild" do
+      let (id, d) ← b.createMultisigAccount adv name k keys ledger rec
       return .multisigCreated g id d
+  | .pairLedger g adv name => background fx g "ledgerPair" do return .ledgerPaired g (← b.pairLedger adv name)
+  | .verifyLedgerAddress g adv id index => discard <| IO.asTask do
+      try fx.post (.ledgerAddressShown g id index (.ok (← b.verifyLedgerAddress adv id index)))
+      catch e => fx.post (.ledgerAddressShown g id index (.error (toString e)))
+  | .signMultisigSpendWithLedger g e adv id psbt => background fx g s!"multisigPSBT.{e}" do
+      return .multisigPSBT g e id (← b.signMultisigSpendWithLedger adv id psbt)
   | .multisigFeeRate g => background fx g "multisigRate" do
       return .multisigFeeRate g (← b.resolveFeeRate 1 none)
   | .createMultisigSpend g e id address amount rate recovery => background fx g s!"multisigPSBT.{e}" do

@@ -89,7 +89,13 @@ structure Backend where
   /-- `createMultisigAccount(name:threshold:otherKeys:includeLedger: false, recovery:)` (refused outside
   Advanced mode); the account's id and descriptor. -/
   createMultisigAccount : (advanced : Bool) → (name : String) → (threshold : Nat) → (otherKeys : List String) →
-    Option MultisigRecovery → IO (String × String)
+    (includeLedger : Bool) → Option MultisigRecovery → IO (String × String)
+  /-- `pairLedger(name:)`: a new 2-of-2 with the Ledger, registered on it; the account's id. -/
+  pairLedger : (advanced : Bool) → (name : String) → IO String
+  /-- `verifyLedgerAddress(record:index:)`: the address the Ledger showed (the phone's own). -/
+  verifyLedgerAddress : (advanced : Bool) → (id : String) → (index : Nat) → IO String
+  /-- `signMultisigSpendWithLedger(_:record:)`. -/
+  signMultisigSpendWithLedger : (advanced : Bool) → (id psbt : String) → IO MultisigPSBT
   /-- `createMultisigSpend(record:address:amount:feeRateSatPerVByte:path:)` (`recovery`: the recovery path). -/
   createMultisigSpend : (id address : String) → (amount : Int) → (feeRate : Float) → (recovery : Bool) → IO MultisigPSBT
   /-- The PSBT in hand reviewed again (the account's coins or frontiers moved). -/
@@ -151,7 +157,10 @@ def Backend.pending : Backend where
   addMultisigAccount := fun _ _ => notPorted "Multisig accounts"
   removeMultisigAccount := fun _ => notPorted "Multisig accounts"
   newMultisigReceiveAddress := fun _ => notPorted "Multisig accounts"
-  createMultisigAccount := fun _ _ _ _ _ => notPorted "Multisig accounts"
+  createMultisigAccount := fun _ _ _ _ _ _ => notPorted "Multisig accounts"
+  pairLedger := fun _ _ => notPorted "Ledger signing"
+  verifyLedgerAddress := fun _ _ _ => notPorted "Ledger signing"
+  signMultisigSpendWithLedger := fun _ _ _ => notPorted "Ledger signing"
   createMultisigSpend := fun _ _ _ _ _ => notPorted "Multisig accounts"
   reviewMultisigPSBT := fun _ _ => notPorted "Multisig accounts"
   addMultisigPSBT := fun _ _ _ => notPorted "Multisig accounts"

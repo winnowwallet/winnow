@@ -156,7 +156,8 @@ def onHost (h : Host) (m : Model) : Model × List Cmd :=
       ({ m with multisigBuild := { m.multisigBuild with recoveryKey := Winnow.Keys.Unicode.trimWhitespace text } }, [])
     | .multisigPSBT => ({ m with multisigSpend := { m.multisigSpend with pasted := text } }, [])
   | .multisig .. | .multisigChecked .. | .multisigAdded .. | .multisigCreated .. | .multisigRemoved ..
-  | .multisigFeeRate .. | .multisigPSBT .. | .multisigBroadcast .. => m.onMultisigHost h
+  | .multisigFeeRate .. | .multisigPSBT .. | .multisigBroadcast .. | .ledgerPaired .. | .ledgerAddressShown .. =>
+    m.onMultisigHost h
   | .copiedExpired key => if m.copied == some key then ({ m with copied := none }, []) else (m, [])
   | .deleted g =>
     if !current g then (m, []) else

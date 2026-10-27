@@ -81,9 +81,12 @@ def Real.MultisigApp.install (a : Real.MultisigApp) (env : Real.Env) (base : Bac
     addMultisigAccount := fun name d => do return (← Real.addMultisigAccount env a name d).id
     removeMultisigAccount := Real.removeMultisigAccount a
     newMultisigReceiveAddress := Real.newMultisigReceiveAddress a
-    createMultisigAccount := fun adv name k keys rec => do
-      let r ← Real.createMultisigAccount env a adv name k keys rec
+    createMultisigAccount := fun adv name k keys ledger rec => do
+      let r ← Real.createMultisigAccount env a adv name k keys ledger rec
       return (r.id, r.descriptor)
+    pairLedger := fun adv name => do return (← Real.pairLedger env a adv name).id
+    verifyLedgerAddress := Real.verifyLedgerAddress env a
+    signMultisigSpendWithLedger := Real.signMultisigSpendWithLedger env a
     createMultisigSpend := Real.createMultisigSpend env a
     reviewMultisigPSBT := Real.reviewMultisigPSBT env a
     addMultisigPSBT := Real.addPastedPSBT env a
@@ -93,21 +96,23 @@ def Real.MultisigApp.install (a : Real.MultisigApp) (env : Real.Env) (base : Bac
 /-- The real backend over the injected capabilities, with its diagnostics handle and the multisig store:
 the core half (`Real/Assemble.lean`), the records half (`Real/Records*.lean`) and the multisig accounts
 (`Real/Multisig*.lean`) joined through `Hooks`. -/
-def Backend.realWithMultisig (deps : Real.Deps) : IO (Backend × Real.Env × Real.MultisigApp) := do
+def Backend.realWithMultisig (deps : Real.Deps) (ledger : IO Real.LedgerSession := Real.noLedger) :
+    IO (Backend × Real.Env × Real.MultisigApp) := do
   let host ← Real.RecordsHost.new deps.keyStore deps.journal
-  let multisig ← Real.MultisigApp.new (RecordsReal.StoreKeyVault.ofKeyStore deps.keyStore)
+  let multisig ← Real.MultisigApp.new (RecordsReal.StoreKeyVault.ofKeyStore deps.keyStore) ledger
   let env ← Real.Env.new { deps with hooks := multisig.hooks host.hooks }
   let ctx := host.ctx env
   let base := multisig.install env (ctx.install env.backend)
   return ({ base with records := host.withStore {} fun _ => ctx.records }, env, multisig)
 
 /-- The real backend with its diagnostics handle. -/
-def Backend.realWithEnv (deps : Real.Deps) : IO (Backend × Real.Env) := do
-  let (b, env, _) ← Backend.realWithMultisig deps
+def Backend.realWithEnv (deps : Real.Deps) (ledger : IO Real.LedgerSession := Real.noLedger) :
+    IO (Backend × Real.Env) := do
+  let (b, env, _) ← Backend.realWithMultisig deps ledger
   return (b, env)
 
 /-- The real backend: the Lean WalletCore, the network stack and the records behind every field. -/
-def Backend.real (deps : Real.Deps) : IO Backend := do
-  return (← Backend.realWithEnv deps).1
+def Backend.real (deps : Real.Deps) (ledger : IO Real.LedgerSession := Real.noLedger) : IO Backend := do
+  return (← Backend.realWithEnv deps ledger).1
 
 end WinnowApp

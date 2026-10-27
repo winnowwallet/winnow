@@ -125,6 +125,8 @@ def mainScreen (m : Model) : H :=
   | some (.payment t) => .screen "Payment" (some (.home .pop)) ([.list (paymentSections m t)] ++ overlays m)
   | some .backup => backupScreen m (overlays m)
   | some .multisigAdd => multisigAddScreen m (overlays m)
+  | some .ledgerPair =>
+    .screen "Pair a Ledger" (some (.multisig .pop)) ([.list (ledgerPairSections m)] ++ overlays m)
   | some .multisigBuild =>
     .screen "New multisig account" (some (.multisig .pop)) ([.list (multisigBuildSections m)] ++ overlays m)
   | some (.multisigAccount id) =>

@@ -447,7 +447,7 @@ def testBuilderMakesAccountWithAnotherWinnowAndRecovery : IO Unit := do
   let phone ← phoneWith 0xA1
   let ms ← masters
   let otherWinnow ← keyExpression ms[2]!
-  let (id, descriptor) ← phone.backend.createMultisigAccount true "Family 2-of-2" 2 [s!" {otherWinnow} "] (some (.fewerSigners 1 4320))
+  let (id, descriptor) ← phone.backend.createMultisigAccount true "Family 2-of-2" 2 [s!" {otherWinnow} "] false (some (.fewerSigners 1 4320))
   let account ← needM "account" (MultisigAccount.parse descriptor signet)
   check "builder: 2 of 2 with a recovery path of 1 after 4320 blocks" (account.threshold == 2 && account.signers.size == 2 &&
     (account.recovery.map (·.blocks)) == some 4320 && (account.recovery.map (·.threshold)) == some 1)
@@ -465,7 +465,7 @@ def testBuilderMakesAccountWithAnotherWinnowAndRecovery : IO Unit := do
   check "one account" ((← phone.accounts).length == 1)
   -- Phone and another Winnow with a separate recovery key.
   let recoveryKey ← keyExpression (← master 0xD4)
-  let (_, pair) ← phone.backend.createMultisigAccount true "Two phones" 2 [otherWinnow] (some (.separateKey recoveryKey 144))
+  let (_, pair) ← phone.backend.createMultisigAccount true "Two phones" 2 [otherWinnow] false (some (.separateKey recoveryKey 144))
   let pairAccount ← needM "pair" (MultisigAccount.parse pair signet)
   check "a separate recovery key" ((pairAccount.recovery.map (·.keys.size)) == some 1)
   check "two accounts" ((← phone.accounts).length == 2)
@@ -486,7 +486,7 @@ def testTwoPhonesSignACoSignersSpendWithBIP326Sequences : IO Unit := do
   let phone ← phoneWith 0xA1
   let otherPhone ← phoneWith 0xC3
   let recoveryKey ← keyExpression (← master 0xD4)
-  let (id, descriptor) ← phone.backend.createMultisigAccount true "Two phones" 2 [← otherPhone.keyExpression]
+  let (id, descriptor) ← phone.backend.createMultisigAccount true "Two phones" 2 [← otherPhone.keyExpression] false
     (some (.separateKey recoveryKey 144))
   let otherID ← otherPhone.backend.addMultisigAccount "Two phones" descriptor
   check "the other phone joins the same account" (otherID == id)
@@ -534,7 +534,7 @@ def testTwoPhonesSignACoSignersSpendWithBIP326Sequences : IO Unit := do
 
 def testRecoveryPathRefusesCoinsThatAreTooYoung : IO Unit := do
   let phone ← phoneWith 0xA1
-  let (id, descriptor) ← phone.backend.createMultisigAccount true "Two phones" 2 [← keyExpression (← masters)[2]!]
+  let (id, descriptor) ← phone.backend.createMultisigAccount true "Two phones" 2 [← keyExpression (← masters)[2]!] false
     (some (.fewerSigners 1 1000))
   let account ← needM "account" (MultisigAccount.parse descriptor signet)
   let height := (← phone.record id).createdAtHeight + 1
@@ -554,13 +554,171 @@ def testRecoveryPathRefusesCoinsThatAreTooYoung : IO Unit := do
 def testBuilderIsAdvancedModeOnly : IO Unit := do
   let phone ← phoneWith 0xA1
   failsWith "the builder refuses Simple mode"
-    (phone.backend.createMultisigAccount false "Two phones" 2 [← keyExpression (← masters)[2]!] none) Real.advancedModeOnlyText
+    (phone.backend.createMultisigAccount false "Two phones" 2 [← keyExpression (← masters)[2]!] false none) Real.advancedModeOnlyText
 
 def flowTests : List (String × IO Unit) :=
   [ ("testBuilderMakesAccountWithAnotherWinnowAndRecovery", testBuilderMakesAccountWithAnotherWinnowAndRecovery)
   , ("testTwoPhonesSignACoSignersSpendWithBIP326Sequences", testTwoPhonesSignACoSignersSpendWithBIP326Sequences)
   , ("testRecoveryPathRefusesCoinsThatAreTooYoung", testRecoveryPathRefusesCoinsThatAreTooYoung)
   , ("testBuilderIsAdvancedModeOnly", testBuilderIsAdvancedModeOnly) ]
+
+
+/-! ## LedgerPairingTests and LedgerBluetoothTests -/
+
+/-- `SimulatorConnector`: the phone's Ledger is the simulator; `relabelsLeaves` rewrites the leaf hash in
+every signature the device yields, as a faulty or tampered device or link would. -/
+def Phone.useLedger (p : Phone) (device : IO.Ref Ledger.Simulator) (relabelsLeaves : Bool := false) : IO Unit :=
+  p.multisig.ledger.set do
+    let base ← Real.simulatedLedger device
+    if !relabelsLeaves then return base
+    return { base with exchange := fun apdu => do
+      let reply ← base.exchange apdu
+      -- a yielded script-path signature: tag, input, key length 64, x-only key, leaf hash, signature
+      if reply.size > 70 && reply[0]! == 0x10 && reply[2]! == 64 && reply[reply.size - 2]! == 0xE0 && reply[reply.size - 1]! == 0x00 then
+        return reply.extract 0 35 ++ zeros 32 0xEE ++ reply.extract 67 reply.size
+      return reply }
+
+def simulator (entropyByte : UInt8) : IO (IO.Ref Ledger.Simulator) := do
+  IO.mkRef (Ledger.Simulator.new (← master entropyByte))
+
+def testLedgerSigningIsAdvancedModeOnly : IO Unit := do
+  let phone ← phoneWith 0xA1
+  phone.useLedger (← simulator 0xB2)
+  failsWith "pairing refuses Simple mode" (phone.backend.pairLedger false "Phone and Ledger") Real.advancedModeOnlyText
+  check "no account" (← phone.accounts).isEmpty
+
+def screenOf (p : MultisigPSBT) : IO MultisigScreen := do
+  let some s := p.screen | throw (IO.userError s!"no review: {p.reviewError}")
+  return s
+
+def testPairVerifyAndSpendWithBothSigners : IO Unit := do
+  let phone ← phoneWith 0xA1
+  let device ← simulator 0xB2
+  phone.useLedger device
+  let id ← phone.backend.pairLedger true "Phone and Ledger"
+  let record ← phone.record id
+  let account ← needM "account" (MultisigAccount.parse record.descriptor signet)
+  check "paired: 2 of 2" (account.threshold == 2 && account.signers.size == 2)
+  let ledgerFingerprint := (← master 0xB2).fingerprint
+  check "the registration names the Ledger's master and BIP87 path" (match record.ledger with
+    | some r => r.masterFingerprint == ledgerFingerprint && r.keyPath == Ledger.Multisig.keyPath .signet
+    | none => false)
+  check "the Ledger approved the account by name" ((← device.get).registeredNames == #["Phone and Ledger"])
+  let again ← phone.backend.pairLedger true "Phone and Ledger"
+  check "pairing again refiles the same account" (again == id && (← phone.accounts).length == 1)
+  let shown ← phone.backend.verifyLedgerAddress true id 0
+  check "the Ledger shows the phone's first address" ((account.address 0).toOption == some shown)
+  check "on its screen" ((← device.get).displayedAddresses == #[shown])
+  check "the account screen shows the Ledger" (((← phone.accounts).find? (·.id == id)).bind (·.ledgerFingerprint) ==
+    some (Descriptor.hex8 (← master 0xB2).fingerprint))
+  -- Fund the account, then spend: the phone and the Ledger each sign.
+  let height := record.createdAtHeight + 1
+  discard <| phone.multisig.applyMatch (fakeMatch height #[coinbaseAt height, fundingTx 0x33 (← spk account 0)]) signet
+  let record ← phone.record id
+  check "funded" (record.balance == 60_000)
+  let destination ← do
+    let d ← needE "destination descriptor" (Descriptor.parse s!"tr({← keyExpression (← masters)[2]!})")
+    pure ((← needE "derived" (d.derived 0 signet))[0]!.address)
+  let created ← phone.backend.createMultisigSpend id destination 40_000 2.0 false
+  let screen ← screenOf created
+  check "before signing: the signers' path, nothing signed" (screen.signatures == [(false, 0, 2)])
+  check "both still to sign" (screen.progress == { phoneHolds := true, phoneUnsigned := true, ledgerHolds := true, ledgerUnsigned := true })
+  check "the footer asks for both" (screen.progress.nextStep.startsWith "Add this phone's signature and the Ledger's")
+  let byLedger ← phone.backend.signMultisigSpendWithLedger true id created.psbt
+  let screen ← screenOf byLedger
+  check "the Ledger's signature verifies" (screen.signatures == [(false, 1, 2)] && !screen.progress.ledgerUnsigned && !screen.progress.complete)
+  check "then the footer asks for the phone" (screen.progress.nextStep ==
+    "Check the payment, then add this phone's signature. Signers can sign in any order.")
+  -- A device whose signatures name a leaf they were not made for is refused (SEC-036), nothing added.
+  phone.useLedger device (relabelsLeaves := true)
+  failsWith "a relabelled Ledger signature is refused" (phone.backend.signMultisigSpendWithLedger true id byLedger.psbt)
+    (LedgerError.mismatch "a Ledger signature does not verify").description
+  phone.useLedger device
+  let both ← phone.backend.signMultisigSpend id byLedger.psbt
+  let screen ← screenOf both
+  check "both signed: complete" (screen.signatures == [(false, 2, 2)] && screen.progress.complete &&
+    screen.progress.nextStep == "Enough signatures verify. Finalize and broadcast.")
+  let full ← needE "psbt" (PSBT.ofBase64 both.psbt)
+  let (_, tx) ← needM "finalize" (account.finalizeSpend full record.utxos (Real.ownedCoordinates record) height)
+  check "finalized with one input" (tx.inputs.size == 1)
+  -- A refusal on the Ledger reaches the user as that, and signs nothing.
+  device.modify (·.setDecision .reject)
+  let unsigned ← phone.backend.createMultisigSpend id destination 40_000 2.0 false
+  failsWith "a refusal on the Ledger" (phone.backend.signMultisigSpendWithLedger true id unsigned.psbt)
+    LedgerError.rejectedOnDevice.description
+  failsWith "Ledger signing refuses Simple mode" (phone.backend.signMultisigSpendWithLedger false id unsigned.psbt)
+    Real.advancedModeOnlyText
+
+def testBuilderMakesTwoOfThreeWithAnotherWinnowALedgerAndRecovery : IO Unit := do
+  let phone ← phoneWith 0xA1
+  let device ← simulator 0xB2
+  phone.useLedger device
+  let ms ← masters
+  let otherWinnow ← keyExpression ms[2]!
+  let (id, descriptor) ← phone.backend.createMultisigAccount true "Family 2-of-3" 2 [s!" {otherWinnow} "] true
+    (some (.fewerSigners 1 4320))
+  let account ← needM "account" (MultisigAccount.parse descriptor signet)
+  check "2 of 3 with recovery" (account.threshold == 2 && account.signers.size == 3 &&
+    (account.recovery.map (·.blocks)) == some 4320 && (account.recovery.map (·.threshold)) == some 1)
+  check "registered" ((← phone.record id).ledger.isSome && (← device.get).registeredNames == #["Family 2-of-3"])
+  let otherKey ← needE "other account key" (ms[2]!.derived "m/86'/1'/0'")
+  check "the other Winnow's key is a signer" (account.includes otherKey.neutered)
+  check "one account" ((← phone.accounts).length == 1)
+  failsWith "a name the Ledger cannot show" (phone.backend.createMultisigAccount true "Family é" 2 [otherWinnow] true none)
+    Real.invalidNameText
+
+def testStoreRefusesARegistrationForAnotherAccount : IO Unit := do
+  let phone ← phoneWith 0xA1
+  phone.useLedger (← simulator 0xB2)
+  let id ← phone.backend.pairLedger true "Phone and Ledger"
+  let record ← phone.record id
+  let some registration := record.ledger | throw (IO.userError "no registration")
+  let forged := { registration with policyID := zeros 32 0x11 }
+  match ← (Real.setLedger phone.multisig id forged).toBaseIO with
+  | .ok _ => check "a registration for another policy is not filed" false
+  | .error _ => check "a registration for another policy is not filed" true
+  check "the store keeps the real one" ((← phone.record id).ledger == some registration)
+  check "validate refuses a tampered record"
+    ((← (MultisigStore.validate #[{ record with ledger := some forged }] signet).run) matches .error _)
+  check "validate accepts the record" ((← (MultisigStore.validate #[record] signet).run) matches .ok _)
+
+def testBluetoothStatesStartFailOrWait : IO Unit := do
+  check "poweredOn starts" (match Ledger.Bluetooth.readiness "poweredOn" with | some (.ok ()) => true | _ => false)
+  for state in ["poweredOff", "unauthorized", "unsupported"] do
+    check s!"{state} fails with a step the user can take" (match Ledger.Bluetooth.readiness state with
+      | some (.error (.transport _)) => true | _ => false)
+  check "resetting and unknown wait" ((Ledger.Bluetooth.readiness "resetting").isNone && (Ledger.Bluetooth.readiness "unknown").isNone)
+  -- the app's transport over a shell answering `unsupported` (the simulator has no Bluetooth)
+  let ask : Real.Ask := fun name _ => pure (Task.pure (if name == "ble.state" then
+    Lean.Json.mkObj [("state", .str "unsupported")] else Lean.Json.mkObj [("ok", .bool false)]))
+  match ← (Real.openLedger ask).toBaseIO with
+  | .ok _ => check "no Bluetooth: opening fails" false
+  | .error e => check "no Bluetooth: Swift's text" (toString e ==
+      (LedgerError.transport "this device has no Bluetooth Low Energy").description) (toString e)
+
+def testNotificationsReachOnlyTheStepInFlight : IO Unit := do
+  let router : Ledger.Bluetooth.NotificationRouter := {}
+  let mtu := ByteArray.mk #[0x08, 0, 0, 0, 1, 153]
+  check "the frame-size reply while asking for it" (((router.receive mtu (some .frameSize)).2.map (·.toOption)) == some (some mtu))
+  check "a reply frame is not a frame size" (router.receive (ByteArray.mk #[0x05, 0, 0, 0, 2, 0x90, 0x00]) (some .frameSize)).2.isNone
+  check "nothing reaches a written step" (router.receive mtu (some .written)).2.isNone
+  check "nothing reaches no step" (router.receive mtu none).2.isNone
+  let reply := zeros 30 0x42
+  let frames ← needE "frames" (Ledger.BluetoothFraming.frames reply 20)
+  check "two frames" (frames.size == 2)
+  let (r1, first) := router.receive frames[0]! (some .reply)
+  check "the first frame completes nothing" first.isNone
+  check "the second completes the reply" (((r1.receive frames[1]! (some .reply)).2.map (·.toOption)) == some (some reply))
+  check "a frame without the APDU tag fails the reply" (match ((({} : Ledger.Bluetooth.NotificationRouter).receive
+    (ByteArray.mk #[0x07, 0, 0]) (some .reply)).2) with | some (.error _) => true | _ => false)
+
+def ledgerTests : List (String × IO Unit) :=
+  [ ("testLedgerSigningIsAdvancedModeOnly", testLedgerSigningIsAdvancedModeOnly)
+  , ("testPairVerifyAndSpendWithBothSigners", testPairVerifyAndSpendWithBothSigners)
+  , ("testBuilderMakesTwoOfThreeWithAnotherWinnowALedgerAndRecovery", testBuilderMakesTwoOfThreeWithAnotherWinnowALedgerAndRecovery)
+  , ("testStoreRefusesARegistrationForAnotherAccount", testStoreRefusesARegistrationForAnotherAccount)
+  , ("testBluetoothStatesStartFailOrWait", testBluetoothStatesStartFailOrWait)
+  , ("testNotificationsReachOnlyTheStepInFlight", testNotificationsReachOnlyTheStepInFlight) ]
 
 /-! ## main -/
 
@@ -584,6 +742,8 @@ def main : IO UInt32 := do
   for (name, t) in storeTests do runTest name t
   IO.println "MultisigAccountFlowTests"
   for (name, t) in flowTests do runTest name t
+  IO.println "LedgerPairingTests, LedgerBluetoothTests"
+  for (name, t) in ledgerTests do runTest name t
   try IO.FS.removeDirAll root catch _ => pure ()
   let failed ← failures.get
   IO.println s!"multisig-app-test: {← passed.get} passed, {failed.size} failed"

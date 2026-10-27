@@ -1,6 +1,7 @@
 import WinnowApp.Common
 import Winnow.Wallet.People
 import Winnow.Keys.Taproot
+import Winnow.Ledger.WalletPolicy
 
 /-! MultisigViews.swift and MultisigBuildView.swift (upstream 1cf93fb): raw k-of-n multisig accounts in
 Advanced mode's Wallet tab only — the Multisig section, MultisigAddView ("Join with a descriptor"),
@@ -58,6 +59,10 @@ def MultisigBuildForm.canCreate (f : MultisigBuildForm) : Bool :=
   !f.creating && (Winnow.DisplayName.normalized f.name).isSome && f.signerCount ≥ 2 &&
     !(f.withRecovery && f.recoveryMode == 1 && f.recoveryKey.isEmpty)
 
+/-- LedgerPairView's `nameIsUsable`: a display name the Ledger can show. -/
+def LedgerPairForm.nameIsUsable (f : LedgerPairForm) : Bool :=
+  (Winnow.DisplayName.normalized f.name).any Winnow.Ledger.WalletPolicy.isValidName
+
 /-- The descriptor text as MultisigAddView validates it (trimmed; nothing while empty). -/
 def MultisigAddForm.trimmed (f : MultisigAddForm) : String := Winnow.Keys.Unicode.trimWhitespace f.descriptor
 
@@ -80,6 +85,7 @@ def Model.popMultisig (m : Model) : Model :=
     | some (.multisigPSBT _) => { m with multisigSpend := m.multisigSpend.cleared }
     | some .multisigAdd => { m with multisigAdd := {} }
     | some .multisigBuild => { m with multisigBuild := {} }
+    | some .ledgerPair => { m with ledgerPair := {} }
     | some (.multisigAccount _) => { m with multisigAccountError := none }
     | _ => m
   { m' with routes := m'.routes.dropLast }
@@ -105,7 +111,9 @@ def stepMultisig (msg : MultisigMsg) (m : Model) : Model × List Cmd :=
   match msg with
   | .openAdd => ({ m with routes := m.routes ++ [.multisigAdd], multisigAdd := {} }, [])
   | .openBuild => ({ m with routes := m.routes ++ [.multisigBuild], multisigBuild := {} }, [])
-  | .openAccount id => ({ m with routes := m.routes ++ [.multisigAccount id], multisigAccountError := none }, [.multisigOverview g])
+  | .openAccount id =>
+    ({ m with routes := m.routes ++ [.multisigAccount id], multisigAccountError := none, ledgerVerify := {} },
+     [.multisigOverview g])
   | .openPSBT id =>
     ({ m with routes := m.routes ++ [.multisigPSBT id], multisigSpend := { epoch := spend.epoch + 1 } }, [.multisigFeeRate g])
   | .pop => (m.popMultisig, [])
@@ -134,7 +142,9 @@ def stepMultisig (msg : MultisigMsg) (m : Model) : Model × List Cmd :=
   | .create =>
     if !build.canCreate then (m, []) else
     (withBuild { build with creating := true, error := none },
-     [.createMultisigAccount g m.settings.advancedMode build.name build.threshold build.otherKeys build.recoveryPlan])
+     [.createMultisigAccount g m.settings.advancedMode build.name build.threshold build.otherKeys build.includeLedger
+        build.recoveryPlan])
+  | .setIncludeLedger b => (withBuild { build with includeLedger := b }.clamp, [])
   -- MultisigAccountView
   | .newAddress =>
     match m.routes.getLast? with
@@ -176,6 +186,30 @@ def stepMultisig (msg : MultisigMsg) (m : Model) : Model × List Cmd :=
       let (m', e) := m.runPSBT
       (m', [.signMultisigSpend g e id w.psbt])
     | _, _ => (m, [])
+  | .signWithLedger =>
+    match m.multisigPSBTRoute?, spend.working with
+    | some id, some w =>
+      let ok := w.screen.any fun s => s.progress.ledgerUnsigned && !s.progress.complete
+      if spend.busy || !ok then (m, []) else
+      let (m', e) := m.runPSBT
+      (m', [.signMultisigSpendWithLedger g e m.settings.advancedMode id w.psbt])
+    | _, _ => (m, [])
+  | .openLedgerPair => ({ m with routes := m.routes ++ [.ledgerPair], ledgerPair := {} }, [])
+  | .setLedgerName s' => ({ m with ledgerPair := { m.ledgerPair with name := s' } }, [])
+  | .pairLedger =>
+    let f := m.ledgerPair
+    if f.pairing || !f.nameIsUsable then (m, []) else
+    ({ m with ledgerPair := { f with pairing := true, error := none } }, [.pairLedger g m.settings.advancedMode f.name])
+  | .verifyAddress =>
+    match m.routes.getLast? with
+    | some (.multisigAccount id) =>
+      match m.multisigInfo? id with
+      | some a =>
+        if m.ledgerVerify.checking then (m, []) else
+        ({ m with ledgerVerify := { id, index := a.nextReceiveIndex, checking := true } },
+         [.verifyLedgerAddress g m.settings.advancedMode id a.nextReceiveIndex])
+      | none => (m, [])
+    | _ => (m, [])
   | .broadcast =>
     match m.multisigPSBTRoute?, spend.working with
     | some id, some w =>
@@ -227,6 +261,17 @@ def Model.onMultisigHost (m : Model) (h : Host) : Model × List Cmd :=
     if !accepts g e id then (m, []) else
     let m' := m.installPSBT id p
     ({ m' with multisigSpend := { m'.multisigSpend with busy := false, pasted := if fromPaste then "" else spend.pasted } }, [])
+  | .ledgerPaired g _ =>
+    if !current g then (m, []) else
+    let m' := { m with ledgerPair := { m.ledgerPair with pairing := false } }
+    -- `dismiss()`
+    (if m'.routes.getLast? == some .ledgerPair then m'.popMultisig else m', [.multisigOverview g])
+  | .ledgerAddressShown g id index r =>
+    if !current g || m.ledgerVerify.id != id || m.ledgerVerify.index != index then (m, []) else
+    let result := match r with
+      | .ok _ => ("The Ledger derived this same address. Compare it with the one on its screen.", false)
+      | .error e => (e, true)
+    ({ m with ledgerVerify := { m.ledgerVerify with checking := false, result := some result } }, [])
   | .multisigBroadcast g e id txid =>
     let m := { m with spendingInFlight := false }
     if !accepts g e id then (m, [.refresh m.generation]) else
@@ -247,7 +292,8 @@ def multisigSection (m : Model) : H :=
      (m.multisig.accounts.map fun a =>
         .row [.button a.name .plain (some (.multisig (.openAccount a.id))), .spacer, body (satsText a.balance)]) ++
      [ .button "New multisig account" .plain (some (.multisig .openBuild))
-     , .button "Join with a descriptor" .plain (some (.multisig .openAdd)) ])
+     , .button "Join with a descriptor" .plain (some (.multisig .openAdd))
+     , .button "Pair a Ledger (2-of-2)" .plain (some (.multisig .openLedgerPair)) ])
 
 def errorSection (e : Option String) : List H :=
   match e with
@@ -302,7 +348,8 @@ def multisigBuildSections (m : Model) : List H :=
           | none => []) ++
          (f.otherKeys.zipIdx.map fun (k, i) =>
             .col [caption k, .button "Remove" .destructive (some (.multisig (.removeSignerKey i)))]) ++
-         [.button "Paste a signer's key" .plain (some (.multisig .pasteSignerKey))])
+         [ .button "Paste a signer's key" .plain (some (.multisig .pasteSignerKey))
+         , .toggle "Include a Ledger" f.includeLedger (fun b => .multisig (.setIncludeLedger b)) ])
     , .section "" ""
         [.stepper s!"Any {f.threshold} of {n} spend at once" f.threshold 1 (max n 1) (fun k => .multisig (.setThreshold k)) " "]
     , .section "" (if f.withRecovery then "The delay counts from when each coin is received. Once it passes, the recovery path can spend that coin without the other signers, so move coins before then if you do not want that." else "")
@@ -318,7 +365,9 @@ def multisigBuildSections (m : Model) : List H :=
              [caption f.recoveryKey, .button "Remove the recovery key" .destructive (some (.multisig .removeRecoveryKey))]) ++
            [.stepper s!"After {f.recoveryDays} days ({recoveryBlocks f.recoveryDays} blocks)" f.recoveryDays 1 455
               (fun k => .multisig (.setRecoveryDays k)) " "]))
-    , .section "" "Winnow watches the account from the next block it scans."
+    , .section ""
+        (if f.includeLedger then "Open the Bitcoin app on the Ledger (Bitcoin Test on signet), version 2.2.1 or later for a recovery path. It reads the Ledger's key, then asks you to approve the account on the Ledger."
+         else "Winnow watches the account from the next block it scans.")
         [.button (if f.creating then "Creating…" else "Create account") .primary (if f.canCreate then some (.multisig .create) else none)] ] ++
     errorSection f.error
 
@@ -336,6 +385,14 @@ def multisigAccountSections (m : Model) (id : String) : List H :=
           ((match a.receiveAddress with
             | some address => [.qr address, literalRow m "multisig.receive" address]
             | none => []) ++
+           (if a.ledgerFingerprint.isNone then [] else
+             let v := m.ledgerVerify
+             let mine := v.id == a.id && v.index == a.nextReceiveIndex
+             [.button (if mine && v.checking then "Check the Ledger's screen…" else "Verify on Ledger") .plain
+                (if mine && v.checking then none else some (.multisig .verifyAddress))] ++
+             (match v.result with
+              | some (text, _) => if mine then [caption text] else []
+              | none => [])) ++
            [.button "New address" .plain (some (.multisig .newAddress))])
       , .section "Spend" "" [.button "New or pasted PSBT" .plain (some (.multisig (.openPSBT a.id)))]
       , .section "Coins" ""
@@ -394,14 +451,31 @@ def multisigPSBTSections (m : Model) (id : String) : List H :=
          | some s =>
            let p := s.progress
            [.section (if s.recoveryUsable then "Signing · signers or recovery path" else "Signing") p.nextStep
-             [ .button "Add this phone's signature" .plain
-                 (if f.busy || !p.phoneUnsigned || p.complete then none else some (.multisig .sign))
-             , .button (if f.busy then "Working…" else "Finalize and broadcast") .primary
-                 (if f.busy || !p.complete then none else some (.multisig .broadcast)) ]]
+             ([ .button "Add this phone's signature" .plain
+                 (if f.busy || !p.phoneUnsigned || p.complete then none else some (.multisig .sign)) ] ++
+              (if p.ledgerHolds then
+                [.button "Sign with Ledger" .plain (if f.busy || !p.ledgerUnsigned || p.complete then none else some (.multisig .signWithLedger))]
+               else []) ++
+             [ .button (if f.busy then "Working…" else "Finalize and broadcast") .primary
+                 (if f.busy || !p.complete then none else some (.multisig .broadcast)) ])]
          | none => [])
     let output : List H := match f.working.bind (·.output) with
       | some text => [.section "PSBT to share" "" [copyableBlock m "multisig.psbt" text]]
       | none => []
     create ++ [paste] ++ review ++ errorSection f.error ++ output
+
+/-- LedgerPairView ("Pair a Ledger"). -/
+def ledgerPairSections (m : Model) : List H :=
+  let f := m.ledgerPair
+  [ .section "" "The Ledger shows this name when it signs: plain letters, digits and punctuation, at most 64."
+      [.input .plain "" "Name" f.name (fun s => .multisig (.setLedgerName s)) none]
+  , .section "Steps" "The account is tr(NUMS, sortedmulti_a(2, this phone, the Ledger)). Spending needs both: neither this phone nor the Ledger can pay alone, and losing either one loses the account."
+      [ body "1. Unlock the Ledger and open its Bitcoin app, version 2.1.2 or later (Bitcoin Test on signet)."
+      , body "2. Tap Pair. The first time, confirm the same pairing code on the phone and the Ledger."
+      , body "3. On the Ledger, check the account and both keys, then approve." ]
+  , .section "" ""
+      ([.button (if f.pairing then "Pairing…" else "Pair") .primary (if f.pairing || !f.nameIsUsable then none else some (.multisig .pairLedger))] ++
+       (if f.pairing then [.progress ""] else [])) ] ++
+  errorSection f.error
 
 end WinnowApp
