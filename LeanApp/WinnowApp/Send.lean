@@ -87,12 +87,12 @@ def sendForm (m : Model) : List H :=
       (match person with
        | some p => [.row [body p.name, .spacer, .button "Change" .plain (some (.send .clearPerson))]]
        | none =>
-         [ .row [.input .plain "" "Bitcoin address" i.destination (send .setDestination) none,
-                 .button "Paste" .plain (some (.send .pasteDestination))]
+         [ .row [.identified "destinationField" (.input .plain "" "Bitcoin address" i.destination (send .setDestination) none),
+                 .identified "pasteDestinationButton" (.button "Paste" .plain (some (.send .pasteDestination)))]
          , .button "Saved recipients" .plain (some (.send .openRecipients)) ])
   [toSection,
     .section "Amount" "You'll see the network fee before you send."
-      [ .row [.input .number "" "0" i.amount (send .setAmount) none, caption "sats"] ] ] ++
+      [ .row [.identified "amountField" (.input .number "" "0" i.amount (send .setAmount) none), caption "sats"] ] ] ++
   (if m.settings.advancedMode then
     [ .section "Fee" "The rate uses your override, recent confirmed fees, or a preset, never below the peers' relay floor. It is not a live fee-market estimate."
         [ .picker "Priority" ["Low", "Medium", "High"] i.priority (fun n => .send (.setPriority n))
@@ -102,12 +102,13 @@ def sendForm (m : Model) : List H :=
         , .input .decimal "" "Override (sat/vB, optional)" i.override (send .setOverride) none ] ]
    else []) ++
   [ .section "" ""
-      [ .button (if m.send.reviewing then "Preparing review…" else "Review payment") .primary
-          (if m.send.reviewing || !canReview inputs then none else some (.send .review)) ] ]
+      [ .identified "reviewButton" (.button (if m.send.reviewing then "Preparing review…" else "Review payment") .primary
+          (if m.send.reviewing || !canReview inputs then none else some (.send .review))) ] ]
 
 def paymentAmounts (p : Preview) : H :=
-  .section "" "" [ .labeled "Amount" (satsText p.amount), .labeled "Network fee" (satsText p.fee),
-                   .labeled "Total" (satsText (p.amount + p.fee)) ]
+  .section "" "" [ .identified "reviewAmount" (.labeled "Amount" (satsText p.amount)),
+                   .identified "reviewFee" (.labeled "Network fee" (satsText p.fee)),
+                   .identified "reviewTotal" (.labeled "Total" (satsText (p.amount + p.fee))) ]
 
 def warning (iconName text : String) : H := .section "" "" [.row [.icon iconName, caption text]]
 
@@ -125,10 +126,11 @@ def sendReview (m : Model) (p : Preview) : List H :=
       [warning "clock.arrow.circlepath" "Your wallet is still syncing. Sending now can reveal that on the Bitcoin network. Wait for sync to finish for better privacy."]
      else [])
   let action := if m.send.sending then "Working…" else "Send payment"
-  [ .section "To" "" ((match p.recipient with | some r => [body r.name] | none => []) ++ [caption p.destination])
+  [ .section "To" "" ((match p.recipient with | some r => [body r.name] | none => []) ++
+                      [.identified "reviewDestination" (caption p.destination)])
   , paymentAmounts p ] ++ warnings ++
   [ .section "" ""
-      [ .button action .primary (if m.send.sending then none else some (.send .sendPayment))
+      [ .identified "sendButton" (.button action .primary (if m.send.sending then none else some (.send .sendPayment)))
       , .button "Edit payment" .plain (if m.send.sending then none else some (.send .editPayment)) ] ] ++
   (if m.settings.advancedMode then
     [ .section "Transaction details" ""
@@ -139,8 +141,8 @@ def sendReview (m : Model) (p : Preview) : List H :=
 def sendStatus (m : Model) (txid : String) : List H :=
   let s := m.send
   [ .section ""  ""
-      ((if s.confirmedHeight.isSome then [.row [.icon "checkmark.circle.fill", body "Payment confirmed"]]
-        else [.row [.icon "clock", body "Waiting for confirmation"],
+      ((if s.confirmedHeight.isSome then [.row [.icon "checkmark.circle.fill", .identified "broadcastConfirmed" (body "Payment confirmed")]]
+        else [.row [.icon "clock", .identified "broadcastPending" (body "Waiting for confirmation")],
               caption (if m.settings.advancedMode then "You can leave this screen. Follow this payment in Wallet."
                        else "You can close this screen. The payment stays in Activity until it confirms.")]) ++
        (if s.feeFloorNotice then
@@ -172,6 +174,6 @@ def sendTitle (m : Model) : String :=
 /-- Beginner mode's Send sheet. -/
 def sendSheet (m : Model) (inner : List H) : H :=
   .sheet (sendTitle m) (if m.send.sending then none else some .closeSheet)
-    ([closeRow (if m.send.sentTxid.isNone then "Cancel" else "Done")] ++ sendContent m ++ inner)
+    ([closeRow (if m.send.sentTxid.isNone then "Cancel" else "Done") "closeSendButton"] ++ sendContent m ++ inner)
 
 end WinnowApp

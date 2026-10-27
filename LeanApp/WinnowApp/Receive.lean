@@ -69,13 +69,16 @@ def labelEditorView (m : Model) : List H :=
     | .error _ => false
   [ .text "Who is this address for?" .title
   , body "Name the person you’re sharing it with, or what the payment is for. This note will appear beside payments to this address."
-  , .input .plain "" "Alice · invoice 12" e.draft (fun s => .receive (.setLabelDraft s)) (some (.receive .saveLabel))
+  , .identified "receiveAddressLabelField"
+      (.input .plain "" "Alice · invoice 12" e.draft (fun s => .receive (.setLabelDraft s)) (some (.receive .saveLabel)))
   , caption "Only saved on this device. The label is not included when you copy or share the address, and does not verify who paid you." ] ++
   (match valid with | .error msg => [body msg] | .ok _ => []) ++
   (match notice with | some n => [body n] | none => []) ++
   errorRows e.error ++
-  [ .button (if existing.isNone then "Save and show address" else "Save label") .primary (if canSave then some (.receive .saveLabel) else none)
-  , .button (if existing.isNone then "Skip for now" else "Cancel") .plain (if e.saving then none else some (.receive .finishLabel)) ] ++
+  [ .identified "saveReceiveAddressLabelButton"
+      (.button (if existing.isNone then "Save and show address" else "Save label") .primary (if canSave then some (.receive .saveLabel) else none))
+  , .identified "skipReceiveAddressLabelButton"
+      (.button (if existing.isNone then "Skip for now" else "Cancel") .plain (if e.saving then none else some (.receive .finishLabel))) ] ++
   (if existing.isSome then
     [.button "Remove label" .destructive (if e.saving || notice.isSome then none else some (.receive .removeLabel))] else [])
 
@@ -88,10 +91,10 @@ def receiveSheet (m : Model) (inner : List H) : H :=
       let label := m.receiveLabel? a
       (match label with | some l => [.row [.icon "tag", .text l .title]] | none => []) ++
       [ .button (if label.isNone then "Label this address" else "Edit label") .plain (some (.receive .editLabel))
-      , .qr a, .text a .body
+      , .qr a, .identified "receiveAddress" (.text a .body)
       , .row [.button (if m.copied == some "receive.address" then "Copied" else "Copy") .plain (some (.copy "receive.address" a)),
               .share "Share" a,
-              .button "New address" .plain (if r.changing then none else some (.receive .freshAddress))]
+              .identified "freshAddressButton" (.button "New address" .plain (if r.changing then none else some (.receive .freshAddress)))]
       , explorerButton "View address" (m.settings.addressURL a) "address" ] ++
       (r.unconfirmed.map fun (_, amount) =>
         .row [.icon "clock", body s!"Unconfirmed: +{satsText amount} — awaiting confirmation"]) ++
@@ -99,7 +102,8 @@ def receiveSheet (m : Model) (inner : List H) : H :=
     else if r.error.isNone then [.progress ""]
     else []
   .sheet "Receive" (some .closeSheet)
-    ([.row [.button "Share my card" .plain (some (.receive .openCard)), .spacer, .button "Done" .plain (some .closeSheet)]] ++
+    ([.row [.button "Share my card" .plain (some (.receive .openCard)), .spacer,
+            .identified "closeReceiveButton" (.button "Done" .plain (some .closeSheet))]] ++
      content ++ errorRows r.error ++ inner)
 
 /-- PaymentDetailView's "Address label" sheet. -/

@@ -1,0 +1,80 @@
+#!/bin/bash
+# The UI journeys (LeanApp/ios/UITests) in the simulator against a fresh regtest node:
+#
+#   scripts/ci-ui-journey [xcodebuild test arguments, e.g. -only-testing:WinnowLeanUITests/WinnowLeanUITests/testCreateReceiveSendConfirm]
+#
+# `backend-test --fixture` starts the node (random ports, a funded wallet `w`); the runner finds it through
+# a config file passed as TEST_RUNNER_WINNOW_UI_CONFIG. Evidence goes to $UI_JOURNEY_OUT (default
+# LeanApp/ios/build/ui-journey): the result bundle, a screen recording, the screenshots, the app's test-mode
+# journal and the fixture's log. The node is stopped by its pid when the script exits. The app is
+# com.btcswift.app, so unless UI_SIMULATOR names one, the run uses a throwaway simulator it creates and
+# deletes, never one that may hold a real Winnow wallet.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+APP="$ROOT/LeanApp"
+OUT="${UI_JOURNEY_OUT:-$APP/ios/build/ui-journey}"
+# one run per output directory: a node stopped by an earlier run deletes its cookie at the same datadir path
+LOCK="${OUT%/}.lock"
+mkdir -p "$(dirname "$LOCK")"
+mkdir "$LOCK" 2>/dev/null || { echo "another ci-ui-journey run is using $OUT ($LOCK)" >&2; exit 1; }
+rm -rf "$OUT"
+mkdir -p "$OUT/screenshots"
+OUT="$(cd "$OUT" && pwd)"
+
+(cd "$APP" && lake build backend-test >/dev/null)
+NODE_PID=""
+VIDEO_PID=""
+THROWAWAY=""
+cleanup() {
+  rmdir "$LOCK" 2>/dev/null || true
+  [ -n "$VIDEO_PID" ] && kill -INT "$VIDEO_PID" 2>/dev/null && wait "$VIDEO_PID" 2>/dev/null || true
+  [ -n "$NODE_PID" ] && kill "$NODE_PID" 2>/dev/null || true
+  if [ -n "$THROWAWAY" ]; then
+    xcrun simctl shutdown "$THROWAWAY" >/dev/null 2>&1 || true
+    xcrun simctl delete "$THROWAWAY" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+"$APP/.lake/build/bin/backend-test" --fixture "$OUT/fixture" > "$OUT/fixture.log" 2>&1 || { cat "$OUT/fixture.log"; exit 1; }
+NODE_PID=$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$OUT/fixture/fixture.json")
+tail -1 "$OUT/fixture.log"
+
+CLI="${WINNOW_BITCOIN_CLI:-$(command -v bitcoin-cli || echo /opt/homebrew/bin/bitcoin-cli)}"
+/usr/bin/python3 - "$OUT" "$CLI" <<'PY'
+import json, sys
+out, cli = sys.argv[1:3]
+json.dump({"fixture": out + "/fixture", "bitcoinCli": cli, "screenshots": out + "/screenshots"},
+          open(out + "/ui.json", "w"), indent=2)
+PY
+
+PREPARE_ONLY=1 "$ROOT/scripts/build-ios" Debug iossim
+if [ -n "${UI_SIMULATOR:-}" ]; then UDID="$UI_SIMULATOR"
+else
+  MODEL="$(xcrun simctl list devices available -j | /usr/bin/python3 -c '
+import json, sys
+for d in json.load(sys.stdin)["devices"].values():
+    for x in d:
+        if x["name"].startswith("iPhone"): print(x["deviceTypeIdentifier"]); sys.exit()')"
+  UDID=$(xcrun simctl create "Winnow UI journey $$" "$MODEL")
+  THROWAWAY="$UDID"
+fi
+xcrun simctl boot "$UDID" 2>/dev/null || true
+xcrun simctl bootstatus "$UDID" -b >/dev/null
+xcrun simctl io "$UDID" recordVideo --codec=h264 --force "$OUT/journey.mp4" >/dev/null 2>&1 &
+VIDEO_PID=$!
+
+status=0
+TEST_RUNNER_WINNOW_UI_CONFIG="$OUT/ui.json" xcodebuild test \
+  -project "$APP/ios/WinnowLean.xcodeproj" -scheme WinnowLean -destination "id=$UDID" \
+  -derivedDataPath "${DERIVED_DATA:-$APP/ios/build/DerivedData}" -resultBundlePath "$OUT/journey.xcresult" \
+  "$@" > "$OUT/xcodebuild.log" 2>&1 || status=$?
+grep -E "^Test Case|error:|\*\* TEST" "$OUT/xcodebuild.log" | tail -30
+
+# the app's test-mode journals (Application Support/BTCSwiftE2E-<run>/story-events.jsonl)
+BUNDLE_ID=$(grep -m1 'PRODUCT_BUNDLE_IDENTIFIER:' "$APP/ios/project.yml" | sed 's/.*: *//')
+if DATA=$(xcrun simctl get_app_container "$UDID" "$BUNDLE_ID" data 2>/dev/null); then
+  for j in "$DATA/Library/Application Support"/BTCSwiftE2E-*/story-events.jsonl; do
+    [ -f "$j" ] && cp "$j" "$OUT/journal-$(basename "$(dirname "$j")").jsonl"
+  done
+fi
+exit "$status"

@@ -23,8 +23,9 @@ def mnemonicSheet (m : Model) (inner : List H) : H :=
       | some progress =>
         [.section "Connecting to Bitcoin" "You can finish writing down the words while Winnow connects." [.progress progress]]
       | none => []) ++
-     [ .toggle "I have written the words down" m.onboarding.writtenDown Msg.setWrittenDown
-     , .button "Done" .primary (if m.onboarding.writtenDown then some .finishOnboarding else none) ] ++ inner)
+     [ .identified "writtenDownToggle" (.toggle "I have written the words down" m.onboarding.writtenDown Msg.setWrittenDown)
+     , .identified "backupDoneButton"
+         (.button "Done" .primary (if m.onboarding.writtenDown then some .finishOnboarding else none)) ] ++ inner)
 
 def importSheet (m : Model) (inner : List H) : H :=
   .sheet "Import wallet" (some .closeSheet)
@@ -114,7 +115,8 @@ def onboardingView (m : Model) : H :=
                [ .button "Continue backup" .primary (if m.onboarding.busy then none else some .resumeBackup)
                , caption "This wallet's recovery words were never confirmed written down." ]
              | none =>
-               [ .button "Create new wallet" .primary (if m.onboarding.busy then none else some .createWallet)
+               [ .identified "createWalletButton"
+                   (.button "Create new wallet" .primary (if m.onboarding.busy then none else some .createWallet))
                , .button "Restore from backup" .plain (some .openImport) ])
         , .section "" "" [networkPicker m]
         , .section "" "" (errorRows m.onboarding.error) ] ] ++ overlays m)
@@ -137,11 +139,13 @@ def mainScreen (m : Model) : H :=
   | none =>
     if m.settings.advancedMode then
       .screen "Winnow" none
-        ([ .toolbar [.button "Simple" .plain (some (.setAdvanced false)), .button "Receive" .plain (some .openReceive)]
+        ([ .toolbar [.identified "simpleModeButton" (.button "Simple" .plain (some (.setAdvanced false))),
+                     .identified "receiveButton" (.button "Receive" .plain (some .openReceive))]
          , .list (walletSections m) ] ++ overlays m) (onRefresh := some .syncNow)
     else
       .screen "Winnow" none
-        ([ .toolbar [.button "Advanced" .plain (some .askAdvanced)], .list (beginnerSections m) ] ++ overlays m)
+        ([ .toolbar [.identified "advancedModeButton" (.button "Advanced" .plain (some .askAdvanced))],
+           .list (beginnerSections m) ] ++ overlays m)
         (onRefresh := some .syncNow)
 
 def otherNetwork (n : Network) : Network := if n == .mainnet then .signet else .mainnet

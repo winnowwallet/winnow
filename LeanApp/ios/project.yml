@@ -4,7 +4,7 @@
 # (build/lean-c); both from ios_lean_sources.sh. Linked with Lean's runtime retargeted to iOS (build/lib).
 name: WinnowLean
 options:
-  bundleIdPrefix: art.fralex
+  bundleIdPrefix: com.btcswift
   deploymentTarget: { iOS: "17.0" }
   xcodeVersion: "27.1"
 settings:
@@ -30,8 +30,8 @@ targets:
       path: build/Info.plist
       properties:
         CFBundleDisplayName: Winnow
-        CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "1"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
         # the shell's scene delegate (ElmLeanShell.h)
         UIApplicationSceneManifest:
@@ -46,7 +46,13 @@ targets:
         ITSAppUsesNonExemptEncryption: false
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: art.fralex.winnow.lean
+        # the Swift app's identity, which this app replaces on TestFlight: the same bundle identifier and team,
+        # so an installed wallet's Keychain items stay readable (release.yml sets the versions from the tag)
+        PRODUCT_BUNDLE_IDENTIFIER: com.btcswift.app
+        DEVELOPMENT_TEAM: 2858MX5336
+        CODE_SIGN_STYLE: Automatic
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
         PRODUCT_NAME: WinnowLean
         GENERATE_INFOPLIST_FILE: NO
         HEADER_SEARCH_PATHS: ["$(HOME)/.elan/toolchains/leanprover--lean4---v4.35.0/include", "$(PROJECT_DIR)/../.lake/packages/elmlean/framework/native/c"]
@@ -60,3 +66,27 @@ targets:
         "CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]": "NO"
         # Lean's runtime is arm64 only (build/lib): no Intel simulator slice
         "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+  # The UI journeys (Objective-C XCUITest, UITests/): run by scripts/ci-ui-journey against a regtest fixture.
+  WinnowLeanUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: WinnowLean
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.btcswift.app.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: WinnowLean
+        "CODE_SIGN_IDENTITY[sdk=iphonesimulator*]": "-"
+        "CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]": "NO"
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+schemes:
+  WinnowLean:
+    build:
+      targets:
+        WinnowLean: all
+        WinnowLeanUITests: [test]
+    test:
+      config: Debug
+      targets: [WinnowLeanUITests]

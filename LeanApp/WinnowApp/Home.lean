@@ -102,19 +102,20 @@ def historyRow (m : Model) (h : HistoryItem) (tappable := true) : H :=
       (match h.fee with | some f => [caption s!"fee {groupDigits f.natAbs} sats"] | none => [])
     else
       [caption (if h.replacedBy.isSome then "Replaced" else if h.height > 0 then "Confirmed" else "Pending")]
-  .row [ .col ([if tappable then .button title .plain (some (.home (.openPayment h.txid))) else body title] ++
+  .row [ .col ([.identified s!"historyPayment-{h.txid}"
+                  (if tappable then .button title .plain (some (.home (.openPayment h.txid))) else body title)] ++
                (if labels.isEmpty then [] else [caption labels]))
        , .spacer
        , .col ([body (signedSatsText h.net)] ++ status) ]
 
 def syncLine (m : Model) : H :=
   match m.phase.summary m.status.syncing with
-  | .synced => .row [.icon "checkmark.circle", caption "Up to date"]
-  | .peersUnavailable => body "Couldn't reach the Bitcoin network — check your connection."
-  | .syncing => .progress "Syncing…"
+  | .synced => .row [.icon "checkmark.circle", .identified "syncSummaryText" (caption "Up to date")]
+  | .peersUnavailable => .identified "syncSummaryText" (body "Couldn't reach the Bitcoin network — check your connection.")
+  | .syncing => .identified "syncSummaryText" (.progress "Syncing…")
 
 def balanceSection (m : Model) : H :=
-  .section "" "" ([ caption "Balance", .text (satsText m.status.balance) .title,
+  .section "" "" ([ caption "Balance", .identified "balanceText" (.text (satsText m.status.balance) .title),
                     .row ([syncLine m] ++ (if m.settings.network == .mainnet then [] else [caption "Signet · test coins"])) ] ++
                   (if m.phase.summary m.status.syncing == .peersUnavailable then [.button "Retry" .plain (some .retryPeers)] else []) ++
                   errorRows m.status.lastSyncError)
@@ -126,7 +127,8 @@ def activitySection (m : Model) : H :=
 
 def beginnerSections (m : Model) : List H :=
   [ balanceSection m
-  , .section "" "" [.row [.button "Receive" .plain (some .openReceive), .button "Send" .primary (some .openSend)]]
+  , .section "" "" [.row [.identified "receiveButton" (.button "Receive" .plain (some .openReceive)),
+                          .identified "openSendButton" (.button "Send" .primary (some .openSend))]]
   , activitySection m
   , .section "" "" [.button "Back up wallet" .plain (some (.home .openBackup)), caption "Backup file and recovery words"] ]
 
@@ -147,7 +149,8 @@ def syncSection (m : Model) : H :=
      [.button "Sync now" .plain (if m.status.syncing then none else some .syncNow)])
 
 def walletSections (m : Model) : List H :=
-  [ .section "" "" [caption "Balance · confirmed", .text (satsText m.status.balance) .title, caption s!"{m.status.utxoCount} UTXO(s)"]
+  [ .section "" "" [caption "Balance · confirmed", .identified "balanceText" (.text (satsText m.status.balance) .title),
+                    caption s!"{m.status.utxoCount} UTXO(s)"]
   , syncSection m
   , multisigSection m
   , .section "Transactions" ""

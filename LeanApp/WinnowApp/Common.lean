@@ -106,14 +106,17 @@ def Sheet.isSensitive : Sheet → Bool
 
 /-! ## View pieces (Components.swift) -/
 
+/-- `h` with a UI-test identifier (`Html.identified`); none when `id` is empty. -/
+def withId (id : String) (h : H) : H := if id.isEmpty then h else .identified id h
+
 /-- `CopyableIdentifier`: shown short when asked, copied whole; "Copied" for two seconds. -/
 def copyableIdentifier (m : Model) (key value : String) (abbreviated := false) (label := "Copy") : H :=
   let shown := if abbreviated && value.length > 20 then String.ofList (value.toList.take 16) ++ "…" else value
   .row [caption shown, .spacer, .button (if m.copied == some key then "Copied" else label) .plain (some (.copy key value))]
 
-/-- `CopyableTextBlock`: the text, Copy and Share. -/
-def copyableBlock (m : Model) (key text : String) : H :=
-  .col [caption text,
+/-- `CopyableTextBlock`: the text (`id` its UI-test identifier), Copy and Share. -/
+def copyableBlock (m : Model) (key text : String) (id := "") : H :=
+  .col [withId id (caption text),
         .row [.button (if m.copied == some key then "Copied" else "Copy") .plain (some (.copy key text)), .share "Share" text]]
 
 /-- `WarnedExplorerLink`: the warning comes before anything is opened. -/
@@ -125,7 +128,8 @@ def technical (m : Model) (key title : String) (content : List H) : List H :=
   if m.settings.advancedMode then content
   else [.disclosure title (m.isExpanded key) (Msg.setExpanded key) content]
 
-/-- A sheet's own close control (SwiftUI's cancellation toolbar item). -/
-def closeRow (label : String) : H := .row [.spacer, .button label .plain (some .closeSheet)]
+/-- A sheet's own close control (SwiftUI's cancellation toolbar item), `id` its UI-test identifier. -/
+def closeRow (label : String) (id : String := "") : H :=
+  .row [.spacer, withId id (.button label .plain (some .closeSheet))]
 
 end WinnowApp
