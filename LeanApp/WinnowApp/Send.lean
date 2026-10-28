@@ -191,7 +191,7 @@ def sendStatus (m : Model) (txid : String) : List H :=
   -- Activity and explorers show the derived address, not the code: the receipt is where the two meet
   (if s.derivedAddresses.isEmpty then [] else
     [.section "Paid on chain to" "" (s.derivedAddresses.map fun a => .identified "derivedOutputAddress" (caption a))]) ++
-  [ .section "" "" [ .button "New payment" .primary (some (.send .newPayment)) ]
+  [ .section "" "" [ .identified "newPaymentButton" (.button "New payment" .primary (some (.send .newPayment))) ]
   , .section "" ""
       [ .disclosure "Transaction details" (m.isExpanded "send.details") (Msg.setExpanded "send.details")
           ([ copyableIdentifier m "send.txid" txid ] ++

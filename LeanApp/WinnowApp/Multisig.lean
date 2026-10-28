@@ -94,11 +94,17 @@ def MultisigBuildForm.computePreview (f : MultisigBuildForm) (network : Network)
       | .error e => some (.error e.description)
     else some (.ok (previewText account))
 
-/-- `.onChange(of: members.count)`: both thresholds stay within 1 … members; the preview follows. -/
+/-- `.onChange(of: members.count)`: both thresholds stay within 1 … members; the preview follows. The
+signers' threshold is not lowered below 2 while only this phone is a member: upstream's `onChange` drops
+it to 1 when the builder seeds this phone, so every account built without touching the stepper would be
+any 1 of its members. -/
 def MultisigBuildForm.clamp (f : MultisigBuildForm) (network : Network) : MultisigBuildForm :=
   let n := max f.members.length 1
-  let f := { f with threshold := min (max f.threshold 1) n, recoveryThreshold := min (max f.recoveryThreshold 1) n }
+  let f := { f with threshold := min (max f.threshold 1) (max n 2), recoveryThreshold := min (max f.recoveryThreshold 1) n }
   { f with preview := f.computePreview network }
+
+/-- The threshold the stepper shows: at most the members there are. -/
+def MultisigBuildForm.shownThreshold (f : MultisigBuildForm) : Nat := min f.threshold (max f.members.length 1)
 
 def MultisigBuildForm.canCreate (f : MultisigBuildForm) : Bool :=
   !f.creating && (Winnow.DisplayName.normalized f.name).isSome && (f.preview.any fun p => p matches .ok _) &&
@@ -542,7 +548,7 @@ def multisigBuildSections (m : Model) : List H :=
          [.identified "multisigBuildAddMemberButton" (.button "Add a member" .plain (some (.multisig (.openPicker none))))])
     , .section "" ""
         ([.identified "multisigBuildThresholdStepper"
-          (.stepper s!"Any {f.threshold} of {n} members spend" f.threshold 1 (max n 1) (fun k => .multisig (.setThreshold k)) " ")] ++
+          (.stepper s!"Any {f.shownThreshold} of {n} members spend" f.shownThreshold 1 (max n 1) (fun k => .multisig (.setThreshold k)) " ")] ++
          [match f.preview with
           | some (.ok text) => .identified "multisigBuildPolicyPreview" (caption text)
           | some (.error e) => .identified "multisigBuildPolicyPreview" (body e)

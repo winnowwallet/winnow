@@ -107,14 +107,13 @@ def signersSummary (o : MultisigOverview) : String :=
 /-- Settings → "Signers" (Advanced mode only, after Backup). -/
 def signersSection (m : Model) : H :=
   .section "" "Pair a Ledger once, and save the keys other people send; multisig accounts under Wallet are built from them."
-    [.identified "signersButton"
-      (.row [.button "Signers" .plain (some (.signer .openSigners)), .spacer, caption (signersSummary m.multisig)])]
+    [.row [.identified "signersButton" (.button "Signers" .plain (some (.signer .openSigners))), .spacer,
+           caption (signersSummary m.multisig)]]
 
 /-- `SignerRow`. -/
 def signerRow (s : SignerInfo) (action : Option Msg) (id : String := s!"signerRow-{s.id}") : H :=
-  .identified id
-    (.col [.button s.name .plain action,
-           caption (s.keysText ++ (if s.keys.length > 1 then " · one signer" else ""))])
+  .col [.identified id (.button s.name .plain action),
+        caption (s.keysText ++ (if s.keys.length > 1 then " · one signer" else ""))]
 
 /-- SignersView. -/
 def signersSections (m : Model) : List H :=
@@ -217,9 +216,9 @@ def signerPickerSheet (m : Model) (inner : List H) : H :=
           (m.multisig.accounts.filter (·.policy.isSome)).map fun a =>
             let eligible := pickerAccountEligible a whole
             let taken := a.signerExpressions.any fun k => some k != phone && used.contains k
-            .identified s!"signerPickAccount-{a.id}"
-              (.col [.button a.name .plain (if eligible && !taken then some (.multisig (.pickAccount a.id)) else none),
-                     caption (pickerAccountText a eligible)]))
+            .col [.identified s!"signerPickAccount-{a.id}"
+                    (.button a.name .plain (if eligible && !taken then some (.multisig (.pickAccount a.id)) else none)),
+                  caption (pickerAccountText a eligible)])
      , .section "" "One key, or several that always sign together, as another Winnow shows them under Join with a descriptor."
          ([.identified "signerPickerPasteButton" (.button "Paste keys from the clipboard" .plain (some (.multisig .pasteMemberKeys)))] ++
           (match f.pasteError with

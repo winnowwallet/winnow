@@ -1235,11 +1235,22 @@ def nestedTests : List (String × IO Unit) :=
   , ("testAThresholdAccountAsOneMember", testAThresholdAccountAsOneMember)
   , ("testPairingSavingAndRegisteringAreAdvancedModeOnly", testPairingSavingAndRegisteringAreAdvancedModeOnly) ]
 
+/-- The signer list is not a wallet's: deleting the wallet keeps `signers.json`, and the list reads back. -/
+def testTheSignerListSurvivesDeletingTheWallet : IO Unit := do
+  let phone ← phoneWith 0xA1
+  let dir ← phone.dir
+  discard <| phone.backend.addSignerKeys true "Bob" (← keyExpression (← masters)[2]!)
+  phone.backend.deleteWallet
+  check "signers.json stays" (← (dir / "signers.json").pathExists)
+  let o ← phone.backend.multisigOverview
+  check "the list reads back after the deletion" (o.signers.map (·.name) == ["Bob"] && o.signerNotice.isNone)
+
 def signerTests : List (String × IO Unit) :=
   [ ("testPairedLedgerAndSavedKeysPersistAndRefuseDuplicates", testPairedLedgerAndSavedKeysPersistAndRefuseDuplicates)
   , ("testEveryBackupCarriesTheListAndAnImportMergesIt", testEveryBackupCarriesTheListAndAnImportMergesIt)
   , ("testARestoredListJoinsThePhonesOwn", testARestoredListJoinsThePhonesOwn)
-  , ("testBuilderTakesMembersFromTheListAndAWholeAccountAsOne", testBuilderTakesMembersFromTheListAndAWholeAccountAsOne) ]
+  , ("testBuilderTakesMembersFromTheListAndAWholeAccountAsOne", testBuilderTakesMembersFromTheListAndAWholeAccountAsOne)
+  , ("testTheSignerListSurvivesDeletingTheWallet", testTheSignerListSurvivesDeletingTheWallet) ]
 
 /-! ## MultisigAccountFlowTests: one wallet (upstream #259) -/
 
@@ -1556,6 +1567,17 @@ def testSimpleModeShowsAccountsOnlyInTheBalanceAndActivity : IO Unit := do
   let settings := rendered (advanced.switchTab 2)
   check "Advanced Settings: Signers" (contains settings "signersButton")
 
+/-- The builder starts with this phone as its first member and any 2 of the members (upstream's builder
+falls to any 1 when it seeds this phone). -/
+def testTheBuilderStartsAtAnyTwoMembers : IO Unit := do
+  let (m, _) := stepMultisig .openBuild (modelWithAccounts true)
+  check "seeded with this phone" (m.multisigBuild.members.map (·.title) == ["This phone"])
+  check "any 2 by default" (m.multisigBuild.threshold == 2 && m.multisigBuild.shownThreshold == 1)
+  let f := (m.multisigBuild.addPick [{ key := "k2", label := "Bob" }] none none none).clamp .signet
+  check "two members: any 2 of 2" (f.threshold == 2 && f.shownThreshold == 2)
+  let f := (f.addPick [{ key := "k3", label := "Carol" }] none none none).clamp .signet
+  check "three members: still any 2" (f.threshold == 2 && f.members.length == 3)
+
 /-- Each Advanced-mode tab keeps its own navigation stack. -/
 def testEachTabKeepsItsOwnStack : IO Unit := do
   let m := modelWithAccounts true
@@ -1575,7 +1597,8 @@ def pureTests : List (String × IO Unit) :=
   , ("testAReviewForTheWalletNeverSignsForAnAccount", testAReviewForTheWalletNeverSignsForAnAccount)
   , ("testTheDraftRowShowsTheLeafClosestToFinishing", testTheDraftRowShowsTheLeafClosestToFinishing)
   , ("testSimpleModeShowsAccountsOnlyInTheBalanceAndActivity", testSimpleModeShowsAccountsOnlyInTheBalanceAndActivity)
-  , ("testEachTabKeepsItsOwnStack", testEachTabKeepsItsOwnStack) ]
+  , ("testEachTabKeepsItsOwnStack", testEachTabKeepsItsOwnStack)
+  , ("testTheBuilderStartsAtAnyTwoMembers", testTheBuilderStartsAtAnyTwoMembers) ]
 
 /-! ## main -/
 

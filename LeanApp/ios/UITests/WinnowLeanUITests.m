@@ -201,12 +201,55 @@ static NSArray<NSNumber *> *WLWitnessSizes(NSArray<NSString *> *witness, NSUInte
     return [sizes sortedArrayUsingSelector:@selector(compare:)];
 }
 
+/// Back to the Wallet tab's list (the builder and the account it opened are both on its stack).
+- (void)backToWalletList:(XCUIApplication *)app {
+    for (int i = 0; i < 4 && !WLElement(app, @"balanceText").exists; i++) {
+        XCUIElement *back = app.navigationBars.buttons.firstMatch;
+        if (back.exists) [back tap];
+        [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
+    }
+    XCTAssertTrue([WLElement(app, @"balanceText") waitForExistenceWithTimeout:10], @"the Wallet tab did not return to its list");
+}
+
+/// The account's id: its descriptor's checksum.
+static NSString *WLAccountID(NSString *descriptor) {
+    NSRange hash = [descriptor rangeOfString:@"#" options:NSBackwardsSearch];
+    return hash.location == NSNotFound ? @"" : [descriptor substringFromIndex:hash.location + 1];
+}
+
+/// Send, From: the account: the review names it and the signatures it needs; "Sign and continue" signs here
+/// and opens the collection step (upstream #259's MultisigJourney send-tab leg).
+- (void)sendFromAccount:(XCUIApplication *)app account:(NSString *)accountID to:(NSString *)destination
+                  sats:(int64_t)amount needs:(NSString *)needs {
+    [app.tabBars.buttons[@"Send"] tap];
+    WLTap(self, app, [@"sendFrom-" stringByAppendingString:accountID]);
+    XCTAssertTrue([WLElement(app, @"sendSourceNote") waitForExistenceWithTimeout:10], @"the account is not the source");
+    [self setClipboard:destination];
+    WLTap(self, app, @"pasteDestinationButton");
+    WLType(self, app, @"amountField", [NSString stringWithFormat:@"%lld", amount]);
+    WLTap(self, app, @"reviewButton");
+    XCUIElement *signatures = WLElement(app, @"reviewSignatures");
+    XCTAssertTrue([signatures waitForExistenceWithTimeout:30], @"the account review did not open");
+    XCTAssertTrue([WLText(signatures) containsString:needs], @"review: %@", WLText(signatures));
+    XCUIElement *sign = WLElement(app, @"sendButton");
+    XCTAssertTrue(WLScrollTo(app, sign));
+    XCTAssertEqualObjects(sign.label, @"Sign and continue");
+    [sign tap];
+    // the collection step replaces the review once this phone's signature is filed
+    XCUIElement *count = WLElement(app, @"multisigSignatureCount");
+    XCTAssertTrue(WLPoll(90, 0.5, ^{ return (BOOL)(count.exists || app.navigationBars[@"Collect signatures"].exists); }),
+                  @"the collection step did not open");
+    XCTAssertTrue(WLScrollTo(app, count), @"the collection step shows no signature count");
+}
+
 /// A 2-of-3 Taproot multisig account between the phone and two Bitcoin Core wallets, with a recovery path
 /// letting any one of them spend a coin after a day (upstream's MultisigJourney, built in the app's own
-/// builder): its first address must be Core's; the phone creates the spend and signs first, each Core wallet
-/// signs its copy with its own libsecp256k1, the phone combines both (three signatures where two are
-/// needed), finalizes and broadcasts, and Core must accept a witness carrying exactly two. Then, past the
-/// delay, the phone alone spends the change on the recovery path and Core accepts the CSV-locked witness.
+/// builder from members): its first address must be Core's; the payment starts from Send with the account
+/// as its source, "Sign and continue" signs it here, each Core wallet signs its copy with its own
+/// libsecp256k1, the phone combines both (three signatures where two are needed), finalizes and broadcasts,
+/// and Core must accept a witness carrying exactly two; the Transactions list shows the spend once, named
+/// with the account. Then, past the delay, the phone alone spends the change on the recovery path from the
+/// account's page and Core accepts the CSV-locked witness.
 - (void)testMultisigTwoOfThreeWithRecovery {
     WLHost *host = WLHost.shared;
     NSString *run = [NSUUID.UUID.UUIDString substringToIndex:8];
@@ -216,29 +259,34 @@ static NSArray<NSNumber *> *WLWitnessSizes(NSArray<NSString *> *witness, NSUInte
     [self createWallet:app];
     [self turnOnAdvanced:app];
 
-    // the account, in the app's builder: this phone, the two Core keys, any 2 of 3, any 1 after a day
+    // the account, in the app's builder: this phone and the two Core keys as members, any 2 of 3, any 1 after a day
     WLTap(self, app, @"multisigBuildButton");
     WLType(self, app, @"multisigBuildNameField", @"Phone and two Cores");
     for (WLCoreSigner *signer in @[core, second]) {
         [self setClipboard:signer.keyExpression];
-        WLTap(self, app, @"multisigPasteSignerButton");
+        WLTap(self, app, @"multisigBuildAddMemberButton");
+        WLTap(self, app, @"signerPickerPasteButton");
     }
-    XCTAssertTrue([[self text:app beginningWith:@"Signers · 3"] waitForExistenceWithTimeout:10], @"the two Core keys were not added");
-    XCTAssertTrue([self text:app beginningWith:@"Any 2 of 3 spend at once"].exists);
-    WLTap(self, app, @"multisigRecoveryToggle");
-    XCTAssertTrue([[self text:app beginningWith:@"Any 1 of the 3 signers"] waitForExistenceWithTimeout:10]);
-    XCUIElement *days = WLElement(app, @"multisigRecoveryDaysStepper");
+    XCTAssertTrue([[self text:app beginningWith:@"Members · 3"] waitForExistenceWithTimeout:10], @"the two Core keys were not added");
+    XCTAssertTrue([self text:app beginningWith:@"Any 2 of 3 members spend"].exists);
+    XCTAssertTrue([[self text:app beginningWith:@"2 of 3: any 2 of the 3 keys sign a spend."] waitForExistenceWithTimeout:10],
+                  @"no policy preview");
+    WLTap(self, app, @"multisigBuildRecoveryToggle");
+    XCTAssertTrue([[self text:app beginningWith:@"Any 1 of the 3 members"] waitForExistenceWithTimeout:10]);
+    XCUIElement *days = WLElement(app, @"multisigBuildRecoveryDaysStepper");
     XCTAssertTrue(WLScrollTo(app, days));
-    XCUIElement *delay = [self text:app matching:@"^After \\d+ days \\("];
-    for (int i = 0; i < 40 && ![WLText(delay) hasPrefix:@"After 1 days"]; i++) [days.buttons[@"Decrement"] tap];
-    XCTAssertEqualObjects(WLText(delay), ([NSString stringWithFormat:@"After 1 days (%ld blocks)", (long)WLRecoveryBlocks]));
+    XCUIElement *delay = [self text:app matching:@"^After about \\d+ days \\("];
+    XCTAssertTrue([WLText(delay) hasPrefix:@"After about 181 days (26,000 blocks)"], @"the default delay: %@", WLText(delay));
+    for (int i = 0; i < 200 && ![WLText(delay) hasPrefix:@"After about 1 days"]; i++) [days.buttons[@"Decrement"] tap];
+    XCTAssertEqualObjects(WLText(delay), ([NSString stringWithFormat:@"After about 1 days (%ld blocks)", (long)WLRecoveryBlocks]));
     WLShot(self, app, @"10-multisig-build");
-    WLTap(self, app, @"multisigCreateAccountButton");
-    XCTAssertTrue([WLElement(app, @"multisigCreated") waitForExistenceWithTimeout:30], @"the account was not created");
+    WLTap(self, app, @"multisigBuildCreateButton");
+    XCTAssertTrue([WLElement(app, @"multisigBuildCreated") waitForExistenceWithTimeout:30], @"the account was not created");
     XCUIElement *created = WLElement(app, @"multisigCreatedDescriptor");
     XCTAssertTrue(WLScrollTo(app, created));
     NSString *descriptor = WLText(created);
     XCTAssertTrue([descriptor hasPrefix:@"tr("], @"not a descriptor: %@", descriptor);
+    NSString *accountID = WLAccountID(descriptor);
     [core importAccount:descriptor];
     [second importAccount:descriptor];
     WLTap(self, app, @"multisigOpenAccountButton");
@@ -254,27 +302,21 @@ static NSArray<NSNumber *> *WLWitnessSizes(NSArray<NSString *> *witness, NSUInte
                   @"the account did not find %@ (balance %@)", funding, WLText(balance));
     WLShot(self, app, @"11-multisig-funded");
 
-    // the phone creates the spend and signs first; one signature is not enough
+    // Send, From: the account; Sign and continue signs here; one signature is not enough
     NSString *destination = host.bankAddress;
-    WLTap(self, app, @"multisigPSBTButton");
-    WLType(self, app, @"multisigAddressField", destination);
-    WLType(self, app, @"multisigAmountField", [NSString stringWithFormat:@"%lld", WLPayment]);
-    WLType(self, app, @"multisigFeeRateField", @"2");
-    WLTap(self, app, @"multisigCreateButton");
-    XCUIElement *feeText = WLElement(app, @"multisigFee");
-    XCTAssertTrue([feeText waitForExistenceWithTimeout:30], @"the PSBT review did not open");
-    int64_t fee = WLDigits(WLText(feeText));
-    XCTAssertGreaterThan(fee, 0);
-    WLTap(self, app, @"multisigSignButton");
+    [self sendFromAccount:app account:accountID to:destination sats:WLPayment needs:@"needs 2 of 3"];
     XCUIElement *count = WLElement(app, @"multisigSignatureCount");
-    XCTAssertTrue(WLPoll(30, 0.3, ^{ return [WLText(count) isEqualToString:@"1 of 2"]; }), @"after the phone: %@", WLText(count));
+    XCTAssertTrue(WLPoll(60, 0.3, ^{ return [WLText(count) isEqualToString:@"1 of 2"]; }), @"after Sign and continue: %@", WLText(count));
+    int64_t fee = WLDigits(WLText(WLElement(app, @"multisigFee")));
+    XCTAssertGreaterThan(fee, 0);
     XCUIElement *broadcast = WLElement(app, @"multisigBroadcastButton");
     XCTAssertTrue(WLScrollTo(app, broadcast));
     XCTAssertFalse(broadcast.isEnabled, @"one signer alone cannot send");
     XCUIElement *shared = WLElement(app, @"multisigPSBTText");
     XCTAssertTrue(WLScrollTo(app, shared));
     NSString *phoneSigned = WLText(shared);
-    XCTAssertTrue([phoneSigned hasPrefix:@"cHNidP8"], @"not a PSBT: %@", phoneSigned);
+    // v0 opens with the unsigned transaction (global key 0x00), v2 with its version (0x02: "cHNidP8BAg")
+    XCTAssertTrue([phoneSigned hasPrefix:@"cHNidP8BA"] && ![phoneSigned hasPrefix:@"cHNidP8BAg"], @"not a BIP174 v0 PSBT: %@", phoneSigned);
     WLShot(self, app, @"12-multisig-one-signature");
 
     // each Core wallet signs its own copy; the phone combines both
@@ -292,7 +334,7 @@ static NSArray<NSNumber *> *WLWitnessSizes(NSArray<NSString *> *witness, NSUInte
     // the phone finalizes and broadcasts; Core accepts a witness with exactly two signatures
     NSSet *before = host.mempool;
     WLTap(self, app, @"multisigBroadcastButton");
-    XCTAssertTrue([WLElement(app, @"multisigPaymentSent") waitForExistenceWithTimeout:30], @"the payment was not sent");
+    XCTAssertTrue([WLElement(app, @"broadcastPending") waitForExistenceWithTimeout:30], @"the receipt did not open");
     NSString *txid = [self newMempoolTransaction:before within:30];
     XCTAssertNotNil(txid, @"Core did not accept the multisig payment");
     NSDictionary *input = [self spendingInput:txid];
@@ -309,9 +351,20 @@ static NSArray<NSNumber *> *WLWitnessSizes(NSArray<NSString *> *witness, NSUInte
     WLShot(self, app, @"13-multisig-sent");
     [host mine:1];
     NSInteger spentAt = [[host cliJSON:@[@"getblockcount"]] integerValue];
-    [app.navigationBars.buttons[@"Back"] tap];
+    XCTAssertTrue([WLElement(app, @"broadcastConfirmed") waitForExistenceWithTimeout:90], @"the receipt did not see it confirm");
+
+    // one Transactions row for the spend, named with the account
+    [app.tabBars.buttons[@"Wallet"] tap];
     XCTAssertTrue(WLPoll(90, 1, ^{ return (BOOL)(WLDigits(WLText(balance)) == WLFunding - WLPayment - fee); }),
                   @"the account's change: %@", WLText(balance));
+    [self backToWalletList:app];
+    XCUIElement *row = WLElement(app, [@"historyPayment-" stringByAppendingString:txid]);
+    XCTAssertTrue([row waitForExistenceWithTimeout:30] && WLScrollTo(app, row), @"the spend is missing from Transactions");
+    XCTAssertTrue(WLElement(app, [@"paymentAccount-" stringByAppendingString:txid]).exists, @"the row does not name the account");
+    WLShot(self, app, @"13b-multisig-transactions");
+    XCUIElement *accountButton = WLElement(app, [@"multisigAccount-" stringByAppendingString:accountID]);
+    XCTAssertTrue(WLScrollTo(app, accountButton));
+    [accountButton tap];
 
     // past the delay, the phone alone spends the change on the recovery path
     NSInteger height = [[host cliJSON:@[@"getblockcount"]] integerValue];
@@ -325,7 +378,8 @@ static NSArray<NSNumber *> *WLWitnessSizes(NSArray<NSString *> *witness, NSUInte
     WLType(self, app, @"multisigAddressField", recoveryDestination);
     WLType(self, app, @"multisigAmountField", [NSString stringWithFormat:@"%lld", WLRecoveryPayment]);
     WLType(self, app, @"multisigFeeRateField", @"2");
-    // the phone may not have seen the last blocks yet: create until the coin unlocks
+    // the phone may not have seen the last blocks yet: create until the coin unlocks (the page then collects)
+    XCUIElement *feeText = WLElement(app, @"multisigFee");
     XCTAssertTrue(WLPoll(120, 3, ^{
         if (feeText.exists) return YES;
         XCUIElement *create = WLElement(app, @"multisigCreateButton");
@@ -357,23 +411,48 @@ static NSArray<NSNumber *> *WLWitnessSizes(NSArray<NSString *> *witness, NSUInte
 }
 
 /// A 2-of-2 between the phone and a Ledger, with test mode's simulated Ledger (`WINNOW_E2E_LEDGER`, the
-/// Lean device behind the app's real APDU program): pair it, have it derive the receive address, which
-/// must also be Core's, fund the account, sign the spend with the phone and the Ledger, and Core must
-/// accept a witness carrying both signatures.
+/// Lean device behind the app's real APDU program): pair it under Settings → Signers (its key filed,
+/// nothing registered), build the account with it as a member (the Ledger registers it), have it derive
+/// the receive address, which must also be Core's, fund the account from the wallet (one Transactions row,
+/// a transfer), pay from it on the Send tab (Sign and continue, then the Ledger in the collection step),
+/// and Core must accept a witness carrying both signatures; the receipt sees it confirm and Transactions
+/// shows it once, named with the account.
 - (void)testLedgerPairVerifySpend {
     WLHost *host = WLHost.shared;
     NSString *ledgerSeed = [[NSUUID.UUID.UUIDString stringByReplacingOccurrencesOfString:@"-" withString:@""] lowercaseString];
     XCUIApplication *app = [self launch:@"ledger" extra:@{@"WINNOW_E2E_LEDGER": ledgerSeed}];
     [self createWallet:app];
+    NSString *walletAddress = [self receiveAddress:app];
+    WLTap(self, app, @"closeReceiveButton");
+    [host fund:walletAddress sats:2 * WLFunding];
+    XCTAssertTrue(WLPoll(90, 1, ^{ return (BOOL)([self balance:app] == 2 * WLFunding); }), @"wallet balance %lld", [self balance:app]);
     [self turnOnAdvanced:app];
 
+    // Settings → Signers → Pair a Ledger
+    [app.tabBars.buttons[@"Settings"] tap];
+    WLTap(self, app, @"signersButton");
+    WLTap(self, app, @"signersPairLedgerButton");
+    WLType(self, app, @"ledgerNameField", @"Nano X");
     WLTap(self, app, @"ledgerPairButton");
-    WLType(self, app, @"ledgerNameField", @"Ledger savings");
-    WLTap(self, app, @"ledgerPairStartButton");
-    XCUIElement *account = app.buttons[@"Ledger savings"];
-    XCTAssertTrue([account waitForExistenceWithTimeout:60], @"pairing did not create the account");
-    XCTAssertTrue(WLScrollTo(app, account));
-    [account tap];
+    XCUIElement *paired = app.buttons[@"Nano X"];
+    XCTAssertTrue([paired waitForExistenceWithTimeout:60], @"pairing did not file the Ledger");
+    WLShot(self, app, @"19-signers-paired");
+
+    // the builder: this phone and the Ledger, any 2 of 2; the Ledger approves it
+    [app.tabBars.buttons[@"Wallet"] tap];
+    WLTap(self, app, @"multisigBuildButton");
+    WLType(self, app, @"multisigBuildNameField", @"Ledger savings");
+    WLTap(self, app, @"multisigBuildAddMemberButton");
+    XCUIElement *pick = app.buttons[@"Nano X"];
+    XCTAssertTrue([pick waitForExistenceWithTimeout:10], @"the picker does not offer the Ledger");
+    [pick tap];
+    XCTAssertTrue([[self text:app beginningWith:@"Members · 2"] waitForExistenceWithTimeout:10]);
+    WLTap(self, app, @"multisigBuildCreateButton");
+    XCTAssertTrue([WLElement(app, @"multisigBuildLedgerRegistered") waitForExistenceWithTimeout:60], @"the Ledger did not register the account");
+    XCUIElement *created = WLElement(app, @"multisigCreatedDescriptor");
+    XCTAssertTrue(WLScrollTo(app, created));
+    NSString *accountID = WLAccountID(WLText(created));
+    WLTap(self, app, @"multisigOpenAccountButton");
     XCUIElement *policy = WLElement(app, @"multisigPolicy");
     XCTAssertTrue([policy waitForExistenceWithTimeout:20]);
     XCTAssertEqualObjects(WLText(policy), @"2 of 2");
@@ -391,28 +470,43 @@ static NSArray<NSNumber *> *WLWitnessSizes(NSArray<NSString *> *witness, NSUInte
     XCTAssertEqualObjects(WLDeriveAddress(WLText(descriptorText), 0), address, @"the account's first address is not Core's");
     WLShot(self, app, @"20-ledger-verified");
 
-    NSString *funding = [host fund:address sats:WLFunding];
+    // the wallet pays the account: Send, From the wallet
+    [app.tabBars.buttons[@"Send"] tap];
+    WLTap(self, app, @"sendFromWallet");
+    [self setClipboard:address];
+    WLTap(self, app, @"pasteDestinationButton");
+    WLType(self, app, @"amountField", [NSString stringWithFormat:@"%lld", WLFunding]);
+    WLTap(self, app, @"reviewButton");
+    XCUIElement *sendButton = WLElement(app, @"sendButton");
+    XCTAssertTrue([sendButton waitForExistenceWithTimeout:30], @"the wallet's review did not open");
+    NSSet *beforeFunding = host.mempool;
+    [sendButton tap];
+    NSString *funding = [self newMempoolTransaction:beforeFunding within:60];
+    XCTAssertNotNil(funding, @"the wallet's payment to the account never reached the node");
+    [host mine:1];
+    XCTAssertTrue([WLElement(app, @"broadcastConfirmed") waitForExistenceWithTimeout:90], @"the transfer did not confirm");
+    WLTap(self, app, @"newPaymentButton");
+    [app.tabBars.buttons[@"Wallet"] tap];
     XCUIElement *balance = WLElement(app, @"multisigBalance");
     XCTAssertTrue(WLPoll(90, 1, ^{ return (BOOL)(WLDigits(WLText(balance)) == WLFunding); }),
                   @"the account did not find %@ (balance %@)", funding, WLText(balance));
+    [self backToWalletList:app];
+    XCUIElement *transfer = WLElement(app, [@"historyPayment-" stringByAppendingString:funding]);
+    XCTAssertTrue([transfer waitForExistenceWithTimeout:30] && WLScrollTo(app, transfer), @"no Transactions row for the transfer");
+    XCTAssertEqualObjects(transfer.label, @"Moved to Ledger savings", @"the transfer is not one row: %@", transfer.label);
+    WLShot(self, app, @"20b-ledger-transfer-row");
 
     NSString *destination = host.bankAddress;
-    WLTap(self, app, @"multisigPSBTButton");
-    WLType(self, app, @"multisigAddressField", destination);
-    WLType(self, app, @"multisigAmountField", [NSString stringWithFormat:@"%lld", WLPayment]);
-    WLType(self, app, @"multisigFeeRateField", @"2");
-    WLTap(self, app, @"multisigCreateButton");
-    XCTAssertTrue([WLElement(app, @"multisigFee") waitForExistenceWithTimeout:30], @"the PSBT review did not open");
+    [self sendFromAccount:app account:accountID to:destination sats:WLPayment needs:@"needs 2 of 2"];
     XCUIElement *count = WLElement(app, @"multisigSignatureCount");
-    WLTap(self, app, @"multisigSignButton");
-    XCTAssertTrue(WLPoll(30, 0.3, ^{ return [WLText(count) isEqualToString:@"1 of 2"]; }), @"after the phone: %@", WLText(count));
+    XCTAssertTrue(WLPoll(60, 0.3, ^{ return [WLText(count) isEqualToString:@"1 of 2"]; }), @"after the phone: %@", WLText(count));
     WLTap(self, app, @"ledgerSignButton");
     XCTAssertTrue(WLPoll(60, 0.3, ^{ return [WLText(count) isEqualToString:@"2 of 2"]; }), @"after the Ledger: %@", WLText(count));
     WLShot(self, app, @"21-ledger-signed");
 
     NSSet *before = host.mempool;
     WLTap(self, app, @"multisigBroadcastButton");
-    XCTAssertTrue([WLElement(app, @"multisigPaymentSent") waitForExistenceWithTimeout:30], @"the payment was not sent");
+    XCTAssertTrue([WLElement(app, @"broadcastPending") waitForExistenceWithTimeout:30], @"the receipt did not open");
     NSString *txid = [self newMempoolTransaction:before within:30];
     XCTAssertNotNil(txid, @"Core did not accept the Ledger-signed payment");
     NSDictionary *input = [self spendingInput:txid];
@@ -421,8 +515,16 @@ static NSArray<NSNumber *> *WLWitnessSizes(NSArray<NSString *> *witness, NSUInte
     XCTAssertEqual(witness.count, 4u, @"two signatures, the leaf script and the control block");
     XCTAssertEqualObjects(WLWitnessSizes(witness, 2), (@[@128, @128]), @"the phone's and the Ledger's signatures");
     [host mine:1];
+    XCTAssertTrue([WLElement(app, @"broadcastConfirmed") waitForExistenceWithTimeout:90], @"the receipt did not see it confirm");
     NSDictionary *tip = [host cliJSON:@[@"getblock", [host cli:@[@"getbestblockhash"]]]];
     XCTAssertTrue([tip[@"tx"] containsObject:txid], @"the payment was not mined");
+    WLShot(self, app, @"22-ledger-confirmed");
+    // one confirmed row, named with the account
+    [app.tabBars.buttons[@"Wallet"] tap];
+    XCUIElement *row = WLElement(app, [@"historyPayment-" stringByAppendingString:txid]);
+    XCTAssertTrue([row waitForExistenceWithTimeout:60] && WLScrollTo(app, row), @"the spend is missing from Transactions");
+    XCTAssertTrue(WLElement(app, [@"paymentAccount-" stringByAppendingString:txid]).exists, @"the row does not name the account");
+    WLShot(self, app, @"23-ledger-transactions");
 }
 
 /// The census list the build ships (project.yml bundles build/census/peers.json; CensusCatalog.bundled
