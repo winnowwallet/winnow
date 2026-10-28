@@ -12,7 +12,7 @@ path = "../Lean"
 [[require]]
 name = "elmlean"
 git = "https://github.com/posix4e/elmlean.git"
-rev = "bfa557d20e8b1427fae27eefd2d7cfde2a1c2978"
+rev = "fbce4c5a807814490dcb7a59e8d5c78d26659f26"
 subDir = "framework/lean"
 
 [[lean_lib]]
