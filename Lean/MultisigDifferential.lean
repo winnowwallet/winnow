@@ -2,26 +2,32 @@ import Winnow
 import Lean.Data.Json
 
 /-! `multisig-differential`: the Lean port of upstream's `winnow-fixture multisig-differential`
-(Tools/Fixture/MultisigDifferential.swift, run by scripts/check-multisig-core at 1cf93fb): Winnow's Taproot
+(Tools/Fixture/MultisigDifferential.swift, run by scripts/check-multisig-core at d2ca878): Winnow's Taproot
 script-path multisig (`MultisigAccount`) held to Bitcoin Core on a disposable regtest node.
 
 The node is started here (temp datadir, random ports, `bitcoind -regtest`) and killed at
-the end, also on failure. Seeded cases vary the threshold, the number of signers (two to five), which
+the end, also on failure. Seeded cases vary the threshold, the number of signers (two to six), which
 signers are Bitcoin Core wallets (keys Core generated, signing through `walletprocesspsbt` with its own
 libsecp256k1), the order the signers are listed in, and the recovery leaf (none, fewer of the same signers,
-or separate keys, after a delay). For every case Core must agree with Winnow on:
+or separate keys, after a delay). A third of the cases with three or more signers are nested (#256): some
+signers are grouped into one member of two or three keys, signing with all of them (a phone and its Ledger)
+or with a threshold of them (a 2-of-3 account that is one member), the threshold counts members, and the
+account has a leaf per group of members and per way the group meets its thresholds; a recovery path of
+fewer members is a timelocked leaf per group. For every case Core must agree with Winnow on:
 
-* the descriptor checksum and the first four receive and change addresses, and that listing the signers,
-  or a recovery leaf's separate keys, in another order builds the same descriptor;
-* which signers a PSBT carries valid signatures from, Core's included;
-* every subset of exactly k signers, each signing in a shuffled order: Winnow finalizes, Core's mempool
-  accepts it, and Core's own finalizer produces the same bytes; with k + 1 signers both finish and Core
-  accepts Winnow's k-signature witness; with k − 1 neither finishes; one spend is mined;
-* the recovery leaf, for delays of one to four blocks: every subset of its threshold, refused by Core
-  (`non-BIP68-final`) and by Winnow's unlock rule one block before the lock opens and accepted by both in
-  the block it opens; one key fewer finishing on neither side unless the same people also complete the
-  signers' leaf; the signers' leaf finishing a spend that carries the recovery sequence (BIP326); one
-  recovery spend is mined.
+* the descriptor checksum and the first four receive and change addresses, and that listing the members,
+  their keys, or a recovery leaf's separate keys, in another order builds the same descriptor; the members
+  Winnow reads back from a nested account's leaves;
+* which keys of every leaf a PSBT carries valid signatures from, Core's included;
+* every subset of exactly k members, each meeting its threshold exactly and signing in a shuffled order:
+  Winnow finalizes, Core's mempool accepts it, and Core's own finalizer produces the same bytes; with k + 1
+  members, or a member signing with more keys than it needs, both finish and Core accepts Winnow's
+  witness; with k − 1, or a member one key short, neither finishes; one spend is mined;
+* every recovery leaf, for delays of one to four blocks: its keys (every subset of its threshold when there
+  is one leaf), refused by Core (`non-BIP68-final`) and by Winnow's unlock rule one block before the lock
+  opens and accepted by both in the block it opens; one key fewer finishing on neither side unless the same
+  people also complete a signers' leaf; a signers' leaf finishing a spend that carries the recovery
+  sequence (BIP326); one recovery spend is mined.
 
 The case generator draws from the same SplitMix64 sequence in the same order as the Swift one, so a seed
 names the same case shapes (Core's keys differ per node). Differences: the signers' spend uses the
@@ -269,18 +275,42 @@ def Signer.accountKey (s : Signer) : IO String := return extendedKeyIn (← s.ex
 
 structure Case where
   number : Nat
+  /-- Of the groups. -/
   threshold : Nat
   signers : Array Signer
+  /-- The signers as the policy counts them, by position in `signers`: one each for an ordinary account; a
+  nested account's members, some of two or three signers. -/
+  groups : Array (Array Nat)
+  /-- How many of each group's signers sign for it. -/
+  thresholds : Array Nat
   recovery : Option RecoveryPlan
   recoveryMasters : Array HDKey
 
+/-- Whether the account has a leaf per group of members: a threshold of every member, each signing with
+every key, is one leaf of every key, the ordinary account. -/
+def Case.isNested (c : Case) : Bool :=
+  c.groups.any (·.size > 1) &&
+    (c.threshold < c.groups.size || (Array.range c.groups.size).any fun g => c.thresholds[g]! < c.groups[g]!.size)
+
+/-- The groups that are a threshold over their signers. -/
+def Case.thresholdGroups (c : Case) : Array Nat :=
+  (Array.range c.groups.size).filter fun g => c.thresholds[g]! < c.groups[g]!.size
+
+def Case.members (c : Case) : IO (Array MultisigAccount.Member) :=
+  (Array.range c.groups.size).mapM fun g => do
+    let keys ← c.groups[g]!.mapM (c.signers[·]!.expression)
+    let threshold : Nat := c.thresholds[g]!
+    return { keys, threshold := (threshold : Int) }
+
 def Case.summary (c : Case) : String :=
-  let who := ",".intercalate (c.signers.toList.map (·.label))
+  let who := ",".intercalate ((Array.range c.groups.size).toList.map fun g =>
+    let names := "+".intercalate (c.groups[g]!.toList.map (c.signers[·]!.label))
+    if c.thresholds[g]! < c.groups[g]!.size then s!"{c.thresholds[g]!}of({names})" else names)
   let leaf := match c.recovery with
     | none => "no recovery"
-    | some (.fewerSigners m b) => s!"recovery {m} of the signers after {b}"
+    | some (.fewerSigners m b) => s!"recovery {m} of the members after {b}"
     | some (.separateKeys m ks b) => s!"recovery {m} of {ks.size} other keys after {b}"
-  s!"{c.threshold}-of-{c.signers.size} [{who}], {leaf}"
+  s!"{c.threshold}-of-{c.groups.size} [{who}], {leaf}"
 
 def spendableDelay : UInt32 := 4
 
@@ -289,27 +319,49 @@ def randomMaster : IO HDKey := do
   for _ in [0:32] do seed := seed.push (← next).toUInt8
   match HDKey.ofSeed seed with | .ok k => pure k | .error e => throw (IO.userError e.name)
 
+/-- Groups of one to three signers in shuffled order: the first of two or three, leaving at least one
+signer for a second member. -/
+def nestedGroups (n : Nat) : IO (Array (Array Nat)) := do
+  let order ← shuffle (Array.range n)
+  let mut groups : Array (Array Nat) := #[]
+  let mut cursor := 0
+  for _ in [0:n] do
+    if cursor ≥ order.size then break
+    let room := order.size - cursor
+    let size ← if groups.isEmpty then pure (2 + (← count (min (room - 1) 3 - 1))) else pure (1 + (← count (min room 3)))
+    groups := groups.push (order.extract cursor (cursor + size))
+    cursor := cursor + size
+  return groups
+
 def generate (number : Nat) : IO Case := do
-  let n := 2 + (← count 4)
-  let threshold := 1 + (← count n)
+  let n := 2 + (← count 5)
   let coreCount := min (← count 3) n
   let mut signers : Array Signer := #[]
   for i in [0:coreCount] do signers := signers.push (.core (← CoreSigner.make s!"case{number}-core{i}"))
   for _ in [coreCount:n] do signers := signers.push (.winnow (← randomMaster))
   signers ← shuffle signers
+  let nested ← if n ≥ 3 then pure ((← count 3) == 0) else pure false
+  let groups ← if nested then nestedGroups n else pure ((Array.range n).map (#[·]))
+  -- A group of two or three signs with all of them, or half the time with fewer: one of a pair, one or
+  -- two of three.
+  let thresholds ← groups.mapM fun g => do
+    if g.size > 1 && (← count 2) == 0 then pure (1 + (← count (g.size - 1))) else pure g.size
+  let mut threshold := 1 + (← count groups.size)
+  -- One member alone may spend only when every member needs two keys.
+  if nested && threshold == 1 && thresholds.any (· < 2) then threshold := 2
   let blocks : UInt32 ← do
     if (← count 10) < 7 then pure (1 + (← count spendableDelay.toNat)).toUInt32
     else pure (#[16, 144, 4_032, 65_535] : Array UInt32)[← count 4]!
   let mut recoveryMasters : Array HDKey := #[]
   let recovery ← match ← count 3 with
     | 0 => pure none
-    | 1 => pure (some (RecoveryPlan.fewerSigners (1 + (← count n)) blocks))
+    | 1 => pure (some (RecoveryPlan.fewerSigners (1 + (← count groups.size)) blocks))
     | _ =>
       let k := 1 + (← count 3)
       for _ in [0:k] do recoveryMasters := recoveryMasters.push (← randomMaster)
       let keys ← recoveryMasters.mapM keyExpressionOf
       pure (some (RecoveryPlan.separateKeys (1 + (← count recoveryMasters.size)) keys blocks))
-  return { number, threshold, signers, recovery, recoveryMasters }
+  return { number, threshold, signers, groups, thresholds, recovery, recoveryMasters }
 
 /-! ## Signing and finalizing -/
 
@@ -373,27 +425,49 @@ def fund (a : MultisigAccount) (indices : Array UInt32) : IO (Array WalletUTXO) 
       coins := coins.push coin
   return coins
 
-def signerPositions (a : MultisigAccount) (signers : Array Signer) : IO (Array Nat) := do
-  let listed := a.signers.map fun k => match k.base with
-    | .extended x _ => x.serialized .testnet | _ => ""
-  signers.mapM fun s => do
-    let key ← s.accountKey
-    let some p := listed.findIdx? (· == key) | throw (IO.userError "a signer is missing from the account")
-    return p
+def sortedNat (xs : Array Nat) : Array Nat := (xs.toList.mergeSort (· ≤ ·)).toArray
 
-def recoveryHolders (a : MultisigAccount) (c : Case) : IO (Array Signer) := do
+/-- The positions in `keys` held by `signers`, those on the leaf only, ascending. -/
+def positions (keys : Array Descriptor.SingleKey) (signers : Array Signer) : IO (Array Nat) := do
+  let listed ← keys.mapM fun k => match k.base with
+    | .extended x _ => pure (x.serialized .testnet) | _ => throw (IO.userError "a signer is not an xpub")
+  let held ← signers.filterMapM fun s => do return listed.findIdx? (· == (← s.accountKey))
+  return sortedNat (held.foldl (fun acc p => if acc.contains p then acc else acc.push p) #[])
+
+/-- Who holds each key of the recovery leaf at `path`, in the leaf's order. -/
+def recoveryHolders (a : MultisigAccount) (path : SpendPath) (c : Case) : IO (Array Signer) := do
   let holders : Array Signer := if c.recoveryMasters.isEmpty then c.signers else c.recoveryMasters.map .winnow
   let keys ← holders.mapM (·.accountKey)
-  (a.keysOn .recovery).mapM fun k => do
+  (a.keysOn path).mapM fun k => do
     let .extended x _ := k.base | throw (IO.userError "a recovery key is not an xpub")
     let some p := keys.findIdx? (· == x.serialized .testnet) | throw (IO.userError "a recovery key has no holder")
     return holders[p]!
 
-def sortedNat (xs : Array Nat) : Array Nat := (xs.toList.mergeSort (· ≤ ·)).toArray
+/-- Whether some signers' leaf has its threshold of verified signatures. -/
+def signersLeafCanFinish (a : MultisigAccount) (p : PSBT) (coins : Array WalletUTXO) : IO Bool :=
+  a.signersPaths.anyM fun path => do
+    return ((← mam "approvals" (a.approvals p coins path)).size : Int) ≥ a.thresholdOn path
 
 /-! ## The checks -/
 
-def checkAddresses (a : MultisigAccount) (c : Case) (expressions : Array String) (tag : String) : IO Unit := do
+/-- The members Winnow reads back from the leaves it wrote: the threshold members by threshold and size,
+and, unless every member is in every leaf, the member count and threshold. -/
+def checkMembersReadBack (a : MultisigAccount) (c : Case) (tag : String) : IO Unit := do
+  let some members := a.members
+    | tally false "members read back" s!"{tag}: Winnow reads no members from {a.signersLeaves.size} leaves"
+  let policies (ts : Array Nat) (sizes : Array Nat) (gs : Array Nat) : List String :=
+    (gs.toList.map fun g => s!"{ts[g]!} of {sizes[g]!}").mergeSort (fun x y => decide (x ≤ y))
+  let read := policies members.thresholds (members.groups.map (·.size)) members.thresholdGroups
+  let built := policies c.thresholds (c.groups.map (·.size)) c.thresholdGroups
+  tally (read == built) "members read back" s!"{tag}: Winnow reads threshold members {read}, built {built}"
+  unless c.threshold < c.groups.size do return
+  tally (members.threshold == c.threshold && members.groups.size == c.groups.size) "members read back"
+    s!"{tag}: Winnow reads {members.threshold} of {members.groups.size}"
+  if let (some recoveryMembers, some (.fewerSigners m _)) := (a.recoveryMembers, c.recovery) then
+    tally (recoveryMembers.threshold == m.toNat && recoveryMembers.groups.size == c.groups.size) "recovery members read back"
+      s!"{tag}: Winnow reads {recoveryMembers.threshold} of {recoveryMembers.groups.size} for recovery"
+
+def checkAddresses (a : MultisigAccount) (c : Case) (members : Array MultisigAccount.Member) (tag : String) : IO Unit := do
   let text := a.descriptor.serialized
   let body := (text.splitOn "#")[0]!
   let coreChecksum ← jstr (← cliJson #["getdescriptorinfo", body]) "checksum"
@@ -409,12 +483,34 @@ def checkAddresses (a : MultisigAccount) (c : Case) (expressions : Array String)
       let ours ← mam "address" (a.address index.toUInt32 choice)
       let theirs := ((lists[choice]?).bind (·[index]?)).getD "none"
       tally (ours == theirs) "address" s!"{tag} {choice}/{index}: Core {theirs}, Winnow {ours}"
+  -- The builder writes keys in one canonical order, so listing the members, their keys, or a recovery
+  -- leaf's separate keys in another order must give the very same descriptor, internal key included.
   let reversedRecovery := c.recovery.map fun
     | .separateKeys m ks b => .separateKeys m ks.reverse b
     | plan => plan
-  let reordered ← mam "reordered" (MultisigAccount.makeDescriptor c.threshold expressions.reverse reversedRecovery .regtest)
+  let reordered ← mam "reordered" (MultisigAccount.makeNestedDescriptor
+    (members.reverse.map fun m => { m with keys := m.keys.reverse }) c.threshold reversedRecovery .regtest)
   tally (reordered.serialized == text) "signer order"
     s!"{tag}: listing the keys in reverse gives {reordered.serialized}, not {a.id}"
+
+/-- Signer subsets to try: every k members, each with exactly the keys it needs; k − 1 and k + 1 members; a
+member one key short of its threshold among k; and a threshold member signing with every key. -/
+def signerTrials (c : Case) : Array (Array Nat) := Id.run do
+  let groups := c.groups
+  let k := c.threshold
+  let keys (g count : Nat) : Array Nat := groups[g]!.extract 0 count
+  let meeting (chosen : Array Nat) : Array Nat := chosen.flatMap fun g => keys g c.thresholds[g]!
+  let indices := Array.range groups.size
+  let mut trials := ((combinations indices.toList k).map fun chosen => meeting chosen.toArray).toArray
+  if k > 1 then trials := trials.push (meeting (indices.extract 0 (k - 1)))
+  if k < groups.size then trials := trials.push (meeting (indices.extract 0 (k + 1)))
+  if let some short := indices.find? (groups[·]!.size > 1) then
+    let others := (indices.filter (· != short)).extract 0 (k - 1)
+    trials := trials.push (keys short (c.thresholds[short]! - 1) ++ meeting others)
+  if let some generous := c.thresholdGroups[0]? then
+    let others := (indices.filter (· != generous)).extract 0 (k - 1)
+    trials := trials.push (groups[generous]! ++ meeting others)
+  return trials
 
 def checkSignersPath (a : MultisigAccount) (c : Case) (tag : String) : IO Unit := do
   let coins ← fund a #[0, 1]
@@ -422,33 +518,38 @@ def checkSignersPath (a : MultisigAccount) (c : Case) (tag : String) : IO Unit :
   let destination ← newScript
   let psbt ← mam "create" (a.createSpend coins #[{ amount := 60_000, scriptPubKey := destination }] 0 2 tip .signers (0.5, 0.5))
   let owned : Array OutputCoordinate := #[{ choice := 1, index := 0 }]
-  let positions ← signerPositions a c.signers
   let k := c.threshold
-  let all := (List.range c.signers.size)
-  let mut trials := (combinations all k).map List.toArray
-  if k > 1 then trials := trials ++ [(all.take (k - 1)).toArray]
-  if k < c.signers.size then trials := trials ++ [(all.take (k + 1)).toArray]
   let mut first : Option (String × String) := none
-  for trial in trials do
+  for trial in signerTrials c do
     let subset ← shuffle trial
     let label := s!"{tag} signers {subset.toList.map fun i => c.signers[i]!.label ++ toString i}"
     let mut signed := psbt
     for member in subset do signed ← signAs signed c.signers[member]! a coins owned tip
-    let approved ← mam "approvals" (a.approvals signed coins)
-    let expected := sortedNat (subset.map (positions[·]!))
-    tally (approved == expected) "verified signers" s!"{label}: Winnow verifies {approved}, signed by {expected}"
+    -- Every leaf must verify exactly the subset's keys that sit on it.
+    for path in a.signersPaths do
+      let approved ← mam "approvals" (a.approvals signed coins path)
+      let expected ← positions (a.keysOn path) (subset.map (c.signers[·]!))
+      tally (approved == expected) "verified signers" s!"{label} {path}: Winnow verifies {approved}, signed by {expected}"
+    -- Members that met their threshold, and whether exactly k did with exactly the keys they need, so that
+    -- one leaf can finish.
+    let held (g : Nat) := (c.groups[g]!.filter subset.contains).size
+    let met := (Array.range c.groups.size).filter fun g => held g ≥ c.thresholds[g]!
+    let exact := met.size == k && met.all fun g => held g == c.thresholds[g]!
     let (ours, theirs) ← finalizeBoth a signed coins owned tip
-    if subset.size < k then
+    if met.size < k then
       tally (ours.isNone && theirs.isNone) "below threshold refused"
         s!"{label}: Winnow finished {ours.isSome}, Core finished {theirs.isSome}"
       continue
-    let some ours := ours | tally false "threshold finalizes" s!"{label}: Winnow refused {k} signatures"; continue
+    let some ours := ours | tally false "threshold finalizes" s!"{label}: Winnow refused {k} complete groups"; continue
     tally theirs.isSome "threshold finalizes" s!"{label}: Core's finalizer did not complete"
-    if subset.size == k then
+    -- With exactly k members each meeting its threshold exactly, one leaf can finish, so the finalizers
+    -- must produce the same witness; with more, each may pick a leaf.
+    if exact then
       if let some t := theirs then tally (ours == t) "finalizers agree" s!"{label}: Winnow {ours}, Core {t}"
     let (allowed, reason) ← mempoolVerdict ours
     tally allowed "Core accepts" s!"{label}: {reason}"
     if allowed && first.isNone then first := some (label, ours)
+  -- Mined only after every subset was tried against the unspent coins.
   if let some (label, txHex) := first then broadcastAndMine txHex label
 
 def checkRecoveryPath (a : MultisigAccount) (c : Case) (tag : String) : IO Unit := do
@@ -461,34 +562,42 @@ def checkRecoveryPath (a : MultisigAccount) (c : Case) (tag : String) : IO Unit 
   let psbt ← mam "create recovery" (a.createSpend #[coin] #[{ amount := 40_000, scriptPubKey := destination }] 1 2 openTip
     .recovery (0, 0.5))
   let owned : Array OutputCoordinate := #[{ choice := 1, index := 1 }]
-  let holders ← recoveryHolders a c
-  let m := recovery.threshold.toNat
-  let all := List.range holders.size
-  let mut trials := (combinations all m).map List.toArray
-  if m > 1 then trials := trials ++ [(all.take (m - 1)).toArray]
   let mut ready : Array (String × String) := #[]
-  for trial in trials do
-    let subset ← shuffle trial
-    let label := s!"{tag} recovery keys {subset}"
-    let mut signed := psbt
-    for member in subset do signed ← signAs signed holders[member]! a #[coin] owned openTip
-    let approved ← mam "approvals" (a.approvals signed #[coin] .recovery)
-    tally (approved == sortedNat subset) "verified recovery signers"
-      s!"{label}: Winnow verifies {approved}, signed by {sortedNat subset}"
-    let (ours, theirs) ← finalizeBoth a signed #[coin] owned openTip
-    let signersCanFinish := decide ((← mam "approvals" (a.approvals signed #[coin])).size ≥ c.threshold)
-    if subset.size < m then
-      tally (ours.isSome == signersCanFinish && theirs.isSome == signersCanFinish) "below recovery threshold"
-        s!"{label}: Winnow finished {ours.isSome}, Core finished {theirs.isSome}, signers' leaf complete {signersCanFinish}"
-      continue
-    let some ours := ours | tally false "recovery finalizes" s!"{label}: Winnow refused {m} recovery signatures"; continue
-    tally theirs.isSome "recovery finalizes" s!"{label}: Core's finalizer did not complete"
-    if let some t := theirs then
-      if !signersCanFinish then tally (ours == t) "recovery finalizers agree" s!"{label}: Winnow {ours}, Core {t}"
-    ready := ready.push (label, ours)
-  -- BIP326: the signers' leaf may finish a spend that carries the recovery sequence.
+  for path in a.recoveryPaths do
+    let holders ← recoveryHolders a path c
+    let m := (a.thresholdOn path).toNat
+    let all := List.range holders.size
+    -- One recovery leaf: every subset of its threshold; a leaf per group of members: each leaf's keys. One
+    -- key fewer on the first.
+    let mut trials := if a.recoveryPaths.size == 1 then ((combinations all m).map List.toArray).toArray else #[all.toArray]
+    if m > 1 && path == .recovery then trials := trials.push (all.take (m - 1)).toArray
+    for trial in trials do
+      let subset ← shuffle trial
+      let label := s!"{tag} {path} keys {subset}"
+      let mut signed := psbt
+      for member in subset do signed ← signAs signed holders[member]! a #[coin] owned openTip
+      let approved ← mam "approvals" (a.approvals signed #[coin] path)
+      tally (approved == sortedNat subset) "verified recovery signers"
+        s!"{label}: Winnow verifies {approved}, signed by {sortedNat subset}"
+      let (ours, theirs) ← finalizeBoth a signed #[coin] owned openTip
+      -- A signer reused for recovery signs both leaves, so when its signatures meet a signers' threshold
+      -- that leaf can finish.
+      let signersCanFinish ← signersLeafCanFinish a signed #[coin]
+      if subset.size < m then
+        tally (ours.isSome == signersCanFinish && theirs.isSome == signersCanFinish) "below recovery threshold"
+          s!"{label}: Winnow finished {ours.isSome}, Core finished {theirs.isSome}, signers' leaf complete {signersCanFinish}"
+        continue
+      let some ours := ours | tally false "recovery finalizes" s!"{label}: Winnow refused {m} recovery signatures"; continue
+      tally theirs.isSome "recovery finalizes" s!"{label}: Core's finalizer did not complete"
+      -- When a signers' leaf can finish too, each finalizer may pick either leaf, so only a recovery-only
+      -- spend must match byte for byte.
+      if let some t := theirs then
+        if !signersCanFinish then tally (ours == t) "recovery finalizers agree" s!"{label}: Winnow {ours}, Core {t}"
+      ready := ready.push (label, ours)
+  -- BIP326: a signers' leaf may finish a spend that carries the recovery sequence.
   let mut bySigners := psbt
-  for member in [0:c.threshold] do bySigners ← signAs bySigners c.signers[member]! a #[coin] owned openTip
+  for member in (c.groups.extract 0 c.threshold).flatten do
+    bySigners ← signAs bySigners c.signers[member]! a #[coin] owned openTip
   match (← finalizeBoth a bySigners #[coin] owned openTip).1 with
   | some ours => ready := ready.push (s!"{tag} signers' leaf with the recovery sequence", ours)
   | none => tally false "signers' leaf under the recovery sequence" s!"{tag}: Winnow refused it"
@@ -514,10 +623,12 @@ def checkRecoveryPath (a : MultisigAccount) (c : Case) (tag : String) : IO Unit 
     if (← mempoolVerdict txHex).1 then broadcastAndMine txHex label
 
 def checkCase (c : Case) (tag : String) : IO Unit := do
-  let expressions ← c.signers.mapM (·.expression)
-  let d ← mam "descriptor" (MultisigAccount.makeDescriptor c.threshold expressions c.recovery .regtest)
+  let members ← c.members
+  let d ← mam "descriptor" (MultisigAccount.makeNestedDescriptor members c.threshold c.recovery .regtest)
   let a ← mam "account" (MultisigAccount.make d .regtest)
-  checkAddresses a c expressions tag
+  tally (a.isNested == c.isNested) "nesting" s!"{tag}: Winnow built {a.signersLeaves.size} signers' leaves"
+  if c.isNested then checkMembersReadBack a c tag
+  checkAddresses a c members tag
   for s in c.signers do
     if let .core core := s then core.importAccount a
   checkSignersPath a c tag
