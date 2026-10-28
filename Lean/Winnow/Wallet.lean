@@ -16,4 +16,5 @@ import Winnow.Wallet.HistoryLedger
 import Winnow.Wallet.Characters
 import Winnow.Wallet.ImportBundle
 import Winnow.Wallet.Wallet
+import Winnow.Wallet.CloudWalletBackup
 import Winnow.Wallet.People

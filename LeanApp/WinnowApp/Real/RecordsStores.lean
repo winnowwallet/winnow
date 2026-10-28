@@ -320,6 +320,86 @@ def removeSenderLabel (s : PeopleStore) (keys : StoreKeyVault) (writeData : Writ
   | .ok n => return n
   | .error _ => return s
 
+/-! ### Backup (`PeopleStore.Backup`, for the encrypted iCloud copy) -/
+
+/-- `PeopleStore.Backup`: the file's payload, people and sender labels. -/
+structure Backup where
+  people : Array PersonRecord
+  /-- Txid display hex → person id (a Swift dictionary: order carries no meaning). -/
+  senderByTxid : Array (String × String) := #[]
+  deriving Inhabited
+
+namespace Backup
+
+private def sortedLabels (labels : Array (String × String)) : Array (String × String) :=
+  (labels.toList.mergeSort fun a b => !(b.1 < a.1)).toArray
+
+/-- Swift's `==`: the people in order, the labels as a dictionary. -/
+def same (a b : Backup) : Bool := a.people == b.people && sortedLabels a.senderByTxid == sortedLabels b.senderByTxid
+
+instance : BEq Backup := ⟨same⟩
+
+def toJV (b : Backup) : JV := .obj #[("people", .arr (b.people.map PersonRecord.toJV)), ("senderByTxid", labelsJV b.senderByTxid)]
+
+/-- `init(from:)`: `people` required, `senderByTxid` absent in older files. -/
+def ofJV (v : JV) : D Backup := do
+  let (people, senderByTxid) ← decodeEnvelope v
+  return { people, senderByTxid }
+
+end Backup
+
+/-- `backup()`: what the store holds; refused while the file is damaged. -/
+def backup (s : PeopleStore) : RM Backup := do
+  s.requireReadable
+  return { people := s.records, senderByTxid := s.senderByTxid }
+
+/-- `validateBackup(_:network:)`: the file's own rules, every sender label naming a person in the backup,
+and the file's byte ceiling. -/
+def validateBackup (b : Backup) (network : BitcoinNetwork) : RM Unit := do
+  validate b.people b.senderByTxid network
+  let ids : Std.HashSet String := b.people.foldl (fun a p => a.insert p.id) {}
+  unless b.senderByTxid.all (fun (_, id) => ids.contains id) && (write b.toJV).utf8ByteSize ≤ maximumFileBytes do
+    invalid "invalid cloud address book"
+
+/-- `planRestore(_:)`: keeps the contacts already on this device (matched by id, else by a shared key),
+never rewinds a recipient's payment counter, and remaps the incoming sender labels onto the kept ids
+without replacing a label this device already has. -/
+def planRestore (s : PeopleStore) (incoming : Backup) : RM Backup := do
+  s.requireReadable
+  validateBackup incoming s.network
+  let mut merged := s.records
+  let mut ids : Array (String × String) := #[]
+  for person in incoming.people do
+    let existing ← match merged.find? (·.id == person.id) with
+      | some e => pure (some e)
+      | none => firstSharingAKey person merged s.network
+    match existing with
+    | some e =>
+      let some i := merged.findIdx? (·.id == e.id) | continue
+      ids := setLabel ids person.id (some e.id)
+      let ours ← e.payTo.mapM (payIdentity · s.network)
+      let theirs ← person.payTo.mapM (payIdentity · s.network)
+      if ours == theirs then
+        merged := merged.modify i fun r => { r with nextPaymentIndex := max e.nextPaymentIndex person.nextPaymentIndex }
+    | none =>
+      merged := merged.push person
+      ids := setLabel ids person.id (some person.id)
+  let mut labels := s.senderByTxid
+  for (txid, id) in incoming.senderByTxid do
+    if (lookupLabel labels txid).isNone then
+      if let some mapped := lookupLabel ids id then labels := setLabel labels txid (some mapped)
+  let result : Backup := { people := merged, senderByTxid := labels }
+  validateBackup result s.network
+  return result
+
+/-- `restore(_:)`: replaces the store's contents with a validated backup, persisted before adopted. -/
+def restore (s : PeopleStore) (keys : StoreKeyVault) (writeData : WriteData) (b : Backup) : RM PeopleStore := do
+  s.requireReadable
+  validateBackup b s.network
+  let next := { s with records := b.people, senderByTxid := b.senderByTxid }
+  next.persist keys writeData
+  return next
+
 end PeopleStore
 
 /-! ## Receive address labels -/
@@ -390,6 +470,36 @@ def setLabel (s : LabelStore) (writeData : WriteData) (text address : String) : 
   let label ← RM.lift .labels (normalizedLabel text)
   let rest := s.labels.filter (·.1 != script)
   let updated := if label.isEmpty then rest else rest.push (script, label)
+  unless updated.size ≤ maximumLabels do throw (.labels .full)
+  let data := s.encode updated
+  unless data.size ≤ maximumFileBytes do throw (.labels .full)
+  RM.io (writeData data p)
+  return { s with labels := updated }
+
+/-! ### Backup (for the encrypted iCloud copy) -/
+
+/-- `validatedBackup(_:network:)`: canonical script hex that makes an address on the network, each with a
+non-empty normalized note; at most `maximumLabels` (`full`), anything else `damaged`. -/
+def validatedBackup (labels : Array (String × String)) (network : BitcoinNetwork) : RM (Array (ByteArray × String)) := do
+  unless labels.size ≤ maximumLabels do throw (.labels .full)
+  let mut out : Array (ByteArray × String) := #[]
+  for (k, label) in labels do
+    let some script := Wire.dataOfHex? k | throw (.labels .damaged)
+    unless hex script == k && (AddressDecoder.address script network).isSome &&
+        (normalizedLabel label).toOption == some label && !label.isEmpty do throw (.labels .damaged)
+    out := (out.filter (·.1 != script)).push (script, label)
+  return out
+
+/-- `backup()`: script hex → note; refused while the file is unreadable. -/
+def backup (s : LabelStore) : RM (Array (String × String)) := do
+  if s.notice.isSome then throw (.labels .damaged)
+  return s.labels.map fun (k, v) => (hex k, v)
+
+/-- `restore(_:)`: the validated labels written (as `persist`), then adopted. -/
+def restore (s : LabelStore) (writeData : WriteData) (backup : Array (String × String)) : RM LabelStore := do
+  if s.notice.isSome then throw (.labels .damaged)
+  let updated ← validatedBackup backup s.network
+  let some p := s.path | throw (.labels .unavailable)
   unless updated.size ≤ maximumLabels do throw (.labels .full)
   let data := s.encode updated
   unless data.size ≤ maximumFileBytes do throw (.labels .full)
