@@ -1,4 +1,5 @@
 import WinnowApp.Real.RecordsBackend
+import WinnowApp.Pure
 
 /-! `records-test`: a scripted run of every records operation against a temporary directory, with the
 in-memory key store and two wallets made by `Wallet.create` (two phones: A and B).
@@ -306,10 +307,31 @@ def reopenFromDisk (t : T) (a : Phone) (before : Records) : IO Unit := do
   t.check "people.json: seal over the sorted-key envelope"
     (file == SealedStoreFile.sealed (PeopleStore.encode st.people.records st.people.senderByTxid) "people" network key)
 
+/-- Upstream d2ca878's `BackgroundSyncTests`: Simple mode waits out dropped peers but shows other errors at
+once, and only link failures count as transient. -/
+def syncErrorBookkeeping (t : T) : IO Unit := do
+  let dropped := (Winnow.IO.NetError.peer (.disconnected "closed")).description
+  t.check "simple sync error: none without an error" (simpleSyncError none none 0 == none)
+  t.check "simple sync error: one dropped peer stays quiet" (simpleSyncError (some dropped) (some dropped) 1 == none)
+  t.check "simple sync error: two dropped peers stay quiet" (simpleSyncError (some dropped) (some dropped) 2 == none)
+  t.check "simple sync error: a third is said in plain words" (simpleSyncError (some dropped) (some dropped) 3 ==
+    some "Winnow keeps losing its connection to Bitcoin peers. It will keep trying.")
+  let mismatch := (Winnow.IO.NetError.filters (.filterHeaderMismatch 7)).description
+  t.check "simple sync error: another failure shows as is" (simpleSyncError (some mismatch) (some dropped) 1 == some mismatch)
+  t.check "simple sync error: a lone failure shows as is" (simpleSyncError (some mismatch) none 0 == some mismatch)
+  t.check "transient: a dropped peer" (isTransientSyncError (.peer (.disconnected "closed")))
+  t.check "transient: a timeout" (isTransientSyncError (.peer .timeout))
+  t.check "transient: peers cooling down" (isTransientSyncError (.filters (.peersCoolingDown 2)))
+  t.check "transient: no peers" (isTransientSyncError (.filters .noPeers))
+  t.check "not transient: a protocol violation" (!isTransientSyncError (.peer (.protocolViolation "bad")))
+  t.check "not transient: a checkpoint mismatch" (!isTransientSyncError (.filters (.checkpointMismatch "split")))
+  t.check "not transient: a corrupt file" (!isTransientSyncError (.other "The file couldn’t be opened because it isn’t in the correct format."))
+
 def main : IO UInt32 := do
   let t : T := { passed := ← IO.mkRef 0, failed := ← IO.mkRef #[] }
   let root ← IO.FS.createTempDir
   IO.println s!"records-test in {root}"
+  syncErrorBookkeeping t
   try
     let a ← newPhone root "A"
     let b ← newPhone root "B"
