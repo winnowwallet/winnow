@@ -532,8 +532,10 @@ def fakeSocks (target : PeerEndpoint) (refuse : Bool := false) : IO (PeerEndpoin
           let b ← buf.get
           buf.set (b.extract n b.size)
           return some (b.extract 0 n)
-        let some hello ← take 3 | return
-        unless hello == ByteArray.mk #[5, 1, 0] do discard <| sock.shutdown.toIO; return
+        -- any greeting that offers no-authentication (curl also offers GSS-API)
+        let some hello ← take 2 | return
+        let some methods ← take hello[1]!.toNat | return
+        unless hello[0]! == 5 && methods.toList.contains 0 do discard <| sock.shutdown.toIO; return
         (sock.send (ByteArray.mk #[5, 0])).block
         let some head ← take 5 | return
         unless head[0]! == 5 && head[1]! == 1 && head[3]! == 3 do discard <| sock.shutdown.toIO; return
@@ -551,6 +553,51 @@ def fakeSocks (target : PeerEndpoint) (refuse : Bool := false) : IO (PeerEndpoin
         spawn (pump up sock)
         pump sock up
   return ({ host := "127.0.0.1", port }, asked)
+
+/-- The routing gate (`RoutingTests.i2pOnlyClientRefusesPublicHosts`,
+`PeerGatewayTests.torHTTPUsesTheGatewayForRemoteResolution`): I2P alone makes no HTTP request at all;
+Tor alone fetches through its gateway, which is asked for the URL's host by name. -/
+def routedHTTPChecks (dir : String) : IO Unit := do
+  say "routed HTTP (the gateway gate)"
+  let calls ← IO.mkRef 0
+  let counting : HttpFetch := fun _ => do calls.modify (· + 1); return .response 200 none "OK".toUTF8
+  let i2pOnly : PeerGatewayConfiguration := { networks := [.i2p], i2pProxy := some { host := "100.74.30.8", port := 4447 } }
+  let refusing ← RoutedHTTPClient.ofGateways counting i2pOnly
+  check "i2p only: the client is not enabled" (!refusing.enabled)
+  check "i2p only: a public host is unavailable"
+    (match ← (refusing.get "http://127.0.0.1:1/census/peers.json" 8).attempt with | .error (.http .unavailable) => true | _ => false)
+  check "i2p only: nothing was fetched" ((← calls.get) == 0)
+  let disabled ← RoutedHTTPClient.new counting (enabled := false)
+  check "a disabled client refuses" ((match ← (disabled.get "https://example.com" 1024).attempt with
+    | .error (.http .unavailable) => true | _ => false) && (← calls.get) == 0)
+  let badProxy ← RoutedHTTPClient.new counting (proxy := some { host := "a b", port := 9050 })
+  check "an implausible proxy disables the client" (!badProxy.enabled)
+  let torOnly : PeerGatewayConfiguration := { networks := [.tor], torProxy := some { host := "100.74.30.9", port := 9050 } }
+  let viaTor ← RoutedHTTPClient.ofGateways counting torOnly
+  let both : PeerGatewayConfiguration := { networks := [.clearnet, .tor], torProxy := some { host := "100.74.30.9", port := 9050 } }
+  check "tor only: through the gateway; with clearnet: direct"
+    (viaTor.enabled && viaTor.proxy == torOnly.torProxy && (← RoutedHTTPClient.ofGateways counting both).proxy.isNone)
+  let seen ← IO.mkRef (none : Option HttpRequest)
+  let recording : HttpFetch := fun r => do seen.set (some r); return .response 200 none "OK".toUTF8
+  discard <| ((← RoutedHTTPClient.ofGateways recording torOnly).get "https://example.com/x" 8).attempt
+  check "tor only: every hop names the proxy, with the longer limits" (match ← seen.get with
+    | some r => r.socks == torOnly.torProxy && r.requestTimeoutSeconds == 90 && r.resourceTimeoutSeconds == 180
+    | none => false)
+  -- The curl fetch through a SOCKS5 gateway to the local Python server (offlineChecks wrote its script).
+  let server ← IO.Process.spawn { cmd := "python3", args := #["-I", s!"{dir}/http_server.py"], stdout := .piped,
+                                  stderr := .null, stdin := .null }
+  try
+    let port := (← server.stdout.getLine).trimAscii.toString
+    let (gateway, asked) ← fakeSocks { host := "127.0.0.1", port := port.toNat!.toUInt16 }
+    let http ← RoutedHTTPClient.new (curlFetch "/usr/bin/curl") (proxy := some gateway)
+    let body ← (http.get "http://gateway-http.invalid/ok" 100).attempt
+    check "tor: the body arrives through the gateway" (match body with | .ok b => b == "hello".toUTF8 | _ => false)
+      (match body with | .error e => e.description | .ok b => s!"{b.size} bytes")
+    check "tor: the gateway was asked for the URL's host by name" ((← asked.get) == #["gateway-http.invalid"])
+      s!"{← asked.get}"
+    http.cancel
+  finally
+    server.kill
 
 /-- A MagicDNS answer for `host`: `addresses` as A records under a compression pointer to the question. -/
 def dnsAnswer (id : UInt16) (host : String) (addresses : List (List UInt8)) (flags : UInt16 := 0x8180) : ByteArray := Id.run do
@@ -907,6 +954,7 @@ def main (args : List String) : IO UInt32 := do
   try
     offlineChecks dir
     fakeChecks dir
+    routedHTTPChecks dir
     nodeChecks dir n swift
     gatewayChecks n
   catch e =>
