@@ -48,6 +48,9 @@ structure Mode where
   Ledger's seed, which then answers in place of Bluetooth. `some none` when it is set but unreadable,
   which the launch refuses rather than fall back to the radio. -/
   ledgerEntropy : Option (Option ByteArray) := none
+  /-- `WINNOW_E2E_LIVE_GATEWAYS=1`: let Automatic routing probe the real tailnet. Only the live gateway
+  journey sets it; every other run keeps discovery off so it never depends on the developer's network. -/
+  liveGateways : Bool := false
 
 inductive Resolution where
   | inactive
@@ -115,7 +118,8 @@ def resolve (env : String → Option String) : Resolution :=
         peerCount := (env "WINNOW_E2E_PEER_COUNT").bind swiftInt? |>.bind fun n => if n > 0 then some n.toNat else none
         syncIntervalSeconds := (env "WINNOW_E2E_SYNC_INTERVAL").bind parseDouble |>.bind fun d => if d > 0 then some d else none
         ledgerEntropy := (env "WINNOW_E2E_LEDGER").map fun h =>
-          (Wire.dataOfHex? h).filter fun e => 16 ≤ e.size && e.size ≤ 32 && e.size % 4 == 0 }
+          (Wire.dataOfHex? h).filter fun e => 16 ≤ e.size && e.size ≤ 32 && e.size % 4 == 0
+        liveGateways := env "WINNOW_E2E_LIVE_GATEWAYS" == some "1" }
 
 namespace Mode
 

@@ -146,7 +146,8 @@ def snapshot (env : Env) : IO (Status × SyncPhase) := do
     s := { s with peerCount := (← stack.pool.connectedPeers).size, tipHeight := (← stack.chain.height).toNat
                   feeFloorMilli := ← feeFloorMilli stack.pool }
     if let some f := stack.filters then s := { s with nextScanHeight := (← f.nextScanHeight).toNat }
-  s := { s with syncing := c.syncing, lastSyncError := c.lastSyncError, relayStoreQuarantined := c.relayStoreQuarantined }
+  s := { s with syncing := c.syncing, lastSyncError := c.lastSyncError, relayStoreQuarantined := c.relayStoreQuarantined,
+                activeGateways := c.activeGateways, discoveringGateways := c.discoveringGateways }
   journalSnapshotIfChanged env s
   return (s, phase)
 

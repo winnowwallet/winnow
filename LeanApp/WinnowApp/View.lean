@@ -66,7 +66,7 @@ def confirms (m : Model) : List H :=
     [.alert "Turn on Advanced mode?" "The app changes to three tabs — Wallet, Send and Settings — with fee controls, network settings and technical details. Simple, on the Wallet tab, brings this screen back and keeps every setting you changed."
        [.button "Turn on" .primary (some (.setAdvanced true)), cancel]]
   | some .deleteWallet =>
-    [.alert "Delete this wallet?" "This deletes the key from this device. Anyone holding the recovery phrase can still restore it; without that phrase, any money in this wallet is unrecoverable. Check you have the phrase written down before continuing."
+    [.alert "Delete this wallet?" "This deletes the key from this device. Winnow can restore it from your iCloud backup or from a backup file that includes the recovery phrase. Without one of those or the phrase itself, any money in this wallet is unrecoverable. Check you have one before continuing."
        [.button "Delete wallet" .destructive (some (.settings .deleteWallet)), cancel]]
   | some (.deleteFailed msg) =>
     [.alert "Could not delete the wallet" msg [.button "OK" .plain (some .dismissConfirm)]]
@@ -99,7 +99,7 @@ def confirms (m : Model) : List H :=
        [.button s!"Open {host.getD "explorer"}" .plain (some (.openURL url)), cancel]]
   | none =>
     if m.settings.torRemovedNotice then
-      [.alert "Tor is no longer part of Winnow" "This version connects to Bitcoin peers directly. Your Tor setting was on, and it no longer applies: peers and the explorer see your connection's IP address. Tor and I2P are on the roadmap at winnowwallet.com/roadmap."
+      [.alert "Built-in Tor was removed" "Your old built-in Tor setting no longer applies. Automatic routing uses your Tor and I2P gateways on Tailscale when they answer, and connects directly when none do. To require Tor, open Advanced Settings, choose Manual gateway routing, and select only Tor peers with your gateway address."
          [.button "OK" .plain (some (.settings .dismissTor))]]
     else []
 

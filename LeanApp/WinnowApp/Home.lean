@@ -170,11 +170,19 @@ def accountsBalanceLine (m : Model) : List H :=
 /-- The headline: the wallet's and the accounts' coins together. -/
 def totalBalance (m : Model) : Int := m.status.balance + m.status.accountsBalance
 
+/-- `PeerRoutingBanner`: Simple mode's routing line (a lock when every peer is behind Tor or I2P, a warning
+when any peer can see the phone's IP address). -/
+def peerRoutingBanner (m : Model) : H :=
+  let state := PeerRoutingState.current m.settings.peerGatewaySettings.mode m.status.activeGateways m.status.discoveringGateways
+  .identified "peerRoutingBanner" (.row [.icon state.symbol, caption state.message])
+
 def balanceSection (m : Model) : H :=
   .section "" "" ([ caption "Balance", .identified "balanceText" (.text (satsText (totalBalance m)) .title) ] ++
                   accountsBalanceLine m ++ [
-                    .row ([syncLine m] ++ (if m.settings.network == .mainnet then [] else [caption "Signet · test coins"])) ] ++
-                  (if m.phase.summary m.status.syncing == .peersUnavailable then [.button "Retry" .plain (some .retryPeers)] else []) ++
+                    .row ([syncLine m] ++ (if m.settings.network == .mainnet then [] else [.identified "networkTag" (caption "Signet · test coins")])) ] ++
+                  (if m.settings.network == .mainnet then [peerRoutingBanner m] else []) ++
+                  (if m.phase.summary m.status.syncing == .peersUnavailable then
+                    [.identified "retryPeersButton" (.button "Retry" .plain (some .retryPeers))] else []) ++
                   errorRows m.status.lastSyncError)
 
 def activitySection (m : Model) : H :=

@@ -37,7 +37,7 @@ def e2eVariables : List String :=
   ["WINNOW_E2E", "WINNOW_E2E_ENTROPY", "WINNOW_E2E_MNEMONIC", "WINNOW_E2E_RUN", "WINNOW_E2E_PEER",
    "WINNOW_E2E_CHALLENGE", "WINNOW_E2E_RESET", "WINNOW_E2E_CLIPBOARD", "WINNOW_E2E_NETWORK", "WINNOW_E2E_TAB",
    "WINNOW_E2E_DEVICE_AUTH", "WINNOW_E2E_ADVANCED", "WINNOW_E2E_CONTROL_FILE", "WINNOW_E2E_PEER_COUNT",
-   "WINNOW_E2E_SYNC_INTERVAL", "WINNOW_E2E_LEDGER"]
+   "WINNOW_E2E_SYNC_INTERVAL", "WINNOW_E2E_LEDGER", "WINNOW_E2E_LIVE_GATEWAYS"]
 
 /-- `E2EMode.current` in a Debug build: inactive, active, or — without pinned entropy — a stop, because a
 capture run that generated a real seed would publish it. -/
@@ -111,7 +111,8 @@ def chooseBackend (fx : Effects Host) (mode : Option E2E.Mode := none) : IO Unit
   if (← debugBuild.get) && (← IO.getEnv "WINNOW_LEAN_SAMPLE") == some "1" then backendRef.set Backend.sample
   else
     let service := (mode.map (·.keychainService)).getD Real.walletService
-    let deps : Real.Deps := { keyStore := Real.shellKeyStore fx.ask service, fetch := Real.shellFetch fx.ask }
+    let deps : Real.Deps := { keyStore := Real.shellKeyStore fx.ask service, fetch := Real.shellFetch fx.ask,
+                              discoverGateways := some (Winnow.IO.discoverGateways) }
     let deps := match mode with
       | none => deps
       | some m =>
@@ -120,7 +121,9 @@ def chooseBackend (fx : Effects Host) (mode : Option E2E.Mode := none) : IO Unit
           syncIntervalMs := (m.syncIntervalSeconds.map fun s => (s * 1000).toUInt64.toNat).getD deps.syncIntervalMs
           networkParams := m.networkParams
           entropy := m.entropy
-          journal := fun n f => journal n f }
+          journal := fun n f => journal n f
+          -- UI journeys never probe the developer's real tailnet, except the live gateway journey
+          discoverGateways := if m.liveGateways then deps.discoverGateways else none }
     -- the Ledger: Bluetooth through the shell, or test mode's simulated device with its pinned seed
     let ledger ← match mode.bind (·.ledgerEntropy) |>.join with
       | some entropy =>

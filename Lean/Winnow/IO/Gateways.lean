@@ -107,6 +107,28 @@ structure PeerGatewaySettings where
   manual : PeerGatewayConfiguration := {}
   deriving BEq, Repr, Inhabited
 
+namespace PeerGatewaySettings
+
+def modes : List String := ["automatic", "direct", "manual"]
+
+/-- `Codable`: `{"mode": "automatic"|"direct"|"manual", "manual": {…}}`. -/
+def toJson (s : PeerGatewaySettings) : Json := Json.mkObj [("mode", .str s.mode), ("manual", s.manual.toJson)]
+
+def ofJson? (j : Json) : Option PeerGatewaySettings := do
+  let mode ← (j.getObjValAs? String "mode").toOption
+  unless modes.contains mode do none
+  let manual ← PeerGatewayConfiguration.ofJson? (← (j.getObjVal? "manual").toOption)
+  return { mode, manual }
+
+/-- What saved settings that cannot be read become (`AppModel.init`): manual with no network, so
+networking stays offline rather than fall back to direct connections. -/
+def unreadable : PeerGatewaySettings := { mode := "manual", manual := { networks := [] } }
+
+/-- The routing in effect before (or without) discovery: the manual gateways, else clearnet. -/
+def initialActive (s : PeerGatewaySettings) : PeerGatewayConfiguration := if s.mode == "manual" then s.manual else {}
+
+end PeerGatewaySettings
+
 /-! ## Discovery (`TailnetGatewayDiscovery`) -/
 
 /-- An address in the tailnet's CGNAT block (100.64.0.0/10), not MagicDNS itself. -/

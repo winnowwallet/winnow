@@ -35,7 +35,7 @@ def onHost (h : Host) (m : Model) : Model × List Cmd :=
   match h with
   | .launched forced tab => ({ m with forcedNetwork := forced, tab := tab }, [])
   | .settingsLoaded s =>
-    let m := { m with settings := s }
+    let m := { m with settings := s }.loadGatewayDraft
     (m, [.openWallet m.generation s.network true])
   | .booted g r =>
     if !current g then (m, []) else
@@ -235,7 +235,9 @@ def step (msg : Msg) (m : Model) : Model × List Cmd :=
   | .setAdvanced b =>
     if b == m.settings.advancedMode then ({ m with confirm := none }, []) else
     let s := { m.settings with advancedMode := b }
-    ({ m with settings := s, confirm := none, tab := 0, routes := [], tabRoutes := [] },
+    -- the Settings tab is a new view: its staged gateway edits start again from the saved settings
+    let m := { m with settingsDraft := { m.settingsDraft with gatewaysLoaded := false, gatewayError := none } }
+    ({ m with settings := s, confirm := none, tab := 0, routes := [], tabRoutes := [] }.loadGatewayDraft,
      [.saveSettings s, .journal "setting.advancedMode" [("enabled", toString b)]])
   | .dismissConfirm => ({ m with confirm := none }, [])
   | .selectTab i =>

@@ -47,6 +47,66 @@ def isTransientSyncError : Winnow.IO.NetError → Bool
   | .filters (.peersCoolingDown _) | .filters (.crossCheckUnavailable _) | .filters .noPeers => true
   | _ => false
 
+/-! ## Peer routing (`PeerRoutingBanner.swift`, `PeerGatewaysSection.swift`, upstream d2ca878) -/
+
+/-- `PeerRoutingState`: how this phone reaches Bitcoin peers, as one line a beginner can read. -/
+inductive PeerRoutingState where
+  | checking
+  /-- Every peer goes through the named overlays; none sees the phone's IP. -/
+  | overlay (tor i2p : Bool)
+  /-- Some peers are direct and some go through a gateway. -/
+  | mixed
+  /-- Every peer is direct. `fallback` means Automatic found no gateway. -/
+  | direct (fallback : Bool)
+  | offline
+  deriving Repr, BEq, Inhabited
+
+namespace PeerRoutingState
+open Winnow.IO
+
+def current (mode : String) (active : PeerGatewayConfiguration) (discovering : Bool) : PeerRoutingState :=
+  if discovering then .checking
+  else if !active.isValid then .offline
+  else
+    let tor := active.networks.contains .tor
+    let i2p := active.networks.contains .i2p
+    if !active.networks.contains .clearnet then .overlay tor i2p
+    else if tor || i2p then .mixed
+    else .direct (mode == "automatic")
+
+def message : PeerRoutingState → String
+  | .checking => "Checking your Tor and I2P gateways…"
+  | .overlay tor i2p => s!"Private: peers reached through {if tor && i2p then "Tor and I2P" else if tor then "Tor" else "I2P"}"
+  | .mixed => "Some peers are direct and can see your IP address"
+  | .direct true => "Direct: peers can see your IP address. No Tor or I2P gateway found; connect Tailscale, then return to Winnow."
+  | .direct false => "Direct: peers can see your IP address"
+  | .offline => "Offline: peer routing settings are invalid"
+
+def symbol : PeerRoutingState → String
+  | .checking => "network"
+  | .overlay .. => "lock.shield.fill"
+  | .mixed | .direct _ => "exclamationmark.triangle.fill"
+  | .offline => "xmark.octagon.fill"
+
+end PeerRoutingState
+
+/-- `PeerGatewaysSection.address(_:)`: an IPv6 host in brackets. -/
+def gatewayAddressText (e : Winnow.Net.PeerEndpoint) : String :=
+  if e.host.toList.contains ':' then s!"[{e.host}]:{e.port}" else s!"{e.host}:{e.port}"
+
+/-- `SettingsView.PeerInfo.networkLabel`. -/
+def peerNetworkLabel : Winnow.IO.PeerNetwork → String
+  | .clearnet => "Clearnet · sees your IP"
+  | .tor => "Tor"
+  | .i2p => "I2P"
+
+/-- `AppModel.backgroundRoutingAllowed`: a background check has no banner, so after the foreground last
+reached peers through Tor or I2P, Automatic routing that found no gateway waits for the app to open
+rather than connect directly. Direct only and Manual are followed exactly as in the foreground. -/
+def backgroundRoutingAllowed (mode : String) (resolved : Winnow.IO.PeerGatewayConfiguration)
+    (foregroundUsedGateways : Bool) : Bool :=
+  mode != "automatic" || !resolved.networks.contains .clearnet || !foregroundUsedGateways
+
 /-! ## History -/
 
 /-- `AppModel.historyForDisplay` (AppModel.swift:1010): newest block first; a replaced transaction sorts with the one that

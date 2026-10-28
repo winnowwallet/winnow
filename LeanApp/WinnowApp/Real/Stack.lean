@@ -104,6 +104,50 @@ def Window.close (w : Window) : IO Unit := do
   w.window.stop
   w.events.cancel
 
+/-! ## Peer routing -/
+
+/-- `preparePeerGateways()`: resolve the routing once per networking generation. Direct only is clearnet,
+Manual the gateways typed in, Automatic what discovery finds (callers of one generation share one
+discovery). A generation that ended meanwhile installs nothing. No discovered address is persisted:
+the next generation asks again. The routed HTTP client follows the routing. -/
+def preparePeerGateways (env : Env) : IO Unit := do
+  let c ← env.get
+  let epoch := c.generation
+  if c.preparedGatewayGeneration == some epoch then return
+  let settings := c.gatewaySettings
+  let config ← match settings.mode with
+    | "direct" => pure {}
+    | "manual" => pure settings.manual
+    | _ =>
+      match env.deps.discoverGateways with
+      | none => pure {}
+      | some discover =>
+        let p ← IO.Promise.new
+        let (mine, t) ← env.modifyGet fun c =>
+          match c.gatewayDiscovery with
+          | some t => ((false, t), c)
+          | none =>
+            if c.generation != epoch then ((false, Task.pure none), c)
+            else ((true, p.result?), { c with gatewayDiscovery := some p.result?, discoveringGateways := true })
+        if mine then
+          discard <| IO.asTask (prio := .dedicated) do
+            let r ← try discover catch _ => pure {}
+            p.resolve r
+        pure ((← IO.wait t).getD {})
+  let claim ← env.modifyGet fun c =>
+    if c.generation != epoch then (none, c) else
+    (some (c.active, c.activeGateways == config && c.httpGateways == config, c.http, c.dir),
+     { c with preparedGatewayGeneration := some epoch, gatewayDiscovery := none, discoveringGateways := false })
+  let some (active, same, old, dir) := claim | return
+  if settings.mode == "automatic" && active then
+    if let some d := dir then
+      try IO.FS.writeFile (gatewaysUsedPath d) (toString !(config.networks.contains .clearnet)) catch _ => pure ()
+  if same && !(← old.isCancelled) then return
+  let fresh ← RoutedHTTPClient.ofGateways env.deps.fetch config
+  let replaced ← env.modifyGet fun c =>
+    if c.generation == epoch then (some c.http, { c with activeGateways := config, http := fresh, httpGateways := config }) else (none, c)
+  if let some o := replaced then o.cancel
+
 /-- `buildStackIfNeeded()`. Unlike AppModel it does not require `isActive`: the Lean app creates and
 imports wallets during onboarding before networking is started (see the module doc of `Real.lean`). -/
 partial def buildStackIfNeeded (env : Env) : IO Unit := do
@@ -124,14 +168,19 @@ partial def buildStackIfNeeded (env : Env) : IO Unit := do
   | some (some (dir, network, c)) =>
     let epoch := c.generation
     try
+      -- creation, import and activation all wait for the same routing decision
+      preparePeerGateways env
+      let c ← env.get
+      if c.generation != epoch then return
       let params := env.deps.networkParams.getD (NetworkParams.params (Network.net network))
       let key := keyFor c.settings network
       let manual := key.manualPeers.filterMap parsePeerEndpoint
       -- `censusCatalog: network == .mainnet ? CensusCatalog.bundled : nil`
       let catalog ← if network == .mainnet then env.deps.census else pure none
       let pool ← PeerPool.new params (peerCount := env.deps.peerCount) (manualPeers := manual.toArray)
-        (peersFile := some (dirFile dir "peers.json")) (relayPreference := true) (dialTimeoutMs := 5_000)
-        (seedResolver := some (SeedResolver.routed c.http)) (censusCatalog := catalog)
+        (peersFile := some (dirFile dir "peers.json")) (relayPreference := true)
+        (dialTimeoutMs := if c.activeGateways.networks == [.clearnet] then 5_000 else 30_000)
+        (seedResolver := some (SeedResolver.routed c.http)) (censusCatalog := catalog) (gateways := c.activeGateways)
         (avoidOnReset := c.peersToAvoid) (httpFetch := env.deps.fetch)
       let start ← chainStart c.wallet params key.verifyFromGenesis
       let chain ← runNet (openOrRebuildChain params (dirFile dir "headers.bin") start)
@@ -156,10 +205,12 @@ partial def buildStackIfNeeded (env : Env) : IO Unit := do
 /-- `suspendNetworking()` + `stopNetworking()`: ends the generation, then stops everything it ran.
 `keepActive` is for the rebuilds (`reconnect`, `resetPeers`), which activate again right after. -/
 def suspendAndStop (env : Env) (keepActive : Bool) : IO Unit := do
-  let fresh ← RoutedHTTPClient.new env.deps.fetch
+  let routing := (← env.get).activeGateways
+  let fresh ← RoutedHTTPClient.ofGateways env.deps.fetch routing
   let (old, stack, windows) ← env.modifyGet fun c =>
     ((c.http, c.stack, c.receiveWindow.toList ++ c.relayWindows.toList.map (·.2)),
-     { c with generation := c.generation + 1, active := keepActive && c.active, http := fresh, stack := none,
+     { c with generation := c.generation + 1, active := keepActive && c.active, http := fresh, httpGateways := routing, stack := none,
+              gatewayDiscovery := none, discoveringGateways := false,
               receiveWindow := none, relayWindows := #[], syncLoop := none, phaseLoop := none,
               loopToken := c.loopToken + 1, phase := .idle })
   old.cancel

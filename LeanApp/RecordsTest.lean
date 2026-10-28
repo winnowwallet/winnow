@@ -1,5 +1,8 @@
 import WinnowApp.Real.RecordsBackend
-import WinnowApp.Pure
+import WinnowApp.Real
+import WinnowApp.View
+import ElmLean.Erase
+import ElmLean.Json
 
 /-! `records-test`: a scripted run of every records operation against a temporary directory, with the
 in-memory key store and two wallets made by `Wallet.create` (two phones: A and B).
@@ -327,11 +330,159 @@ def syncErrorBookkeeping (t : T) : IO Unit := do
   t.check "not transient: a checkpoint mismatch" (!isTransientSyncError (.filters (.checkpointMismatch "split")))
   t.check "not transient: a corrupt file" (!isTransientSyncError (.other "The file couldn’t be opened because it isn’t in the correct format."))
 
+/-! ## Peer gateways (upstream d2ca878 `PeerGatewayModelTests`) -/
+
+def contains (haystack needle : String) : Bool := (haystack.splitOn needle).length > 1
+
+open Winnow.IO in
+def discoveredTor : PeerGatewayConfiguration := { networks := [.tor], torProxy := some { host := "100.75.175.127", port := 9050 } }
+
+/-- A backend core over nothing (no peer, no HTTPS): routing is all these tests drive. -/
+def gatewayEnv (discover : Option (IO Winnow.IO.PeerGatewayConfiguration)) : IO Real.Env := do
+  let ks := Winnow.inMemoryKeyStore (← IO.mkRef {})
+  let env ← Real.Env.new { keyStore := ks, fetch := fun _ => throw (.other "offline"), discoverGateways := discover }
+  return env
+
+def relaunch (s : Settings) : Settings :=
+  match Lean.Json.parse (Lean.toJson s).compress >>= Lean.fromJson? with
+  | .ok s' => s'
+  | .error _ => {}
+
+open Winnow.IO in
+def peerGatewayModel (t : T) : IO Unit := do
+  -- testAutomaticDefaultAndManualOverridePersistAcrossModes
+  let m : Model := { stage := .ready, settings := { advancedMode := true } }
+  t.check "gateways: Automatic by default" (m.settings.peerGatewaySettings.mode == "automatic" && (relaunch {}).peerGatewaySettings == {})
+  let m := m.loadGatewayDraft
+  let config : PeerGatewayConfiguration := { networks := [.i2p], i2pProxy := some { host := "gateway", port := 4447 } }
+  let m := (stepSettings (.setGatewayMode 2) m).1
+  let m := (stepSettings (.setGatewayNetwork .clearnet false) m).1
+  let m := (stepSettings (.setGatewayNetwork .i2p true) m).1
+  let m := (stepSettings (.setI2PAddress "gateway:4447") m).1
+  let (m, cs) := stepSettings .applyGateways m
+  t.check "gateways: Apply saves the manual gateways" (m.settings.peerGatewaySettings == { mode := "manual", manual := config })
+    (reprStr m.settings.peerGatewaySettings)
+  t.check "gateways: Apply saves and reconnects" (cs.length == 2 && cs.any (· matches .reconnect ..) && cs.any (· matches .saveSettings _))
+  let m := (step (.setAdvanced false) m).1
+  let relaunched := relaunch m.settings
+  t.check "gateways: the manual override survives Simple mode and a relaunch" (relaunched.peerGatewaySettings == { mode := "manual", manual := config })
+  let http ← RoutedHTTPClient.ofGateways (fun _ => throw (.other "offline")) relaunched.peerGatewaySettings.initialActive
+  t.check "gateways: I2P alone makes no HTTP request" (!http.enabled)
+  let m := { m with settings := { m.settings with advancedMode := true } }.loadGatewayDraft
+  let m := (stepSettings (.setGatewayNetwork .i2p false) m).1
+  let (bad, badCmds) := stepSettings .applyGateways m
+  t.check "gateways: an invalid edit does not overwrite the settings"
+    (bad.settings.peerGatewaySettings.manual == config && badCmds.isEmpty &&
+     bad.settingsDraft.gatewayError == some PeerGatewayConfiguration.Invalid.configuration.description)
+  let (typo, _) := stepSettings .applyGateways (stepSettings (.setI2PAddress "gateway") (stepSettings (.setGatewayNetwork .i2p true) m).1).1
+  t.check "gateways: an incomplete address is refused" (typo.settingsDraft.gatewayError == some PeerGatewayConfiguration.Invalid.address.description &&
+    typo.settings.peerGatewaySettings.manual == config)
+  let (direct, _) := stepSettings .applyGateways (stepSettings (.setGatewayMode 1) m).1
+  t.check "gateways: Direct only persists" ((relaunch direct.settings).peerGatewaySettings.mode == "direct")
+  t.check "gateways: Direct only keeps the manual gateways for later" ((relaunch direct.settings).peerGatewaySettings.manual == config)
+  -- testRoutingBannerSaysWhetherPeersSeeTheIPAddress
+  let tor : Winnow.Net.PeerEndpoint := { host := "100.75.175.127", port := 9050 }
+  let i2p : Winnow.Net.PeerEndpoint := { host := "100.74.30.8", port := 4447 }
+  let state (mode : String) (c : PeerGatewayConfiguration) (discovering := false) := PeerRoutingState.current mode c discovering
+  t.check "banner: Tor and I2P" (state "automatic" { networks := [.tor, .i2p], torProxy := some tor, i2pProxy := some i2p } == .overlay true true)
+  t.check "banner: Tor" (state "automatic" { networks := [.tor], torProxy := some tor } == .overlay true false)
+  t.check "banner: Automatic found nothing" (state "automatic" {} == .direct true)
+  t.check "banner: Direct only" (state "direct" {} == .direct false)
+  t.check "banner: mixed" (state "manual" { networks := [.clearnet, .i2p], i2pProxy := some i2p } == .mixed)
+  t.check "banner: checking" (state "automatic" {} true == .checking)
+  t.check "banner: offline" (state "manual" { networks := [] } == .offline)
+  t.check "banner: the private line" ((PeerRoutingState.overlay true true).message == "Private: peers reached through Tor and I2P")
+  t.check "banner: a fallback says the IP is seen" (contains (PeerRoutingState.direct true).message "can see your IP address")
+  t.check "banner: mixed says the IP is seen" (contains PeerRoutingState.mixed.message "can see your IP address")
+  let banner := (ElmLean.Html.toWire (.list (beginnerSections { m with settings := { network := .mainnet } }) : H)).toJson.compress
+  t.check "banner: Simple mode shows it on mainnet" (contains banner "peerRoutingBanner" && contains banner "Direct: peers can see your IP address. No Tor")
+  let signet := (ElmLean.Html.toWire (.list (beginnerSections { m with settings := { network := .signet } }) : H)).toJson.compress
+  t.check "banner: not on signet" (!contains signet "peerRoutingBanner")
+  -- testCandidateCountFollowsRoutedNetworks
+  let entry : CensusEntry := { host := "8.8.8.8", port := 8333, userAgent := "/Satoshi:30/", startHeight := 900_000 }
+  let nets := #[("clearnet", #[entry, entry]), ("tor", #[entry]), ("i2p", #[entry, entry, entry])]
+  let catalog : CensusCatalog := { date := "2026-09-28", tip := 900_000, networks := nets }
+  t.check "candidates: clearnet" (Real.candidateCount catalog == "2 candidates")
+  t.check "candidates: I2P" (Real.candidateCount catalog [.i2p] == "3 candidates")
+  t.check "candidates: Tor" (Real.candidateCount catalog [.tor] == "1 candidate")
+  t.check "candidates: all three" (Real.candidateCount catalog [.clearnet, .tor, .i2p] == "6 candidates")
+  -- testCorruptSavedSettingsStayOffline
+  let corrupt : Settings := match Lean.Json.parse "{\"peerGatewaySettings\":\"broken\"}" >>= Lean.fromJson? with
+    | .ok s => s | .error _ => {}
+  t.check "corrupt settings: read as offline" (corrupt.peerGatewaySettings == PeerGatewaySettings.unreadable)
+  let env ← gatewayEnv (some (pure discoveredTor))
+  env.modify (·.withSettings corrupt)
+  Real.preparePeerGateways env
+  let c ← env.get
+  t.check "corrupt settings: networking stays offline" (!c.activeGateways.isValid && !c.http.enabled)
+  -- testDiscoveredAddressesAreNotPersisted
+  let env ← gatewayEnv (some (pure discoveredTor))
+  let saved : Settings := {}
+  env.modify (·.withSettings saved)
+  Real.preparePeerGateways env
+  let c ← env.get
+  t.check "discovery: the gateways found are in use" (c.activeGateways == discoveredTor && c.http.proxy == discoveredTor.torProxy)
+  t.check "discovery: nothing is persisted" (!contains (Lean.toJson saved).compress "100.75.175.127")
+  let fresh ← gatewayEnv none
+  t.check "discovery: a relaunch starts from clearnet" ((← fresh.get).activeGateways == {})
+  -- testDiscoveryIsSharedUntilTheNetworkingGenerationEnds
+  let asked ← IO.mkRef 0
+  let gate ← IO.mkRef (← IO.Promise.new : IO.Promise PeerGatewayConfiguration)
+  let discover : IO PeerGatewayConfiguration := do
+    asked.modify (· + 1)
+    let p ← gate.get
+    return (← IO.wait p.result?).getD {}
+  let env ← gatewayEnv (some discover)
+  env.modify (·.withSettings {})
+  let first ← IO.asTask (Real.preparePeerGateways env)
+  while (← asked.get) == 0 do IO.sleep 5
+  let second ← IO.asTask (Real.preparePeerGateways env)
+  IO.sleep 50
+  t.check "discovery: Checking while it runs" (← env.get).discoveringGateways
+  (← gate.get).resolve discoveredTor
+  discard <| IO.wait first
+  discard <| IO.wait second
+  Real.preparePeerGateways env
+  t.check "discovery: one discovery for every caller of a generation" ((← asked.get) == 1 && (← env.get).activeGateways == discoveredTor)
+  t.check "discovery: done" (!(← env.get).discoveringGateways)
+  gate.set (← IO.Promise.new)
+  Real.stopNetworking env
+  let next ← IO.asTask (Real.preparePeerGateways env)
+  while (← asked.get) < 2 do IO.sleep 5
+  (← gate.get).resolve {}
+  discard <| IO.wait next
+  t.check "discovery: the next generation asks again" ((← asked.get) == 2 && (← env.get).activeGateways == {})
+  -- testBackgroundAndManualChangeDiscardStaleDiscovery
+  for changeMode in [false, true] do
+    let gate ← IO.Promise.new
+    let started ← IO.mkRef false
+    let env ← gatewayEnv (some do started.set true; return (← IO.wait gate.result?).getD {})
+    env.modify (·.withSettings {})
+    let task ← IO.asTask (Real.preparePeerGateways env)
+    while !(← started.get) do IO.sleep 5
+    if changeMode then Real.reconnect env { peerGatewaySettings := { mode := "direct" } }
+    else Real.stopNetworking env
+    gate.resolve discoveredTor
+    discard <| IO.wait task
+    let c ← env.get
+    t.check s!"stale discovery is dropped ({if changeMode then "mode change" else "background"})"
+      (c.activeGateways == {} && !c.discoveringGateways)
+  -- AppModel.backgroundRoutingAllowed (BackgroundSyncTests)
+  let torGw : Winnow.Net.PeerEndpoint := { host := "100.64.0.1", port := 9050 }
+  let i2pGw : Winnow.Net.PeerEndpoint := { host := "100.64.0.2", port := 4447 }
+  let overlay : PeerGatewayConfiguration := { networks := [.tor, .i2p], torProxy := some torGw, i2pProxy := some i2pGw }
+  t.check "background: no direct connection after the foreground used gateways" (!backgroundRoutingAllowed "automatic" {} true)
+  t.check "background: through the gateways found" (backgroundRoutingAllowed "automatic" overlay true)
+  t.check "background: direct when the foreground was direct too" (backgroundRoutingAllowed "automatic" {} false)
+  t.check "background: Direct only as chosen" (backgroundRoutingAllowed "direct" {} true)
+  t.check "background: Manual as chosen" (backgroundRoutingAllowed "manual" overlay true)
+
 def main : IO UInt32 := do
   let t : T := { passed := ← IO.mkRef 0, failed := ← IO.mkRef #[] }
   let root ← IO.FS.createTempDir
   IO.println s!"records-test in {root}"
   syncErrorBookkeeping t
+  peerGatewayModel t
   try
     let a ← newPhone root "A"
     let b ← newPhone root "B"

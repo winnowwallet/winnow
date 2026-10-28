@@ -95,6 +95,10 @@ structure Deps where
   entropy : Option ByteArray := none
   /-- `e2e?.journal(_:fields:)`: test mode's event journal; a no-op otherwise. -/
   journal : String → List (String × String) → IO Unit := fun _ _ => pure ()
+  /-- `TailnetGatewayDiscovery().discover()` for Automatic routing. None never probes and resolves to
+  clearnet: tests, and test mode unless `WINNOW_E2E_LIVE_GATEWAYS=1` (a UI journey never depends on the
+  developer's tailnet). -/
+  discoverGateways : Option (IO PeerGatewayConfiguration) := none
   hooks : Hooks := {}
 
 /-! ## AppModel's errors and the texts the app shows -/
@@ -219,6 +223,7 @@ structure StackKey where
   network : WinnowApp.Network
   manualPeers : List String
   verifyFromGenesis : Bool
+  gateways : PeerGatewaySettings := {}
   deriving BEq
 
 /-- `AppModel.SyncStack`: peer pool, header chain, filter sync (once a wallet exists), broadcaster. -/
@@ -282,6 +287,17 @@ structure Core where
   bumps : Array (String × Winnow.FeeBumpPreview) := #[]
   peersToAvoid : Array PeerEndpoint := #[]
   http : RoutedHTTPClient
+  /-- `gatewaySettings`: what the user chose (the settings' `peerGatewaySettings`). -/
+  gatewaySettings : PeerGatewaySettings := {}
+  /-- `activePeerGateways`: the routing in effect for this generation. -/
+  activeGateways : PeerGatewayConfiguration := {}
+  /-- The routing `http` was made for (it is remade when that differs from the routing in effect). -/
+  httpGateways : PeerGatewayConfiguration := {}
+  /-- `discoveringGateways`, and the discovery every caller of this generation waits for. -/
+  discoveringGateways : Bool := false
+  gatewayDiscovery : Option (Task (Option PeerGatewayConfiguration)) := none
+  /-- `preparedGatewayGeneration`: routing is resolved once per generation. -/
+  preparedGatewayGeneration : Option Nat := none
   /-- `lastE2EPeerFingerprint` / `lastE2ESnapshotFingerprint`: the last `peers.status` and
   `wallet.snapshot` journaled, so an unchanged one is not journaled again. -/
   lastPeerFingerprint : Option String := none
@@ -371,7 +387,24 @@ def scopedFor (s : Settings) (n : WinnowApp.Network) : NetworkSettings :=
 
 def keyFor (s : Option Settings) (n : WinnowApp.Network) : StackKey :=
   match s with
-  | some s => { network := n, manualPeers := (scopedFor s n).manualPeers, verifyFromGenesis := s.verifyFromGenesis }
+  | some s => { network := n, manualPeers := (scopedFor s n).manualPeers, verifyFromGenesis := s.verifyFromGenesis,
+                gateways := s.peerGatewaySettings }
   | none => { network := n, manualPeers := [], verifyFromGenesis := false }
+
+/-- The settings arrived (activation, reconnect): changed gateway settings take effect as
+`setPeerGatewaySettings` makes them (the manual gateways, else clearnet, until routing is resolved again). -/
+def Core.withSettings (c : Core) (s : Settings) : Core :=
+  let c := { c with settings := some s }
+  if c.gatewaySettings == s.peerGatewaySettings then c
+  else { c with gatewaySettings := s.peerGatewaySettings, activeGateways := s.peerGatewaySettings.initialActive,
+                preparedGatewayGeneration := none }
+
+/-- `DefaultsKey.automaticUsedGateways` (global): whether Automatic routing last reached peers through Tor
+or I2P in the foreground, as a file beside the network directories. -/
+def gatewaysUsedPath (dir : String) : System.FilePath :=
+  (System.FilePath.mk dir).parent.getD (System.FilePath.mk dir) / "peer-gateways.automatic-used"
+
+def readGatewaysUsed (dir : String) : IO Bool := do
+  try return (← IO.FS.readFile (gatewaysUsedPath dir)).trimAscii.copy == "true" catch _ => return false
 
 end WinnowApp.Real

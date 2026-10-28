@@ -1,4 +1,5 @@
 import Lean.Data.Json
+import Winnow.IO.Gateways
 
 /-! The app-facing view of the wallet: what the screens show, already derived (the Model never holds
 WalletCore objects, only these summaries). Mirrors AppModel's `Status`, `SyncPhase`, settings, stage,
@@ -31,6 +32,8 @@ structure NetworkSettings where
   explorer : Explorer := .blockstream
   deriving Repr, Inhabited, BEq, ToJson
 
+instance : ToJson Winnow.IO.PeerGatewaySettings := ⟨Winnow.IO.PeerGatewaySettings.toJson⟩
+
 /-- AppModel's settings (UserDefaults in the original; `settings.json` here). -/
 structure Settings where
   network : Network := .mainnet
@@ -42,6 +45,8 @@ structure Settings where
   mainnet : NetworkSettings := {}
   signet : NetworkSettings := {}
   regtest : NetworkSettings := {}
+  /-- `peerGatewaySettings` (global, not per network): Automatic, Direct only, or the manual gateways. -/
+  peerGatewaySettings : Winnow.IO.PeerGatewaySettings := {}
   deriving Repr, Inhabited, ToJson
 
 /-- Reads every field with its default when absent, so a settings file from an older build still loads. -/
@@ -61,7 +66,11 @@ instance : FromJson Settings where
       torRemovedNotice := (j.getObjValAs? Bool "torRemovedNotice").toOption.getD false
       mainnet := (j.getObjValAs? NetworkSettings "mainnet").toOption.getD {}
       signet := (j.getObjValAs? NetworkSettings "signet").toOption.getD {}
-      regtest := (j.getObjValAs? NetworkSettings "regtest").toOption.getD {} }
+      regtest := (j.getObjValAs? NetworkSettings "regtest").toOption.getD {}
+      -- absent: Automatic; present but unreadable: offline (`PeerGatewaySettings.unreadable`)
+      peerGatewaySettings := match j.getObjVal? "peerGatewaySettings" with
+        | .ok v => (Winnow.IO.PeerGatewaySettings.ofJson? v).getD Winnow.IO.PeerGatewaySettings.unreadable
+        | .error _ => {} }
 
 /-- `networkScopedSettings`: the peers and explorer of the selected network. -/
 def Settings.scoped (s : Settings) : NetworkSettings :=
@@ -153,6 +162,10 @@ structure Status where
   lastSyncError : Option String := none
   relayStoreQuarantined : Option String := none
   feeFloorMilli : Option Nat := none
+  /-- `activePeerGateways`: the routing in effect (discovered, manual or clearnet). -/
+  activeGateways : Winnow.IO.PeerGatewayConfiguration := {}
+  /-- `discoveringGateways`: Automatic is asking the tailnet for its gateways. -/
+  discoveringGateways : Bool := false
   deriving Repr, Inhabited
 
 /-- AppModel's `SyncPhase`. -/
@@ -242,6 +255,7 @@ structure PeerInfo where
   startHeight : Int
   /-- BIP133 feefilter, sat/kvB -/
   feeFilter : Option Nat
+  network : Winnow.IO.PeerNetwork := .clearnet
   deriving Repr, Inhabited
 
 /-- `FeeBumpPreview`. -/

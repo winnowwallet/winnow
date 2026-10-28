@@ -21,6 +21,43 @@ def papers : List (String × String × String) :=
 def Model.settingsAppear (m : Model) : List Cmd :=
   if m.settings.advancedMode && m.stage == .ready then [.connectedPeers m.generation, .catalogStatus m.generation] else []
 
+def gatewayModes : List String := Winnow.IO.PeerGatewaySettings.modes
+
+/-- PeerGatewaysSection's `onAppear`: the staged edits start from the saved settings, once; a later
+appearance keeps what was staged. -/
+def Model.loadGatewayDraft (m : Model) : Model :=
+  let d := m.settingsDraft
+  if d.gatewaysLoaded then m else
+  let g := m.settings.peerGatewaySettings
+  let tor := (g.manual.torProxy.map gatewayAddressText).getD ""
+  let i2p := (g.manual.i2pProxy.map gatewayAddressText).getD ""
+  let d' : SettingsDraft := { d with gatewaysLoaded := true, gatewayMode := (gatewayModes.idxOf? g.mode).getD 0,
+                                     gatewayNetworks := g.manual.networks, torAddress := tor, i2pAddress := i2p }
+  { m with settingsDraft := d' }
+
+/-- PeerGatewaysSection's Apply: the manual gateways parsed (only for the networks selected), then
+`setPeerGatewaySettings`, which refuses an invalid manual configuration and leaves the saved settings as
+they were. Applied settings rebuild networking (`reconnect`); discovery and connection continue in the
+foreground. -/
+def Model.applyGateways (m : Model) : Model × List Cmd :=
+  let d := m.settingsDraft
+  let mode := (gatewayModes[d.gatewayMode]?).getD "automatic"
+  let fail (e : Winnow.IO.PeerGatewayConfiguration.Invalid) : Model × List Cmd :=
+    ({ m with settingsDraft := { d with gatewayError := some e.description, applyingGateways := false } }, [])
+  let parsed : Except Winnow.IO.PeerGatewayConfiguration.Invalid Winnow.IO.PeerGatewayConfiguration :=
+    if mode != "manual" then pure m.settings.peerGatewaySettings.manual else do
+      let networks := Winnow.IO.PeerNetwork.allCases.filter d.gatewayNetworks.contains
+      let tor ← if networks.contains .tor then some <$> Winnow.IO.PeerGatewayConfiguration.parseProxy d.torAddress else pure none
+      let i2p ← if networks.contains .i2p then some <$> Winnow.IO.PeerGatewayConfiguration.parseProxy d.i2pAddress else pure none
+      pure { networks, torProxy := tor, i2pProxy := i2p }
+  match parsed with
+  | .error e => fail e
+  | .ok manual =>
+    if mode == "manual" && !manual.isValid then fail .configuration else
+    let s := { m.settings with peerGatewaySettings := { mode, manual } }
+    ({ m with settings := s, settingsDraft := { d with gatewayError := none, applyingGateways := false } },
+     [.saveSettings s, .reconnect m.generation s])
+
 def stepSettings (msg : SettingsMsg) (m : Model) : Model × List Cmd :=
   let g := m.generation
   let d := m.settingsDraft
@@ -54,6 +91,16 @@ def stepSettings (msg : SettingsMsg) (m : Model) : Model × List Cmd :=
   | .askDelete => ({ m with confirm := some .deleteWallet }, [])
   | .deleteWallet => ({ m with confirm := none }, [.deleteWallet g])
   | .dismissTor => save { m.settings with torRemovedNotice := false }
+  | .setGatewayMode i => ({ m with settingsDraft := { d with gatewayMode := i } }, [])
+  | .setGatewayNetwork n on =>
+    let ns := if on then (if d.gatewayNetworks.contains n then d.gatewayNetworks else d.gatewayNetworks ++ [n])
+              else d.gatewayNetworks.erase n
+    ({ m with settingsDraft := { d with gatewayNetworks := ns } }, [])
+  | .setTorAddress t => ({ m with settingsDraft := { d with torAddress := t } }, [])
+  | .setI2PAddress t => ({ m with settingsDraft := { d with i2pAddress := t } }, [])
+  | .applyGateways => if d.applyingGateways then (m, []) else m.applyGateways
+  -- "Check gateways and reconnect"
+  | .checkGateways => if m.status.discoveringGateways then (m, []) else (m, [.reconnect g m.settings])
 
 /-! ## View -/
 
@@ -70,6 +117,36 @@ def networkFooter (m : Model) : String :=
     s!"This debug session is locked to {if m.settings.network == .mainnet then "mainnet" else "public signet"}."
   else "Each network has a separate wallet. Signet uses test coins with no value."
 
+/-- PeerGatewaysSection: stage edits until Apply so incomplete addresses never disrupt live peers. -/
+def peerGatewaysSection (m : Model) : H :=
+  let d := m.settingsDraft
+  let active := m.status.activeGateways
+  let off := d.applyingGateways
+  let act (msg : SettingsMsg) : Option Msg := if off then none else some (.settings msg)
+  let networkRow (n : Winnow.IO.PeerNetwork) : H :=
+    .identified s!"peerType_{n.rawValue}"
+      (.toggle (match n with | .clearnet => "Clearnet peers" | .tor => "Tor peers" | .i2p => "I2P peers")
+        (d.gatewayNetworks.contains n) fun on => .settings (.setGatewayNetwork n on))
+  .section "Peer networks" "Automatic uses only your Tailscale Tor and I2P gateways when either answers, and clearnet only when neither does, in both simple and advanced mode. Connect Tailscale first; discovery checks winnow-tor-gateway:9050 and winnow-i2p-gateway:4447 on launch, foregrounding, and reconnect. Manual settings stay in effect in simple mode. Tor and I2P peers always use their gateway. Peer-list downloads and explorer requests use clearnet when selected, Tor otherwise. With I2P alone, the peer list comes from its I2P mirror and explorer requests are unavailable. A SOCKS check does not guarantee overlay connectivity."
+    ([ .identified "gatewayRoutingMode"
+         (.picker "Gateway routing" ["Automatic", "Direct only", "Manual"] d.gatewayMode fun i => .settings (.setGatewayMode i)) ] ++
+     (if d.gatewayMode == 2 then
+       (Winnow.IO.PeerNetwork.allCases.map networkRow) ++
+       (if d.gatewayNetworks.contains .tor then
+         [.identified "torGatewayAddress" (.input .plain "" "Tor SOCKS gateway — host:port" d.torAddress (fun t => .settings (.setTorAddress t)) none)] else []) ++
+       (if d.gatewayNetworks.contains .i2p then
+         [.identified "i2pGatewayAddress" (.input .plain "" "I2P SOCKS gateway — host:port" d.i2pAddress (fun t => .settings (.setI2PAddress t)) none)] else [])
+      else []) ++
+     [ .identified "applyPeerRouting" (.button (if off then "Applying…" else "Apply routing") .plain (act .applyGateways)) ] ++
+     errorRows d.gatewayError ++
+     (if m.status.discoveringGateways then [.progress "Checking Tailscale gateways…"] else
+       (match active.torProxy with | some e => [.labeled "Active Tor gateway" (gatewayAddressText e)] | none => []) ++
+       (match active.i2pProxy with | some e => [.labeled "Active I2P gateway" (gatewayAddressText e)] | none => []) ++
+       (if active.networks == [.clearnet] then [caption "Using clearnet peers."] else []) ++
+       (if !active.isValid then errorRows (some "Gateway settings are invalid. Networking is offline.") else [])) ++
+     [ .identified "checkPeerGateways" (.button "Check gateways and reconnect" .plain
+         (if m.status.discoveringGateways || off then none else some (.settings .checkGateways))) ])
+
 def settingsSections (m : Model) : List H :=
   let s := m.settings
   let d := m.settingsDraft
@@ -79,10 +156,10 @@ def settingsSections (m : Model) : List H :=
   [backupSection m] ++
   (if s.advancedMode then [signersSection m] else []) ++
   (if s.advancedMode then
-    [.section "Mainnet peer list" "Each release carries the census of its day, the list it starts from. Every selected peer still undergoes Winnow's normal checks."
+    [peerGatewaysSection m, .section "Mainnet peer list" "Each release carries the census of its day, the list it starts from. Every selected peer still undergoes Winnow's normal checks."
       (match d.catalog with | some line => [.identified "censusCatalogText" (body line)] | none => [])] else []) ++
   (if s.showsManualPeers then
-    [.section "Manual peers" "Manual peers are tried first. Seeds resolve over HTTPS (Cloudflare 1.1.1.1), with system DNS as the fallback. The default port is 8333 (mainnet) / 38333 (signet). Peers must advertise compact filters and pass Winnow's checks."
+    [.section "Manual peers" "Manual peers are tried first when their network is enabled. Clearnet seeds resolve over HTTPS (Cloudflare 1.1.1.1), with system DNS as the fallback. Overlay names are resolved by their SOCKS gateway. The default port is 8333 (mainnet) / 38333 (signet). Peers must advertise compact filters and pass Winnow's checks."
       ((s.manualPeers.zipIdx.map fun (p, i) => .row [caption p, .spacer, .button "Remove" .destructive (some (.settings (.removeManualPeer i)))]) ++
        [.row [.input .plain "" "host:port" d.manualPeer (set .setManualPeer) (some (.settings .addManualPeer)),
               .button "Add" .plain (if d.manualPeer.trimAscii.isEmpty then none else some (.settings .addManualPeer))]] ++
@@ -102,7 +179,7 @@ def settingsSections (m : Model) : List H :=
   (if s.advancedMode then
     [.section "Connected peers" ""
       ((d.peers.map fun p =>
-          .col [caption p.endpoint,
+          .col [.identified "peerNetwork" (caption (peerNetworkLabel p.network)), .identified "peerEndpoint" (caption p.endpoint),
                 caption (s!"{p.userAgent} · height {p.startHeight}" ++ (match p.feeFilter with | some f => s!" · floor {f} sat/kvB" | none => ""))]) ++
        (if d.peers.isEmpty then [caption "No peers connected."] else []) ++
        [ .button "Refresh" .plain (some (.settings .refreshPeers))
@@ -113,7 +190,7 @@ def settingsSections (m : Model) : List H :=
      (if s.advancedMode then [.labeled "Wallet ID" (m.walletID.getD "—")] else []) ++
      [.button "Design papers" .plain (some (.settings .openPapers))])] ++
   (if m.walletID.isSome then
-    [.section "Danger zone" s!"Removes this {s.network.name} wallet so you can create or import another. The key is deleted from this device — without your recovery phrase the money is gone. People you added stay on this phone, and block headers are kept, so the next wallet does not re-sync the chain."
+    [.section "Danger zone" s!"Removes this {s.network.name} wallet so you can create or import another. The key is deleted from this device; restore it from your iCloud backup or a backup file that includes the recovery phrase, or the money is gone. People you added stay on this phone, and block headers are kept, so the next wallet does not re-sync the chain."
       [.button "Delete wallet from this device" .destructive (some (.settings .askDelete))]] else [])
 
 /-- `DesignPapersView` and `DesignPaperView`. The pages are the HTML files the site serves, bundled

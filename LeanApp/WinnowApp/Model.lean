@@ -226,6 +226,16 @@ structure SettingsDraft where
   resettingPeers : Bool := false
   /-- The census line: "Observed …: N candidates." for the list this build ships, or the no-list sentence. -/
   catalog : Option String := none
+  /-- PeerGatewaysSection's staged edits (applied only by Apply routing): the mode (0 Automatic, 1 Direct
+  only, 2 Manual), the manual networks and the two gateway addresses as typed. -/
+  gatewayMode : Nat := 0
+  gatewayNetworks : List Winnow.IO.PeerNetwork := [.clearnet]
+  torAddress : String := ""
+  i2pAddress : String := ""
+  gatewayError : Option String := none
+  applyingGateways : Bool := false
+  /-- The staged edits were loaded from the settings once (`loaded`): reappearing keeps them. -/
+  gatewaysLoaded : Bool := false
   deriving Repr, Inhabited
 
 structure ExportState where
@@ -603,6 +613,13 @@ inductive SettingsMsg where
   | askDelete
   | deleteWallet
   | dismissTor
+  -- PeerGatewaysSection
+  | setGatewayMode (i : Nat)
+  | setGatewayNetwork (n : Winnow.IO.PeerNetwork) (on : Bool)
+  | setTorAddress (s : String)
+  | setI2PAddress (s : String)
+  | applyGateways
+  | checkGateways
   deriving Inhabited
 
 inductive BackupMsg where
