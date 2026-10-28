@@ -164,15 +164,15 @@ def MultisigAddForm.validation (f : MultisigAddForm) : Option (Except String Mul
 def MultisigAddForm.canSave (f : MultisigAddForm) : Bool :=
   !f.saving && (Winnow.DisplayName.normalized f.name).isSome && (f.validation.any fun r => r matches .ok _)
 
-/-- MultisigPSBTView's `clearState` (leaving or backgrounding): the proposal goes; the shared PSBT text is
-the only copy that travels between signers. -/
-def MultisigSpendForm.cleared (f : MultisigSpendForm) : MultisigSpendForm :=
-  { f with epoch := f.epoch + 1, busy := false, working := none, pasted := "", trusted := "" }
+/-- The collection step's state on leaving or backgrounding: an answer in flight no longer counts, and the
+paste field empties (every signature is already in the account's draft). -/
+def CollectForm.cleared (f : CollectForm) : CollectForm :=
+  { f with epoch := f.epoch + 1, busy := false, pasted := "" }
 
 /-- Leave the innermost multisig screen (its state goes with it). -/
 def Model.popMultisig (m : Model) : Model :=
   let m' := match m.routes.getLast? with
-    | some (.multisigPSBT _) => { m with multisigSpend := m.multisigSpend.cleared }
+    | some (.multisigPSBT _) => { m with collect := m.collect.cleared }
     | some .multisigAdd => { m with multisigAdd := {} }
     | some .multisigBuild => { m with multisigBuild := {} }
     | some .ledgerPair => { m with ledgerPair := {} }
@@ -180,24 +180,23 @@ def Model.popMultisig (m : Model) : Model :=
     | _ => m
   { m' with routes := m'.routes.dropLast }
 
-/-- The PSBT in hand, installed (`install`), for the account state it was reviewed against. -/
-def Model.installPSBT (m : Model) (id : String) (p : MultisigPSBT) : Model :=
-  let trusted := ((m.multisigInfo? id).map (·.trusted)).getD ""
-  { m with multisigSpend := { m.multisigSpend with working := some p, trusted } }
+/-- Begin an operation of the collection step (`run`): a new epoch, busy, no error. -/
+def Model.runCollect (m : Model) : Model × Nat :=
+  let e := m.collect.epoch + 1
+  ({ m with collect := { m.collect with epoch := e, busy := true, error := none } }, e)
 
-/-- Begin an operation of the PSBT screen (`run`): a new epoch, busy, no error. -/
-def Model.runPSBT (m : Model) : Model × Nat :=
-  let e := m.multisigSpend.epoch + 1
-  ({ m with multisigSpend := { m.multisigSpend with epoch := e, busy := true, error := none } }, e)
+/-- The account whose draft the collection step shows: the Send tab's, or the account page's. -/
+def Model.collectingOn? (m : Model) (id : String) : Bool :=
+  m.send.collecting == some id || m.multisigPSBTRoute? == some id
 
 def stepMultisig (msg : MultisigMsg) (m : Model) : Model × List Cmd :=
   let g := m.generation
   let add := m.multisigAdd
   let build := m.multisigBuild
-  let spend := m.multisigSpend
+  let spend := m.collect
   let withAdd (f : MultisigAddForm) : Model := { m with multisigAdd := f }
   let withBuild (f : MultisigBuildForm) : Model := { m with multisigBuild := f }
-  let withSpend (f : MultisigSpendForm) : Model := { m with multisigSpend := f }
+  let withSpend (f : CollectForm) : Model := { m with collect := f }
   match msg with
   | .openAdd => ({ m with routes := m.routes ++ [.multisigAdd], multisigAdd := {} }, [])
   | .openBuild =>
@@ -208,7 +207,7 @@ def stepMultisig (msg : MultisigMsg) (m : Model) : Model × List Cmd :=
     ({ m with routes := m.routes ++ [.multisigAccount id], multisigAccountError := none, ledgerVerify := {} },
      [.multisigOverview g])
   | .openPSBT id =>
-    ({ m with routes := m.routes ++ [.multisigPSBT id], multisigSpend := { epoch := spend.epoch + 1 } }, [.multisigFeeRate g])
+    ({ m with routes := m.routes ++ [.multisigPSBT id], collect := { epoch := spend.epoch + 1 } }, [.multisigFeeRate g])
   | .pop => (m.popMultisig, [])
   -- MultisigAddView
   | .setName s => (withAdd { add with name := s }, [])
@@ -285,33 +284,25 @@ def stepMultisig (msg : MultisigMsg) (m : Model) : Model × List Cmd :=
     match m.multisigPSBTRoute?, swiftInt64? spend.amount, parseDouble spend.feeRate with
     | some id, some amount, some rate =>
       if spend.busy || spend.address.trimAscii.isEmpty then (m, []) else
-      let (m', e) := m.runPSBT
-      (m', [.createMultisigSpend g e id spend.address amount rate spend.recovery])
+      let (m', e) := m.runCollect
+      (m', [.createDraft g e id spend.address amount rate spend.recovery])
     | _, _, _ => (m, [])
   | .setPasted s => (withSpend { spend with pasted := s }, [])
   | .pastePSBT => (m, [.paste .multisigPSBT])
-  | .addPasted =>
-    match m.multisigPSBTRoute? with
-    | some id =>
-      if spend.busy || spend.pasted.trimAscii.isEmpty then (m, []) else
-      (withSpend { spend with error := none }, [.addMultisigPSBT g spend.epoch id (spend.working.map (·.psbt)) spend.pasted])
-    | none => (m, [])
-  | .sign =>
-    match m.multisigPSBTRoute?, spend.working with
-    | some id, some w =>
-      let ok := w.screen.any fun s => s.progress.phoneUnsigned && !s.progress.complete
-      if spend.busy || !ok then (m, []) else
-      let (m', e) := m.runPSBT
-      (m', [.signMultisigSpend g e id w.psbt])
-    | _, _ => (m, [])
-  | .signWithLedger =>
-    match m.multisigPSBTRoute?, spend.working with
-    | some id, some w =>
-      let ok := w.screen.any fun s => s.progress.ledgerUnsigned && !s.progress.complete
-      if spend.busy || !ok then (m, []) else
-      let (m', e) := m.runPSBT
-      (m', [.signMultisigSpendWithLedger g e m.settings.advancedMode id w.psbt])
-    | _, _ => (m, [])
+  | .addPasted id =>
+    if spend.busy || spend.pasted.trimAscii.isEmpty then (m, []) else
+    let (m', e) := m.runCollect
+    (m', [.adoptDraft g e id spend.pasted])
+  | .sign id =>
+    let ok := ((m.multisigInfo? id).bind (·.draft)).bind (·.screen) |>.any fun s => s.progress.phoneUnsigned && !s.progress.complete
+    if spend.busy || !ok then (m, []) else
+    let (m', e) := m.runCollect
+    (m', [.signDraft g e id])
+  | .signWithLedger id =>
+    let ok := ((m.multisigInfo? id).bind (·.draft)).bind (·.screen) |>.any fun s => s.progress.ledgerUnsigned && !s.progress.complete
+    if spend.busy || !ok then (m, []) else
+    let (m', e) := m.runCollect
+    (m', [.signDraftWithLedger g e m.settings.advancedMode id])
   | .openLedgerPair => ({ m with routes := m.routes ++ [.ledgerPair], ledgerPair := {} }, [])
   | .setLedgerName s' => ({ m with ledgerPair := { m.ledgerPair with name := s' } }, [])
   | .pairLedger =>
@@ -328,35 +319,38 @@ def stepMultisig (msg : MultisigMsg) (m : Model) : Model × List Cmd :=
          [.verifyLedgerAddress g m.settings.advancedMode id a.nextReceiveIndex])
       | none => (m, [])
     | _ => (m, [])
-  | .broadcast =>
-    match m.multisigPSBTRoute?, spend.working with
-    | some id, some w =>
-      if spend.busy || !(w.screen.any (·.progress.complete)) then (m, []) else
-      if m.spendingInFlight then
-        (withSpend { spend with error := some "Another payment is already being signed and broadcast. Wait for it to finish." }, [])
-      else
-        let (m', e) := m.runPSBT
-        ({ m' with spendingInFlight := true }, [.broadcastMultisigSpend g e id w.psbt])
-    | _, _ => (m, [])
+  | .broadcast id =>
+    let ok := ((m.multisigInfo? id).bind (·.draft)).bind (·.screen) |>.any (·.progress.complete)
+    if spend.busy || !ok then (m, []) else
+    if m.spendingInFlight then
+      (withSpend { spend with error := some "Another payment is already being signed and broadcast. Wait for it to finish." }, [])
+    else
+      let (m', e) := m.runCollect
+      ({ m' with spendingInFlight := true }, [.broadcastDraft g e id])
+  | .askDiscard id => ({ m with confirm := some (.discardDraft id) }, [])
+  | .discard =>
+    match m.confirm with
+    | some (.discardDraft id) =>
+      let (m', e) := { m with confirm := none }.runCollect
+      (m', [.discardDraft g e id])
+    | _ => (m, [])
+  | .rebroadcast id txid => ({ m with payment := { m.payment with error := none } }, [.rebroadcastSpend g id txid])
+  | .askAbandon id txid => ({ m with confirm := some (.abandonSpend id txid) }, [])
+  | .abandon =>
+    match m.confirm with
+    | some (.abandonSpend id txid) => ({ m with confirm := none }, [.abandonSpend g id txid])
+    | _ => (m, [])
 
 /-- The backend's multisig answers (`onHost` hands them here). -/
 def Model.onMultisigHost (m : Model) (h : Host) : Model × List Cmd :=
   let current (g : Nat) := g == m.generation
-  let spend := m.multisigSpend
-  -- an answer for the PSBT screen counts only while it shows that account and the operation's epoch lasts
-  let accepts (g e : Nat) (id : String) := current g && e == spend.epoch && m.multisigPSBTRoute? == some id && m.active
+  let spend := m.collect
+  -- an answer for the collection step counts only while it shows that account and the operation's epoch lasts
+  let accepts (g e : Nat) (id : String) := current g && e == spend.epoch && m.collectingOn? id && m.active
   match h with
   | .multisig g o =>
-    if !current g then (m, []) else
-    let m' := { m with multisig := o }
-    -- `.task(id: trustedState)`: the account's coins or frontiers moved under the PSBT in hand
-    match m'.multisigPSBTRoute?, spend.working with
-    | some id, some w =>
-      let now := ((m'.multisigInfo? id).map (·.trusted)).getD ""
-      if now != spend.trusted && !spend.busy then
-        ({ m' with multisigSpend := { spend with trusted := now } }, [.reviewMultisigPSBT g spend.epoch id w.psbt])
-      else (m', [])
-    | _, _ => (m', [])
+    -- the draft's review comes with the overview (re-reviewed whenever the draft, coins or tip move)
+    if !current g then (m, []) else ({ m with multisig := o }, [])
   | .multisigChecked g text r =>
     if current g && m.multisigAdd.trimmed == text then ({ m with multisigAdd := { m.multisigAdd with check := some (text, r) } }, [])
     else (m, [])
@@ -390,12 +384,19 @@ def Model.onMultisigHost (m : Model) (h : Host) : Model × List Cmd :=
     (if m.routes.getLast? == some (.multisigAccount id) then m.popMultisig else m, [.multisigOverview g])
   | .multisigFeeRate g milli =>
     if current g && spend.feeRate.isEmpty && m.multisigPSBTRoute?.isSome then
-      ({ m with multisigSpend := { spend with feeRate := oneDecimal milli } }, [])
+      ({ m with collect := { spend with feeRate := oneDecimal milli } }, [])
     else (m, [])
-  | .multisigPSBT g e id p fromPaste =>
-    if !accepts g e id then (m, []) else
-    let m' := m.installPSBT id p
-    ({ m' with multisigSpend := { m'.multisigSpend with busy := false, pasted := if fromPaste then "" else spend.pasted } }, [])
+  | .drafted g id =>
+    if !current g then ({ m with spendingInFlight := false }, []) else
+    -- "Sign and continue" filed the draft: the Send tab goes on to collect its signatures
+    ({ m with send := { m.send with sending := false, collecting := some id, error := none }, spendingInFlight := false,
+              collect := { epoch := spend.epoch + 1 } },
+     [.multisigOverview g, .refresh g])
+  | .collected g e id fromPaste =>
+    if !accepts g e id then (m, [.multisigOverview m.generation]) else
+    ({ m with collect := { spend with busy := false, pasted := if fromPaste then "" else spend.pasted } },
+     [.multisigOverview g, .refresh g])
+  | .spendHandled g _ _ => if current g then (m, [.multisigOverview g, .refresh g]) else (m, [])
   | .ledgerPaired g _ =>
     if !current g then (m, []) else
     let m' := { m with ledgerPair := { m.ledgerPair with pairing := false } }
@@ -407,10 +408,16 @@ def Model.onMultisigHost (m : Model) (h : Host) : Model × List Cmd :=
       | .ok _ => ("The Ledger derived this same address. Compare it with the one on its screen.", false)
       | .error e => (e, true)
     ({ m with ledgerVerify := { m.ledgerVerify with checking := false, result := some result } }, [])
-  | .multisigBroadcast g e id txid =>
+  | .draftBroadcast g e id txid =>
     let m := { m with spendingInFlight := false }
-    if !accepts g e id then (m, [.refresh m.generation]) else
-    ({ m with multisigSpend := { spend with busy := false, broadcastTxid := some txid } }, [.multisigOverview g, .refresh g])
+    if !accepts g e id then (m, [.refresh m.generation, .multisigOverview m.generation]) else
+    if m.send.collecting == some id then
+      -- the Send tab's receipt, with the main path's relay watch
+      ({ m with send := { m.send with sentTxid := some txid, collecting := none }, collect := { spend with busy := false } },
+       [.multisigOverview g, .refresh g, .rawTransaction g txid, .watchRelay g txid])
+    else
+      ({ m with collect := { spend with busy := false, broadcastTxid := some txid } },
+       [.multisigOverview g, .refresh g, .watchRelay g txid])
   | _ => (m, [])
 
 /-! ## View -/
@@ -598,7 +605,9 @@ def multisigAccountSections (m : Model) (id : String) : List H :=
               | some (text, _) => if mine then [.identified "ledgerVerifyResult" (caption text)] else []
               | none => [])) ++
            [.identified "multisigNewAddressButton" (.button "New address" .plain (some (.multisig .newAddress)))])
-      , .section "Spend" "" [.identified "multisigPSBTButton" (.button "New or pasted PSBT" .plain (some (.multisig (.openPSBT a.id))))]
+      , .section "Spend" "An ordinary payment starts from Send with this account picked under From. This page is for a pasted PSBT and the recovery path."
+          [.identified "multisigPSBTButton"
+            (.button (if a.draft.isNone then "New or pasted PSBT" else "Payment awaiting signatures") .plain (some (.multisig (.openPSBT a.id))))]
       , .section "Coins" ""
           ((if a.coins.isEmpty then [caption "No coins yet."] else []) ++
            a.coins.map fun c =>
@@ -610,21 +619,76 @@ def multisigAccountSections (m : Model) (id : String) : List H :=
     | none => [.section "" "" [caption "This multisig account is no longer on this phone."]] ++ errorSection m.multisigAccountError
   | none => [.section "" "" [caption "This multisig account is no longer on this phone."]] ++ errorSection m.multisigAccountError
 
-/-- MultisigPSBTView ("Multisig PSBT"). -/
+/-- `MultisigSigningSections`: the signature-collection step for an account's draft, shared by Send
+(after "Sign and continue"), Transactions' draft row and the account's PSBT page: the review of the draft,
+the signature counts on every leaf that can finish it, this phone's and the Ledger's signatures, a pasted
+co-signer's copy, the PSBT to share (BIP174 v0), Finalize and broadcast, and Discard. Every change goes
+through the account's draft, so leaving the screen loses nothing. -/
+def collectSections (m : Model) (id : String) : List H :=
+  let f := m.collect
+  let set (g : String → MultisigMsg) : String → Msg := fun s => .multisig (g s)
+  match (m.multisigInfo? id).bind (·.draft) with
+  | none => [.section "" "" [caption "This account has no payment awaiting signatures."]] ++ errorSection f.error
+  | some d =>
+    let review : H :=
+      .section "Check this payment" "Check the addresses, amounts and fee on every signer's device before signing."
+        (match d.screen with
+         | some s =>
+           (s.outputs.map fun o =>
+              .col [.row [caption (if o.owned then "Back to this account" else "Pays"), .spacer, body (satsText o.amount)],
+                    caption o.address]) ++
+           [.labeled "Inputs" (satsText s.inputTotal), .identified "multisigFee" (.labeled "Fee" (satsText s.fee))] ++
+           (s.signatures.zipIdx.map fun ((recovery, approved, threshold), i) =>
+              let (title, rowID) := s.signatureTitles[i]?.getD
+                (if recovery then ("Recovery signatures", "multisigRecoverySignatureCount") else ("Signatures", "multisigSignatureCount"))
+              .identified rowID (.labeled title s!"{approved} of {threshold}"))
+         | none =>
+           [ .row [.icon "exclamationmark.triangle.fill", body "Winnow cannot safely review this PSBT"]
+           , body (d.reviewError.getD "The account or PSBT is unavailable.") ])
+    let actions : List H := match d.screen with
+      | some s =>
+        let p := s.progress
+        [.section (if s.recoveryUsable then "Signing · signers or recovery path" else "Signing") p.nextStep
+          ([ .identified "multisigSignButton" (.button "Add this phone's signature" .plain
+              (if f.busy || !p.phoneUnsigned || p.complete then none else some (.multisig (.sign id)))) ] ++
+           (if p.ledgerHolds then
+             [.identified "ledgerSignButton"
+               (.button "Sign with Ledger" .plain (if f.busy || !p.ledgerUnsigned || p.complete then none else some (.multisig (.signWithLedger id))))]
+            else []) ++
+           [ .identified "multisigBroadcastButton" (.button (if f.busy then "Working…" else "Finalize and broadcast") .primary
+               (if f.busy || !p.complete then none else some (.multisig (.broadcast id)))) ])]
+      | none => []
+    let paste : H :=
+      .section "Another signer's PSBT" "A pasted copy of this payment is combined with the signatures here."
+        [ .identified "psbtPasteField" (.input .multiline "" "Paste a PSBT (Base64)" f.pasted (set .setPasted) none)
+        , .identified "psbtPasteButton" (.button "Paste from clipboard" .plain (some (.multisig .pastePSBT)))
+        , .identified "addPSBTButton" (.button "Combine" .plain
+            (if f.busy || f.pasted.trimAscii.isEmpty then none else some (.multisig (.addPasted id)))) ]
+    [review] ++ actions ++ [paste] ++
+    (match f.error with
+     | some e => [.section "" "" [.identified "multisigError" (body e)]]
+     | none => []) ++
+    [ .section "PSBT to share" "" [copyableBlock m "multisig.psbt" d.psbt "multisigPSBTText"]
+    , .section "" "" [.identified "multisigDiscardDraftButton"
+        (.button "Discard draft" .destructive (if f.busy then none else some (.multisig (.askDiscard id))))] ]
+
+/-- MultisigPSBTView: the account's PSBT page, for what Send cannot do: a pasted co-signer's PSBT when this
+phone has no draft, and a spend on the recovery path; both file the account's draft. While the account
+has a draft, the page is the collection step. -/
 def multisigPSBTSections (m : Model) (id : String) : List H :=
-  let f := m.multisigSpend
+  let f := m.collect
   let set (g : String → MultisigMsg) : String → Msg := fun s => .multisig (g s)
   match f.broadcastTxid with
   | some txid => [.section "" "" [.identified "multisigPaymentSent" (.text "Payment sent" .title),
                                   literalRow m "multisig.txid" txid "multisigTxid"]]
   | none =>
-    let hasRecovery := ((m.multisigInfo? id).map (·.hasRecovery)).getD false
+    let info := m.multisigInfo? id
+    if info.any (·.draft.isSome) then collectSections m id else
+    let hasRecovery := (info.map (·.hasRecovery)).getD false
     let canCreate := !f.busy && (swiftInt64? f.amount).isSome && (parseDouble f.feeRate).isSome && !f.address.trimAscii.isEmpty
-    let create : List H :=
-      if f.working.isSome then [] else
-      [.section "New payment"
+    [ .section "New payment"
         (if f.recovery then "Only coins that have not moved for the recovery delay can be spent this way. Change returns to this account's next change address."
-         else "Change returns to this account's next change address. The fee may be at most a tenth of the coins spent.")
+         else "Change returns to this account's next change address. The fee may be at most a tenth of the coins spent. An ordinary payment can also start from Send, with this account picked under From.")
         ((if hasRecovery then
             [.identified "multisigPathPicker"
               (.picker "Spend with" ["Signers now", "Recovery path"] (if f.recovery then 1 else 0) (fun i => .multisig (.setPath i)))]
@@ -632,47 +696,17 @@ def multisigPSBTSections (m : Model) (id : String) : List H :=
          [ .identified "multisigAddressField" (.input .plain "" "Address" f.address (set .setAddress) none)
          , .identified "multisigAmountField" (.input .number "" "Amount (sats)" f.amount (set .setAmount) none)
          , .identified "multisigFeeRateField" (.input .decimal "" "Fee rate (sat/vB)" f.feeRate (set .setFeeRate) none)
-         , .identified "multisigCreateButton" (.button "Create PSBT" .plain (if canCreate then some (.multisig .createSpend) else none)) ])]
-    let paste : H :=
-      .section (if f.working.isNone then "Or paste a PSBT" else "Another signer's PSBT")
-        "A pasted PSBT is combined with the one here. Winnow signs only a spend of coins this account already has."
+         , .identified "multisigCreateButton" (.button "Create PSBT" .plain (if canCreate then some (.multisig .createSpend) else none)) ])
+    , .section "Or paste a PSBT" "A pasted PSBT becomes the payment this account is collecting signatures for. Winnow signs only a spend of coins this account already has."
         [ .identified "psbtPasteField" (.input .multiline "" "Paste a PSBT (Base64)" f.pasted (set .setPasted) none)
         , .identified "psbtPasteButton" (.button "Paste from clipboard" .plain (some (.multisig .pastePSBT)))
-        , .identified "addPSBTButton" (.button (if f.working.isNone then "Use this PSBT" else "Combine") .plain
-            (if f.busy || f.pasted.trimAscii.isEmpty then none else some (.multisig .addPasted))) ]
-    let review : List H := match f.working with
-      | none => []
-      | some w =>
-        [.section "Check this payment" "Check the addresses, amounts and fee on every signer's device before signing."
-          (match w.screen with
-           | some s =>
-             (s.outputs.map fun o =>
-                .col [.row [caption (if o.owned then "Back to this account" else "Pays"), .spacer, body (satsText o.amount)],
-                      caption o.address]) ++
-             [.labeled "Inputs" (satsText s.inputTotal), .identified "multisigFee" (.labeled "Fee" (satsText s.fee))] ++
-             (s.signatures.zipIdx.map fun ((recovery, approved, threshold), i) =>
-                let (title, id) := s.signatureTitles[i]?.getD
-                  (if recovery then ("Recovery signatures", "multisigRecoverySignatureCount") else ("Signatures", "multisigSignatureCount"))
-                .identified id (.labeled title s!"{approved} of {threshold}"))
-           | none =>
-             [ .row [.icon "exclamationmark.triangle.fill", body "Winnow cannot safely review this PSBT"]
-             , body (w.reviewError.getD "The account or PSBT is unavailable.") ])] ++
-        (match w.screen with
-         | some s =>
-           let p := s.progress
-           [.section (if s.recoveryUsable then "Signing · signers or recovery path" else "Signing") p.nextStep
-             ([ .identified "multisigSignButton" (.button "Add this phone's signature" .plain
-                 (if f.busy || !p.phoneUnsigned || p.complete then none else some (.multisig .sign))) ] ++
-              (if p.ledgerHolds then
-                [.identified "ledgerSignButton"
-                  (.button "Sign with Ledger" .plain (if f.busy || !p.ledgerUnsigned || p.complete then none else some (.multisig .signWithLedger)))]
-               else []) ++
-             [ .identified "multisigBroadcastButton" (.button (if f.busy then "Working…" else "Finalize and broadcast") .primary
-                 (if f.busy || !p.complete then none else some (.multisig .broadcast))) ])]
-         | none => [])
-    let output : List H := match f.working.bind (·.output) with
-      | some text => [.section "PSBT to share" "" [copyableBlock m "multisig.psbt" text "multisigPSBTText"]]
-      | none => []
-    create ++ [paste] ++ review ++ errorSection f.error ++ output
+        , .identified "addPSBTButton" (.button "Use this PSBT" .plain
+            (if f.busy || f.pasted.trimAscii.isEmpty then none else some (.multisig (.addPasted id)))) ] ] ++
+    (match f.error with
+     | some e => [.section "" "" [.identified "multisigError" (body e)]]
+     | none => [])
+
+def multisigPSBTTitle (m : Model) (id : String) : String :=
+  if ((m.multisigInfo? id).bind (·.draft)).isSome && m.collect.broadcastTxid.isNone then "Awaiting signatures" else "Multisig PSBT"
 
 end WinnowApp

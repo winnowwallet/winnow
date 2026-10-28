@@ -138,6 +138,10 @@ def snapshot (env : Env) : IO (Status × SyncPhase) := do
                   history := st.history.toList.map (historyItem · owned w.network)
                   feeBumpable := (← w.feeBumpableTxids).toList.map Winnow.displayHex
                   nextScanHeight := st.nextScanHeight.toNat }
+    -- the accounts' balance and the one Transactions list (wallet, accounts, transfers, drafts)
+    let (accountsBalance, rows) ← try env.hooks.multisigSnapshot owned w.network s.history
+      catch _ => pure (0, payments s.history [] [])
+    s := { s with accountsBalance, payments := rows }
   if let some stack := c.stack then
     s := { s with peerCount := (← stack.pool.connectedPeers).size, tipHeight := (← stack.chain.height).toNat
                   feeFloorMilli := ← feeFloorMilli stack.pool }

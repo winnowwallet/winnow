@@ -92,12 +92,17 @@ def Real.MultisigApp.install (a : Real.MultisigApp) (env : Real.Env) (base : Bac
     renameSigner := Real.renameSigner a
     removeSigner := Real.removeSigner a
     verifyLedgerAddress := Real.verifyLedgerAddress env a
-    signMultisigSpendWithLedger := Real.signMultisigSpendWithLedger env a
-    createMultisigSpend := Real.createMultisigSpend env a
-    reviewMultisigPSBT := Real.reviewMultisigPSBT env a
-    addMultisigPSBT := Real.addPastedPSBT env a
-    signMultisigSpend := Real.signMultisigSpend env a
-    broadcastMultisigSpend := Real.broadcastMultisigSpend env a }
+    -- a payment from an account goes through the account's review; the wallet's otherwise
+    previewSend := fun inputs => if inputs.accountID.isSome then Real.previewAccountSend env a inputs else base.previewSend inputs
+    signAndDraft := fun adv inputs p => Real.signAndDraft env a adv inputs p
+    signDraft := Real.signDraft env a
+    signDraftWithLedger := Real.signDraftWithLedger env a
+    adoptDraft := Real.adoptDraft env a
+    broadcastDraft := Real.broadcastDraft env a
+    discardDraft := Real.discardDraft env a
+    createDraft := Real.createDraft env a
+    rebroadcastSpend := Real.rebroadcastSpend env a
+    abandonSpend := Real.abandonSpend env a }
 
 /-- The real backend over the injected capabilities, with its diagnostics handle and the multisig store:
 the core half (`Real/Assemble.lean`), the records half (`Real/Records*.lean`) and the multisig accounts
@@ -106,7 +111,8 @@ def Backend.realWithMultisig (deps : Real.Deps) (ledger : IO Real.LedgerSession 
     IO (Backend × Real.Env × Real.MultisigApp) := do
   let host ← Real.RecordsHost.new deps.keyStore deps.journal
   let multisig ← Real.MultisigApp.new (RecordsReal.StoreKeyVault.ofKeyStore deps.keyStore) ledger
-  let env ← Real.Env.new { deps with hooks := multisig.hooks host.hooks }
+  let env ← Real.Env.new { deps with hooks := multisig.allHooks host.hooks }
+  multisig.env.set (some env)
   let ctx := host.ctx env
   let base := multisig.install env (ctx.install env.backend)
   return ({ base with records := host.withStore {} fun _ => ctx.records }, env, multisig)

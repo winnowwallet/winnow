@@ -1,4 +1,5 @@
 import WinnowApp.Multisig
+import WinnowApp.Payments
 
 /-! HomeView.swift and BeginnerHomeView.swift: the balance, sync and activity; HistoryRow,
 PaymentDetailView (recipients, receive labels, sender, details, transaction) and FeeBumpView. -/
@@ -19,9 +20,11 @@ def Model.loadPayment (m : Model) : Model × List Cmd :=
   match m.currentPayment? with
   | none => (m, [])
   | some txid =>
-    match m.historyItem? txid with
-    | some h =>
-      if h.spent > 0 && h.outputs.isNone && !m.payment.loading && !m.status.syncing then
+    match m.payment? txid with
+    | some row =>
+      let h := row.item
+      -- only the wallet's own sends: an account's entry carries its bytes
+      if row.accountID.isNone && h.spent > 0 && h.outputs.isNone && !m.payment.loading && !m.status.syncing then
         ({ m with payment := { loading := true, error := none } }, [.loadPaymentDetails m.generation txid])
       else (m, [])
     | none => (m, [])
@@ -90,8 +93,8 @@ def stepHome (msg : HomeMsg) (m : Model) : Model × List Cmd :=
 /-! ## View -/
 
 /-- `HistoryRow`: who, the labels, the net amount, and Confirmed/Pending/Replaced (beginner) or the
-block, fee and replacement (Advanced). The title opens the payment. -/
-def historyRow (m : Model) (h : HistoryItem) (tappable := true) : H :=
+block, fee and replacement (Advanced). The title opens the payment. The row, and its status lines. -/
+def historyRow (m : Model) (h : HistoryItem) (tappable := true) : H × List H :=
   let labels := historyLabels m.records h
   let title := historyTitle m.records h
   let status : List H :=
@@ -102,11 +105,53 @@ def historyRow (m : Model) (h : HistoryItem) (tappable := true) : H :=
       (match h.fee with | some f => [caption s!"fee {groupDigits f.natAbs} sats"] | none => [])
     else
       [caption (if h.replacedBy.isSome then "Replaced" else if h.height > 0 then "Confirmed" else "Pending")]
-  .row [ .col ([.identified s!"historyPayment-{h.txid}"
+  (.row [ .col ([.identified s!"historyPayment-{h.txid}"
                   (if tappable then .button title .plain (some (.home (.openPayment h.txid))) else body title)] ++
                (if labels.isEmpty then [] else [caption labels]))
        , .spacer
-       , .col ([body (signedSatsText h.net)] ++ status) ]
+       , .col ([body (signedSatsText h.net)] ++ status) ], status)
+
+/-- `HistoryRow`'s title for a row: an account's payment as the wallet's, a draft as awaiting signatures,
+a move between the wallet and an account as such. -/
+def paymentTitle (m : Model) (p : DisplayedPayment) : String :=
+  match p.source with
+  | .wallet | .account _ => historyTitle m.records p.item
+  | .draft name _ => s!"Awaiting signatures · {name}"
+  | .transfer f t _ =>
+    if f == walletName then s!"Moved to {t}" else if t == walletName then s!"Moved from {f}" else s!"Moved from {f} to {t}"
+
+/-- `HistoryRow` and `PaymentLink`: who (and which account), the labels, the amount, and Confirmed/Pending/
+Replaced (Simple) or the block, fee and replacement (Advanced); a draft says how many signatures it has.
+In Advanced mode a draft opens its collection step and anything else the payment; Simple mode opens only
+the wallet's own payments (an account's rows are there to read, with no action). -/
+def paymentRow (m : Model) (p : DisplayedPayment) (tappable := true) : H :=
+  let h := p.item
+  let labels := historyLabels m.records h
+  let title := paymentTitle m p
+  let advanced := m.settings.advancedMode
+  let action : Option Msg :=
+    if !tappable then none
+    else match p.source, p.accountID with
+      | .draft .., some id => if advanced then some (.multisig (.openPSBT id)) else none
+      | .wallet, _ => some (.home (.openPayment h.txid))
+      | _, _ => if advanced then some (.home (.openPayment h.txid)) else none
+  let rowID := if p.isDraft then s!"historyDraft-{p.accountID.getD ""}" else s!"historyPayment-{h.txid}"
+  let status : List H :=
+    match p.source with
+    | .draft _ signatures =>
+      [.identified s!"transactionDraft-{h.txid}"
+        (caption (if advanced then s!"{signatures} signed · tap to continue" else "Awaiting signatures · collected in Advanced mode"))]
+    | _ => (historyRow m h).2
+  let amount : H := match p.source with
+    | .transfer _ _ moved => body s!"{groupDigits moved} sats"
+    | _ => body (signedSatsText h.net)
+  .row [ .col ([.identified rowID (match action with | some a => .button title .plain (some a) | none => body title)] ++
+               (match p.source with
+                | .account name => [.identified s!"paymentAccount-{h.txid}" (caption name)]
+                | _ => []) ++
+               (if labels.isEmpty then [] else [caption labels]))
+       , .spacer
+       , .col ([amount] ++ status) ]
 
 def syncLine (m : Model) : H :=
   match m.phase.summary m.status.syncing with
@@ -114,16 +159,28 @@ def syncLine (m : Model) : H :=
   | .peersUnavailable => .identified "syncSummaryText" (body "Couldn't reach the Bitcoin network — check your connection.")
   | .syncing => .identified "syncSummaryText" (.progress "Syncing…")
 
+/-- `AccountsBalanceLine`: how much of the headline sits in multisig accounts, which need co-signers to move;
+nothing when the phone has no account. -/
+def accountsBalanceLine (m : Model) : List H :=
+  let count := m.multisig.accounts.length
+  if count == 0 then [] else
+  [.identified "accountsBalanceText"
+    (caption s!"of which {satsText m.status.accountsBalance} in {count} multisig account{if count == 1 then "" else "s"}, needs co-signers")]
+
+/-- The headline: the wallet's and the accounts' coins together. -/
+def totalBalance (m : Model) : Int := m.status.balance + m.status.accountsBalance
+
 def balanceSection (m : Model) : H :=
-  .section "" "" ([ caption "Balance", .identified "balanceText" (.text (satsText m.status.balance) .title),
+  .section "" "" ([ caption "Balance", .identified "balanceText" (.text (satsText (totalBalance m)) .title) ] ++
+                  accountsBalanceLine m ++ [
                     .row ([syncLine m] ++ (if m.settings.network == .mainnet then [] else [caption "Signet · test coins"])) ] ++
                   (if m.phase.summary m.status.syncing == .peersUnavailable then [.button "Retry" .plain (some .retryPeers)] else []) ++
                   errorRows m.status.lastSyncError)
 
 def activitySection (m : Model) : H :=
   .section "Activity" ""
-    (if m.status.history.isEmpty then [caption "Nothing yet. Payments appear here once they are confirmed."]
-     else m.status.history.map (historyRow m))
+    (if m.status.payments.isEmpty then [caption "Nothing yet. Payments appear here once they are confirmed."]
+     else m.status.payments.map (paymentRow m))
 
 def beginnerSections (m : Model) : List H :=
   [ balanceSection m
@@ -149,13 +206,13 @@ def syncSection (m : Model) : H :=
      [.button "Sync now" .plain (if m.status.syncing then none else some .syncNow)])
 
 def walletSections (m : Model) : List H :=
-  [ .section "" "" [caption "Balance · confirmed", .identified "balanceText" (.text (satsText m.status.balance) .title),
-                    caption s!"{m.status.utxoCount} UTXO(s)"]
+  [ .section "" "" ([caption "Balance · confirmed", .identified "balanceText" (.text (satsText (totalBalance m)) .title)] ++
+                    accountsBalanceLine m ++ [caption s!"{m.status.utxoCount} UTXO(s)"])
   , syncSection m
   , multisigSection m
   , .section "Transactions" ""
-      (if m.status.history.isEmpty then [caption "No transactions yet. Payments appear here once they confirm in a block."]
-       else m.status.history.map (historyRow m)) ]
+      (if m.status.payments.isEmpty then [caption "No transactions yet. Payments appear here once they confirm in a block."]
+       else m.status.payments.map (paymentRow m)) ]
 
 /-! ### PaymentDetailView -/
 
@@ -173,10 +230,31 @@ def senderSection (m : Model) (h : HistoryItem) : H :=
        , .button "Remove sender label" .destructive (some (.home .removeSenderLabel)) ]
      | none => [.button "Save sender as person" .plain (act .labelSender)])
 
+/-- The payment screen's "Account" section: the account a payment belongs to, with what can be done about it
+in Advanced mode: collecting a draft's signatures, or announcing again or giving up on a spend no block has
+taken. Simple mode names the account only. -/
+def accountSection (m : Model) (p : DisplayedPayment) : List H :=
+  match p.accountID.bind m.multisigInfo? with
+  | none => []
+  | some a =>
+    let txid := p.item.txid
+    let actions : List H :=
+      if p.isDraft then
+        if m.settings.advancedMode then
+          [.identified "collectSignaturesButton" (.button "Collect signatures" .plain (some (.multisig (.openPSBT a.id))))]
+        else [caption "This payment is waiting for the other signers. Signatures are collected in Advanced mode."]
+      else if m.settings.advancedMode && p.item.height == 0 && a.inFlight.contains txid then
+        [ .identified "rebroadcastSpendButton" (.button "Rebroadcast" .plain (some (.multisig (.rebroadcast a.id txid))))
+        , .identified "abandonSpendButton" (.button "Give up on this payment" .destructive (some (.multisig (.askAbandon a.id txid))))
+        , caption "No block has taken this payment yet. Rebroadcast announces it to the network again; giving up frees its coins for another payment." ]
+      else []
+    [.section "Account" "" ([.identified "paymentAccountName" (.text a.name .title)] ++ actions)]
+
 def paymentSections (m : Model) (txid : String) : List H :=
-  match m.historyItem? txid with
+  match m.payment? txid with
   | none => [.section "" "" [body "This payment is no longer in the wallet’s history."]]
-  | some h =>
+  | some row =>
+    let h := row.item
     let locked := m.records.peopleStorageNotice.isSome
     let recipients := (paymentRecipients m.records h).map fun r =>
       let saved := (r.person.map (·.isSavedRecipient)).getD false
@@ -199,7 +277,7 @@ def paymentSections (m : Model) (txid : String) : List H :=
     let notice : List H := match m.records.receiveLabelStorageNotice with
       | some n => [.section "" "" [body n]] | none => []
     let load : List H :=
-      if h.outputs.isNone && h.spent > 0 then
+      if h.outputs.isNone && h.spent > 0 && row.accountID.isNone then
         [.section "" "" [if m.payment.loading || m.status.syncing then .progress "Loading payment details…"
                          else .button "Load payment details" .plain (some (.home .loadPayment))]]
       else []
@@ -210,8 +288,8 @@ def paymentSections (m : Model) (txid : String) : List H :=
            , explorerButton "View transaction" (m.settings.transactionURL txid) "transaction ID" ] ++
            (if m.status.feeBumpable.contains txid then [.button "Bump fee" .plain (some (.home .openFeeBump))] else []))]
       else [.section "" "" (technical m "pay.txid" "Transaction ID" [copyableIdentifier m "pay.txid" txid])]
-    [.section "" "" [historyRow m h false]] ++ recipients ++ labelSection ++ notice ++
-    (if h.received > 0 then [senderSection m h] else []) ++ load ++
+    [.section "" "" [paymentRow m row false]] ++ accountSection m row ++ recipients ++ labelSection ++ notice ++
+    (if h.received > 0 && !row.isDraft then [senderSection m h] else []) ++ load ++
     (match m.payment.error with | some e => [.section "" "" (errorRows (some e))] | none => []) ++ txSection
 
 /-! ### FeeBumpView -/

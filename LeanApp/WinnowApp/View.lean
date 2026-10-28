@@ -83,6 +83,12 @@ def confirms (m : Model) : List H :=
     [.alert s!"Look up funding addresses with {host}?"
        ((if m.person.lookupConsent.isSome then lookupDisclosure else "No lookup selected.") ++ " Funding addresses do not establish who sent the payment or where they want a payment sent.")
        [.button s!"Look up with {host}" .plain (some (.people .infer)), cancel]]
+  | some (.discardDraft _) =>
+    [.alert "Discard this payment?" "The account keeps its coins. The signatures collected so far are lost."
+       [.identified "multisigConfirmDiscardButton" (.button "Discard" .destructive (some (.multisig .discard))), cancel]]
+  | some (.abandonSpend _ _) =>
+    [.alert "Give up on this payment?" "Its coins become the account's again. If the network confirms it after all, it shows up here again as a spend."
+       [.identified "abandonConfirmButton" (.button "Give up" .destructive (some (.multisig .abandon))), cancel]]
   | some (.removeMultisig _) =>
     [.alert "Remove this account from this phone?" "Only an empty account can be removed. The other signers keep theirs."
        [.button "Remove" .destructive (some (.multisig .remove)), cancel]]
@@ -136,7 +142,7 @@ def routedScreen (m : Model) : Option H :=
     some (.screen ((m.multisigInfo? id).map (·.name) |>.getD "Multisig") (some (.multisig .pop))
       ([.list (multisigAccountSections m id)] ++ overlays m))
   | some (.multisigPSBT id) =>
-    some (.screen "Multisig PSBT" (some (.multisig .pop)) ([.list (multisigPSBTSections m id)] ++ overlays m))
+    some (.screen (multisigPSBTTitle m id) (some (.multisig .pop)) ([.list (multisigPSBTSections m id)] ++ overlays m))
   | some .signers => some (.screen "Signers" (some (.signer .pop)) ([.list (signersSections m)] ++ overlays m))
   | some (.signer id) =>
     some (.screen ((m.signer? id).map (·.name) |>.getD "Signer") (some (.signer .pop))

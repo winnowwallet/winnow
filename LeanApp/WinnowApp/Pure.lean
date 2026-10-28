@@ -497,3 +497,22 @@ the exact pending rate (the backend computes it before rounding the rate to thou
 def suggestedBumpText (rate : Float) : String := toString (rate + 1).ceil.toUInt64.toNat
 
 end WinnowApp
+
+namespace WinnowApp
+
+/-! ## Multisig drafts -/
+
+/-- The leaf a draft row shows its signatures for, given each usable path's (approvals, threshold): the
+path needing the fewest further signatures, ties broken by the most approvals, then by the first path;
+none when there is no path. Compared as numbers: upstream's `draftRow` (DisplayedPayment.swift 93–109)
+takes the longest "k of n" text, so an untouched twelve-key leaf ("0 of 12") wins over a leaf two of
+three have signed ("2 of 3"). Fixed here (PORT.md, "Fixed upstream bugs" 2). -/
+def bestLeafSignatures (paths : List (Nat × Nat)) : Option (Nat × Nat) :=
+  paths.foldl (fun best p =>
+    match best with
+    | none => some p
+    | some b =>
+      let need (x : Nat × Nat) := x.2 - x.1
+      if need p < need b || (need p == need b && p.1 > b.1) then some p else some b) none
+
+end WinnowApp

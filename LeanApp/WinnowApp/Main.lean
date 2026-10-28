@@ -371,21 +371,36 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit := do
   | .verifyLedgerAddress g adv id index => discard <| IO.asTask do
       try fx.post (.ledgerAddressShown g id index (.ok (← b.verifyLedgerAddress adv id index)))
       catch e => fx.post (.ledgerAddressShown g id index (.error (toString e)))
-  | .signMultisigSpendWithLedger g e adv id psbt => background fx g s!"multisigPSBT.{e}" do
-      return .multisigPSBT g e id (← b.signMultisigSpendWithLedger adv id psbt)
   | .multisigFeeRate g => background fx g "multisigRate" do
       return .multisigFeeRate g (← b.resolveFeeRate 1 none)
-  | .createMultisigSpend g e id address amount rate recovery => background fx g s!"multisigPSBT.{e}" do
-      return .multisigPSBT g e id (← b.createMultisigSpend id address amount rate recovery)
-  | .reviewMultisigPSBT g e id psbt => background fx g s!"multisigPSBT.{e}" do
-      return .multisigPSBT g e id (← b.reviewMultisigPSBT id psbt)
-  | .addMultisigPSBT g e id working pasted => background fx g s!"multisigPSBT.{e}" do
-      return .multisigPSBT g e id (← b.addMultisigPSBT id working pasted) true
-  | .signMultisigSpend g e id psbt =>
-      authenticated fx g s!"multisigPSBT.{e}" "Sign this multisig payment" do
-        return .multisigPSBT g e id (← b.signMultisigSpend id psbt)
-  | .broadcastMultisigSpend g e id psbt => background fx g s!"multisigPSBT.{e}" do
-      return .multisigBroadcast g e id (← b.broadcastMultisigSpend id psbt)
+  | .signAndDraft g adv inputs p =>
+      -- "Sign and continue": one device authentication, this phone's signature, the draft filed
+      authenticated fx g "send" "Sign this multisig payment" do
+        return .drafted g (← b.signAndDraft adv inputs p)
+  | .signDraft g e id =>
+      authenticated fx g s!"collect.{e}" "Sign this multisig payment" do
+        b.signDraft id
+        return .collected g e id
+  | .signDraftWithLedger g e adv id => background fx g s!"collect.{e}" do
+      b.signDraftWithLedger adv id
+      return .collected g e id
+  | .adoptDraft g e id psbt => background fx g s!"collect.{e}" do
+      b.adoptDraft id psbt
+      return .collected g e id true
+  | .broadcastDraft g e id => background fx g s!"collect.{e}" do
+      return .draftBroadcast g e id (← b.broadcastDraft id)
+  | .discardDraft g e id => background fx g s!"collect.{e}" do
+      b.discardDraft id
+      return .collected g e id
+  | .createDraft g e id address amount rate recovery => background fx g s!"collect.{e}" do
+      b.createDraft id address amount rate recovery
+      return .collected g e id
+  | .rebroadcastSpend g id txid => background fx g "accountSpend" do
+      b.rebroadcastSpend id txid
+      return .spendHandled g id txid
+  | .abandonSpend g id txid => background fx g "accountSpend" do
+      b.abandonSpend id txid
+      return .spendHandled g id txid
   | .journal name fields => journal name fields
   | .paste target => discard <| IO.asTask do
       -- `pasteboardText()`: the runner's control file under test mode, the pasteboard otherwise

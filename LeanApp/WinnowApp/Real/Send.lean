@@ -49,18 +49,19 @@ def requireRelayFloors (env : Env) (rate : Float) : IO Unit := do
   requireRelayFee rate (← feeFloor s.pool .seatMajority)
   requireRelayFee rate (← feeFloor s.pool .mostLenient)
 
-/-- `SendPreview.authorizes(_:resolvedSilentPayments:)`: fee, change, inputs in order, and the outputs
-exactly. A silent payment's script comes from the wallet (`resolved`, one per reviewed silent payment, same
-order and amount) and is then matched like any reviewed payment. -/
-def SendReview.authorizes (r : SendReview) (built : BuiltTransaction) (resolved : Array Payment := #[]) : Bool := Id.run do
-  if !(built.fee == r.fee && built.changeAmount == r.changeAmount &&
-      built.transaction.inputs.map (·.previousOutput) == r.selected) then return false
+/-- `authorizes(transaction:fee:changeAmount:resolvedSilentPayments:)`: the same check on a transaction
+that is not yet signed, such as a multisig account's PSBT, whose inputs, outputs and fee are fixed
+before any signature. -/
+def SendReview.authorizesTransaction (r : SendReview) (tx : Transaction) (fee : Int64) (changeAmount : Option Int64)
+    (resolved : Array Payment := #[]) : Bool := Id.run do
+  if !(fee == r.fee && changeAmount == r.changeAmount &&
+      tx.inputs.map (·.previousOutput) == r.selected) then return false
   if !(resolved.size == r.silentPayments.size &&
       (r.silentPayments.zip resolved).all fun (s, p) => s.amount == p.amount) then return false
   let reviewed := r.payments ++ resolved
   let expected := match r.change with | some c => reviewed.push c | none => reviewed
-  if built.transaction.outputs.size != expected.size then return false
-  let mut unmatched := built.transaction.outputs
+  if tx.outputs.size != expected.size then return false
+  let mut unmatched := tx.outputs
   for p in expected do
     match unmatched.findIdx? (fun o => o.value == p.amount && o.scriptPubKey == p.scriptPubKey) with
     | some i => unmatched := unmatched.eraseIdx! i
@@ -68,10 +69,16 @@ def SendReview.authorizes (r : SendReview) (built : BuiltTransaction) (resolved 
   if !unmatched.isEmpty then return false
   return r.change.isNone == r.changeAmount.isNone
 
+/-- `SendPreview.authorizes(_:resolvedSilentPayments:)`: fee, change, inputs in order, and the outputs
+exactly. A silent payment's script comes from the wallet (`resolved`, one per reviewed silent payment, same
+order and amount) and is then matched like any reviewed payment. -/
+def SendReview.authorizes (r : SendReview) (built : BuiltTransaction) (resolved : Array Payment := #[]) : Bool :=
+  r.authorizesTransaction built.transaction built.fee built.changeAmount resolved
+
 def sameSummary (a b : Preview) : Bool :=
   a.destination == b.destination && a.amount == b.amount && a.fee == b.fee &&
     a.feeRateMilli == b.feeRateMilli && a.inputCount == b.inputCount && a.change == b.change &&
-    a.recipient == b.recipient
+    a.recipient == b.recipient && a.account == b.account
 
 /-- `previewSend(destination:…)` / `previewSend(to:…)` for the everyday wallet. -/
 def previewSend (env : Env) (inputs : SendInputs) : IO Preview := do

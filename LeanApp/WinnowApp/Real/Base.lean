@@ -4,6 +4,7 @@ import Winnow.Wallet.Wallet
 import Winnow.Wallet.FeePolicy
 import WinnowApp.Backend
 import WinnowApp.Pure
+import WinnowApp.Payments
 
 /-! # `Backend.real`: shared state, injected capabilities, error texts
 
@@ -68,6 +69,10 @@ structure Hooks where
   signerMerge : Array SignerRecord → IO Unit := fun _ => pure ()
   /-- `signerStore.backup()`. -/
   signerBackup : IO (Array SignerRecord) := pure #[]
+  /-- `refresh()`'s account half: the accounts' live balance and the one Transactions list
+  (`AppModel.payments`) over the wallet's rows, rendered with the scripts the wallet and accounts own. -/
+  multisigSnapshot : Std.HashSet ByteArray → Tx.BitcoinNetwork → List HistoryItem → IO (Int × List DisplayedPayment) :=
+    fun _ _ wallet => pure (0, payments wallet [] [])
 
 instance : Inhabited Hooks := ⟨{}⟩
 

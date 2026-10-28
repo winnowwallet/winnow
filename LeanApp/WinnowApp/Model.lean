@@ -70,6 +70,10 @@ inductive Confirm where
   | openExternal (url : String) (exposedItem : String)
   /-- MultisigAccountView's "Remove this account from this phone?". -/
   | removeMultisig (id : String)
+  /-- The collection step's "Discard this payment?". -/
+  | discardDraft (id : String)
+  /-- The payment screen's "Give up on this payment?". -/
+  | abandonSpend (id txid : String)
   deriving Repr, BEq, Inhabited
 
 /-- Which clipboard policy a copy uses (`ClipboardPolicy`). -/
@@ -135,6 +139,19 @@ structure SendInputs where
   personID : Option String := none
   paymentIndex : Option Nat := none
   walletID : Option String := none
+  /-- The multisig account the payment comes from (Advanced mode's From); none for the wallet. -/
+  accountID : Option String := none
+  deriving Repr, Inhabited, BEq
+
+/-- `SendPreview.AccountSource`: the account a payment comes from and the PSBT this phone built for it,
+which "Sign and continue" signs and files as the account's draft. -/
+structure AccountSource where
+  id : String
+  name : String
+  threshold : Nat
+  signerCount : Nat
+  /-- The unsigned PSBT (Base64) the review was made from. -/
+  psbt : String
   deriving Repr, Inhabited, BEq
 
 structure PreviewRecipient where
@@ -157,6 +174,8 @@ structure Preview where
   locktimeLagsTip : Bool
   /-- The destination is a silent payment code (BIP352): the chain shows an address derived at signing. -/
   silent : Bool := false
+  /-- Set when the source is a multisig account. -/
+  account : Option AccountSource := none
   deriving Repr, Inhabited
 
 /-- A broadcast send: its txid, and the addresses its silent payments were derived to (in order). -/
@@ -180,6 +199,8 @@ structure SendState where
   feeFloorNotice : Bool := false
   confirmedHeight : Option Nat := none
   resolvedRateMilli : Option Nat := none
+  /-- The account whose draft is collecting signatures, after "Sign and continue". -/
+  collecting : Option String := none
   deriving Repr, Inhabited
 
 structure PaymentDetail where
@@ -354,19 +375,20 @@ structure LedgerVerify where
   result : Option (String × Bool) := none
   deriving Repr, Inhabited
 
-/-- MultisigPSBTView's state. -/
-structure MultisigSpendForm where
+/-- The account's PSBT page (MultisigPSBTView: the recovery path and a pasted PSBT, both filing the draft)
+and the signature-collection step (`MultisigSigningSections`, the same from Send, Transactions and the
+account page). Nothing of a PSBT is held here: every step changes the account's draft, which the overview
+shows. -/
+structure CollectForm where
   address : String := ""
   amount : String := ""
   feeRate : String := ""
   pasted : String := ""
   /-- The path a new PSBT is created on. -/
   recovery : Bool := false
-  working : Option MultisigPSBT := none
-  /-- The account state (`TrustedState`) the review in hand was made for. -/
-  trusted : String := ""
   error : Option String := none
   busy : Bool := false
+  /-- The account page's broadcast (from Send, the receipt shows instead). -/
   broadcastTxid : Option String := none
   /-- `SensitivePresentationEpoch`: bumped by each operation and when the screen is left or backgrounded; an
   answer counts only for its epoch. -/
@@ -432,7 +454,7 @@ structure Model where
   /-- LedgerRegisterButton: the account being registered, and the last failure per account. -/
   ledgerRegistering : Option String := none
   ledgerRegisterError : Option (String × String) := none
-  multisigSpend : MultisigSpendForm := {}
+  collect : CollectForm := {}
   /-- Paper shown in the Design papers sheet. -/
   paper : Option Nat := none
   /-- Bumped on suspend, network switch and rebuild: an answer from an older generation is dropped. -/
@@ -495,9 +517,14 @@ inductive Host where
   | multisigRemoved (gen : Nat) (id : String)
   /-- The medium fee rate, thousandths of sat/vB (MultisigPSBTView's `.task`). -/
   | multisigFeeRate (gen : Nat) (milli : Nat)
-  /-- `pasted`: the answer to "Use this PSBT" / "Combine", which empties the paste field. -/
-  | multisigPSBT (gen epoch : Nat) (id : String) (p : MultisigPSBT) (pasted : Bool := false)
-  | multisigBroadcast (gen epoch : Nat) (id txid : String)
+  /-- "Sign and continue" filed the account's draft. -/
+  | drafted (gen : Nat) (id : String)
+  /-- A step of the collection (sign, Ledger, combine, a new or pasted PSBT, discard) is done; `pasted`:
+  the paste field empties. -/
+  | collected (gen epoch : Nat) (id : String) (pasted : Bool := false)
+  | draftBroadcast (gen epoch : Nat) (id txid : String)
+  /-- Rebroadcast or Give up on an in-flight account spend is done. -/
+  | spendHandled (gen : Nat) (id txid : String)
   | ledgerPaired (gen : Nat) (id : String)
   | signerSaved (gen : Nat) (id : String)
   | signerRenamed (gen : Nat) (id : String)
@@ -521,6 +548,8 @@ inductive SendMsg where
   | openRecipients
   | choosePerson (id : String)
   | clearPerson
+  /-- From: the wallet (none) or a multisig account (Advanced mode). -/
+  | setSource (account : Option String)
   | review
   | sendPayment
   | editPayment
@@ -647,7 +676,7 @@ inductive MultisigMsg where
   | newAddress
   | askRemove
   | remove
-  -- MultisigPSBTView
+  -- MultisigPSBTView (the account's page: recovery path, pasted PSBT) and the collection step
   | setAddress (s : String)
   | setAmount (s : String)
   | setFeeRate (s : String)
@@ -655,10 +684,17 @@ inductive MultisigMsg where
   | createSpend
   | setPasted (s : String)
   | pastePSBT
-  | addPasted
-  | sign
-  | signWithLedger
-  | broadcast
+  /-- "Use this PSBT" (no draft) or "Combine" (a draft): the account named. -/
+  | addPasted (id : String)
+  | sign (id : String)
+  | signWithLedger (id : String)
+  | broadcast (id : String)
+  | askDiscard (id : String)
+  | discard
+  -- PaymentDetailView's Account section
+  | rebroadcast (id txid : String)
+  | askAbandon (id txid : String)
+  | abandon
   -- LedgerPairView, LedgerVerifyAddressButton, the builder's Ledger toggle
   | openLedgerPair
   | setLedgerName (s : String)
@@ -772,14 +808,18 @@ inductive Cmd where
   | renameSigner (gen : Nat) (id name : String)
   | removeSigner (gen : Nat) (id : String)
   | verifyLedgerAddress (gen : Nat) (advanced : Bool) (id : String) (index : Nat)
-  | signMultisigSpendWithLedger (gen epoch : Nat) (advanced : Bool) (id psbt : String)
   | multisigFeeRate (gen : Nat)
-  | createMultisigSpend (gen epoch : Nat) (id address : String) (amount : Int) (feeRate : Float) (recovery : Bool)
-  | reviewMultisigPSBT (gen epoch : Nat) (id psbt : String)
-  | addMultisigPSBT (gen epoch : Nat) (id : String) (working : Option String) (pasted : String)
+  /-- "Sign and continue", after device authentication ("Sign this multisig payment"). -/
+  | signAndDraft (gen : Nat) (advanced : Bool) (inputs : SendInputs) (p : Preview)
   /-- After device authentication ("Sign this multisig payment"). -/
-  | signMultisigSpend (gen epoch : Nat) (id psbt : String)
-  | broadcastMultisigSpend (gen epoch : Nat) (id psbt : String)
+  | signDraft (gen epoch : Nat) (id : String)
+  | signDraftWithLedger (gen epoch : Nat) (advanced : Bool) (id : String)
+  | adoptDraft (gen epoch : Nat) (id psbt : String)
+  | broadcastDraft (gen epoch : Nat) (id : String)
+  | discardDraft (gen epoch : Nat) (id : String)
+  | createDraft (gen epoch : Nat) (id address : String) (amount : Int) (feeRate : Float) (recovery : Bool)
+  | rebroadcastSpend (gen : Nat) (id txid : String)
+  | abandonSpend (gen : Nat) (id txid : String)
   /-- `e2e?.journal(name, fields:)` for what happens in the Model (test mode only; nothing otherwise). -/
   | journal (name : String) (fields : List (String × String))
   deriving Inhabited
@@ -803,7 +843,16 @@ def Model.hasSheet (m : Model) (s : Sheet) : Bool := m.sheets.contains s
 def Model.present (m : Model) (s : Sheet) : Model := { m with sheets := m.sheets ++ [s], confirm := none }
 def Model.isExpanded (m : Model) (key : String) : Bool := m.expanded.contains key
 def Model.person? (m : Model) (id : String) : Option Person := m.records.people.find? (·.id == id)
-def Model.historyItem? (m : Model) (txid : String) : Option HistoryItem := m.status.history.find? (·.txid == txid)
+/-- The row a payment screen shows for a transaction id: the merged list's, else the wallet's own entry. -/
+def Model.historyItem? (m : Model) (txid : String) : Option HistoryItem :=
+  match m.status.payments.find? (·.item.txid == txid) with
+  | some row => some row.item
+  | none => m.status.history.find? (·.txid == txid)
+
+def Model.payment? (m : Model) (txid : String) : Option DisplayedPayment :=
+  match m.status.payments.find? (·.item.txid == txid) with
+  | some row => some row
+  | none => (m.status.history.find? (·.txid == txid)).map fun e => { item := e, source := .wallet }
 
 /-- The saved stack of `tab` (empty when none was saved). -/
 def Model.savedRoutes (m : Model) (tab : Nat) : List Route := (m.tabRoutes[tab]?).getD []

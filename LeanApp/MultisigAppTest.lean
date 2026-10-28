@@ -1,5 +1,9 @@
 import WinnowApp.Real
 import WinnowApp.Signers
+import WinnowApp.Payments
+import WinnowApp.View
+import ElmLean.Erase
+import ElmLean.Json
 
 /-! `multisig-app-test`: upstream 1cf93fb's app-side multisig tests, ported.
 
@@ -93,7 +97,8 @@ def fakeMatch (height : UInt32) (txs : Array Transaction) : Net.BlockMatch :=
   let header : Net.BlockHeader := {
     version := 2, previousHash := zeros 32, merkleRoot := zeros 32 0xAA, time := 1_700_000_000 + height,
     bits := 0x207F_FFFF, nonce := 0, hash := .empty }
-  { height, blockHash := .empty, block := { header := header, transactions := txs } }
+  -- a 32-byte hash, as a real block has (an entry's `blockHash` is coded as 32 bytes)
+  { height, blockHash := zeros 32 (height % 251).toUInt8, block := { header := header, transactions := txs } }
 
 /-- A block whose first transaction is a coinbase paying no one we watch. -/
 def block (height : UInt32) (txs : Array Transaction) : Net.BlockMatch :=
@@ -158,8 +163,16 @@ def S.add (s : S) (name : String) (a : MultisigAccount) (h : UInt32) : RM Multis
 def S.restore (s : S) (rs : Array MultisigAccountRecord) : RM Unit := s.stepU fun st => st.restore s.keys writeAtomically rs
 def S.apply (s : S) (m : Net.BlockMatch) (network : BitcoinNetwork := signet) : RM (Array ByteArray) :=
   s.step fun st => st.apply s.keys writeAtomically m network
-def S.recordSpend (s : S) (id : String) (tx : Transaction) (ci : Option UInt32) : RM Bool :=
-  s.step fun st => st.recordSpend s.keys writeAtomically id tx ci
+def S.recordSpend (s : S) (id : String) (tx : Transaction) (ci : Option UInt32) (broadcastHeight : UInt32 := 0) : RM Bool :=
+  s.step fun st => st.recordSpend s.keys writeAtomically id tx ci broadcastHeight
+def S.applyPaying (s : S) (m : Net.BlockMatch) : RM (Array (String × UInt32)) :=
+  s.step fun st => do
+    let (next, _, paid) ← st.applyPaying s.keys writeAtomically m signet
+    return (next, paid)
+def S.setDraft (s : S) (id : String) (d : Option MultisigSpendDraft) : RM Unit :=
+  s.stepU fun st => st.setDraft s.keys writeAtomically id d
+def S.abandon (s : S) (id : String) (txid : ByteArray) : RM Unit :=
+  s.stepU fun st => st.abandonSpend s.keys writeAtomically id txid
 def S.rollBack (s : S) (fork : UInt32) : RM Unit := s.stepU fun st => st.rollBack s.keys writeAtomically fork
 def S.backup (s : S) : RM (Array MultisigAccountRecord) := do (← RM.io s.ref.get).backupRecords
 def S.watch (s : S) (network : BitcoinNetwork := signet) : RM (Array ByteArray) := s.step fun st => do
@@ -203,11 +216,17 @@ def testBackupPreservesAccountsAndRejectsChangedOwnership : IO Unit := do
     (SwiftJSON.decodeText t (SwiftJSON.asArray MultisigAccountRecord.ofJV)).toOption
   check "backup: the file holds exactly the record" (onDisk == some #[record])
 
-def testBackupWaitsForPendingAccountPayments : IO Unit := do
+/-- A backup carries what no block has taken yet, so a restored phone keeps waiting for it instead of
+forgetting it (upstream inverted this test in #259). -/
+def testBackupCarriesPendingAccountPayments : IO Unit := do
   let a ← twoOfTwo
   let (store, _) ← S.open (← memoryKeys) none
-  need "restore" (store.restore #[recordOf a #[← coin a 80_000 0]])
-  refused "an unconfirmed account snapshot is not exported" store.backup "invalidBundle"
+  let pending := recordOf a #[← coin a 80_000 0]
+  need "restore" (store.restore #[pending])
+  let backup ← need "backup" store.backup
+  let bundle : ImportBundle := { network := "signet", lastKnownHeight := 100, vaults := some backup }
+  let decoded ← needE "decode" (ImportBundle.decode bundle.serialized)
+  check "the pending account snapshot round-trips through a bundle" (decoded.vaults == some #[pending])
 
 def testPaymentsSpendsAndRollbacks : IO Unit := do
   let keys ← memoryKeys
@@ -233,22 +252,50 @@ def testPaymentsSpendsAndRollbacks : IO Unit := do
   current ← store.fetch added.id
   check "spend recorded: balance" (current.balance == 26_000) s!"{current.balance}"
   check "spend recorded: change frontier" (current.nextChangeIndex == 1)
-  check "no backup while a spend is pending" ((← store.backup.run) matches .error _)
-  -- A reorg below the later payment drops it, and keeps the in-flight spend's input reserved.
+  -- The spend is in the history as pending, with its exact fee and breakdown, and its bytes are kept.
+  match current.history.find? (·.txid == sp.txid) with
+  | some e =>
+    check "pending entry: height 0, spent, change received, exact fee"
+      (e.height == 0 && e.spent == 60_000 && e.received == 19_000 && e.fee == some 1_000)
+    check "pending entry: the breakdown" ((e.outputs.map (·.change)) == some #[1] &&
+      (e.outputs.map (·.external.map (·.amount))) == some #[40_000])
+  | none => check "the spend is in the history" false
+  check "its bytes are kept" (current.inFlight.map (·.txid) == #[sp.txid] && current.inFlight[0]!.transaction.toOption == some sp)
+  check "history order" (current.history.map (·.txid) == #[funding.txid, later.txid, sp.txid])
+  check "a payment from elsewhere: received, no exact fee"
+    (current.history[0]!.received == 60_000 && current.history[0]!.height == 101 && current.history[0]!.fee.isNone)
+  check "a backup carries the pending spend" ((← need "backup" store.backup) == #[current])
+  -- A reorg below the later payment drops it, with its entry, and keeps the in-flight spend's input reserved.
   need "rollBack 101" (store.rollBack 101)
   current ← store.fetch added.id
   check "rollback: balance" (current.balance == 19_000) s!"{current.balance}"
   check "a reorg never costs an address gap" (current.nextReceiveIndex == 3)
-  -- The spend confirms; a reorg below it puts it back in flight.
+  check "rollback: the later payment's entry left" (current.history.map (·.txid) == #[funding.txid, sp.txid])
+  -- The spend confirms in place; a reorg below it puts it back in flight and its entry re-pends.
   discard <| need "apply 103" (store.apply (block 103 #[sp]))
   current ← store.fetch added.id
   check "the spend's tombstone is heighted" ((spentOf current ⟨funding.txid, 0⟩).bind (·.height) == some 103)
   check "the change is confirmed" ((current.utxos.find? (·.txid == sp.txid)).map (·.height) == some 103)
-  check "a confirmed spend can be backed up" ((← store.backup.run) matches .ok _)
+  match current.history.find? (·.txid == sp.txid) with
+  | some e =>
+    check "confirmed in place: height, fee, the breakdown survives"
+      (e.height == 103 && e.fee == some 1_000 && (e.outputs.map (·.change)) == some #[1])
+  | none => check "confirmed in place" false
+  check "confirmed in place, not appended again" (current.history.size == 2)
+  check "bytes kept until the block is buried" (current.inFlight.map (·.txid) == #[sp.txid])
   need "rollBack 102" (store.rollBack 102)
   current ← store.fetch added.id
   check "the fallen spend is in flight again" (spentOf current ⟨funding.txid, 0⟩ == marker sp.txid none)
   check "and its change left" (current.balance == 0) s!"{current.balance}"
+  check "its entry re-pended" (((current.history.find? (·.txid == sp.txid)).map (·.height)) == some 0)
+  check "its bytes still kept" (current.inFlight.map (·.txid) == #[sp.txid])
+  -- Buried deep enough, the bytes are no longer kept.
+  discard <| need "apply 103 again" (store.apply (block 103 #[sp]))
+  for h in [104:104 + MultisigStore.inFlightDepth.toNat] do
+    discard <| need s!"apply {h}" (store.apply (block h.toUInt32 #[payment (ByteArray.mk #[0x51]) 1 (foreign h.toUInt8)]))
+  current ← store.fetch added.id
+  check "buried: no bytes kept" current.inFlight.isEmpty
+  check "buried: the entry stays confirmed" (((current.history.find? (·.txid == sp.txid)).map (·.height)) == some 103)
   let (restarted, _) ← S.open keys (some url)
   check "reopened from disk: the same records" ((← restarted.all) == #[current])
 
@@ -270,7 +317,9 @@ def testARollbackKeepsTheInputsOfAFallenSpendReserved : IO Unit := do
   check "fallen spend: in flight again" (spentOf current fundingCoin == marker sp.txid none)
   check "only the coin no spend holds can go into a new one" (current.utxos.map (·.outpoint) == #[⟨other.txid, 0⟩])
   check "the change left with its block" (current.balance == 5_000)
-  check "no backup while in flight" ((← store.backup.run) matches .error _)
+  let backup ← need "backup" store.backup
+  check "a backup carries the reservation, so a restore cannot double-spend it"
+    (((backup[0]?.bind fun r => r.allUtxos.find? (·.outpoint == fundingCoin)).bind (·.spent)) == marker sp.txid none)
   need "rollBack again" (store.rollBack 102)
   check "a rollback redone after a crash changes nothing" ((← store.fetch added.id) == current)
   let discarded ← need "apply 104" (store.apply (block 104 #[sp]))
@@ -347,7 +396,12 @@ def testALosingInFlightSpendReleasesItsCoinsAndDropsItsChange : IO Unit := do
   check "losing spend: balance after" (current.balance == 44_000) s!"{current.balance}"
   check "the losing spends' outputs never existed" (!current.allUtxos.any fun u => u.txid == ours.txid || u.txid == chained.txid)
   check "nothing stays reserved" (!current.allUtxos.any MultisigStore.isPending)
-  check "nothing is left in flight: backup" ((← store.backup.run) matches .ok _)
+  let entry (t : ByteArray) := current.history.find? (·.txid == t)
+  check "the losing spend stays listed beside the one that took its coin" (((entry ours.txid).bind (·.replacedBy)) == some theirs.txid)
+  check "the chained one too" (((entry chained.txid).bind (·.replacedBy)) == some theirs.txid)
+  check "nothing is left to announce" current.inFlight.isEmpty
+  check "the winner: spent and an exact fee" (((entry theirs.txid).map (·.spent)) == some 60_000 &&
+    ((entry theirs.txid).bind (·.fee)) == some 1_000)
   need "rollBack 101" (store.rollBack 101)
   current ← store.fetch added.id
   check "the winner is back in flight" (spentOf current firstCoin == marker theirs.txid none)
@@ -356,6 +410,89 @@ def testALosingInFlightSpendReleasesItsCoinsAndDropsItsChange : IO Unit := do
   check "ours beats it on the new branch" (beaten == #[theirs.txid])
   current ← store.fetch added.id
   check "ours confirmed: the change" (current.utxos.map (·.outpoint) == #[⟨ours.txid, 1⟩] && current.balance == 19_000)
+  let entry (t : ByteArray) := current.history.find? (·.txid == t)
+  check "ours won after all" (((entry ours.txid).bind (·.replacedBy)).isNone)
+  check "theirs is now the replaced one" (((entry theirs.txid).bind (·.replacedBy)) == some ours.txid)
+
+/-- A creator's PSBT for `sp`, as the draft a phone files. -/
+def psbtFor (sp : Transaction) (coins : Array WalletUTXO) : IO PSBT :=
+  needE "psbt" (PSBT.create sp
+    (sp.inputs.map fun i =>
+      let c := coins.find? (·.outpoint == i.previousOutput)
+      ({ spentOutput := { amount := (c.map (·.amount)).getD 1, scriptPubKey := (c.map (·.scriptPubKey)).getD (ByteArray.mk #[0x51]) } } : PSBT.InputInfo))
+    (sp.outputs.map fun _ => {}))
+
+def draftFor (sp : Transaction) (coins : Array WalletUTXO) (height : UInt32) (person : Option String := none)
+    (index : Option UInt32 := none) : IO MultisigSpendDraft := do
+  needE "draft" (MultisigSpendDraft.ofPSBT (← psbtFor sp coins) height person index)
+
+/-- A draft lives on the record until its coins are gone: this phone broadcasting it, a co-signer's
+conflicting spend confirming, or a reorg taking a coin all drop it. A spend given up on frees its coins. -/
+def testDraftsFollowTheirCoinsAndAnAbandonedSpendFreesThem : IO Unit := do
+  let keys ← memoryKeys
+  let url ← tempFile "multisig.json"
+  let a ← twoOfTwo
+  let (store, _) ← S.open keys (some url)
+  let added ← need "add" (store.add "Shared" a 100)
+  let funding := payment (← spk a 0) 60_000 (foreign 0x71)
+  discard <| need "apply 101" (store.apply (block 101 #[funding]))
+  let fundingCoin : Transaction.Outpoint := ⟨funding.txid, 0⟩
+  let sp := payment elsewhere 40_000 fundingCoin (some { value := 19_000, scriptPubKey := ← spk a 0 1 })
+  let coins := (← store.fetch added.id).allUtxos
+  let draft ← draftFor sp coins 101 (some "bob") (some 3)
+  check "a draft's text is BIP174 v0" (draft.psbtBase64.startsWith "cHNidP8BA") draft.psbtBase64
+  -- Filed, read back from disk, and carried by a backup.
+  need "setDraft" (store.setDraft added.id (some draft))
+  check "filed" ((← store.fetch added.id).draft == some draft)
+  let (restarted, _) ← S.open keys (some url)
+  check "read back from disk" ((← restarted.fetch added.id).draft == some draft)
+  check "carried by a backup" (((← need "backup" store.backup)[0]?.bind (·.draft)) == some draft)
+  -- A draft of a coin the account does not hold is refused.
+  let stranger ← draftFor (payment elsewhere 1 (foreign 0x72)) #[] 101
+  refused "a draft of a foreign coin" (store.setDraft added.id (some stranger)) "invalidState"
+  -- Broadcast: the draft is retired with the coin it spent...
+  discard <| need "recordSpend" (store.recordSpend added.id sp (some 0) 102)
+  let mut current ← store.fetch added.id
+  check "broadcast: the draft retired" current.draft.isNone
+  check "broadcast: the height kept" (current.inFlight.map (·.broadcastHeight) == #[102])
+  -- ...and given up on, everything it took is back.
+  need "abandon" (store.abandon added.id sp.txid)
+  current ← store.fetch added.id
+  check "given up: the coin is live" (current.utxos.map (·.outpoint) == #[fundingCoin] && current.balance == 60_000)
+  check "given up: its entry and bytes gone" (current.history.map (·.txid) == #[funding.txid] && current.inFlight.isEmpty)
+  refused "a confirmed transaction cannot be given up" (store.abandon added.id funding.txid) "invalidState"
+  -- Filed again, then a co-signer's spend of the same coin confirms: the draft goes.
+  need "setDraft again" (store.setDraft added.id (some draft))
+  let theirs := payment elsewhere 50_000 fundingCoin
+  let paid ← need "apply theirs" (store.applyPaying (block 103 #[theirs]))
+  current ← store.fetch added.id
+  check "a co-signer's other spend: the draft goes" current.draft.isNone
+  check "a co-signer's other spend paid nobody of the draft" paid.isEmpty
+  check "and is in the history" (current.history.map (·.txid) == #[funding.txid, theirs.txid])
+  -- And one whose coin a reorg takes away goes with it.
+  need "rollBack 102" (store.rollBack 102)
+  let late := payment (← spk a 1) 9_000 (foreign 0x73)
+  discard <| need "apply late" (store.apply (block 103 #[late]))
+  let lateDraft ← draftFor (payment elsewhere 8_000 ⟨late.txid, 0⟩) (← store.fetch added.id).allUtxos 103
+  need "setDraft late" (store.setDraft added.id (some lateDraft))
+  need "rollBack 102 again" (store.rollBack 102)
+  check "a reorg took its coin: the draft goes" (← store.fetch added.id).draft.isNone
+
+/-- Fixed upstream bug 3: the person a draft pays has their address index advanced when the draft's own
+transaction confirms, whoever broadcast it; a different spend of the coin pays nobody. -/
+def testADraftConfirmedByACoSignerPaysItsPerson : IO Unit := do
+  let a ← twoOfTwo
+  let (store, _) ← S.open (← memoryKeys) none
+  let added ← need "add" (store.add "Shared" a 100)
+  let funding := payment (← spk a 0) 60_000 (foreign 0x81)
+  discard <| need "apply 101" (store.apply (block 101 #[funding]))
+  let fundingCoin : Transaction.Outpoint := ⟨funding.txid, 0⟩
+  let sp := payment elsewhere 40_000 fundingCoin (some { value := 19_000, scriptPubKey := ← spk a 0 1 })
+  need "setDraft" (store.setDraft added.id (some (← draftFor sp (← store.fetch added.id).allUtxos 101 (some "bob") (some 3))))
+  -- the co-signer broadcast it (this phone never did): its block reaches this phone
+  let paid ← need "apply" (store.applyPaying (block 102 #[sp]))
+  check "the draft's own transaction confirming pays Bob at index 3" (paid == #[("bob", 3)])
+  check "the draft is gone" (← store.fetch added.id).draft.isNone
 
 def testLookaheadFindsPaymentsUpToTheGapLimitAhead : IO Unit := do
   let a ← twoOfTwo
@@ -529,7 +666,7 @@ def testTwoPhonesSignACoSignersSpendWithBIP326Sequences : IO Unit := do
   let destination ← do
     let d ← needE "destination descriptor" (Descriptor.parse s!"tr({← keyExpression (← masters)[1]!})")
     pure ((← needE "derived" (d.derived 0 signet))[0]!.address)
-  let created ← phone.backend.createMultisigSpend id destination 100_000 2.0 false
+  let created ← Real.createMultisigSpend phone.env phone.multisig id destination 100_000 2.0 false
   let proposal ← needE "proposal" (PSBT.ofBase64 created.psbt)
   let tx ← needE "unsigned" proposal.unsignedTransaction
   let mut edited := proposal
@@ -538,15 +675,15 @@ def testTwoPhonesSignACoSignersSpendWithBIP326Sequences : IO Unit := do
     edited := { edited with inputs := edited.inputs.modify k (·.setSequence (some seq)) }
   let proposalText := edited.base64
   for p in [phone, otherPhone] do
-    let shown ← p.backend.reviewMultisigPSBT id proposalText
+    let shown ← Real.reviewMultisigPSBT p.env p.multisig id proposalText
     check "the signers' path only" ((shown.screen.map (·.signatures.map (·.1))) == some [false]) s!"{shown.reviewError}"
     check "this phone has not signed" ((shown.screen.map (·.progress.phoneUnsigned)) == some true)
-  let mine ← phone.backend.signMultisigSpend id proposalText
-  let theirs ← otherPhone.backend.signMultisigSpend id proposalText
+  let mine ← Real.signMultisigSpend phone.env phone.multisig id proposalText
+  let theirs ← Real.signMultisigSpend otherPhone.env otherPhone.multisig id proposalText
   check "one signature after signing here" ((mine.screen.map (·.signatures)) == some [(false, 1, 2)])
   check "signed here: share it" ((mine.screen.map (·.progress.nextStep)) ==
     some "Share the PSBT below with the other signers, then combine their signed copies here.")
-  let combined ← phone.backend.addMultisigPSBT id (some mine.psbt) theirs.output.get!
+  let combined ← Real.addPastedPSBT phone.env phone.multisig id (some mine.psbt) theirs.output.get!
   check "combined: complete" ((combined.screen.map (·.progress.complete)) == some true)
   check "combined: next step" ((combined.screen.map (·.progress.nextStep)) == some "Enough signatures verify. Finalize and broadcast.")
   let full ← needE "combined psbt" (PSBT.ofBase64 combined.psbt)
@@ -563,12 +700,12 @@ def testRecoveryPathRefusesCoinsThatAreTooYoung : IO Unit := do
   let destination ← do
     let d ← needE "destination descriptor" (Descriptor.parse s!"tr({← keyExpression (← masters)[0]!})")
     pure ((← needE "derived" (d.derived 5 signet))[0]!.address)
-  match ← (phone.backend.createMultisigSpend id destination 20_000 2.0 true).toBaseIO with
+  match ← (Real.createMultisigSpend phone.env phone.multisig id destination 20_000 2.0 true).toBaseIO with
   | .ok _ => check "a coin younger than the recovery delay is not offered to the recovery path" false
   | .error e =>
     check "a coin younger than the recovery delay is not offered to the recovery path"
       ((toString e).startsWith "This multisig spend is unsafe:") (toString e)
-  match ← (phone.backend.createMultisigSpend id destination 20_000 2.0 false).toBaseIO with
+  match ← (Real.createMultisigSpend phone.env phone.multisig id destination 20_000 2.0 false).toBaseIO with
   | .ok p => check "the signers' path spends it at once" p.screen.isSome
   | .error e => check "the signers' path spends it at once" false (toString e)
 
@@ -665,22 +802,22 @@ def testPairVerifyAndSpendWithBothSigners : IO Unit := do
   let destination ← do
     let d ← needE "destination descriptor" (Descriptor.parse s!"tr({← keyExpression (← masters)[2]!})")
     pure ((← needE "derived" (d.derived 0 signet))[0]!.address)
-  let created ← phone.backend.createMultisigSpend id destination 40_000 2.0 false
+  let created ← Real.createMultisigSpend phone.env phone.multisig id destination 40_000 2.0 false
   let screen ← screenOf created
   check "before signing: the signers' path, nothing signed" (screen.signatures == [(false, 0, 2)])
   check "both still to sign" (screen.progress == { phoneHolds := true, phoneUnsigned := true, ledgerHolds := true, ledgerUnsigned := true })
   check "the footer asks for both" (screen.progress.nextStep.startsWith "Add this phone's signature and the Ledger's")
-  let byLedger ← phone.backend.signMultisigSpendWithLedger true id created.psbt
+  let byLedger ← Real.signMultisigSpendWithLedger phone.env phone.multisig true id created.psbt
   let screen ← screenOf byLedger
   check "the Ledger's signature verifies" (screen.signatures == [(false, 1, 2)] && !screen.progress.ledgerUnsigned && !screen.progress.complete)
   check "then the footer asks for the phone" (screen.progress.nextStep ==
     "Check the payment, then add this phone's signature. Signers can sign in any order.")
   -- A device whose signatures name a leaf they were not made for is refused (SEC-036), nothing added.
   phone.useLedger device (relabelsLeaves := true)
-  failsWith "a relabelled Ledger signature is refused" (phone.backend.signMultisigSpendWithLedger true id byLedger.psbt)
+  failsWith "a relabelled Ledger signature is refused" (Real.signMultisigSpendWithLedger phone.env phone.multisig true id byLedger.psbt)
     (LedgerError.mismatch "a Ledger signature does not verify").description
   phone.useLedger device
-  let both ← phone.backend.signMultisigSpend id byLedger.psbt
+  let both ← Real.signMultisigSpend phone.env phone.multisig id byLedger.psbt
   let screen ← screenOf both
   check "both signed: complete" (screen.signatures == [(false, 2, 2)] && screen.progress.complete &&
     screen.progress.nextStep == "Enough signatures verify. Finalize and broadcast.")
@@ -689,10 +826,10 @@ def testPairVerifyAndSpendWithBothSigners : IO Unit := do
   check "finalized with one input" (tx.inputs.size == 1)
   -- A refusal on the Ledger reaches the user as that, and signs nothing.
   device.modify (·.setDecision .reject)
-  let unsigned ← phone.backend.createMultisigSpend id destination 40_000 2.0 false
-  failsWith "a refusal on the Ledger" (phone.backend.signMultisigSpendWithLedger true id unsigned.psbt)
+  let unsigned ← Real.createMultisigSpend phone.env phone.multisig id destination 40_000 2.0 false
+  failsWith "a refusal on the Ledger" (Real.signMultisigSpendWithLedger phone.env phone.multisig true id unsigned.psbt)
     LedgerError.rejectedOnDevice.description
-  failsWith "Ledger signing refuses Simple mode" (phone.backend.signMultisigSpendWithLedger false id unsigned.psbt)
+  failsWith "Ledger signing refuses Simple mode" (Real.signMultisigSpendWithLedger phone.env phone.multisig false id unsigned.psbt)
     Real.advancedModeOnlyText
 
 def testBuilderMakesTwoOfThreeWithAnotherWinnowALedgerAndRecovery : IO Unit := do
@@ -1104,11 +1241,347 @@ def signerTests : List (String × IO Unit) :=
   , ("testARestoredListJoinsThePhonesOwn", testARestoredListJoinsThePhonesOwn)
   , ("testBuilderTakesMembersFromTheListAndAWholeAccountAsOne", testBuilderTakesMembersFromTheListAndAWholeAccountAsOne) ]
 
+/-! ## MultisigAccountFlowTests: one wallet (upstream #259) -/
+
+/-- Two phones sharing a 2-of-2, the account funded by one block on both; this phone has a stack, so a
+broadcast queues with its broadcaster (no peer answers in this fixture). -/
+structure TwoPhones where
+  phone : Phone
+  other : Phone
+  id : String
+  account : MultisigAccount
+  funding : Transaction
+  height : UInt32
+
+initialize stackedPhones : IO.Ref (Array Phone) ← IO.mkRef #[]
+
+def twoPhones : IO TwoPhones := do
+  let phone ← phoneWith 0xA1
+  let other ← phoneWith 0xC3
+  Real.buildStackIfNeeded phone.env
+  stackedPhones.modify (·.push phone)
+  check "this phone has a stack" (← phone.env.get).stack.isSome
+  let (id, d) ← phone.build "Two phones" 2 [[← phone.keyExpression], [← other.keyExpression]]
+  discard <| other.join "Two phones" d
+  let account ← needM "account" (MultisigAccount.parse d signet)
+  let height := (← phone.record id).createdAtHeight + 1
+  let funding := spend #[⟨zeros 32 0x45, 0⟩] #[{ value := 60_000, scriptPubKey := ← spk account 0 }]
+  for p in [phone, other] do
+    discard <| p.multisig.applyMatch (block height #[funding]) signet
+  return { phone, other, id, account, funding, height }
+
+def Phone.status (p : Phone) : IO Status := do return (← p.backend.snapshot).1
+def Phone.info (p : Phone) (id : String) : IO MultisigInfo := do
+  let some i := (← p.accounts).find? (·.id == id) | throw (IO.userError s!"no account {id}")
+  return i
+
+def accountDestination (index : UInt32 := 0) : IO String := do destinationOf (← masters)[1]! index
+
+def accountInputs (id destination : String) (amount : Nat) : SendInputs :=
+  { destination, amount := toString amount, network := .signet, accountID := some id }
+
+/-- The other phone signs this phone's draft and this phone takes the signatures back, the way the PSBT
+text travels between signers. -/
+def collectOtherSignature (t : TwoPhones) : IO Unit := do
+  let some d := (← t.phone.record t.id).draft | throw (IO.userError "no draft")
+  t.other.backend.adoptDraft t.id d.psbtBase64
+  t.other.backend.signDraft t.id
+  let some theirs := (← t.other.record t.id).draft | throw (IO.userError "no draft on the other phone")
+  t.phone.backend.adoptDraft t.id theirs.psbtBase64
+
+def isV0 (text : String) : Bool :=
+  match PSBT.ofBase64 text with
+  | .ok p => p.base64V0.toOption == some text
+  | .error _ => false
+
+/-- Send, From: the account. The review is the PSBT this phone built; "Sign and continue" files it as the
+draft (BIP174 v0), which survives a reload and shows in Transactions; the other phone signs; the broadcast
+lands in both phones' lists named with the account, confirms in place, and a reorg re-pends it. -/
+def testSendTabSpendsFromAnAccountAcrossTwoPhones : IO Unit := do
+  let t ← twoPhones
+  let phone := t.phone
+  let s ← phone.status
+  check "one balance: the account's" (s.accountsBalance == 60_000 && s.balance == 0)
+  check "one row: the funding" (s.payments.map (·.item.txid) == [Winnow.displayHex t.funding.txid])
+  check "named with the account" ((s.payments.head?.map (·.source)) == some (.account "Two phones"))
+  check "received at its height" ((s.payments.head?.map fun r => (r.item.received, r.item.height)) == some (60_000, t.height.toNat))
+  let destination ← accountDestination
+  let inputs := accountInputs t.id destination 25_000
+  let preview ← phone.backend.previewSend inputs
+  check "the review names the account" ((preview.account.map fun a => (a.name, a.threshold, a.signerCount)) == some ("Two phones", 2, 2))
+  check "the review's amounts" (preview.amount == 25_000 && preview.inputCount == 1 && preview.change == some (60_000 - 25_000 - preview.fee))
+  failsWith "no silent payment code from an account" (phone.backend.previewSend (accountInputs t.id "tsp1qqnonsense" 1_000))
+    Real.silentPaymentUnsupportedText
+  failsWith "Sign and continue is Advanced mode's" (phone.backend.signAndDraft false inputs preview) Real.advancedModeOnlyText
+  failsWith "a review for other inputs does not sign" (phone.backend.signAndDraft true { inputs with amount := "25001" } preview)
+    (Real.AppError.sendReviewChanged).text
+  discard <| phone.backend.signAndDraft true inputs preview
+  let record ← phone.record t.id
+  let some d := record.draft | throw (IO.userError "no draft")
+  check "the draft is BIP174 v0 (fixed upstream bug 1)" (isV0 d.psbtBase64)
+  let info ← phone.info t.id
+  check "one signature: this phone's" ((info.draft.bind (·.screen)).map (·.signatures) == some [(false, 1, 2)])
+  check "signed here" ((info.draft.bind (·.screen)).any (·.progress.signedHere))
+  check "the share text is the draft's v0" ((info.draft.map (·.psbt)) == some d.psbtBase64)
+  let s ← phone.status
+  let some row := s.payments.head? | throw (IO.userError "no rows")
+  check "the draft row on top" (row.isDraft && row.source == .draft "Two phones" "1 of 2") s!"{repr row.source}"
+  check "the draft row's txid" (some row.item.txid == ((d.txid.toOption).map Winnow.displayHex))
+  check "the draft row's amounts" (row.item.spent == 60_000 && row.item.received == (60_000 - 25_000 - preview.fee : Nat) &&
+    row.item.fee == some (preview.fee : Int))
+  check "the draft row's recipient" ((paymentRecipients {} row.item).map (·.amount) == [25_000])
+  phone.multisig.host.configure signet (some (← phone.dir))
+  check "the draft survives a reload" ((← phone.record t.id).draft == some d)
+  failsWith "one draft per account" (phone.backend.previewSend (accountInputs t.id destination 1_000)) Real.draftInProgressText
+  -- Another payment's PSBT cannot be combined into the draft.
+  let different ← Real.createMultisigSpend t.other.env t.other.multisig t.id (← accountDestination 1) 1_000 1.0 false
+  failsWith "a different payment is not combined" (phone.backend.adoptDraft t.id different.psbt) Real.draftMismatchText
+  collectOtherSignature t
+  check "complete" ((((← phone.info t.id).draft.bind (·.screen)).map (·.progress.complete)) == some true)
+  let txid ← phone.backend.broadcastDraft t.id
+  check "the draft's txid went out" (some txid == ((d.txid.toOption).map Winnow.displayHex))
+  let record ← phone.record t.id
+  check "the draft retired, the bytes kept" (record.draft.isNone && record.inFlight.map (Winnow.displayHex ·.txid) == #[txid])
+  let s ← phone.status
+  let some pending := s.payments.head? | throw (IO.userError "no rows")
+  check "pending, named with the account, its exact fee" (pending.source == .account "Two phones" && pending.item.height == 0 &&
+    pending.item.fee == some (preview.fee : Int))
+  check "the balance follows" (s.accountsBalance == (60_000 - 25_000 - preview.fee : Nat))
+  -- It confirms on both phones: in place here, as the account's spend there.
+  let some spendTx := record.inFlight[0]?.bind (·.transaction.toOption) | throw (IO.userError "no bytes")
+  for p in [phone, t.other] do
+    discard <| p.multisig.applyMatch (block (t.height + 1) #[spendTx]) signet
+  let s ← phone.status
+  check "two rows, newest first" (s.payments.map (·.item.txid) == [txid, Winnow.displayHex t.funding.txid])
+  check "confirmed in place" ((s.payments.head?.map (·.item.height)) == some (t.height + 1).toNat)
+  let so ← t.other.status
+  check "on the other phone: the account's spend" ((so.payments.head?.map fun r => (r.source, r.item.spent)) ==
+    some (.account "Two phones", 60_000))
+  check "its draft went with the coin" (← t.other.record t.id).draft.isNone
+  -- A reorg below the spend puts it back in flight, bytes still kept.
+  phone.multisig.rollBack t.height
+  let s ← phone.status
+  check "re-pended" ((s.payments.head?.map (·.item.height)) == some 0)
+  check "bytes still kept" ((← phone.record t.id).inFlight.map (Winnow.displayHex ·.txid) == #[txid])
+
+/-- A payment between the wallet and one of its accounts is one row. -/
+def testATransferBetweenTheWalletAndAnAccountIsOneRow : IO Unit := do
+  let t ← twoPhones
+  let phone := t.phone
+  let some w := (← phone.env.get).wallet | throw (IO.userError "no wallet")
+  let walletScript ← match ← (w.scriptPubKey .receive 0).run with
+    | .ok sc => pure sc | .error _ => throw (IO.userError "script")
+  let walletFunding := spend #[⟨zeros 32 0x46, 0⟩] #[{ value := 30_000, scriptPubKey := walletScript }]
+  discard <| phone.env.walletOp (w.apply (block (t.height + 1) #[walletFunding]))
+  let change ← match ← (w.scriptPubKey .change 0).run with
+    | .ok sc => pure sc | .error _ => throw (IO.userError "script")
+  let transfer := spend #[⟨walletFunding.txid, 0⟩]
+    #[{ value := 20_000, scriptPubKey := ← spk t.account 1 }, { value := 9_500, scriptPubKey := change }]
+  let m := block (t.height + 2) #[transfer]
+  discard <| phone.env.walletOp (w.apply m)
+  discard <| phone.multisig.applyMatch m signet
+  let s ← phone.status
+  check "balances" (s.balance == 9_500 && s.accountsBalance == 80_000) s!"{s.balance} {s.accountsBalance}"
+  check "three rows" (s.payments.map (·.item.txid) ==
+    [Winnow.displayHex transfer.txid, Winnow.displayHex walletFunding.txid, Winnow.displayHex t.funding.txid])
+  let some moved := s.payments.head? | throw (IO.userError "no rows")
+  check "one transfer row" (moved.source == .transfer "Wallet" "Two phones" 20_000) s!"{repr moved.source}"
+  check "carrying the wallet's entry" (moved.accountID.isNone && moved.item.spent == 30_000 && moved.item.fee == some 500)
+  check "the payment screen's row" ((s.displayedPayment? (Winnow.displayHex transfer.txid)).map (·.source) == some moved.source)
+
+/-- A backup carries a spend no block has taken, with its bytes, so a restored phone can announce it again;
+given up on, its coins are the account's again. -/
+def testAnInFlightAccountSpendSurvivesABackupAndCanBeRebroadcastOrGivenUp : IO Unit := do
+  let t ← twoPhones
+  let phone := t.phone
+  let inputs := accountInputs t.id (← accountDestination) 25_000
+  let preview ← phone.backend.previewSend inputs
+  discard <| phone.backend.signAndDraft true inputs preview
+  collectOtherSignature t
+  let txid ← phone.backend.broadcastDraft t.id
+  let json ← phone.backend.exportBundle false
+  let bundle ← needE "bundle" (ImportBundle.decode json)
+  let some carried := bundle.vaults.bind (·[0]?) | throw (IO.userError "no account in the backup")
+  check "the backup carries the spend in flight" (carried.inFlight.map (Winnow.displayHex ·.txid) == #[txid])
+  check "as pending in its history" (((carried.history.find? (Winnow.displayHex ·.txid == txid)).map (·.height)) == some 0)
+  check "with bytes that are the spend" ((carried.inFlight[0]?.bind (·.transaction.toOption)).map (Winnow.displayHex ·.txid) == some txid)
+  phone.backend.rebroadcastSpend t.id txid
+  phone.backend.abandonSpend t.id txid
+  let record ← phone.record t.id
+  check "given up: nothing in flight, the coin back" (record.inFlight.isEmpty && record.balance == 60_000)
+  let s ← phone.status
+  check "given up: the balance and the list" (s.accountsBalance == 60_000 && s.payments.map (·.item.txid) == [Winnow.displayHex t.funding.txid])
+  failsWith "a spend given up on is not announced" (phone.backend.rebroadcastSpend t.id txid) Real.notInFlightText
+
+/-- Fixed upstream bug 3 through the app's hook: a block confirming the draft's own transaction, broadcast by
+the co-signer, advances the paid person's address index here. -/
+def testACoSignersBroadcastAdvancesThePaidPersonsIndex : IO Unit := do
+  let t ← twoPhones
+  let phone := t.phone
+  let inputs := accountInputs t.id (← accountDestination) 25_000
+  let preview ← phone.backend.previewSend inputs
+  discard <| phone.backend.signAndDraft true inputs preview
+  -- the draft pays a person at index 4 (as a Send to a saved person files it)
+  let some d := (← phone.record t.id).draft | throw (IO.userError "no draft")
+  Real.fileDraft phone.multisig t.id (some { d with personID := some "bob", paymentIndex := some 4 })
+  collectOtherSignature t
+  -- the other phone finalizes and broadcasts; its block reaches this phone
+  let some theirs := (← t.phone.record t.id).draft | throw (IO.userError "no draft")
+  let full ← needE "psbt" (PSBT.ofBase64 theirs.psbtBase64)
+  let record ← phone.record t.id
+  let (_, tx) ← needM "finalize" (t.account.finalizeSpend full record.utxos (Real.ownedCoordinates record) t.height)
+  let advanced ← IO.mkRef (#[] : Array (String × UInt32))
+  discard <| phone.multisig.applyMatchPaying (fun p i => advanced.modify (·.push (p, i))) (block (t.height + 1) #[tx]) signet
+  check "Bob's index moves past 4 although this phone never broadcast" ((← advanced.get) == #[("bob", 4)])
+  check "the draft went with its coin" (← phone.record t.id).draft.isNone
+
+/-- The phones a test built a stack for are stopped when it ends (their tasks would keep the process up). -/
+def withStacksStopped (t : IO Unit) : IO Unit := do
+  try t finally
+    for p in ← stackedPhones.get do p.backend.stopNetworking
+    stackedPhones.set #[]
+
+def oneWalletTests : List (String × IO Unit) :=
+  [ ("testSendTabSpendsFromAnAccountAcrossTwoPhones", withStacksStopped testSendTabSpendsFromAnAccountAcrossTwoPhones)
+  , ("testATransferBetweenTheWalletAndAnAccountIsOneRow", withStacksStopped testATransferBetweenTheWalletAndAnAccountIsOneRow)
+  , ("testAnInFlightAccountSpendSurvivesABackupAndCanBeRebroadcastOrGivenUp",
+      withStacksStopped testAnInFlightAccountSpendSurvivesABackupAndCanBeRebroadcastOrGivenUp)
+  , ("testACoSignersBroadcastAdvancesThePaidPersonsIndex", withStacksStopped testACoSignersBroadcastAdvancesThePaidPersonsIndex) ]
+
+/-! ## HistoryDisplayTests, SendReviewBindingTests, the draft row's leaf (pure) -/
+
+def row (id : UInt8) (height : Nat) (received spent : Int) : HistoryItem :=
+  { txid := Winnow.displayHex (zeros 32 id), height, received, spent, fee := none }
+
+/-- The one list: wallet rows, account rows named, a transaction in both histories folded into one transfer
+row, drafts on top, newest first. -/
+def testPaymentsMergeWalletAndAccountRowsAndFoldTransfers : IO Unit := do
+  let walletReceive := row 1 100 10_000 0
+  let toAccount := row 2 105 4_000 10_000
+  let accountSide := row 2 105 5_000 0
+  let fromAccount := row 3 110 0 5_000
+  let walletSide := row 3 110 4_500 0
+  let bothSpent := row 4 111 0 1_000
+  let bothSpentAccount := row 4 111 0 2_000
+  let accountPending := row 5 0 0 3_000
+  let draft : DisplayedPayment := { item := row 9 0 0 500, source := .draft "Household" "1 of 2", accountID := some "acct" }
+  let rows := payments [walletReceive, toAccount, walletSide, bothSpent]
+    [("acct", "Household", [accountSide, fromAccount, bothSpentAccount, accountPending])] [draft]
+  check "order" (rows.map (·.item.txid) == [draft.item.txid, accountPending.txid, bothSpent.txid, bothSpentAccount.txid,
+    fromAccount.txid, toAccount.txid, walletReceive.txid]) s!"{rows.map (·.item.txid.take 2)}"
+  check "sources" (rows.map (·.source) == [.draft "Household" "1 of 2", .account "Household", .wallet, .account "Household",
+    .transfer "Household" "Wallet" 4_500, .transfer "Wallet" "Household" 5_000, .wallet]) s!"{repr (rows.map (·.source))}"
+  check "the transfer row carries the spender's entry" ((rows[4]?.bind (·.accountID)) == some "acct" &&
+    (rows[5]?.bind (·.accountID)).isNone && (rows[5]?.map (·.item.spent)) == some 10_000)
+  check "account names" (rows.map (·.accountName) ==
+    [some "Household", some "Household", none, some "Household", some "Household", some "Household", none])
+
+def testAReviewForTheWalletNeverSignsForAnAccount : IO Unit := do
+  let baseline : SendInputs := { destination := "tb1p-destination", amount := "1000", network := .signet, walletID := some "w" }
+  check "a review made for the wallet never signs for an account" (baseline != { baseline with accountID := some "household" })
+  check "the same inputs are the same review" (baseline == { baseline with accountID := none })
+
+/-- Fixed upstream bug 2: the leaf a draft row shows is chosen by signature counts as numbers. -/
+def testTheDraftRowShowsTheLeafClosestToFinishing : IO Unit := do
+  check "2 of 3 over an untouched 0 of 12 (upstream picked the longer text)" (bestLeafSignatures [(0, 12), (2, 3)] == some (2, 3))
+  check "fewest further signatures" (bestLeafSignatures [(1, 3), (1, 2)] == some (1, 2))
+  check "a tie: the most approvals" (bestLeafSignatures [(0, 1), (2, 3)] == some (2, 3))
+  check "a full tie: the first path" (bestLeafSignatures [(1, 2), (1, 2)] == some (1, 2))
+  check "complete beats incomplete" (bestLeafSignatures [(3, 4), (2, 2)] == some (2, 2))
+  check "no path" (bestLeafSignatures [] == none)
+
+
+/-! ## Simple mode, by taking away -/
+
+def contains (hay needle : String) : Bool := (hay.splitOn needle).length > 1
+
+/-- The rendered tree as the shell receives it. -/
+def rendered (m : Model) : String := (ElmLean.Html.toWire (view m)).toJson.compress
+
+/-- A phone with a multisig account holding a draft, its rows in the one list, a paired Ledger and saved keys. -/
+def modelWithAccounts (advanced : Bool) : Model :=
+  let draftItem : HistoryItem := { txid := "dd", height := 0, received := 30_000, spent := 60_000, fee := some 500 }
+  let accountItem : HistoryItem := { txid := "aa", height := 120, received := 60_000, spent := 0, fee := none }
+  let walletItem : HistoryItem := { txid := "ww", height := 110, received := 10_000, spent := 0, fee := none }
+  let account : MultisigInfo :=
+    { id := "acct", name := "Household", descriptor := "tr(…)", balance := 60_000, policy := some "2 of 2",
+      threshold := 2, signerCount := 2, needsLedgerRegistration := true,
+      draft := some { psbt := "cHNidP8BAA", txid := "dd", signatures := "1 of 2" } }
+  { stage := .ready, settings := { network := .signet, advancedMode := advanced }, walletID := some "w",
+    status := { balance := 10_000, accountsBalance := 60_000, history := [walletItem],
+                payments := [{ item := draftItem, source := .draft "Household" "1 of 2", accountID := some "acct" },
+                             { item := accountItem, source := .account "Household", accountID := some "acct" },
+                             { item := walletItem, source := .wallet }] },
+    multisig := { accounts := [account], keyExpression := some "[deadbeef/86'/1'/0']tpubXYZ/<0;1>/*",
+                  signers := [{ id := "l", isLedger := true, name := "Nano X", keys := ["k"], keysText := "5992698d" },
+                              { id := "b", isLedger := false, name := "Bob", keys := ["k2"], keysText := "1a2b3c4d" }] } }
+
+/-- The user's rule for Simple mode: Ledger, Signers, multisig accounts, the From picker and drafts' signing are
+Advanced only; where accounts exist, Simple shows them only in the one balance with its "of which…" line and
+as action-free Activity rows, a draft saying its signatures are collected in Advanced mode. -/
+def testSimpleModeShowsAccountsOnlyInTheBalanceAndActivity : IO Unit := do
+  let simple := modelWithAccounts false
+  let home := rendered simple
+  check "Simple home: the one balance" (contains home (satsText 70_000))
+  check "Simple home: the of-which line" (contains home "of which" && contains home "accountsBalanceText")
+  check "Simple home: the account's rows" (contains home "Household" && contains home "paymentAccount-aa")
+  check "Simple home: a draft says where signatures are collected" (contains home "collected in Advanced mode")
+  -- (the of-which line names "multisig account" and co-signers: that is the line the rule keeps)
+  for needle in ["Ledger", "ledger", "Signers", "signersButton", "sendFrom", "\"From\"", "Sign and continue", "PSBT",
+                 "Collect signatures", "Multisig", "multisigAccount-", "multisigBuildButton", "Register on"] do
+    check s!"Simple home has no {needle}" (!contains home needle) (match home.splitOn needle with
+      | a :: _ => (a.drop (a.length - 120)).toString | [] => "")
+  -- account rows are there to read: no action on the draft or the account's row, the wallet's opens
+  let draftRow := paymentRow simple simple.status.payments[0]!
+  let accountRow := paymentRow simple simple.status.payments[1]!
+  let walletRow := paymentRow simple simple.status.payments[2]!
+  let actions (h : H) := (ElmLean.Html.toWire h).toJson.compress
+  check "the draft row has no action" (!contains (actions draftRow) "\"button\"")
+  check "the account row has no action" (!contains (actions accountRow) "\"button\"")
+  check "the wallet's row opens its payment" (contains (actions walletRow) "\"button\"")
+  -- the Send sheet itself (the home behind it was checked above)
+  let sendModel := { simple with send := { inputs := { network := .signet, accountID := some "acct" } } }.present .send
+  let send := (ElmLean.Html.toWire (sendSheet sendModel [])).toJson.compress
+  for needle in ["Ledger", "Signers", "sendFrom", "\"From\"", "Sign and continue", "Household"] do
+    check s!"Simple Send has no {needle}" (!contains send needle) (match send.splitOn needle with
+      | a :: _ => (a.drop (a.length - 120)).toString | [] => "")
+  check "a Simple review is always the wallet's" ((({ simple with send := { inputs := { accountID := some "acct" } } }).sendInputs.accountID).isNone)
+  -- the same phone in Advanced mode shows them, so the checks above are not vacuous
+  let advanced := modelWithAccounts true
+  let wallet := rendered advanced
+  check "Advanced Wallet tab: the Multisig section, the draft's step" (contains wallet "Multisig" && contains wallet "historyDraft-acct" &&
+    contains wallet "1 of 2 signed")
+  let sendTab := rendered (advanced.switchTab 1)
+  check "Advanced Send tab: From" (contains sendTab "sendFromWallet" && contains sendTab "sendFrom-acct")
+  let settings := rendered (advanced.switchTab 2)
+  check "Advanced Settings: Signers" (contains settings "signersButton")
+
+/-- Each Advanced-mode tab keeps its own navigation stack. -/
+def testEachTabKeepsItsOwnStack : IO Unit := do
+  let m := modelWithAccounts true
+  let (m, _) := stepSigner .openSigners (m.switchTab 2)
+  check "Settings pushed Signers" (m.routes == [.signers])
+  let m := m.switchTab 0
+  check "the Wallet tab has its own (empty) stack" m.routes.isEmpty
+  let (m, _) := stepMultisig (.openAccount "acct") m
+  let m := m.switchTab 2
+  check "Settings got its stack back" (m.routes == [.signers])
+  check "and Signers renders there" (contains (rendered m) "signersPairLedgerButton")
+  let m := m.switchTab 0
+  check "the Wallet tab its own" (m.routes == [.multisigAccount "acct"])
+
+def pureTests : List (String × IO Unit) :=
+  [ ("testPaymentsMergeWalletAndAccountRowsAndFoldTransfers", testPaymentsMergeWalletAndAccountRowsAndFoldTransfers)
+  , ("testAReviewForTheWalletNeverSignsForAnAccount", testAReviewForTheWalletNeverSignsForAnAccount)
+  , ("testTheDraftRowShowsTheLeafClosestToFinishing", testTheDraftRowShowsTheLeafClosestToFinishing)
+  , ("testSimpleModeShowsAccountsOnlyInTheBalanceAndActivity", testSimpleModeShowsAccountsOnlyInTheBalanceAndActivity)
+  , ("testEachTabKeepsItsOwnStack", testEachTabKeepsItsOwnStack) ]
+
 /-! ## main -/
 
 def storeTests : List (String × IO Unit) :=
   [ ("testBackupPreservesAccountsAndRejectsChangedOwnership", testBackupPreservesAccountsAndRejectsChangedOwnership)
-  , ("testBackupWaitsForPendingAccountPayments", testBackupWaitsForPendingAccountPayments)
+  , ("testBackupCarriesPendingAccountPayments", testBackupCarriesPendingAccountPayments)
   , ("testPaymentsSpendsAndRollbacks", testPaymentsSpendsAndRollbacks)
   , ("testARollbackKeepsTheInputsOfAFallenSpendReserved", testARollbackKeepsTheInputsOfAFallenSpendReserved)
   , ("testARollbackKeepsAReservedCoinFromAFallenBlock", testARollbackKeepsAReservedCoinFromAFallenBlock)
@@ -1116,7 +1589,9 @@ def storeTests : List (String × IO Unit) :=
   , ("testALosingInFlightSpendReleasesItsCoinsAndDropsItsChange", testALosingInFlightSpendReleasesItsCoinsAndDropsItsChange)
   , ("testLookaheadFindsPaymentsUpToTheGapLimitAhead", testLookaheadFindsPaymentsUpToTheGapLimitAhead)
   , ("testTamperedUnsealedAndOversizedFilesAreRefusedAndKept", testTamperedUnsealedAndOversizedFilesAreRefusedAndKept)
-  , ("testDuplicateWrongNetworkAndBadNamesAreRefused", testDuplicateWrongNetworkAndBadNamesAreRefused) ]
+  , ("testDuplicateWrongNetworkAndBadNamesAreRefused", testDuplicateWrongNetworkAndBadNamesAreRefused)
+  , ("testDraftsFollowTheirCoinsAndAnAbandonedSpendFreesThem", testDraftsFollowTheirCoinsAndAnAbandonedSpendFreesThem)
+  , ("testADraftConfirmedByACoSignerPaysItsPerson", testADraftConfirmedByACoSignerPaysItsPerson) ]
 
 def main : IO UInt32 := do
   let root ← IO.FS.createTempDir
@@ -1132,6 +1607,10 @@ def main : IO UInt32 := do
   for (name, t) in signerTests do runTest name t
   IO.println "NestedMultisigFlowTests"
   for (name, t) in nestedTests do runTest name t
+  IO.println "MultisigAccountFlowTests (one wallet)"
+  for (name, t) in oneWalletTests do runTest name t
+  IO.println "HistoryDisplayTests, SendReviewBindingTests, draft rows"
+  for (name, t) in pureTests do runTest name t
   try IO.FS.removeDirAll root catch _ => pure ()
   let failed ← failures.get
   IO.println s!"multisig-app-test: {← passed.get} passed, {failed.size} failed"

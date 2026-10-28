@@ -22,8 +22,8 @@ def Model.background (m : Model) : Model × List Cmd :=
     onboarding := { m.onboarding with words := [], importText := "", busy := false }
     reveal := {}
     exportState := {}
-    -- MultisigPSBTView's `clearState` on background
-    multisigSpend := m.multisigSpend.cleared }
+    -- the collection step's answers in flight no longer count
+    collect := m.collect.cleared }
   let (m2, cs) := match m1.sheets.findIdx? Sheet.isSensitive with
     | some i => m1.closeFrom i
     | none => (m1, [])
@@ -63,7 +63,8 @@ def onHost (h : Host) (m : Model) : Model × List Cmd :=
                  !(s.history.any fun e => e.txid == t && e.height > 0) } }
     let m := match m.send.sentTxid with
       | some t => if m.send.confirmedHeight.isNone then
-          match s.history.find? (·.txid == t) with
+          -- an account's broadcast confirms in the merged list
+          match m.historyItem? t with
           | some e => if e.height > 0 then { m with send := { m.send with confirmedHeight := some e.height } } else m
           | none => m
         else m
@@ -160,11 +161,11 @@ def onHost (h : Host) (m : Model) : Model × List Cmd :=
         { m with multisigBuild := { f with pasteError := none }.clamp m.settings.network }.closeSheet .signerPicker
     | .multisigRecoveryKey =>
       ({ m with multisigBuild := { m.multisigBuild with recoveryKey := Winnow.Keys.Unicode.trimWhitespace text }.clamp m.settings.network }, [])
-    | .multisigPSBT => ({ m with multisigSpend := { m.multisigSpend with pasted := text } }, [])
+    | .multisigPSBT => ({ m with collect := { m.collect with pasted := text } }, [])
     | .signerKeys => ({ m with signerKeys := { m.signerKeys with text := text, error := none } }, [])
   | .multisig .. | .multisigChecked .. | .multisigAdded .. | .multisigCreated .. | .multisigRemoved ..
-  | .multisigFeeRate .. | .multisigPSBT .. | .multisigBroadcast .. | .ledgerPaired .. | .ledgerAddressShown ..
-  | .ledgerRegistered .. =>
+  | .multisigFeeRate .. | .drafted .. | .collected .. | .draftBroadcast .. | .spendHandled .. | .ledgerPaired ..
+  | .ledgerAddressShown .. | .ledgerRegistered .. =>
     m.onMultisigHost h
   | .signerSaved .. | .signerRenamed .. | .signerRemoved .. => m.onSignerHost h
   | .copiedExpired key => if m.copied == some key then ({ m with copied := none }, []) else (m, [])
@@ -172,7 +173,7 @@ def onHost (h : Host) (m : Model) : Model × List Cmd :=
     if !current g then (m, []) else
     let m' := m.nextGeneration
     let m' := { m' with stage := Stage.onboarding, walletID := none, status := ({} : Status), records := ({} : Records),
-                        multisig := ({} : MultisigOverview), multisigSpend := m'.multisigSpend.cleared }
+                        multisig := ({} : MultisigOverview), collect := m'.collect.cleared }
     let m' := { m' with phase := SyncPhase.idle, confirm := none, sheets := [], routes := [], tabRoutes := [], tab := 0 }
     (m', [.stopNetworking])
   | .captured on => ({ m with captured := on }, [])
@@ -197,7 +198,7 @@ def Model.switchNetwork (m : Model) (net : Network) : Model × List Cmd :=
   let s := { m.settings with network := net }
   let m0 := m.nextGeneration
   let m' := { m0 with settings := s, stage := Stage.loading, status := ({} : Status), records := ({} : Records),
-                      multisig := ({} : MultisigOverview), multisigSpend := m0.multisigSpend.cleared,
+                      multisig := ({} : MultisigOverview), collect := m0.collect.cleared,
                       phase := SyncPhase.idle, walletID := none, routes := [], tabRoutes := [], sheets := [], confirm := none,
                       send := ({} : SendState), tab := 0 }
   (m', [.stopNetworking, .stopWatchingAddress, .saveSettings s, .openWallet m'.generation net false])

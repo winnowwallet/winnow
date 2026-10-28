@@ -103,18 +103,27 @@ structure Backend where
   removeSigner : (id : String) → IO Unit
   /-- `verifyLedgerAddress(record:index:)`: the address the Ledger showed (the phone's own). -/
   verifyLedgerAddress : (advanced : Bool) → (id : String) → (index : Nat) → IO String
-  /-- `signMultisigSpendWithLedger(_:record:)`. -/
-  signMultisigSpendWithLedger : (advanced : Bool) → (id psbt : String) → IO MultisigPSBT
-  /-- `createMultisigSpend(record:address:amount:feeRateSatPerVByte:path:)` (`recovery`: the recovery path). -/
-  createMultisigSpend : (id address : String) → (amount : Int) → (feeRate : Float) → (recovery : Bool) → IO MultisigPSBT
-  /-- The PSBT in hand reviewed again (the account's coins or frontiers moved). -/
-  reviewMultisigPSBT : (id psbt : String) → IO MultisigPSBT
-  /-- A pasted PSBT: combined with the one in hand, or used once it reviews. -/
-  addMultisigPSBT : (id : String) → (working : Option String) → (pasted : String) → IO MultisigPSBT
-  /-- After device authentication: this phone's signature on every input. -/
-  signMultisigSpend : (id psbt : String) → IO MultisigPSBT
-  /-- Finalize, broadcast and record the spend; the txid. -/
-  broadcastMultisigSpend : (id psbt : String) → IO String
+  -- An account's spend (#259): reviewed from Send, filed as the account's draft, its signatures collected
+  -- (this phone, the Ledger, a pasted copy), then finalized and broadcast. Every operation changes the
+  -- record, which the next overview shows.
+  /-- `signAndDraftMultisigSpend(preview:)` after device authentication: the reviewed account spend signed
+  here and filed as the draft; the account's id. -/
+  signAndDraft : (advanced : Bool) → SendInputs → Preview → IO String
+  /-- After device authentication: this phone's signature on the draft. -/
+  signDraft : (id : String) → IO Unit
+  /-- The Ledger's signature on the draft. -/
+  signDraftWithLedger : (advanced : Bool) → (id : String) → IO Unit
+  /-- `adoptMultisigDraft(_:record:)`: a pasted PSBT combined into the draft, or adopted as it. -/
+  adoptDraft : (id psbt : String) → IO Unit
+  /-- `broadcastMultisigDraft(record:)`: finalize, broadcast and record the draft; the txid. -/
+  broadcastDraft : (id : String) → IO String
+  discardDraft : (id : String) → IO Unit
+  /-- The account page's spend (`recovery`: the recovery path), filed as the draft. -/
+  createDraft : (id address : String) → (amount : Int) → (feeRate : Float) → (recovery : Bool) → IO Unit
+  /-- `rebroadcastMultisigSpend(record:txid:)`. -/
+  rebroadcastSpend : (id txid : String) → IO Unit
+  /-- `abandonMultisigSpend(record:txid:)`. -/
+  abandonSpend : (id txid : String) → IO Unit
 
 def notPorted (what : String) : IO α := throw (IO.userError s!"{what}: this part of Winnow is still being ported to Lean.")
 
@@ -173,12 +182,15 @@ def Backend.pending : Backend where
   renameSigner := fun _ _ => notPorted "Signers"
   removeSigner := fun _ => notPorted "Signers"
   verifyLedgerAddress := fun _ _ _ => notPorted "Ledger signing"
-  signMultisigSpendWithLedger := fun _ _ _ => notPorted "Ledger signing"
-  createMultisigSpend := fun _ _ _ _ _ => notPorted "Multisig accounts"
-  reviewMultisigPSBT := fun _ _ => notPorted "Multisig accounts"
-  addMultisigPSBT := fun _ _ _ => notPorted "Multisig accounts"
-  signMultisigSpend := fun _ _ => notPorted "Multisig accounts"
-  broadcastMultisigSpend := fun _ _ => notPorted "Multisig accounts"
+  signAndDraft := fun _ _ _ => notPorted "Multisig accounts"
+  signDraft := fun _ => notPorted "Multisig accounts"
+  signDraftWithLedger := fun _ _ => notPorted "Ledger signing"
+  adoptDraft := fun _ _ => notPorted "Multisig accounts"
+  broadcastDraft := fun _ => notPorted "Multisig accounts"
+  discardDraft := fun _ => notPorted "Multisig accounts"
+  createDraft := fun _ _ _ _ _ => notPorted "Multisig accounts"
+  rebroadcastSpend := fun _ _ => notPorted "Multisig accounts"
+  abandonSpend := fun _ _ => notPorted "Multisig accounts"
 
 instance : Nonempty Backend := ⟨Backend.pending⟩
 

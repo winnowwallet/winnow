@@ -131,30 +131,36 @@ commit db4cb1d brings the docs and release scripts; the Swift is ported in the c
 |---|---|---|---|
 | #256 nested multisig, WalletCore | MultisigAccount (`Member`, `descriptor(members:…)`, `SpendPath` with leaf positions, `signersLeaves`/`recoveryLeaves`, `members`/`recoveryMembers`, `policySummary`, `signerKey`, `signerExpressions`, 32 leaves at most), LedgerMultisig (`hasLedgerSigner`, `namesALedgerKey`, the signer looked up over every key), LedgerWalletPolicy (any tree, 512-character template, 15 keys), the simulator's limits, SignerRecord, ImportBundle.signers | **done** (`Wallet/MultisigAccount.lean`, `Wallet/SignerRecord.lean`, `Ledger/`) | `multisig-test`: all of NestedMultisigTests without a Ledger, ImportBundleTests.signers; `ledger-test`: the three Ledger cases (one and two simulated Ledgers, the 335- and 368-character policies, 27 leaves refused); `multisig-differential` against Bitcoin Core v31.1.0 (default seed, 24 cases, five of them nested, among them 2-of-3 and 1-of-3 members and a 1-of-2 of pairs): 1,321 agreements, 0 disagreements |
 | #259 one wallet, WalletCore | HistoryLedger (lifted out of Wallet, which calls it), MultisigSpendDraft and InFlightSpend, MultisigAccountRecord's `history`/`draft`/`inFlight` (each omitted when empty), ImportBundle's account bounds | **done** (`Wallet/HistoryLedger.lean`, `Wallet/MultisigSpendRecords.lean`) | `multisig-test`: HistoryLedgerTests, an old record encoding byte for byte, the spend records' coding and refusals, the bounds. Counts on this tree: multisig-test 664, ledger-test 230; records-test 99, multisig-app-test 150, ledger-transport-test 13 unchanged |
-| #256/#259 app | MultisigStore's history/drafts/in-flight, SignerStore and the signer views, the builder for members, Send from an account, DisplayedPayment | not ported (a later stage); `LeanApp/` only compiles against the new WalletCore | |
+| #256 app | SignerStore (`Real/SignerStore.lean`: sealed `signers.json` per network, 100 signers, 1 MiB, kept when a wallet is deleted, in every backup, merged on import) and Settings → Signers (`Signers.lean`: this phone, Ledgers, saved keys, detail; Pair a Ledger files the Ledger's key and registers nothing); each Advanced tab its own navigation stack; the builder over members (This phone, Ledgers, saved keys, accounts on this phone, pasted keys, ⊕ a co-key, any k of N members, the preview line, the paired Ledger registering after Create with Register on Ledger on failure); Join's Ledger notice, member share and registration; the account screen's members and Ledger | **done** (`LeanApp/WinnowApp/Real/{SignerStore,Multisig}.lean`, `Signers.lean`, `Multisig.lean`). Deviation: the recovery delay defaults to 26,000 blocks (about six months; the user's choice), adjustable a day at a time | `multisig-app-test`: SignerRosterTests (4), NestedMultisigFlowTests (3), LedgerPairingTests as upstream changed them; `backend-test`: the builder and the Ledger flows on regtest |
+| #259 app | MultisigStore's history (HistoryLedger), settle, recordSpend with the broadcast height, drafts, abandon, rollBack rewinding history, backups carrying pending payments; `Status.accountsBalance` and the one balance with its "of which…" line (Simple and Advanced); DisplayedPayment (`Payments.lean`) as the one Activity/Transactions list; the payment screen's Account section (Collect signatures, Rebroadcast, Give up); Send's From (Advanced), the account review through the wallet's gate (override band, relay floors, `authorizes` on the unsigned PSBT, account id in the review identity, silent payment codes refused), Sign and continue (one device authentication), one collection step from Send, Transactions and the account page (phone, Ledger, pasted copy, PSBT to share, finalize with the main path's relay watch and receipt, discard); the account page shrinks to the recovery path and a pasted PSBT, both filing the draft | **done**. Simple mode gains nothing: accounts show only in the balance line and as rows without actions, a draft row saying its signatures are collected in Advanced mode | `multisig-app-test`: MultisigStoreTests as #259 changed them (the backup test inverted), the draft lifecycle, MultisigAccountFlowTests (Send tab across two phones, a transfer is one row, an in-flight spend survives a backup and can be rebroadcast or given up), HistoryDisplayTests' merge, SendReviewBinding's account identity, a Simple-mode render test and the tab stacks; `backend-test`: a Send-tab account spend on regtest and a wallet→account transfer as one row |
 
 ### Fixed upstream bugs
 
-Bugs in upstream d2ca878 that the port fixes rather than copies:
+Bugs in upstream d2ca878 that the port fixes rather than copies (each with a test):
 
 1. **The PSBT given to share must be BIP174 v0.** #259 writes `psbt.base64` (the v2 envelope) into the
    account's draft (`AppModel.signAndDraftMultisigSpend`, `updateMultisigDraft`, Sources/WinnowApp/AppModel.swift
    2522 and 2559) and shares the draft's text as "PSBT to share" (MultisigViews.swift 695); before #259 it
    shared `base64V0()`. Bitcoin Core and most other signers read only v0. Here `MultisigSpendDraft.ofPSBT`
-   writes the v0 envelope (`PSBT.base64V0`), and the app's drafts must be made through it; multisig-test
-   checks that a draft's text is v0 and reads back as the same spend, signatures included.
+   writes the v0 envelope (`PSBT.base64V0`), and every draft the app files goes through it
+   (`Real/Multisig.lean` `draftOf`). **Fixed.** Tests: multisig-test (the draft's text is v0 and reads back as
+   the same spend); multisig-app-test `testSendTabSpendsFromAnAccountAcrossTwoPhones` and
+   `testDraftsFollowTheirCoins…` (the filed draft is v0); backend-test "the shared text is BIP174 v0".
 2. **Draft signature counts are compared by number.** Upstream's `draftRow` (Sources/WinnowApp/DisplayedPayment.swift
    93–109) picks the "best leaf" text with `.max { lhs.count < rhs.count }` over strings like "2 of 3": the
    longest text wins, so an untouched twelve-key leaf ("0 of 12") is shown over a leaf that is two of
-   three signed ("2 of 3"); it must compare the approval counts (then thresholds) as numbers. App side,
-   for the stage that ports DisplayedPayment.
+   three signed ("2 of 3"). Here `bestLeafSignatures` (`WinnowApp/Pure.lean`) takes each path's (approvals,
+   threshold) and shows the path needing the fewest further signatures, ties broken by the most approvals,
+   then by the first path. **Fixed.** Test: multisig-app-test `testTheDraftRowShowsTheLeafClosestToFinishing`.
 3. **A person's address index advances when the account spend confirms, whoever broadcast it.** Upstream
    advances it only in `broadcastMultisigDraft` (AppModel.swift 2572–2576), i.e. when this phone
    broadcasts; when a co-signer broadcasts, `MultisigStore.pruneDraft` (MultisigStore.swift 488–500) drops
    the draft, with its `personID` and `paymentIndex`, once its inputs stop being live coins, and the index
-   never moves, so the next payment reuses the address. The draft keeps both fields (WalletCore); the app
-   must advance the index when the draft's txid confirms in the account's history (or leaves its inputs
-   spent by that txid), not only on its own broadcast. App side, for the stage that ports MultisigStore.
+   never moves, so the next payment reuses the address. Here `MultisigStore.applyPaying` reports the
+   `(personID, paymentIndex)` of each draft whose own transaction the block confirms, and the app's
+   `multisigApply` hook advances that person's index (and still advances it on this phone's own broadcast).
+   **Fixed.** Tests: multisig-app-test `testADraftConfirmedByACoSignerPaysItsPerson` (store) and
+   `testACoSignersBroadcastAdvancesThePaidPersonsIndex` (the hook).
 
 ## Tests, UI tests, CI and TestFlight
 

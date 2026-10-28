@@ -107,11 +107,44 @@ structure HistoryItem where
 
 def HistoryItem.net (h : HistoryItem) : Int := h.received - h.spent
 
+/-- `DisplayedPayment.Source`: whose payment a Transactions row is. -/
+inductive PaymentSource where
+  | wallet
+  | account (name : String)
+  /-- The same transaction in two histories: `from` paid `to` ("Wallet" or an account's name), `amount` sats. -/
+  | transfer («from» to : String) (amount : Nat)
+  /-- An account's draft: `signatures` reads "1 of 2". -/
+  | draft (name signatures : String)
+  deriving Repr, Inhabited, BEq
+
+/-- `DisplayedPayment`: one row of the one Transactions list (wallet, account, transfer or draft). -/
+structure DisplayedPayment where
+  item : HistoryItem
+  source : PaymentSource
+  /-- The account whose history `item` comes from; none for the wallet's. -/
+  accountID : Option String := none
+  deriving Repr, Inhabited, BEq
+
+def DisplayedPayment.isDraft (p : DisplayedPayment) : Bool := p.source matches .draft ..
+
+/-- The account named on the row, if any. -/
+def DisplayedPayment.accountName (p : DisplayedPayment) : Option String :=
+  match p.source with
+  | .wallet => none
+  | .account n | .draft n _ => some n
+  | .transfer f t _ => some (if f == "Wallet" then t else f)
+
 /-- AppModel's `Status`. -/
 structure Status where
+  /-- The wallet's own coins. -/
   balance : Int := 0
+  /-- The multisig accounts' live coins, which need co-signers to move. -/
+  accountsBalance : Int := 0
   utxoCount : Nat := 0
+  /-- The wallet's own history. -/
   history : List HistoryItem := []
+  /-- The one Transactions list: wallet, accounts, transfers and drafts, newest first (drafts on top). -/
+  payments : List DisplayedPayment := []
   feeBumpable : List String := []
   peerCount : Nat := 0
   tipHeight : Nat := 0
@@ -233,6 +266,59 @@ namespace WinnowApp
 
 /-! ## Multisig accounts (Advanced mode) -/
 
+/-- One output of a reviewed spend. -/
+structure MultisigOutputLine where
+  owned : Bool
+  amount : Nat
+  /-- The address, or the script in hex. -/
+  address : String
+  deriving Repr, Inhabited, BEq
+
+/-- `MultisigSigningProgress`. -/
+structure MultisigProgress where
+  complete : Bool := false
+  phoneHolds : Bool := false
+  phoneUnsigned : Bool := false
+  ledgerHolds : Bool := false
+  ledgerUnsigned : Bool := false
+  deriving Repr, Inhabited, BEq
+
+def MultisigProgress.signedHere (p : MultisigProgress) : Bool := p.phoneHolds && !p.phoneUnsigned
+
+/-- `MultisigSigningProgress.nextStep`: the signing screen's footer. -/
+def MultisigProgress.nextStep (p : MultisigProgress) : String :=
+  if p.complete then "Enough signatures verify. Finalize and broadcast."
+  else if p.ledgerUnsigned then
+    if p.signedHere then "Sign with the Ledger: check the payment on its screen before approving."
+    else "Add this phone's signature and the Ledger's, in either order. Check the payment on the Ledger's screen."
+  else if p.signedHere then "Share the PSBT below with the other signers, then combine their signed copies here."
+  else "Check the payment, then add this phone's signature. Signers can sign in any order."
+
+/-- `MultisigSigningScreen`: the review, the verified signatures per usable path, and the progress. -/
+structure MultisigScreen where
+  outputs : List MultisigOutputLine
+  inputTotal : Nat
+  fee : Nat
+  /-- Per usable path: is it the recovery path, verified signatures, threshold. -/
+  signatures : List (Bool × Nat × Nat)
+  /-- Per usable path: the row's title and its UI-test identifier (`signaturesTitle`, `signatureCountIdentifier`). -/
+  signatureTitles : List (String × String) := []
+  progress : MultisigProgress
+  deriving Repr, Inhabited, BEq
+
+def MultisigScreen.recoveryUsable (s : MultisigScreen) : Bool := s.signatures.any (·.1)
+
+/-- An account's draft as the screens show it (`MultisigSigningSections`): the PSBT to share (BIP174 v0),
+its txid, its review, and the signatures on its best leaf. -/
+structure MultisigDraftInfo where
+  psbt : String
+  txid : String
+  screen : Option MultisigScreen := none
+  reviewError : Option String := none
+  /-- "1 of 2" (`bestLeafSignatures`). -/
+  signatures : String := ""
+  deriving Repr, Inhabited, BEq
+
 /-- One live coin of a multisig account, as MultisigAccountView lists it. -/
 structure MultisigCoin where
   amount : Nat
@@ -266,6 +352,10 @@ structure MultisigInfo where
   signerExpressions : List String := []
   threshold : Nat := 0
   signerCount : Nat := 0
+  /-- The payment this phone is collecting signatures for. -/
+  draft : Option MultisigDraftInfo := none
+  /-- Spends this phone broadcast that no block has taken (display-hex txids). -/
+  inFlight : List String := []
   nextReceiveIndex : Nat := 0
   receiveAddress : Option String := none
   coins : List MultisigCoin := []
@@ -314,48 +404,6 @@ inductive MultisigRecovery where
   | fewerSigners (threshold blocks : Nat)
   | separateKey (key : String) (blocks : Nat)
   deriving Repr, Inhabited, BEq
-
-/-- One output of a reviewed spend. -/
-structure MultisigOutputLine where
-  owned : Bool
-  amount : Nat
-  /-- The address, or the script in hex. -/
-  address : String
-  deriving Repr, Inhabited, BEq
-
-/-- `MultisigSigningProgress`. -/
-structure MultisigProgress where
-  complete : Bool := false
-  phoneHolds : Bool := false
-  phoneUnsigned : Bool := false
-  ledgerHolds : Bool := false
-  ledgerUnsigned : Bool := false
-  deriving Repr, Inhabited, BEq
-
-def MultisigProgress.signedHere (p : MultisigProgress) : Bool := p.phoneHolds && !p.phoneUnsigned
-
-/-- `MultisigSigningProgress.nextStep`: the signing screen's footer. -/
-def MultisigProgress.nextStep (p : MultisigProgress) : String :=
-  if p.complete then "Enough signatures verify. Finalize and broadcast."
-  else if p.ledgerUnsigned then
-    if p.signedHere then "Sign with the Ledger: check the payment on its screen before approving."
-    else "Add this phone's signature and the Ledger's, in either order. Check the payment on the Ledger's screen."
-  else if p.signedHere then "Share the PSBT below with the other signers, then combine their signed copies here."
-  else "Check the payment, then add this phone's signature. Signers can sign in any order."
-
-/-- `MultisigSigningScreen`: the review, the verified signatures per usable path, and the progress. -/
-structure MultisigScreen where
-  outputs : List MultisigOutputLine
-  inputTotal : Nat
-  fee : Nat
-  /-- Per usable path: is it the recovery path, verified signatures, threshold. -/
-  signatures : List (Bool × Nat × Nat)
-  /-- Per usable path: the row's title and its UI-test identifier (`signaturesTitle`, `signatureCountIdentifier`). -/
-  signatureTitles : List (String × String) := []
-  progress : MultisigProgress
-  deriving Repr, Inhabited, BEq
-
-def MultisigScreen.recoveryUsable (s : MultisigScreen) : Bool := s.signatures.any (·.1)
 
 /-- A PSBT in hand: its v2 Base64 (the working copy), the BIP174 v0 text to share, and its review. -/
 structure MultisigPSBT where

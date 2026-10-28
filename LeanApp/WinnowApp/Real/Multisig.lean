@@ -63,6 +63,13 @@ def runMAM {α} (x : MAM α) : IO α :=
   | .ok a => pure a
   | .error e => failText (multisigFailureText e)
 
+/-- An account's draft as the screens and the Transactions row read it: the review's summary, and the
+unsigned spend as a pending entry of the account (none when the draft no longer reviews). -/
+structure DraftDetails where
+  info : MultisigDraftInfo
+  entry : Option HistoryEntry := none
+  deriving Inhabited
+
 /-- What the overview is a function of: the accounts, the signers, their notices, this phone's key and
 the chain tip (a review's maturity and recovery checks). -/
 structure OverviewKey where
@@ -80,6 +87,10 @@ structure MultisigApp where
   /-- The signer list (`signerStore`): paired Ledgers and keys other people sent. -/
   signers : SignerHost
   overviewCache : IO.Ref (Option (OverviewKey × MultisigOverview))
+  /-- The core this store serves, once it exists (the hooks are made before it). -/
+  env : IO.Ref (Option Env)
+  /-- Each account's draft as reviewed, by (account, draft text, tip, coins): the review is the cost. -/
+  draftCache : IO.Ref (Array (String × DraftDetails))
   /-- `ledgerConnector`: opens one Ledger connection (Bluetooth through the shell, or test mode's
   simulated device); swappable, as Swift's `var ledgerConnector` is. -/
   ledger : IO.Ref (IO LedgerSession)
@@ -90,7 +101,7 @@ def noLedger : IO LedgerSession :=
 
 def MultisigApp.new (keys : StoreKeyVault) (ledger : IO LedgerSession := noLedger) : IO MultisigApp := do
   return { host := ← MultisigHost.new keys, signers := ← SignerHost.new keys, overviewCache := ← IO.mkRef none,
-           ledger := ← IO.mkRef ledger }
+           env := ← IO.mkRef none, draftCache := ← IO.mkRef #[], ledger := ← IO.mkRef ledger }
 
 namespace MultisigApp
 
@@ -119,6 +130,19 @@ def watchScripts (a : MultisigApp) (network : Tx.BitcoinNetwork) : IO (Array Byt
 def applyMatch (a : MultisigApp) (m : Net.BlockMatch) (network : Tx.BitcoinNetwork) : IO (Array ByteArray) :=
   a.withStore fun s => s.apply a.host.keys a.host.writeData m network
 
+/-- `apply` and the people the block's confirmed drafts paid (fixed upstream bug 3): each person's address
+index moves past the one the draft paid, whoever broadcast it. -/
+def applyMatchPaying (a : MultisigApp) (advance : String → UInt32 → IO Unit) (m : Net.BlockMatch)
+    (network : Tx.BitcoinNetwork) : IO (Array ByteArray) := do
+  let (discarded, paid) ← a.withStore fun s => do
+    let (next, discarded, paid) ← s.applyPaying a.host.keys a.host.writeData m network
+    return (next, (discarded, paid))
+  for (person, index) in paid do
+    advance person index
+    if let some env ← a.env.get then
+      env.journal "person.paid" [("personID", person), ("paymentIndex", toString index), ("confirmedAt", toString m.height)]
+  return discarded
+
 def rollBack (a : MultisigApp) (fork : UInt32) : IO Unit :=
   a.withStore fun s => do return (← s.rollBack a.host.keys a.host.writeData fork, ())
 
@@ -139,7 +163,7 @@ def hooks (a : MultisigApp) (base : Hooks) : Hooks :=
       a.signers.configure (Network.tx n) (some (System.FilePath.mk dir))
       return r
     multisigWatchScripts := a.watchScripts
-    multisigApply := a.applyMatch
+    multisigApply := a.applyMatchPaying base.advancePersonIndex
     multisigRollBack := a.rollBack
     multisigValidate := fun rs n => RM.toIO (MultisigStore.validate rs n)
     multisigRestore := a.restore
@@ -399,6 +423,7 @@ def broadcastMultisigSpend (env : Env) (a : MultisigApp) (id text : String) : IO
   try
     a.withStore fun s => do
       let (s', _) ← s.recordSpend a.host.keys a.host.writeData r.id tx (if hasChange then some r.nextChangeIndex else none)
+        (← RM.io (chainTip env))
       return (s', ())
   catch e =>
     failText (spendNotRecordedText (Winnow.displayHex txid) (toString e))
@@ -608,6 +633,289 @@ def checkMultisigDescriptor (env : Env) (a : MultisigApp) (text : String) : IO M
   return { policy := account.policySummary, firstAddress := (account.address 0).toOption,
            ledgerName := (pairedLedgers (← a.signers.all) account)[0]?.map (·.name) }
 
+/-! ## Drafts: a spend collecting signatures (AppModel.swift d2ca878, "Drafts") -/
+
+/-- `MultisigActionError` cases of #259. -/
+def draftInProgressText : String :=
+  "This account has a payment awaiting signatures. Finish or discard it under Transactions before starting another."
+def noDraftText : String := "This account has no payment awaiting signatures."
+def draftMismatchText : String := "That PSBT is for a different payment than the one awaiting signatures."
+def silentPaymentUnsupportedText : String :=
+  "A silent payment code cannot be paid from a multisig account. Pay it from the wallet, or ask for an address."
+def notInFlightText : String := "This payment is not waiting to be confirmed."
+
+def draftError {α} (e : WalletError ⊕ PSBTError) : IO α :=
+  match e with
+  | .inl w => failText w.description
+  | .inr p => failText (psbtErrorText p)
+
+/-- The account's draft as a PSBT (`multisigDraft(for:)`). -/
+def draftPSBT (r : MultisigAccountRecord) : IO (MultisigSpendDraft × PSBT) := do
+  let some d := r.draft | failText noDraftText
+  match d.psbt with
+  | .ok p => return (d, p)
+  | .error e => draftError e
+
+/-- `setDraft` through the store. -/
+def fileDraft (a : MultisigApp) (id : String) (draft : Option MultisigSpendDraft) : IO Unit :=
+  a.withStore fun s => do return (← s.setDraft a.host.keys a.host.writeData id draft, ())
+
+/-- A draft of `psbt` in the BIP174 v0 envelope (`MultisigSpendDraft.ofPSBT`; upstream wrote v2, fixed
+upstream bug 1), keeping who it pays and when it started. -/
+def draftOf (psbt : PSBT) (createdAtHeight : UInt32) (personID : Option String) (paymentIndex : Option UInt32) :
+    IO MultisigSpendDraft :=
+  match MultisigSpendDraft.ofPSBT psbt createdAtHeight personID paymentIndex with
+  | .ok d => pure d
+  | .error e => failText (psbtErrorText e)
+
+/-- `updateMultisigDraft(_:record:)`: the draft's PSBT replaced by a copy that gained signatures. -/
+def updateDraft (env : Env) (a : MultisigApp) (r : MultisigAccountRecord) (psbt : PSBT) : IO Unit := do
+  let previous := r.draft
+  let height := (previous.map (·.createdAtHeight)).getD (← chainTip env)
+  let d ← draftOf psbt height (previous.bind (·.personID)) (previous.bind (·.paymentIndex))
+  fileDraft a r.id (some d)
+
+/-- The PSBT of a new spend from the account (`createMultisigSpend(record:address:amount:feeRateSatPerVByte:path:)`),
+refused while the account already has a draft: a second spend would take the same coins. -/
+def newSpendPSBT (env : Env) (r : MultisigAccountRecord) (address : String) (amount : Int) (feeRate : Float)
+    (recovery : Bool) : IO PSBT := do
+  if r.draft.isSome then failText draftInProgressText
+  let network ← currentNetwork env
+  let payment ← match Payment.ofAddress (Int64.ofInt amount) (Wire.trimWhitespace address) network with
+    | .ok p => pure p
+    | .error e => failText (addressErrorText e)
+  unless amount > 0 do failText (CoinSelectionError.invalidAmount (Int64.ofInt amount)).description
+  let account ← accountOf r network
+  let draws := (← env.deps.random.draw, ← env.deps.random.draw)
+  let position ← env.deps.random.changePosition 1
+  let psbt ← runMAM (account.createSpend r.utxos #[payment] r.nextChangeIndex feeRate (← chainTip env)
+    (if recovery then .recovery else .signers) draws (fun _ => position))
+  journalPSBT env "multisig-created" psbt
+  return psbt
+
+/-- `previewSend(from:destination:amount:priority:override:)` (and `previewSend(to:…from:)`): a payment from
+a multisig account, reviewed like a wallet send through the same gate (override band, relay fee, the live
+floors): the PSBT this phone builds fixes the inputs, outputs and fee, and the review shows them. Refused
+while the account has a draft, and for a silent payment code, which no account can pay. -/
+def previewAccountSend (env : Env) (a : MultisigApp) (inputs : SendInputs) : IO Preview := do
+  let some id := inputs.accountID | failWith .sendReviewChanged
+  let r ← record a id
+  if r.draft.isSome then failText draftInProgressText
+  if let some o := parseRateMilli inputs.override then
+    unless FeePolicy.acceptsRate (rateOfMilli o) do failText (CoinSelectionError.invalidFeeRate (rateOfMilli o)).description
+  let resolution ← resolveFee env inputs.priority (parseRateMilli inputs.override)
+  requireRelayFee resolution.rate resolution.clampedFloor
+  requireRelayFloors env resolution.rate
+  let (destination, recipient) ← match inputs.personID with
+    | some pid => do
+      let (address, index, rec) ← env.hooks.personPayment pid
+      pure (address, some (pid, index, rec))
+    | none => pure (inputs.destination.trimAscii.copy, none)
+  if SilentPaymentAddress.looksLikeCode destination then failText silentPaymentUnsupportedText
+  let network ← currentNetwork env
+  let amount := inputs.amount.trimAscii.copy.toNat?.getD 0
+  let payment ← match Payment.ofAddress (i64 amount) destination network with
+    | .ok p => pure p
+    | .error e => failText (addressErrorText e)
+  let psbt ← newSpendPSBT env r destination amount resolution.rate false
+  let account ← accountOf r network
+  let review ← reviewSpend env r account psbt
+  let unsigned ← match psbt.unsignedTransaction with
+    | .ok t => pure t
+    | .error e => failText (psbtErrorText e)
+  let changeScript ← runMAM (account.scriptPubKey r.nextChangeIndex AddressChain.change.rawValue)
+  let change : Option Payment := (unsigned.outputs.find? (·.scriptPubKey == changeScript)).map fun o =>
+    { amount := o.value, scriptPubKey := o.scriptPubKey }
+  let phase ← updateSyncPhase env
+  let summary : Preview :=
+    { destination, amount, fee := natOf review.fee, feeRateMilli := milliOf resolution.rate,
+      inputCount := unsigned.inputs.size, change := change.map (natOf ·.amount),
+      locktimeLagsTip := phase.headerTipMayLagNetwork, recipient := recipient.map fun (_, _, rec) => rec,
+      account := some { id := r.id, name := r.name, threshold := account.threshold.toNat,
+                        signerCount := account.signers.size, psbt := psbt.base64 } }
+  let sendReview : SendReview :=
+    { inputs, summary, payments := #[payment], feeRate := resolution.rate, fee := review.fee,
+      changeAmount := change.map (·.amount), selected := unsigned.inputs.map (·.previousOutput), change,
+      recipient := recipient.map fun (pid, index, rec) => (pid, if rec.derivesFreshAddresses then some index else none) }
+  env.modify fun c => { c with reviews := ((c.reviews.filter (·.inputs != inputs)).push sendReview).extract 0 16 }
+  return summary
+
+/-- `signMultisigSpend(_:record:)` on a PSBT in hand: this wallet's script-path signature on every input. -/
+def signWithPhone (env : Env) (r : MultisigAccountRecord) (psbt : PSBT) : IO PSBT := do
+  let w ← needWallet env
+  let account ← accountOf r w.network
+  let key ← runWM w.multisigSigningKey
+  let signed ← runMAM (account.sign psbt key r.utxos (ownedCoordinates r) (← chainTip env) (← env.deps.random.auxRand))
+  journalPSBT env "multisig-signed" signed
+  return signed
+
+/-- `signAndDraftMultisigSpend(preview:)` after device authentication ("Sign and continue"): the PSBT in hand
+must be the one reviewed (same inputs, outputs and fee: the `authorizes` gate on the unsigned
+transaction); this phone signs it and files it as the account's draft, where the other signatures are
+collected. The account's id. -/
+def signAndDraft (env : Env) (a : MultisigApp) (advanced : Bool) (inputs : SendInputs) (p : Preview) : IO String := do
+  unless advanced do failText advancedModeOnlyText
+  let some source := p.account | failWith .sendReviewChanged
+  let c ← env.get
+  let some review := c.reviews.find? (fun rv => rv.inputs == inputs && sameSummary rv.summary p) | failWith .sendReviewChanged
+  let r ← record a source.id
+  if r.draft.isSome then failText draftInProgressText
+  let psbt ← parsePSBT source.psbt
+  let unsigned ← match psbt.unsignedTransaction with
+    | .ok t => pure t
+    | .error e => failText (psbtErrorText e)
+  unless review.authorizesTransaction unsigned review.fee review.changeAmount do failWith .sendReviewChanged
+  let signed ← signWithPhone env r psbt
+  let d ← draftOf signed (← chainTip env) (review.recipient.map (·.1)) (review.recipient.bind (·.2))
+  fileDraft a r.id (some d)
+  env.modify fun c => { c with reviews := c.reviews.filter (·.inputs != inputs) }
+  env.journal "multisig.draftStarted" [("id", r.id), ("txid", Winnow.displayHex unsigned.txid)]
+  return r.id
+
+/-- The draft signed by this phone (after device authentication). -/
+def signDraft (env : Env) (a : MultisigApp) (id : String) : IO Unit := do
+  let r ← record a id
+  let (_, psbt) ← draftPSBT r
+  updateDraft env a r (← signWithPhone env r psbt)
+
+/-- The draft signed by the Ledger (`signMultisigSpendWithLedger` then `updateMultisigDraft`). -/
+def signDraftWithLedger (env : Env) (a : MultisigApp) (advanced : Bool) (id : String) : IO Unit := do
+  let r ← record a id
+  let (_, psbt) ← draftPSBT r
+  let signed ← signMultisigSpendWithLedger env a advanced id psbt.base64
+  updateDraft env a r (← parsePSBT signed.psbt)
+
+/-- `adoptMultisigDraft(_:record:)`: a pasted co-signer's PSBT, combined into the draft when the account has
+one (it must be the same transaction), adopted as the draft when it has none. -/
+def adoptDraft (env : Env) (a : MultisigApp) (id text : String) : IO Unit := do
+  let r ← record a id
+  let pasted ← parsePSBT text
+  let combined ← match r.draft with
+    | some _ =>
+      let (_, current) ← draftPSBT r
+      let same := match current.unsignedTransaction, pasted.unsignedTransaction with
+        | .ok x, .ok y => x.txid == y.txid
+        | _, _ => false
+      unless same do failText draftMismatchText
+      combine env r current pasted
+    | none =>
+      discard <| reviewSpend env r (← accountOf r (← currentNetwork env)) pasted
+      pure pasted
+  updateDraft env a r combined
+  journalPSBT env "multisig-combined" combined
+
+/-- `discardMultisigDraft(record:)`. -/
+def discardDraft (env : Env) (a : MultisigApp) (id : String) : IO Unit := do
+  fileDraft a id none
+  env.journal "multisig.draftDiscarded" [("id", id)]
+
+/-- The account page's new spend (the recovery path, or the signers' path by address), filed as the draft. -/
+def createDraft (env : Env) (a : MultisigApp) (id address : String) (amount : Int) (feeRate : Float) (recovery : Bool) :
+    IO Unit := do
+  let r ← record a id
+  let psbt ← newSpendPSBT env r address amount feeRate recovery
+  updateDraft env a r psbt
+
+/-- `broadcastMultisigDraft(record:)`: finalizes and broadcasts the draft once enough signatures verify, then
+moves the person's address index past the one it paid. The txid (display hex). -/
+def broadcastDraft (env : Env) (a : MultisigApp) (id : String) : IO String := do
+  let r ← record a id
+  let (d, psbt) ← draftPSBT r
+  let txid ← broadcastMultisigSpend env a id psbt.base64
+  if let (some person, some index) := (d.personID, d.paymentIndex) then
+    env.hooks.advancePersonIndex person index
+    env.journal "person.paid" [("personID", person), ("paymentIndex", toString index), ("txid", txid)]
+  return txid
+
+/-- `rebroadcastMultisigSpend(record:txid:)`: announces again a spend no block has taken, from the bytes the
+account kept (after a restore the broadcaster has none of its own). -/
+def rebroadcastSpend (env : Env) (a : MultisigApp) (id txid : String) : IO Unit := do
+  let r ← record a id
+  let raw := ofDisplayHex! txid
+  let some spend := r.inFlight.find? (·.txid == raw) | failText notInFlightText
+  let tx ← match spend.transaction with
+    | .ok t => pure t
+    | .error (.inl e) => failText e.description
+    | .error (.inr n) => failText (namedText n)
+  discard <| broadcastTx env tx (feeRateOf tx r.allUtxos)
+  env.journal "multisig.rebroadcast" [("id", id), ("txid", txid)]
+
+/-- `abandonMultisigSpend(record:txid:)`: its coins are the account's again and the broadcaster stops
+announcing it. -/
+def abandonSpend (env : Env) (a : MultisigApp) (id txid : String) : IO Unit := do
+  let raw := ofDisplayHex! txid
+  a.withStore fun s => do return (← s.abandonSpend a.host.keys a.host.writeData id raw, ())
+  if let some s := (← env.get).stack then
+    try runNet (s.broadcaster.cancel raw) catch _ => pure ()
+  env.journal "multisig.spendAbandoned" [("id", id), ("txid", txid)]
+
+/-- An account's draft reviewed (`draftRow(for:)` and the collection screen's review), cached until the
+draft, the tip or the coins change. -/
+def draftDetails (env : Env) (a : MultisigApp) (r : MultisigAccountRecord) : IO (Option DraftDetails) := do
+  let some d := r.draft | return none
+  let tip ← chainTip env
+  let key := s!"{r.id}|{d.psbtBase64}|{tip}|{r.nextChangeIndex}|" ++
+    ",".intercalate (r.utxos.toList.map fun u => s!"{hex u.txid}:{u.vout}@{u.height}")
+  if let some (_, cached) := (← a.draftCache.get).find? (·.1 == key) then return some cached
+  let details ← compute d
+  a.draftCache.modify fun c => ((c.filter fun (k, _) => !k.startsWith s!"{r.id}|").push (key, details)).extract 0 64
+  return some details
+where
+  compute (d : MultisigSpendDraft) : IO DraftDetails := do
+    let base : MultisigDraftInfo := { psbt := d.psbtBase64, txid := "" }
+    let psbt ← match d.psbt with
+      | .ok p => pure p
+      | .error (.inl e) => return { info := { base with reviewError := some e.description } }
+      | .error (.inr e) => return { info := { base with reviewError := some (psbtErrorText e) } }
+    let unsigned ← match psbt.unsignedTransaction with
+      | .ok t => pure t
+      | .error e => return { info := { base with reviewError := some (psbtErrorText e) } }
+    let base := { base with txid := Winnow.displayHex unsigned.txid }
+    try
+      let screen ← signingScreen env r psbt
+      let account ← accountOf r (← currentNetwork env)
+      let review ← reviewSpend env r account psbt
+      -- the leaf to show: the one needing the fewest further signatures (fixed upstream bug 2)
+      let best := bestLeafSignatures (screen.signatures.map fun (_, approved, threshold) => (approved, threshold))
+      let signatures := match best with
+        | some (approved, threshold) => s!"{approved} of {threshold}"
+        | none => s!"0 of {account.threshold}"
+      let mut outputs : HistoryEntry.Outputs := {}
+      let mut change : Int64 := 0
+      for h : vout in [0:unsigned.outputs.size] do
+        let o := unsigned.outputs[vout]
+        if !(o.value > 0) then continue
+        if (review.outputs[vout]?.map (·.isAccountOwned)) == some true then
+          outputs := { outputs with change := outputs.change.push vout.toUInt32 }
+          change := change + o.value
+        else
+          outputs := { outputs with external := outputs.external.push { vout := vout.toUInt32, amount := o.value, scriptPubKey := o.scriptPubKey } }
+      let entry : HistoryEntry :=
+        { txid := unsigned.txid, height := 0, received := change, spent := review.inputTotal, fee := some review.fee,
+          rawTransaction := some (unsigned.serialized false), outputs := some outputs }
+      return { info := { base with screen := some screen, signatures }, entry := some entry }
+    catch e =>
+      return { info := { base with reviewError := some (toString e) } }
+
+/-- `refresh()`'s account half (the `multisigSnapshot` hook): the accounts' live balance and the one
+Transactions list over the wallet's rows, each account's history and each reviewable draft. -/
+def snapshotPayments (a : MultisigApp) (owned : Std.HashSet ByteArray) (net : Tx.BitcoinNetwork)
+    (wallet : List HistoryItem) : IO (Int × List DisplayedPayment) := do
+  let store ← a.host.read
+  let balance := store.records.foldl (fun t r => t + r.balance.toInt) 0
+  let accounts := store.records.toList.map fun r => (r.id, r.name, r.history.toList.map (historyItem · owned net))
+  let mut drafts : List DisplayedPayment := []
+  if let some env ← a.env.get then
+    for r in store.records do
+      if let some dd ← draftDetails env a r then
+        if let some e := dd.entry then
+          drafts := drafts ++ [{ item := historyItem e owned net, source := .draft r.name dd.info.signatures, accountID := some r.id }]
+  return (balance, payments wallet accounts drafts)
+
+/-- The store's hooks into the core, the Transactions list among them. -/
+def MultisigApp.allHooks (a : MultisigApp) (base : Hooks) : Hooks :=
+  { a.hooks base with multisigSnapshot := snapshotPayments a }
+
 /-! ## What the screens show -/
 
 /-- `MultisigAccountView.recoveryText`: "after 4320 blocks: any 1 of the signers", or "… the recovery key". -/
@@ -703,8 +1011,11 @@ def overview (env : Env) (a : MultisigApp) : IO MultisigOverview := do
   if let some (k', o) ← a.overviewCache.get then
     if k' == k then return o
   let o : MultisigOverview :=
-    { accounts := store.records.toList.map (info · store.network signers.records ownKey), notice := k.notice,
-      keyExpression := key,
+    { accounts := ← store.records.toList.mapM fun r => do
+        return { info r store.network signers.records ownKey with
+                 draft := (← draftDetails env a r).map (·.info),
+                 inFlight := r.inFlight.toList.map (Winnow.displayHex ·.txid) },
+      notice := k.notice, keyExpression := key,
       ownFingerprint := key.map (signerFingerprint · store.network),
       signers := signers.records.toList.map (signerInfo · store.network), signerNotice := k.signerNotice }
   a.overviewCache.set (some (k, o))

@@ -33,11 +33,11 @@ def Model.fail (m : Model) (context message : String) : Model :=
   if context == "reveal.cancelled" then { m with reveal := { m.reveal with revealing := false, error := none } } else
   let cancelled := context.endsWith ".cancelled"
   let context := if cancelled then (context.dropEnd 10).copy else context
-  if context.startsWith "multisigPSBT." then
-    -- MultisigPSBTView's `run`: only the current operation's failure shows (`accepts(token)`)
+  if context.startsWith "collect." then
+    -- the collection step's `run`: only the current operation's failure shows (`accepts(token)`)
     let m := { m with spendingInFlight := false }
-    if (context.drop 13).toString.toNat? != some m.multisigSpend.epoch || !m.active then m else
-    { m with multisigSpend := { m.multisigSpend with busy := false, error := if cancelled then none else some message } }
+    if (context.drop 8).toString.toNat? != some m.collect.epoch || !m.active then m else
+    { m with collect := { m.collect with busy := false, error := if cancelled then none else some message } }
   else
   match context with
   | "onboarding" | "create" | "import" => { m with onboarding := { m.onboarding with busy := false, error := some message } }
@@ -59,6 +59,7 @@ def Model.fail (m : Model) (context message : String) : Model :=
   | "multisigAdd" => { m with multisigAdd := { m.multisigAdd with saving := false, error := some message } }
   | "multisigBuild" => { m with multisigBuild := { m.multisigBuild with creating := false, error := some message } }
   | "multisigAccount" => { m with multisigAccountError := some message }
+  | "accountSpend" => { m with payment := { m.payment with error := some message } }
   | "ledgerPair" => { m with ledgerPair := { m.ledgerPair with pairing := false, error := some message } }
   | "signerKeys" => { m with signerKeys := { m.signerKeys with saving := false, error := some message } }
   | "signer" => { m with signerDetail := { m.signerDetail with error := some message } }

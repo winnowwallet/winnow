@@ -240,23 +240,34 @@ def multisigFlow (n : Node) (a : Backend) (msA : Real.MultisigApp) (mineAddr : S
   check "multisig: the receive frontier moved past the paid address" (funded.nextReceiveIndex == 1)
   let (sw, _) ← a.snapshot
   check "multisig: the account's coin is not the wallet's" (sw.history.all (·.txid != fundTxid))
-  -- 2. Create, review.
+  -- 2. Send, From: the account (upstream #259): the review is the PSBT this phone built.
   let dest ← n.wallet #["getnewaddress"]
-  let created ← a.createMultisigSpend id dest 20_000_000 2.0 false
-  let some screen := created.screen | throw (IO.userError s!"review: {created.reviewError}")
-  check "multisig: the review pays the node and returns change to the account"
+  let inputs : SendInputs := { destination := dest, amount := "20000000", network := .regtest, accountID := some id }
+  let preview ← a.previewSend inputs
+  check "send tab: the review names the account" ((preview.account.map fun x => (x.name, x.threshold, x.signerCount)) ==
+    some ("Shared", 2, 2) && preview.amount == 20_000_000 && preview.inputCount == 1 &&
+    preview.change == some (50_000_000 - 20_000_000 - preview.fee))
+  let silent ← attempt (a.previewSend { inputs with destination := "tsp1qqnonsense" })
+  check "send tab: no silent payment code from an account" (match silent with
+    | .error e => e == Real.silentPaymentUnsupportedText | .ok _ => false)
+  -- 3. Sign and continue: this phone's signature, the draft filed (BIP174 v0) and listed on top.
+  discard <| a.signAndDraft true inputs preview
+  let some drafted ← multisigAccount? a id | throw (IO.userError "account gone")
+  let some d := drafted.draft | throw (IO.userError "no draft")
+  let some screen := d.screen | throw (IO.userError s!"review: {d.reviewError}")
+  check "send tab: the draft reviews: pays the node, change back to the account"
     (screen.outputs.length == 2 && screen.outputs.any (fun o => !o.owned && o.address == dest && o.amount == 20_000_000) &&
-     screen.outputs.any (·.owned) && screen.inputTotal == 50_000_000 && screen.fee > 0)
-  check "multisig: no signature yet, this phone's is wanted" (screen.signatures == [(false, 0, 2)] &&
-    screen.progress.phoneUnsigned && !screen.progress.complete)
-  check "multisig: the shared text is BIP174 v0" (created.output.any (·.startsWith "cHNidP8B"))
-  -- 3. Sign with the phone, then with the other key in Lean, combine.
-  let mine ← a.signMultisigSpend id created.psbt
-  check "multisig: the phone's signature verifies" ((mine.screen.map (·.signatures)) == some [(false, 1, 2)])
-  let finalizeEarly ← attempt (a.broadcastMultisigSpend id mine.psbt)
+     screen.outputs.any (·.owned) && screen.inputTotal == 50_000_000 && screen.fee == preview.fee)
+  check "send tab: this phone's signature verifies" (screen.signatures == [(false, 1, 2)] && screen.progress.signedHere)
+  check "send tab: the shared text is BIP174 v0" (match PSBT.ofBase64 d.psbt with
+    | .ok p => p.base64V0.toOption == some d.psbt | .error _ => false)
+  let (sd, _) ← a.snapshot
+  check "send tab: the draft row on top, 1 of 2" ((sd.payments.head?.map (·.source)) == some (.draft "Shared" "1 of 2"))
+  let finalizeEarly ← attempt (a.broadcastDraft id)
   check "multisig: one signature cannot be finalized" (finalizeEarly matches .error _)
+  -- the other signer signs its copy in Lean; this phone combines it into the draft
   let record ← Real.record msA id
-  let unsigned ← match PSBT.ofBase64 created.psbt with
+  let unsigned ← match PSBT.ofBase64 d.psbt with
     | .ok p => pure p
     | .error _ => throw (IO.userError "psbt")
   let tip ← n.height
@@ -265,18 +276,23 @@ def multisigFlow (n : Node) (a : Backend) (msA : Real.MultisigApp) (mineAddr : S
     | .ok p => pure p
     | .error e => throw (IO.userError s!"other signer: {e.name}")
   let some theirText := theirs.base64V0.toOption | throw (IO.userError "v0")
-  let combined ← a.addMultisigPSBT id (some mine.psbt) theirText
-  check "multisig: combined, enough signatures verify" ((combined.screen.map (·.progress.complete)) == some true &&
-    (combined.screen.map (·.signatures)) == some [(false, 2, 2)])
+  a.adoptDraft id theirText
+  let some combined ← multisigAccount? a id | throw (IO.userError "account gone")
+  check "multisig: combined, enough signatures verify" (((combined.draft.bind (·.screen)).map (·.progress.complete)) == some true &&
+    ((combined.draft.bind (·.screen)).map (·.signatures)) == some [(false, 2, 2)])
   -- 4. Finalize and broadcast.
-  let txid ← a.broadcastMultisigSpend id combined.psbt
+  let txid ← a.broadcastDraft id
   let inMempool ← waitUntil 20_000 (do return (← n.mempool).contains txid)
   check "multisig: the node's mempool holds the spend" inMempool txid
   let some pending ← multisigAccount? a id | throw (IO.userError "account gone")
   let change := 50_000_000 - 20_000_000 - (screen.fee : Int)
   check "multisig: the change waits as a pending coin" (pending.balance == change &&
     pending.coins.any fun c => (c.line.splitOn "change 0 · pending").length > 1) s!"{pending.balance} vs {change}"
-  let again2 ← attempt (a.broadcastMultisigSpend id combined.psbt)
+  check "multisig: the draft retired, the spend in flight" (pending.draft.isNone && pending.inFlight == [txid])
+  let (sp, _) ← a.snapshot
+  check "send tab: the pending spend is one row named with the account" ((sp.payments.filter (·.item.txid == txid)).map
+    (fun r => (r.source, r.item.height, r.item.fee)) == [(.account "Shared", 0, some (screen.fee : Int))])
+  let again2 ← attempt (a.broadcastDraft id)
   check "multisig: a spent coin cannot be spent again" (again2 matches .error _)
   -- 5. Confirm.
   n.mine 1 mineAddr
@@ -293,7 +309,28 @@ def multisigFlow (n : Node) (a : Backend) (msA : Real.MultisigApp) (mineAddr : S
   let blockHash ← n.cli #["getblockhash", toString spendHeight]
   let blk ← n.json #["getblock", blockHash]
   check "multisig: the node's block holds the spend" ((blk.getObjValAs? (List String) "tx").toOption.any (·.contains txid))
-  return { id, balance := change, txid, firstAddress := address }
+  let (sc, _) ← a.snapshot
+  check "send tab: confirmed in place, one row" ((sc.payments.filter (·.item.txid == txid)).map (fun r => (r.source, r.item.height)) ==
+    [(.account "Shared", spendHeight)])
+  -- 6. The wallet pays the account: one row, a transfer.
+  let some to := (account.address 1).toOption | throw (IO.userError "address 1")
+  let tIn : SendInputs := { destination := to, amount := "1000000", network := .regtest }
+  let tp ← a.previewSend tIn
+  let moved := (← a.sendPayment tIn tp).txid
+  discard <| waitUntil 20_000 (do return (← n.mempool).contains moved)
+  n.mine 1 mineAddr
+  n.waitFilterIndex
+  let landed ← waitUntil 90_000 (do
+    a.syncNow
+    return ((← multisigAccount? a id).map (·.balance)) == some (change + 1_000_000))
+  check "transfer: the account received it" landed
+  let (st, _) ← a.snapshot
+  let rows := st.payments.filter (·.item.txid == moved)
+  check "transfer: one row, wallet to account" (rows.map (·.source) == [.transfer "Wallet" "Shared" 1_000_000])
+    s!"{repr (rows.map (·.source))}"
+  check "transfer: the row carries the wallet's spend" (rows.all fun r => r.accountID.isNone && r.item.spent > 0)
+  check "the headline sums the wallet and the account" (st.accountsBalance ≥ change + 1_000_000)
+  return { id, balance := change + 1_000_000, txid, firstAddress := address }
 
 /-- Pair a simulated Ledger (Settings → Signers), build the 2-of-2 of this phone and it and a 2-of-3 with
 another key, the Ledger and a recovery path (the paired Ledger registers each),
@@ -347,16 +384,22 @@ def ledgerFlow (n : Node) (a : Backend) (msA : Real.MultisigApp) (device : IO.Re
   let mut spends : Array (String × String) := #[]
   for id in ids do
     let dest ← n.wallet #["getnewaddress"]
-    let created ← a.createMultisigSpend id dest 10_000_000 2.0 false
-    let some s0 := created.screen | throw (IO.userError s!"review: {created.reviewError}")
+    -- the account page's spend, filed as the draft; the Ledger signs it, then the phone (the collection step)
+    a.createDraft id dest 10_000_000 2.0 false
+    let screenOf : IO MultisigScreen := do
+      let some info ← multisigAccount? a id | throw (IO.userError "account gone")
+      let some d := info.draft | throw (IO.userError "no draft")
+      let some sc := d.screen | throw (IO.userError s!"review: {d.reviewError}")
+      return sc
+    let s0 ← screenOf
     check s!"ledger {id}: the phone and the Ledger both still sign" (s0.progress.phoneUnsigned && s0.progress.ledgerUnsigned &&
       s0.progress.nextStep.startsWith "Add this phone's signature and the Ledger's")
-    let byLedger ← a.signMultisigSpendWithLedger true id created.psbt
-    check s!"ledger {id}: the Ledger's signature verifies" ((byLedger.screen.map (·.signatures)) == some [(false, 1, 2)] &&
-      (byLedger.screen.map (·.progress.ledgerUnsigned)) == some false)
-    let both ← a.signMultisigSpend id byLedger.psbt
-    check s!"ledger {id}: complete" ((both.screen.map (·.progress.complete)) == some true)
-    let txid ← a.broadcastMultisigSpend id both.psbt
+    a.signDraftWithLedger true id
+    let s1 ← screenOf
+    check s!"ledger {id}: the Ledger's signature verifies" (s1.signatures == [(false, 1, 2)] && !s1.progress.ledgerUnsigned)
+    a.signDraft id
+    check s!"ledger {id}: complete" (← screenOf).progress.complete
+    let txid ← a.broadcastDraft id
     spends := spends.push (id, txid)
   let inMempool ← waitUntil 20_000 (do
     let mp ← n.mempool
@@ -610,7 +653,8 @@ def flow (dir : String) (n : Node) : IO Unit := do
   -- 7d. A Ledger: paired 2-of-2 and a 2-of-3 with recovery, registered, addresses verified, both funded,
   -- each spend signed by the phone and the Ledger, broadcast and confirmed.
   let ledgerIDs ← ledgerFlow n a msA device mineAddr
-  -- 8. Export, and import into a fresh directory.
+  -- 8. Export, and import into a fresh directory (the wallet as exported: it paid the account in 7c).
+  let (sExported, _) ← a.snapshot
   let bundle ← a.exportBundle false
   check "exportBundle (watch-only)" ((bundle.splitOn "\"regtest\"").length > 1 && (bundle.splitOn "mnemonic").length == 1)
   check "exportBundle carries the multisig accounts, the Ledger's registrations with them" (match ImportBundle.decode bundle with
@@ -641,8 +685,8 @@ def flow (dir : String) (n : Node) : IO Unit := do
   let report ← bImp.importBundle .regtest dirB bundle
   say s!"  import report: {report.replace "\n" " | "}"
   let (sb, _) ← bImp.snapshot
-  check "importBundle reproduces the balance" (sb.balance == s7.balance && sb.utxoCount == s7.utxoCount)
-    s!"{sb.balance} vs {s7.balance}"
+  check "importBundle reproduces the balance" (sb.balance == sExported.balance && sb.utxoCount == sExported.utxoCount)
+    s!"{sb.balance} vs {sExported.balance}"
   check "import report: scanned and confirmed every claim" (report.startsWith "Scanned from block" &&
     (report.splitOn "Claimed but spent since: 0").length > 1)
   let restored := (← bImp.multisigOverview).accounts.find? (·.id == ms.id)
@@ -680,7 +724,7 @@ def flow (dir : String) (n : Node) : IO Unit := do
   let reopened ← c.openWallet .regtest dirA
   let (sc, _) ← c.snapshot
   check "openWallet from disk: same wallet, same balance and history" (match reopened with
-    | .opened _ => sc.balance == s7.balance && sc.history.length == s7.history.length | _ => false) s!"{sc.balance}"
+    | .opened _ => sc.balance == sExported.balance && sc.history.length == sExported.history.length | _ => false) s!"{sc.balance}"
   let words2 ← c.revealMnemonic
   check "revealMnemonic reads the same words back" (words2 == words)
   c.deleteWallet
@@ -718,7 +762,7 @@ def flow (dir : String) (n : Node) : IO Unit := do
     (fun f => field f "seedBearing" == "false")
   checkJournal "import.verified" ["scannedFromHeight", "scannedToHeight", "matchesBundle", "confirmedUTXOCount",
       "spentSinceBundleCount", "discoveredUTXOCount", "balance", "utxoCount", "historyCount", "nextScanHeight"]
-    (fun f => field f "matchesBundle" == "true" && field f "balance" == toString s7.balance && field f "spentSinceBundleCount" == "0")
+    (fun f => field f "matchesBundle" == "true" && field f "balance" == toString sExported.balance && field f "spentSinceBundleCount" == "0")
   check "journal: import events come from the importing backend"
     ((← journaled "import.started").all (·.1 == "B") && (← journaled "import.verified").all (·.1 == "B"))
   check "journal: no import.verificationWaiting (the import verified)" (← journaled "import.verificationWaiting").isEmpty
