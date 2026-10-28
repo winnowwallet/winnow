@@ -1,4 +1,5 @@
 import WinnowApp.Multisig
+import WinnowApp.Backup
 import WinnowApp.Payments
 
 /-! HomeView.swift and BeginnerHomeView.swift: the balance, sync and activity; HistoryRow,
@@ -196,7 +197,7 @@ def beginnerSections (m : Model) : List H :=
   , .section "" "" [.row [.identified "receiveButton" (.button "Receive" .plain (some .openReceive)),
                           .identified "openSendButton" (.button "Send" .primary (some .openSend))]]
   , activitySection m
-  , .section "" "" [.button "Back up wallet" .plain (some (.home .openBackup)), caption "Backup file and recovery words"] ]
+  , beginnerBackupSection m ]
 
 /-- `ChainCheckStatus`: when a scan last reached the tip, and whether iOS may check in the background
 (background checks are requests; iOS decides when they run). -/

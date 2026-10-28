@@ -25,7 +25,10 @@ inductive Sheet where
   | send
   | receive
   | importWallet
-  | mnemonic
+  /-- CloudRestoreView (onboarding's "Restore your iCloud wallet"). -/
+  | cloudRestore
+  /-- CloudBackupView (Advanced: Backup → iCloud backup). -/
+  | cloudBackup
   | feeBump
   | addPerson
   | savedRecipients
@@ -100,15 +103,17 @@ inductive PasteTarget where
 
 /-! ## Area state -/
 
+/-- OnboardingView, ImportBundleView and CloudRestoreView (no phrase checklist: creation finishes onboarding
+by itself, upstream 4228c6b). -/
 structure Onboarding where
   busy : Bool := false
   error : Option String := none
-  /-- The recovery phrase being backed up (cleared on background). -/
-  words : List String := []
-  writtenDown : Bool := false
   importText : String := ""
   importReport : Option String := none
-  phraseCopied : Bool := false
+  /-- CloudRestoreView: a restore running, done, and what it said. -/
+  restoring : Bool := false
+  restored : Bool := false
+  restoreError : Option String := none
   deriving Repr, Inhabited
 
 /-- ReceiveAddressLabelEditor, for the receive screen and a payment's labelled outputs. -/
@@ -408,8 +413,6 @@ structure CollectForm where
 /-- The wallet's answer at boot. -/
 inductive BootResult where
   | opened (walletID : String)
-  /-- A wallet created here whose recovery words were never confirmed written down: onboarding again. -/
-  | backupPending (walletID : String)
   | missing
   | damaged (message : String)
   deriving Repr, Inhabited
@@ -471,6 +474,8 @@ structure Model where
   generation : Nat := 0
   /-- `UIApplication.shared.backgroundRefreshStatus == .available` (the shell's `bgtask.refreshStatus`). -/
   backgroundRefreshAvailable : Bool := true
+  /-- `cloudBackups` as the backend last reported it. -/
+  cloud : CloudStatus := {}
   /-- `SensitivePresentationEpoch`: bumped whenever a sensitive presentation opens, resets or closes,
   and on background. A sensitive answer (phrase, export) counts only for its epoch. -/
   epoch : Nat := 0
@@ -499,8 +504,14 @@ inductive Host where
   | launched (forcedNetwork : Option Network) (tab : Nat)
   | settingsLoaded (s : Settings)
   | booted (gen : Nat) (r : BootResult)
-  | created (gen : Nat) (words : List String)
-  | imported (gen : Nat) (report : String)
+  /-- The wallet is created and onboarding finished (its iCloud backup prepared when iCloud allows). -/
+  | created (gen : Nat) (walletID : String)
+  | imported (gen : Nat) (walletID : String) (report : String)
+  /-- The iCloud backup's status changed. -/
+  | cloud (s : CloudStatus)
+  /-- A restore from iCloud is done: the wallet, the verification (none: no peer yet), the restored display
+  name and Advanced switch. -/
+  | cloudRestored (gen : Nat) (walletID : String) (matchesBundle : Option Bool) (context : Option (String × Bool))
   | snapshot (gen : Nat) (s : Status) (p : SyncPhase)
   | records (gen : Nat) (r : Records)
   | updated (gen : Nat) (d : Done) (r : Records)
@@ -731,15 +742,21 @@ inductive MultisigMsg where
   | verifyAddress
   deriving Inhabited
 
+/-- CloudBackupView and CloudRestoreView. -/
+inductive CloudMsg where
+  | openBackup
+  | setAutomatic (b : Bool)
+  | openRestore
+  | restore (id : String)
+  | checkAgain
+  deriving Inhabited
+
 inductive Msg where
   | createWallet
-  | resumeBackup
   | openImport
   | setImportText (s : String)
   | pasteImport
   | importWallet
-  | setWrittenDown (b : Bool)
-  | copyBackupPhrase
   | finishOnboarding
   | closeSheet
   | setNetwork (i : Nat)
@@ -765,6 +782,7 @@ inductive Msg where
   | people (m : PeopleMsg)
   | multisig (m : MultisigMsg)
   | signer (m : SignerMsg)
+  | cloud (m : CloudMsg)
   | host (h : Host)
   deriving Inhabited
 
@@ -778,7 +796,6 @@ inductive Cmd where
   /-- `boot()` when `isBoot` (launch, Retry), `switchNetwork` otherwise: only a boot journals `app.booted`. -/
   | openWallet (gen : Nat) (network : Network) (isBoot : Bool)
   | createWallet (gen : Nat) (network : Network)
-  | resumeBackup (gen : Nat)
   | importWallet (gen : Nat) (network : Network) (json : String)
   | finishOnboarding (gen : Nat)
   | refresh (gen : Nat)
@@ -853,6 +870,15 @@ inductive Cmd where
   | journal (name : String) (fields : List (String × String))
   /-- Ask the shell whether Background App Refresh is on (`bgtask.refreshStatus`). -/
   | backgroundRefreshStatus
+  /-- `discoverCloudBackups()`. -/
+  | discoverCloud
+  | setAutomaticCloud (enabled : Bool)
+  /-- `restoreCloudBackup(_:)` (the backend authenticates). -/
+  | restoreCloud (gen : Nat) (network : Network) (id : String)
+  /-- `cloudBackups.suspend()` (CloudRestoreView's `cancel()`). -/
+  | suspendCloud
+  /-- The scene phase, for the iCloud side (a foreground session may prepare once; the background suspends). -/
+  | cloudScene (active : Bool)
   /-- `BackgroundSyncScheduler.schedule()`: one refresh and one processing request, each replacing its own. -/
   | scheduleBackgroundTasks
   /-- Run the launched task `id` as one bounded background check (`BackgroundSyncRun`), then complete it. -/

@@ -19,7 +19,7 @@ def Model.background (m : Model) : Model × List Cmd :=
   let m0 := m.nextGeneration
   let m1 := { m0 with
     active := false
-    onboarding := { m.onboarding with words := [], importText := "", busy := false }
+    onboarding := { m.onboarding with importText := "", busy := false, restoring := false }
     reveal := {}
     exportState := {}
     -- the collection step's answers in flight no longer count
@@ -28,7 +28,7 @@ def Model.background (m : Model) : Model × List Cmd :=
     | some i => m1.closeFrom i
     | none => (m1, [])
   -- `BackgroundSyncScheduler.shared.schedule()` on every trip to the background
-  (m2, [.stopNetworking, .stopWatchingAddress, .scheduleBackgroundTasks] ++ m.discardExport ++ cs)
+  (m2, [.stopNetworking, .stopWatchingAddress, .scheduleBackgroundTasks, .cloudScene false] ++ m.discardExport ++ cs)
 
 def onHost (h : Host) (m : Model) : Model × List Cmd :=
   let current (g : Nat) := g == m.generation
@@ -49,18 +49,34 @@ def onHost (h : Host) (m : Model) : Model × List Cmd :=
     let m := { m with pendingBackgroundTask := none }
     match r with
     | .opened id => ({ m with stage := .ready, walletID := some id }, [.refresh g] ++ start ++ pending)
-    | .backupPending id =>
-      ({ m with stage := .onboarding, walletID := some id, onboarding := { m.onboarding with busy := true, error := none } },
-       [.refresh g] ++ start ++ [.resumeBackup g] ++ pending)
-    -- activation builds the stack whatever the stage, so a new wallet is dated at a synced tip
-    | .missing => ({ m with stage := .onboarding, walletID := none }, start ++ pending)
+    -- activation builds the stack whatever the stage, so a new wallet is dated at a synced tip; onboarding
+    -- looks for this network's iCloud backups (`.task(id: model.network)`)
+    | .missing => ({ m with stage := .onboarding, walletID := none }, start ++ [.discoverCloud] ++ pending)
     | .damaged msg => ({ m with stage := .storageDamaged msg }, pending)
-  | .created g words =>
+  | .created g id =>
+    -- creation finishes onboarding by itself: no phrase checklist, and neither iCloud nor a manual backup
+    -- decides whether the wallet can be used
     if !current g then (m, []) else
-    ({ m with onboarding := { m.onboarding with busy := false, words, writtenDown := false, error := none } }.present .mnemonic, [])
-  | .imported g report =>
+    ({ m with stage := .ready, walletID := some id, sheets := [], onboarding := ({} : Onboarding) },
+     [.refresh g] ++ (if m.active then [.startNetworking g m.settings] else []))
+  | .imported g id report =>
     if !current g then (m, []) else
-    ({ m with onboarding := { m.onboarding with busy := false, importReport := some report, error := none } }, [])
+    ({ m with walletID := some id, onboarding := { m.onboarding with busy := false, importReport := some report, error := none } }, [])
+  | .cloud st => ({ m with cloud := st }, [])
+  | .cloudRestored g id verified context =>
+    if !current g then (m, []) else
+    let note := match verified with
+      | some true => none
+      | some false => some "Some payments changed since this backup. Winnow updated the wallet from the network; review the restored balances."
+      | none => some "Restored. Network verification will resume when peers are reachable."
+    let m := { m with walletID := some id,
+                      onboarding := { m.onboarding with restoring := false, restored := true, restoreError := note } }
+    match context with
+    | some (name, advanced) =>
+      -- `setOwnDisplayName`, `setAdvancedMode`: the restored context's two settings
+      let s := { m.settings with ownDisplayName := name, advancedMode := advanced }
+      ({ m with settings := s }, [.saveSettings s])
+    | none => (m, [])
   | .snapshot g s p =>
     if !current g then (m, []) else
     let wasSyncing := m.status.syncing
@@ -199,9 +215,10 @@ def onHost (h : Host) (m : Model) : Model × List Cmd :=
     if active then
       let m := { m with active := true }
       let resume := if m.stage == .ready then [.startNetworking m.generation m.settings, .refresh m.generation]
+        else if m.stage == .onboarding && m.walletID.isNone then [.startNetworking m.generation m.settings, .discoverCloud]
         else if m.stage == .onboarding then [.startNetworking m.generation m.settings] else []
       let window := if m.hasSheet .receive && !m.receive.address.isEmpty then [.watchAddress m.generation m.receive.address] else []
-      (m, [phase] ++ resume ++ window ++ [.backgroundRefreshStatus])
+      (m, [phase, .cloudScene true] ++ resume ++ window ++ [.backgroundRefreshStatus])
     else
       let (m, cs) := m.background
       (m, phase :: cs)
@@ -225,24 +242,17 @@ def step (msg : Msg) (m : Model) : Model × List Cmd :=
   match msg with
   | .createWallet =>
     ({ m with onboarding := { m.onboarding with busy := true, error := none } }, [.createWallet g m.settings.network])
-  | .resumeBackup =>
-    ({ m with onboarding := { m.onboarding with busy := true, error := none } }, [.resumeBackup g])
   | .openImport => ({ m with onboarding := { m.onboarding with importReport := none, error := none } }.present .importWallet, [])
   | .setImportText s => ({ m with onboarding := { m.onboarding with importText := s } }, [])
   | .pasteImport => (m, [.paste .importBundle])
   | .importWallet =>
     ({ m with onboarding := { m.onboarding with busy := true, error := none } },
      [.importWallet g m.settings.network m.onboarding.importText])
-  | .setWrittenDown b => ({ m with onboarding := { m.onboarding with writtenDown := b } }, [])
-  | .copyBackupPhrase =>
-    ({ m with onboarding := { m.onboarding with phraseCopied := true } }, [.copy (" ".intercalate m.onboarding.words) .recoveryPhrase])
   | .finishOnboarding =>
-    if !m.onboarding.words.isEmpty && !m.onboarding.writtenDown then (m, []) else
+    if m.walletID.isNone then (m, []) else
     ({ m with stage := .ready, sheets := [], onboarding := ({} : Onboarding) },
      [.finishOnboarding g, .refresh g, .startNetworking g m.settings])
-  | .closeSheet =>
-    -- the backup sheet only closes through Done
-    if m.topSheet == some .mnemonic then (m, []) else m.closeTop
+  | .closeSheet => m.closeTop
   | .setNetwork i =>
     match networks[i]? with
     | some net => m.switchNetwork net
@@ -281,6 +291,7 @@ def step (msg : Msg) (m : Model) : Model × List Cmd :=
   | .people p => stepPeople p m
   | .multisig mm => stepMultisig mm m
   | .signer sm => stepSigner sm m
+  | .cloud cm => stepCloud cm m
   | .host h => onHost h m
 
 /-- The shell's system events: background tasks launched and expired, scene phase as `scenePhaseChanged` reads it (`active` activates,

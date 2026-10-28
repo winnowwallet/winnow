@@ -60,18 +60,13 @@ static const NSInteger WLRecoveryBlocks = 144;
     return self.app;
 }
 
-/// Creates the wallet and confirms its words were written down; the home screen with its balance.
+/// Creates the wallet (no phrase checklist since upstream 4228c6b: creation opens the wallet); the home
+/// screen with its balance.
 - (void)createWallet:(XCUIApplication *)app {
     XCTAssertTrue([WLElement(app, @"createWalletButton") waitForExistenceWithTimeout:60], @"onboarding did not open");
     WLShot(self, app, @"01-onboarding");
     WLTap(self, app, @"createWalletButton");
-    XCUIElement *written = WLElement(app, @"writtenDownToggle");
-    XCTAssertTrue([written waitForExistenceWithTimeout:60], @"creation did not show the recovery words");
-    WLShot(self, app, @"02-backup-words");
-    XCTAssertTrue(WLScrollTo(app, written));
-    [written tap];
-    WLTap(self, app, @"backupDoneButton");
-    XCTAssertTrue([WLElement(app, @"receiveButton") waitForExistenceWithTimeout:30], @"the wallet did not open");
+    XCTAssertTrue([WLElement(app, @"receiveButton") waitForExistenceWithTimeout:60], @"the wallet did not open");
     XCTAssertTrue([WLElement(app, @"balanceText") waitForExistenceWithTimeout:30]);
 }
 

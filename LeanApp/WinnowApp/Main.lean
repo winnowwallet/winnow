@@ -101,6 +101,15 @@ def authenticated (fx : Effects Host) (gen : Nat) (ctx reason : String) (act : I
       let cancelled := (err.toLower.splitOn "cancel").length > 1
       fx.post (.failed gen (if cancelled then ctx ++ ".cancelled" else ctx) err)
 
+/-- `authenticateSensitiveAction(reason:)` for the backend's own flows (the iCloud backup's preparation
+and restore): throws when the owner declines or cancels. Skipped in automated Debug runs, as `authenticated`. -/
+def authenticateNow (fx : Effects Host) (reason : String) : IO Unit := do
+  if let some m ← e2eRef.get then
+    if !m.requireDeviceAuthentication then return
+  let auth ← IO.wait (← fx.ask "auth" (Json.mkObj [("reason", Json.str reason)]))
+  unless (auth.getObjValAs? Bool "ok").toOption.getD false do
+    throw (IO.userError ((auth.getObjValAs? String "error").toOption.getD "Device authentication failed."))
+
 def clipPolicyArgs (text : String) : ClipPolicy → Json
   -- the shell's `clipboard.set` takes `text`; the policy rides along for a shell that honours it
   | .recoveryPhrase => Json.mkObj [("text", Json.str text), ("localOnly", Json.bool true), ("expiresIn", toJson (120 : Nat))]
@@ -140,7 +149,11 @@ def chooseBackend (fx : Effects Host) (mode : Option E2E.Mode := none) : IO Unit
           | .error _ => pure Real.noLedger
         | .error _ => pure Real.noLedger
       | none => pure (Real.openLedger fx.ask)
-    backendRef.set (← Backend.real deps ledger)
+    -- automatic iCloud backup through the shell's CloudKit and iCloud Keychain; never in test mode
+    let (b, _, _) ← Backend.realWithCloud deps ledger (Real.shellCloudStore fx.ask) (Real.shellCloudKeys fx.ask)
+      (allows := mode.isNone) (authenticate := authenticateNow fx)
+    b.observeCloud fun st => fx.post (.cloud st)
+    backendRef.set b
 
 def perform (c : Cmd) (fx : Effects Host) : IO Unit := do
   let b ← backendRef.get
@@ -198,6 +211,7 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit := do
       fx.post (.settingsLoaded settings)
   | .saveSettings s => discard <| IO.asTask do
       IO.FS.writeFile (← settingsPath) (toJson s).pretty
+      b.updateSettings s
   | .openWallet g n isBoot => background fx g "open" do
       let dir ← walletDir n
       IO.FS.createDirAll dir
@@ -206,18 +220,15 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit := do
         -- `boot()`: a resumed backup, then the stage it lands on (a damaged store journals nothing)
         match r with
         | .opened id => journal "app.booted" [("stage", "ready"), ("walletID", id)]
-        | .backupPending id =>
-          journal "backup.pendingResumed" [("walletID", id)]
-          journal "app.booted" [("stage", "onboarding"), ("walletID", id)]
         | .missing => journal "app.booted" [("stage", "onboarding"), ("walletID", "")]
         | .damaged _ => pure ()
       return .booted g r
-  | .createWallet g n => authenticated fx g "create" "Create and reveal a new wallet recovery phrase" do
+  | .createWallet g n => authenticated fx g "create" "Create and protect your wallet" do
       return .created g (← b.createWallet n (← walletDir n))
-  | .resumeBackup g => authenticated fx g "create" "Resume this wallet's recovery-phrase backup" do
-      return .created g (← b.pendingBackupWords)
   | .importWallet g n json =>
-    let act : IO Host := do return .imported g (← b.importBundle n (← walletDir n) json)
+    let act : IO Host := do
+      let (id, report) ← b.importBundle n (← walletDir n) json
+      return .imported g id report
     -- a bundle carrying recovery words is imported only after device authentication, as AppModel
     let seeded := match Json.parse json with
       | .ok j => match j.getObjVal? "mnemonic" with | .ok .null | .error _ => false | .ok _ => true
@@ -231,6 +242,8 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit := do
         return .snapshot g s p
       background fx g "refresh" do return .records g (← b.records)
       background fx g "multisigOverview" do return .multisig g (← b.multisigOverview)
+      -- `refresh()` ends by scheduling the iCloud backup's update (and a preparation when due)
+      discard <| IO.asTask (try b.cloudTick catch _ => pure ())
   | .syncNow g => background fx g "sync" do
       b.syncNow
       let (s, p) ← b.snapshot
@@ -269,6 +282,7 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit := do
             let key := reprStr (st, p)
             if key != last then
               last := key
+              try b.cloudTick catch _ => pure ()
               trace s!"watcher {g} posts balance {st.balance} peers {st.peerCount} tip {st.tipHeight} scan {st.nextScanHeight} error {st.lastSyncError}"
               fx.post (.snapshot g st p)
             -- `refresh()` also mirrors `multisigAccounts`: what the sync credited reaches the screens
@@ -407,6 +421,13 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit := do
       b.abandonSpend id txid
       return .spendHandled g id txid
   | .journal name fields => journal name fields
+  | .discoverCloud => discard <| IO.asTask (try b.discoverCloudBackups catch _ => pure ())
+  | .setAutomaticCloud enabled => discard <| IO.asTask (try b.setAutomaticCloudBackup enabled catch _ => pure ())
+  | .restoreCloud g n id => background fx g "cloudRestore" do
+      let (walletID, verified, context) ← b.restoreCloudBackup n (← walletDir n) id
+      return .cloudRestored g walletID verified context
+  | .suspendCloud => discard <| IO.asTask b.suspendCloud
+  | .cloudScene active => discard <| IO.asTask (try b.cloudScene active catch _ => pure ())
   | .scheduleBackgroundTasks => discard <| IO.asTask do
       -- replacing our own requests keeps one of each pending; a refused request (Background App Refresh
       -- off, or the simulator) changes nothing: Settings shows when the chain was last checked

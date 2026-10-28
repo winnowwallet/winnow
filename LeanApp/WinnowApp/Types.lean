@@ -174,6 +174,25 @@ structure Status where
   lastCheckedAgo : Option String := none
   deriving Repr, Inhabited
 
+/-- One saved iCloud backup of this network (`ICloudBackupSummary`), its date as the screens show it. -/
+structure CloudBackupInfo where
+  id : String
+  savedAtText : String
+  deriving Repr, Inhabited, BEq
+
+/-- `CloudBackupController` as the screens read it (`automaticEnabled`, `enabled`, `statusTitle`,
+`lastSaved`, `message`, `busy`, `available`) and AppModel's `cloudRestoreNotice`. -/
+structure CloudStatus where
+  automaticEnabled : Bool := true
+  enabled : Bool := false
+  statusTitle : String := "Not backed up"
+  lastSavedText : Option String := none
+  message : Option String := none
+  busy : Bool := false
+  available : List CloudBackupInfo := []
+  restoreNotice : Option String := none
+  deriving Repr, Inhabited, BEq
+
 /-- AppModel's `SyncPhase`. -/
 inductive SyncPhase where
   | idle

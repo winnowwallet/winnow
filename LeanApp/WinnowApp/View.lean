@@ -10,23 +10,6 @@ open ElmLean
 
 /-! ## Onboarding -/
 
-def mnemonicSheet (m : Model) (inner : List H) : H :=
-  let words := m.onboarding.words
-  .sheet "Wallet backup" none
-    ([ body s!"Write these {words.length} words down, in order, and keep them offline. These words protect your signing keys. Keep a backup file too: Winnow needs both to restore your wallet."
-     , wordGrid words m.captured
-     , .button (if m.onboarding.phraseCopied then "Copied for 2 minutes" else "Copy recovery phrase") .plain (some .copyBackupPhrase)
-     , caption "Copying is less private than paper. The clipboard item stays on this device and expires after two minutes."
-     , .divider ] ++
-     -- shown only while there is sync progress to report (`model.syncStatusText`)
-     (match syncStatusText m.phase with
-      | some progress =>
-        [.section "Connecting to Bitcoin" "You can finish writing down the words while Winnow connects." [.progress progress]]
-      | none => []) ++
-     [ .identified "writtenDownToggle" (.toggle "I have written the words down" m.onboarding.writtenDown Msg.setWrittenDown)
-     , .identified "backupDoneButton"
-         (.button "Done" .primary (if m.onboarding.writtenDown then some .finishOnboarding else none)) ] ++ inner)
-
 def importSheet (m : Model) (inner : List H) : H :=
   .sheet "Import wallet" (some .closeSheet)
     ([ closeRow "Close"
@@ -34,9 +17,11 @@ def importSheet (m : Model) (inner : List H) : H :=
      , .button "Paste from clipboard" .plain (some .pasteImport)
      , caption "Use the file saved from Back up wallet. Keep your recovery words too. Backups from other wallets may not include every coin type." ] ++
      (match m.onboarding.importReport with
-      | some r => [.section "Verification report" "" [body r], .button "Continue" .primary (some .finishOnboarding)]
-      | none => [.button "Import and verify" .primary
-                  (if m.onboarding.busy || m.onboarding.importText.trimAscii.isEmpty then none else some .importWallet)]) ++
+      | some r => [.identified "importReportSection" (.section "Verification report" "" [body r]),
+                   .identified "importContinueButton" (.button "Continue" .primary (some .finishOnboarding))]
+      | none => [.identified "importVerifyButton" (.button "Import and verify" .primary
+                  (if m.onboarding.busy || m.onboarding.importText.trimAscii.isEmpty then none else some .importWallet))]) ++
+     (if m.onboarding.busy then [.progress "Importing and verifying…"] else []) ++
      errorRows m.onboarding.error ++ inner)
 
 /-! ## Presentations -/
@@ -45,7 +30,8 @@ def sheetView (m : Model) (s : Sheet) (inner : List H) : H :=
   match s with
   | .receive => receiveSheet m inner
   | .send => sendSheet m inner
-  | .mnemonic => mnemonicSheet m inner
+  | .cloudRestore => cloudRestoreSheet m inner
+  | .cloudBackup => cloudBackupSheet m inner
   | .importWallet => importSheet m inner
   | .feeBump => feeBumpSheet m inner
   | .addPerson => addPersonSheet m inner
@@ -112,21 +98,34 @@ def overlays (m : Model) : List H := nestSheets m m.sheets
 
 /-! ## Screens -/
 
+/-- OnboardingView: create or restore a wallet without a phrase checklist. Looking for iCloud backups is
+automatic, and neither it nor the backup blocks using the wallet. -/
 def onboardingView (m : Model) : H :=
+  let o := m.onboarding
+  let c := m.cloud
+  let act (msg : Msg) : Option Msg := if o.busy then none else some msg
   .screen "Winnow" none
     ([ .list
-        [ .section "" "" [body "Your bitcoin, on your phone. Winnow connects directly to the Bitcoin network. Keep the app open while it syncs."]
-        , .section "" "First, write down your recovery words. Then save a backup file from Back up wallet on the main screen."
-            (match m.walletID with
-             | some _ =>
-               [ .button "Continue backup" .primary (if m.onboarding.busy then none else some .resumeBackup)
-               , caption "This wallet's recovery words were never confirmed written down." ]
-             | none =>
-               [ .identified "createWalletButton"
-                   (.button "Create new wallet" .primary (if m.onboarding.busy then none else some .createWallet))
-               , .button "Restore from backup" .plain (some .openImport) ])
-        , .section "" "" [networkPicker m]
-        , .section "" "" (errorRows m.onboarding.error) ] ] ++ overlays m)
+        ([ .section "" "" [caption "Your bitcoin, on your phone. Winnow connects directly to Bitcoin and automatically backs up your wallet with iCloud when available."]
+         , .section "" "No iCloud? Your wallet still works. You can save a manual backup instead. Recovery words and backup controls are in Advanced."
+             (match m.walletID with
+              | some _ =>
+                [ .identified "resumeImportedWalletButton" (.button "Continue with your wallet" .primary (act .finishOnboarding)) ]
+              | none =>
+                (if c.available.isEmpty then [] else
+                  [ .identified "restoreCloudBackupButton" (.button "Restore your iCloud wallet" .primary (act (.cloud .openRestore)))
+                  , caption s!"{c.available.length} saved backup(s) found." ]) ++
+                [ .identified "createWalletButton" (.button "Create new wallet" .primary (act .createWallet))
+                , .identified "importWalletButton" (.button "Restore from a file" .plain (act .openImport)) ]) ] ++
+         (if c.busy then [.section "" "" [.progress "Checking iCloud…"]] else []) ++
+         (match c.message with | some t => [.section "" "" [caption t]] | none => []) ++
+         (if m.settings.showsNetworkPicker then
+           [.section "" "Each network has its own wallet. Signet uses test coins with no value."
+             [.identified "onboardingNetworkPicker"
+               (if o.busy then .labeled "Network" (if m.settings.network == .mainnet then "Mainnet" else "Signet") else networkPicker m)]]
+          else []) ++
+         (if o.busy then [.section "" "" [.progress "Creating your wallet…"]] else []) ++
+         (match o.error with | some e => [.section "" "" (errorRows (some e))] | none => [])) ] ++ overlays m)
 
 /-- The screen pushed on top of the current stack (any tab's), if any. -/
 def routedScreen (m : Model) : Option H :=

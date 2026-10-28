@@ -924,7 +924,7 @@ def Phone.importOffline (p : Phone) (json : String) : IO String := do
       if (← p.env.get).stack.isSome then
         p.backend.stopNetworking
         return
-  p.backend.importBundle .signet dir.toString json
+  return (← p.backend.importBundle .signet dir.toString json).2
 
 /-- `configureSigners()`: the file read again. -/
 def Phone.reloadSigners (p : Phone) : IO Unit := do p.multisig.signers.configure signet (some (← p.dir))

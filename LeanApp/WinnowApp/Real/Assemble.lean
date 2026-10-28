@@ -43,10 +43,13 @@ def Env.new (deps : Deps) : IO Env := do
 def Env.backend (env : Env) : Backend :=
   { Backend.pending with
     openWallet := fun n dir => openWallet env n dir
-    createWallet := fun n dir => createWallet env n dir
+    createWallet := fun n dir => do
+      let (id, _) ← createWallet env n dir
+      finishOnboarding env
+      return id
     importBundle := fun n dir json => importBundle env n dir json
     finishOnboarding := finishOnboarding env
-    pendingBackupWords := pendingBackupWords env
+    updateSettings := fun s => env.modify fun c => { c with settings := some s }
     snapshot := snapshot env
     records := pure {}
     receiveAddress := fun fresh => receiveAddress env fresh

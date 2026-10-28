@@ -30,6 +30,11 @@ def errorRows : Option String → List H
 def Model.fail (m : Model) (context message : String) : Model :=
   -- a cancelled authentication prompt: revealing the phrase treats it as a decision (no error)
   if context == "create.cancelled" || context == "import.cancelled" then { m with onboarding := { m.onboarding with busy := false, error := none } } else
+  -- a declined prompt or a cancelled restore says nothing (`catch is CancellationError { }`)
+  if context == "cloudRestore.cancelled" then { m with onboarding := { m.onboarding with restoring := false } } else
+  if context == "cloudRestore" then
+    let shown := if message == "Winnow.CancellationError" then none else some message
+    { m with onboarding := { m.onboarding with restoring := false, restoreError := shown } } else
   if context == "reveal.cancelled" then { m with reveal := { m.reveal with revealing := false, error := none } } else
   let cancelled := context.endsWith ".cancelled"
   let context := if cancelled then (context.dropEnd 10).copy else context
@@ -83,7 +88,9 @@ def Model.forgetSheet (m : Model) : Sheet → Model × List Cmd
   | .savedRecipients => ({ m with recipientsError := none }, [])
   | .importWallet => ({ m with onboarding := { m.onboarding with importText := "", importReport := none } }, [])
   | .signerPicker => ({ m with multisigBuild := { m.multisigBuild with pickInto := none, pasteError := none } }, [])
-  | .mnemonic | .readSide => (m, [])
+  -- CloudRestoreView's `onDisappear`: `cancel()` (the controller's operations end)
+  | .cloudRestore => ({ m with onboarding := { m.onboarding with restoring := false, restoreError := none } }, [.suspendCloud])
+  | .cloudBackup | .readSide => (m, [])
 
 /-- Close the sheets from index `i` up (an outer sheet takes the ones it presented with it). -/
 def Model.closeFrom (m : Model) (i : Nat) : Model × List Cmd :=
@@ -103,9 +110,9 @@ def Model.closeTop (m : Model) : Model × List Cmd :=
   if m.sheets.isEmpty then (m, []) else m.closeFrom (m.sheets.length - 1)
 
 /-- Sheets that never survive a background transition (BackupSection, ExportBundleView,
-RevealPhraseView, the onboarding phrase and import sheets). -/
+RevealPhraseView, the onboarding import sheet). -/
 def Sheet.isSensitive : Sheet → Bool
-  | .mnemonic | .importWallet | .exportBundle | .revealPhrase => true
+  | .importWallet | .exportBundle | .revealPhrase => true
   | _ => false
 
 /-! ## View pieces (Components.swift) -/

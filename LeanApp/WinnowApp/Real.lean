@@ -8,6 +8,8 @@ import WinnowApp.Real.Shell
 import WinnowApp.Real.Assemble
 import WinnowApp.Real.Full
 import WinnowApp.Real.MultisigStore
+import WinnowApp.Real.CloudBackup
+import WinnowApp.Real.CloudApp
 
 /-! # `Backend.real` (aggregator): AppModel's wallet and network logic over the Lean WalletCore
 
@@ -23,6 +25,8 @@ import WinnowApp.Real.MultisigStore
 | `Real/Assemble.lean` | the core fields of the `Backend` record (`Backend.coreWithEnv`) |
 | `Real/Records*.lean` | people and labels (PeopleStore, ReceiveAddressLabelStore, AppModel) |
 | `Real/Full.lean` | `Backend.real`: both halves joined through `Hooks` |
+| `Real/CloudBackup.lean` | the iCloud backup's controller, CloudKit store and iCloud Keychain keys (CloudBackupController.swift, ICloudBackupStore.swift) |
+| `Real/CloudApp.lean` | AppModel's iCloud flows: preparation, updates, restore; `Backend.realWithCloud` |
 
 Differences from AppModel, all forced by the Lean app's shape:
 

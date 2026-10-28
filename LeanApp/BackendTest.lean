@@ -484,19 +484,18 @@ def flow (dir : String) (n : Node) : IO Unit := do
   let boot ← a.openWallet .regtest dirA
   check "openWallet on an empty directory is missing" (boot matches .missing)
   a.startNetworking settings
-  let words ← a.createWallet .regtest dirA
-  check "createWallet returns 12 recovery words" (words.length == 12) s!"{words.length} words"
+  let walletID ← a.createWallet .regtest dirA
+  let words ← a.revealMnemonic
+  check "createWallet stores a wallet with 12 recovery words" (words.length == 12) s!"{words.length} words"
   let walletFile ← (System.FilePath.mk dirA / "wallet.json").pathExists
   check "wallet.json written, secret in the key store" (walletFile && (← keysA.get).size == 1)
-  let pendingBoot ← a.openWallet .regtest dirA
-  check "until the backup is confirmed the wallet boots as backup-pending" (pendingBoot matches .backupPending _)
-  let again ← a.pendingBackupWords
-  check "pendingBackupWords returns the same words" (again == words)
-  a.finishOnboarding
+  -- upstream 4228c6b: no phrase checklist; a new wallet, and one an earlier build left unfinished, open ready
   let readyBoot ← a.openWallet .regtest dirA
-  check "after finishOnboarding the wallet boots as opened" (readyBoot matches .opened _)
-  let gone ← (try discard a.pendingBackupWords; pure false catch _ => pure true)
-  check "pendingBackupWords refuses once the backup is confirmed" gone
+  check "a created wallet opens ready, without a phrase checklist" (readyBoot matches .opened _)
+  let legacyFlag := System.FilePath.mk dirA / s!"backup-pending.{walletID}"
+  IO.FS.writeFile legacyFlag ""
+  let legacyBoot ← a.openWallet .regtest dirA
+  check "a legacy unfinished checklist opens ready and is cleared" ((legacyBoot matches .opened _) && !(← legacyFlag.pathExists))
   a.startNetworking settings
   -- 2. Sync to the tip.
   let tip ← n.height
@@ -682,7 +681,7 @@ def flow (dir : String) (n : Node) : IO Unit := do
   check "importBundle refuses a bundle with accounts, with unsupportedWalletData's text"
     (match refused with | .error e => toString e == WalletError.unsupportedWalletData.description | _ => false)
     (match refused with | .error e => toString e | .ok _ => "imported")
-  let report ← bImp.importBundle .regtest dirB bundle
+  let (_, report) ← bImp.importBundle .regtest dirB bundle
   say s!"  import report: {report.replace "\n" " | "}"
   let (sb, _) ← bImp.snapshot
   check "importBundle reproduces the balance" (sb.balance == sExported.balance && sb.utxoCount == sExported.utxoCount)
@@ -735,10 +734,9 @@ def flow (dir : String) (n : Node) : IO Unit := do
   check "after deleteWallet the directory opens as missing" (afterDelete matches .missing)
   check "no loop thread in the reopened backend" ((← envC.diagnostics).liveLoops == 0)
   -- 11. The journal: the events AppModel writes, with its field names and value formats.
-  let walletID := match pendingBoot with | .backupPending id => id | _ => ""
   checkJournal "wallet.created" ["walletID", "height", "headersContinueInBackground"]
     (fun f => field f "walletID" == walletID && (field f "height").toNat?.isSome && field f "headersContinueInBackground" == "true")
-  checkJournal "backup.completed" ["walletID"] (field · "walletID" == walletID)
+  checkJournal "import.onboardingCompleted" ["walletID"] (field · "walletID" == walletID) "creation finishes onboarding by itself"
   checkJournal "wallet.ready" ["walletID", "balance", "utxoCount", "historyCount", "nextScanHeight"]
     (fun f => field f "walletID" == walletID && field f "balance" == "0")
   let receives ← journaled "address.receive"

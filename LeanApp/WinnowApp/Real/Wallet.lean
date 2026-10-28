@@ -17,6 +17,7 @@ def switchTo (env : Env) (n : WinnowApp.Network) (dir : String) : IO Unit := do
   let c ← env.get
   if c.network == some n && c.dir == some dir then return
   suspendAndStop env false
+  env.hooks.walletChanged
   let checked ← readLastCompleteCheck dir
   env.modify fun c => { c with network := some n, dir := some dir, wallet := none, reviews := #[], bumps := #[],
                                lastSyncError := none, relayStoreQuarantined := none, phase := .idle,
@@ -25,13 +26,15 @@ def switchTo (env : Env) (n : WinnowApp.Network) (dir : String) : IO Unit := do
 def damagedWalletText : String :=
   "Winnow found local wallet data but could not safely read it. The files and protected key were left untouched. Retry; if this continues, restore from a known-good wallet bundle or ask for help before changing anything."
 
-/-- `DefaultsKey.backupPending(walletID)`, kept as a file next to the wallet: present from creation
-until the user confirms the words are written down (`finishOnboarding`). -/
+/-- `DefaultsKey.backupPending(walletID)`: the legacy phrase-checklist flag (a file next to the wallet),
+which earlier builds left from creation until the words were confirmed written down. Onboarding has no
+checklist now (upstream 4228c6b): opening an existing wallet clears it. -/
 def backupPendingPath (dir walletID : String) : System.FilePath := dirFile dir s!"backup-pending.{walletID}"
 
-/-- `.opened`, or `.backupPending` while the created wallet's backup was never confirmed. -/
+/-- `.opened`, clearing a legacy backup-pending flag (the wallet opens without a phrase checklist). -/
 def bootResult (dir walletID : String) : IO BootResult := do
-  return if ← (backupPendingPath dir walletID).pathExists then .backupPending walletID else .opened walletID
+  removeQuietly (backupPendingPath dir walletID)
+  return .opened walletID
 
 /-- A `String` as Swift's `debugDescription` quotes it (inside `String(describing:)` of an enum payload). -/
 def swiftQuoted (s : String) : String :=
@@ -176,8 +179,9 @@ def adopt (env : Env) (w : Wallet) (startSync : Bool) : IO Unit := do
   let (stack, dir, n) ← env.modifyGet fun c =>
     ((c.stack, c.dir, c.network), { c with loopToken := c.loopToken + 1, syncLoop := none })
   let some dir := dir | failWith .noWallet
+  env.hooks.walletChanged
   if let some s := stack then s.broadcaster.shutdown
-  for name in ["filters.json", "broadcast.json", "vaults.json", "multisig.json", "receive-labels.json"] do
+  for name in ["filters.json", "broadcast.json", "vaults.json", "multisig.json", "receive-labels.json", "cloud-backup.json"] do
     removeQuietly (dirFile dir name)
   if let some n := n then
     if let some message ← env.hooks.configure n dir then failWith (.storageDamaged message)
@@ -203,23 +207,21 @@ def readMnemonic (env : Env) (walletID : String) : IO (Option String) := do
   | .ok (.masterKey _) | .ok (.accountKey ..) => return none
   | .error e => failText (keyStoreErrorText e)
 
-/-- `createWallet()`: a fresh wallet dated at the chain tip, adopted; its recovery words. -/
-def createWallet (env : Env) (n : WinnowApp.Network) (dir : String) : IO (List String) := do
+/-- `createWallet()`: a fresh wallet dated at the chain tip, adopted; its id and recovery words (which go
+only to the iCloud backup's preparation, never to a screen). -/
+def createWallet (env : Env) (n : WinnowApp.Network) (dir : String) : IO (String × String) := do
   switchTo env n dir
   buildStackIfNeeded env
   let some stack := (← env.get).stack | failWith .noStack
   let knownHeight ← creationHeightForNewWallet stack
   let w ← runWM (Wallet.create (Network.tx n) env.deps.keyStore (some (walletPath dir)) (entropy := env.deps.entropy) (creationHeight := knownHeight)
     (random := env.deps.random))
-  -- flagged before `adopt`: the secret is already stored, so a throw below must not leave the wallet
-  -- looking backed up (a stale flag only shows the words again)
-  IO.FS.writeFile (backupPendingPath dir w.id) ""
   adopt env w true
   let some words ← readMnemonic env w.id | failWith .mnemonicUnavailable
   env.journal "wallet.created" [("walletID", w.id), ("height", toString knownHeight), ("headersContinueInBackground", "true")]
-  return words.splitOn " "
+  return (w.id, words)
 
-/-- `finishOnboarding()`: the backup is confirmed (or the import report read). -/
+/-- `finishOnboarding()`: wallet usability is independent of cloud availability or a manual backup. -/
 def finishOnboarding (env : Env) : IO Unit := do
   let c ← env.get
   if let (some dir, some w) := (c.dir, c.wallet) then
@@ -230,14 +232,6 @@ def finishOnboarding (env : Env) : IO Unit := do
     let (s, _) ← snapshot env
     env.journal "wallet.ready" [("walletID", w.id), ("balance", toString s.balance), ("utxoCount", toString s.utxoCount),
       ("historyCount", toString s.history.length), ("nextScanHeight", toString s.nextScanHeight)]
-
-/-- `pendingBackupMnemonic()` (the caller has authenticated): the words while the backup is pending. -/
-def pendingBackupWords (env : Env) : IO (List String) := do
-  let c ← env.get
-  let (some dir, some w) := (c.dir, c.wallet) | failWith .noWallet
-  if !(← (backupPendingPath dir w.id).pathExists) then failWith .mnemonicUnavailable
-  let some words ← readMnemonic env w.id | failWith .mnemonicUnavailable
-  return words.splitOn " "
 
 /-- `waitForPeer(timeout:)`, polling once a second. -/
 def waitForPeer (env : Env) (pool : PeerPool) (ms : Nat) (gen : Nat) : IO Bool := do
@@ -274,12 +268,11 @@ def bundleFields (b : ImportBundle) : List (String × String) :=
    ("lastKnownHeight", toString b.lastKnownHeight), ("utxoCount", toString b.utxos.size),
    ("historyCount", toString b.transactions.size)]
 
-/-- `importWallet(bundleJSON:)`: decode, check, seed the wallet, adopt it without the loop, then verify
-by a forward scan (the loop starts on the way out). -/
-def importBundle (env : Env) (n : WinnowApp.Network) (dir : String) (json : String) : IO String := do
-  let bundle ← match ImportBundle.decode json with
-    | .ok b => pure b
-    | .error e => failText (importFailureText e)
+/-- `importWallet(bundle:authenticate:afterCommit:)`: check, seed the wallet, adopt it without the loop,
+run `afterCommit` (the iCloud backup's preparation, or a restore's context), then verify by a forward scan
+(the loop starts on the way out). The report, or none while no peer was reachable. -/
+def importDecoded (env : Env) (n : WinnowApp.Network) (dir : String) (bundle : ImportBundle)
+    (afterCommit : String → IO Unit := fun _ => pure ()) : IO (String × Option ImportReport) := do
   unless bundle.network == n.name do failWith (.wrongNetwork bundle.network)
   -- before anything is written: a bundle whose multisig accounts cannot be restored must not replace the
   -- wallet half-way
@@ -292,11 +285,12 @@ def importBundle (env : Env) (n : WinnowApp.Network) (dir : String) (json : Stri
   env.hooks.multisigRestore (bundle.vaults.getD #[])
   env.hooks.signerMerge (bundle.signers.getD #[])
   try
+    afterCommit w.id
     buildStackIfNeeded env
     let c ← env.get
-    let waiting (reason : String) : IO String := do
+    let waiting (reason : String) : IO (String × Option ImportReport) := do
       env.journal "import.verificationWaiting" [("reason", reason)]
-      return verificationWaitingText
+      return (w.id, none)
     let some stack := c.stack | waiting "sync stack unavailable"
     let some filters := stack.filters | waiting "sync stack unavailable"
     stack.pool.start
@@ -315,9 +309,18 @@ def importBundle (env : Env) (n : WinnowApp.Network) (dir : String) (json : Stri
        ("discoveredUTXOCount", toString report.discoveredUTXOs.size),
        ("balance", toString s.balance), ("utxoCount", toString s.utxoCount),
        ("historyCount", toString s.history.length), ("nextScanHeight", toString s.nextScanHeight)]
-    return reportText report
+    return (w.id, some report)
   finally
     startSyncLoop env
+
+/-- `importWallet(bundleJSON:)`: the wallet's id, and the verification report as the import sheet shows it. -/
+def importBundle (env : Env) (n : WinnowApp.Network) (dir : String) (json : String)
+    (afterCommit : ImportBundle → String → IO Unit := fun _ _ => pure ()) : IO (String × String) := do
+  let bundle ← match ImportBundle.decode json with
+    | .ok b => pure b
+    | .error e => failText (importFailureText e)
+  let (id, report) ← importDecoded env n dir bundle (afterCommit bundle)
+  return (id, (report.map reportText).getD verificationWaitingText)
 
 /-- `exportWalletBundle(includeMnemonic:)`. -/
 def exportBundle (env : Env) (includeMnemonic : Bool) : IO String := do
@@ -343,12 +346,13 @@ def revealMnemonic (env : Env) : IO (List String) := do
 def deleteWallet (env : Env) : IO Unit := do
   let c ← env.get
   let some w := c.wallet | failWith .noWallet
+  env.hooks.walletChanged
   suspendAndStop env false
   match ← (env.deps.keyStore.delete w.id).run with
   | .ok () => pure ()
   | .error e => failText (keyStoreErrorText e)
   if let some dir := c.dir then
-    for name in ["wallet.json", "filters.json", "broadcast.json", "vaults.json", "multisig.json", "receive-labels.json"] do
+    for name in ["wallet.json", "filters.json", "broadcast.json", "vaults.json", "multisig.json", "receive-labels.json", "cloud-backup.json"] do
       removeQuietly (dirFile dir name)
   env.modify fun c => { c with wallet := none, lastSyncError := none, relayStoreQuarantined := none, phase := .idle,
                                reviews := #[], bumps := #[] }

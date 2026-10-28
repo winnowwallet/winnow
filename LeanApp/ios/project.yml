@@ -29,6 +29,15 @@ targets:
       # the census list this build ships (CensusCatalog.bundled reads peers.json beside the executable),
       # fetched by scripts/import-census (scripts/build-ios runs it when the list is missing)
       - { path: ../../build/census/peers.json, buildPhase: resources }
+    # automatic iCloud backup (WinnowApp/Real/CloudBackup.lean): the private database of upstream's container
+    # (CloudKit/schema.ckdb's WalletBackup records); the shell answers missingEntitlement without it
+    entitlements:
+      path: build/WinnowLean.entitlements
+      properties:
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.com.btcswift.app
+        com.apple.developer.icloud-services:
+          - CloudKit
     info:
       path: build/Info.plist
       properties:

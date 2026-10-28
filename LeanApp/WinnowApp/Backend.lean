@@ -14,13 +14,12 @@ namespace WinnowApp
 structure Backend where
   /-- Open the wallet of `network` stored under `dir` (wallet.json + the keychain secret). -/
   openWallet : Network → (dir : String) → IO BootResult
-  /-- Create a wallet; the recovery words. -/
-  createWallet : Network → (dir : String) → IO (List String)
-  /-- Import a backup bundle (JSON); the verification report. -/
-  importBundle : Network → (dir : String) → (json : String) → IO String
+  /-- `createWallet()` (after authentication): a wallet, its automatic iCloud backup prepared from the words
+in hand, onboarding finished; the wallet's id. No phrase checklist: the words are never shown here. -/
+  createWallet : Network → (dir : String) → IO String
+  /-- Import a backup bundle (JSON); the wallet's id and the verification report. -/
+  importBundle : Network → (dir : String) → (json : String) → IO (String × String)
   finishOnboarding : IO Unit
-  /-- `pendingBackupMnemonic`, after authentication: the words of a wallet whose backup is pending. -/
-  pendingBackupWords : IO (List String)
   snapshot : IO (Status × SyncPhase)
   /-- People, sender and receive labels. -/
   records : IO Records
@@ -129,6 +128,26 @@ structure Backend where
   runBackgroundSync : Settings → IO Bool
   /-- `cancelBackgroundSync()`: stop a running background check and wait for it to drain. -/
   cancelBackgroundSync : IO Unit
+  -- Automatic iCloud backup (`Real/CloudApp.lean`)
+  /-- `cloudBackups` as the screens read it. -/
+  cloudStatus : IO CloudStatus
+  /-- Calls `k` with the fresh status after every change. -/
+  observeCloud : (CloudStatus → IO Unit) → IO Unit
+  /-- `discoverCloudBackups()`: onboarding's search for this network's saved backups. -/
+  discoverCloudBackups : IO Unit
+  /-- `setAutomaticCloudBackup(_:)`. -/
+  setAutomaticCloudBackup : Bool → IO Unit
+  /-- `restoreCloudBackup(_:)` (it authenticates itself): the wallet's id, the verification
+  (`matchesBundle`, none while no peer answered) and the restored display name and Advanced switch. -/
+  restoreCloudBackup : Network → (dir id : String) → IO (String × Option Bool × Option (String × Bool))
+  /-- What `refresh()` asks of the iCloud side (an update, a preparation when due). -/
+  cloudTick : IO Unit
+  /-- The scene became active (true) or went to the background (false). -/
+  cloudScene : Bool → IO Unit
+  /-- `cloudBackups.suspend()` (a closed restore presentation). -/
+  suspendCloud : IO Unit
+  /-- The settings changed (the backup's context reads the display name and Advanced switch). -/
+  updateSettings : Settings → IO Unit
 
 def notPorted (what : String) : IO α := throw (IO.userError s!"{what}: this part of Winnow is still being ported to Lean.")
 
@@ -140,7 +159,6 @@ def Backend.pending : Backend where
   createWallet := fun _ _ => notPorted "Creating a wallet"
   importBundle := fun _ _ _ => notPorted "Importing a backup"
   finishOnboarding := pure ()
-  pendingBackupWords := notPorted "Resuming a backup"
   snapshot := pure ({}, .idle)
   records := pure {}
   receiveAddress := fun _ => notPorted "Receiving"
@@ -198,6 +216,15 @@ def Backend.pending : Backend where
   abandonSpend := fun _ _ => notPorted "Multisig accounts"
   runBackgroundSync := fun _ => pure false
   cancelBackgroundSync := pure ()
+  cloudStatus := pure {}
+  observeCloud := fun _ => pure ()
+  discoverCloudBackups := pure ()
+  setAutomaticCloudBackup := fun _ => pure ()
+  restoreCloudBackup := fun _ _ _ => notPorted "Restoring from iCloud"
+  cloudTick := pure ()
+  cloudScene := fun _ => pure ()
+  suspendCloud := pure ()
+  updateSettings := fun _ => pure ()
 
 instance : Nonempty Backend := ⟨Backend.pending⟩
 

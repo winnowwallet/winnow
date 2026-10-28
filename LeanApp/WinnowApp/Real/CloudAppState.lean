@@ -1,4 +1,5 @@
 import WinnowApp.Real.RecordsStores
+import WinnowApp.Real.SignerStore
 import Winnow.Wallet.CloudWalletBackup
 
 /-! # The wallet context inside an iCloud backup (`Sources/WinnowApp/CloudAppState.swift`, upstream d2ca878)
@@ -10,10 +11,9 @@ optionals (`descriptor`, `signers`) omitted when absent; `version` is required o
 with a default is still decoded by the synthesized `init(from:)`).
 
 `signers` is the list of paired Ledgers and saved keys a context carried while only the iCloud copy held
-them; new contexts leave it out (the bundle carries them, `ImportBundle.signers`). Here it is decoded and
-held to `SignerRecord.checkShape` and the signer file's 1 MiB ceiling; the app has no signer store yet, so
-the rest of `SignerStore.validate` (unique ids, usable names, each key held once, a Ledger's own key) and
-the merge on restore are not ported. -/
+them; new contexts leave it out (the bundle carries them, `ImportBundle.signers`). An old context's list
+is held to `SignerStore.validateBackup` (the signer file's own rules and its 1 MiB ceiling) and merged on
+restore (`SignerStore.planRestore`, then `restore`). -/
 
 namespace WinnowApp.RecordsReal
 open Winnow SwiftJSON
@@ -74,12 +74,7 @@ def validate (c : CloudAppState) (bundle : ImportBundle) : RM Unit := do
   let some network := BitcoinNetwork.ofString? c.network | mismatch "cloud wallet context does not match"
   unless c.ownDisplayName.utf8ByteSize ≤ 1024 do mismatch "cloud wallet context does not match"
   PeopleStore.validateBackup c.people network
-  if let some signers := c.signers then
-    match SignerRecord.checkShape signers network with
-    | .ok () => pure ()
-    | .error e => throw (.named e.name "invalid cloud signer list")
-    unless (write (.arr (signers.map SignerRecord.toJV))).utf8ByteSize ≤ maximumSignerFileBytes do
-      throw (.named "invalidState" "invalid cloud signer list")
+  if let some signers := c.signers then SignerStore.validateBackup signers network
   discard <| LabelStore.validatedBackup c.receiveLabels network
   unless c.encoded.size ≤ CloudWalletBackup.maximumAppStateBytes do mismatch "cloud wallet context is too large"
 

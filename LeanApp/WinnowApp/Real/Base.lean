@@ -70,6 +70,9 @@ structure Hooks where
   signerMerge : Array SignerRecord → IO Unit := fun _ => pure ()
   /-- `signerStore.backup()`. -/
   signerBackup : IO (Array SignerRecord) := pure #[]
+  /-- The open wallet changed or went (`adopt`, `destroyWallet`, a network switch): the iCloud backup
+  controller lets go of the old one (`cloudBackups.configure(directory: nil, walletID: nil)`). -/
+  walletChanged : IO Unit := pure ()
   /-- `refresh()`'s account half: the accounts' live balance and the one Transactions list
   (`AppModel.payments`) over the wallet's rows, rendered with the scripts the wallet and accounts own. -/
   multisigSnapshot : Std.HashSet ByteArray → Tx.BitcoinNetwork → List HistoryItem → IO (Int × List DisplayedPayment) :=
