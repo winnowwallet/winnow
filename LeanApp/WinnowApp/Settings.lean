@@ -1,4 +1,5 @@
 import WinnowApp.Backup
+import WinnowApp.Signers
 
 /-! SettingsView.swift: network, backup, the census peer list, manual peers, the external block
 explorer, chain verification, connected peers (with the reset confirmation), about and the design
@@ -76,6 +77,7 @@ def settingsSections (m : Model) : List H :=
   (if s.showsNetworkPicker then
     [.section "" (networkFooter m) [networkPicker m]] else []) ++
   [backupSection m] ++
+  (if s.advancedMode then [signersSection m] else []) ++
   (if s.advancedMode then
     [.section "Mainnet peer list" "Each release carries the census of its day, the list it starts from. Every selected peer still undergoes Winnow's normal checks."
       (match d.catalog with | some line => [.identified "censusCatalogText" (body line)] | none => [])] else []) ++

@@ -36,6 +36,8 @@ inductive Sheet where
   | revealPhrase
   | papers
   | readSide
+  /-- SignerPickerSheet ("Add a member"). -/
+  | signerPicker
   deriving Repr, BEq, Inhabited
 
 /-- A pushed screen (NavigationLink destinations). -/
@@ -46,8 +48,12 @@ inductive Route where
   /-- MultisigRoute (Advanced mode's Wallet tab): join with a descriptor, build, an account, its PSBT screen. -/
   | multisigAdd
   | multisigBuild
-  /-- LedgerPairView ("Pair a Ledger (2-of-2)"). -/
+  /-- LedgerPairView (Settings → Signers → "Pair a Ledger"). -/
   | ledgerPair
+  /-- SignersView, SignerDetailView, SignerKeysAddView (Settings → Signers). -/
+  | signers
+  | signer (id : String)
+  | signerKeysAdd
   | multisigAccount (id : String)
   | multisigPSBT (id : String)
   deriving Repr, BEq, Inhabited
@@ -80,9 +86,12 @@ inductive PasteTarget where
   | person
   | importBundle
   | multisigDescriptor
-  | multisigSignerKey
+  /-- SignerPickerSheet's "Paste keys from the clipboard". -/
+  | memberKeys
   | multisigRecoveryKey
   | multisigPSBT
+  /-- SignerKeysAddView's "Paste keys". -/
+  | signerKeys
   deriving Repr, BEq, Inhabited
 
 /-! ## Area state -/
@@ -243,33 +252,96 @@ structure MultisigAddForm where
   check : Option (String × Except String MultisigCheck) := none
   error : Option String := none
   saving : Bool := false
+  /-- Saved, but the paired Ledger did not register it: the toolbar says Done. -/
+  saved : Bool := false
   deriving Repr, Inhabited
+
+/-- One key of a builder member, with what to call it (`MultisigBuildView.Key`). -/
+structure BuildKey where
+  key : String
+  label : String
+  deriving Repr, Inhabited, BEq
+
+/-- `MultisigBuildView.Member`: one signer's keys; a whole account as one member carries its name and,
+when it signs with fewer than all its keys, its threshold. -/
+structure BuildMember where
+  keys : List BuildKey
+  name : Option String := none
+  threshold : Option Nat := none
+  deriving Repr, Inhabited, BEq
+
+def phoneLabel : String := "This phone"
+
+/-- Whether the member signs with fewer than all its keys. -/
+def BuildMember.isThreshold (m : BuildMember) : Bool := m.threshold.any (· < m.keys.length)
+
+/-- "This phone + Nano X", each name once; "Family 2-of-3". -/
+def BuildMember.title (m : BuildMember) : String :=
+  match m.name with
+  | some n => if m.isThreshold then s!"{n} {m.threshold.getD 0}-of-{m.keys.length}" else plain
+  | none => plain
+where
+  plain : String := " + ".intercalate (m.keys.foldl (fun acc k => if acc.contains k.label then acc else acc ++ [k.label]) [])
+
+/-- "any 2 of its 3 keys", "2 keys, one signer", or nothing to add. -/
+def BuildMember.caption (m : BuildMember) : Option String :=
+  if m.isThreshold then some s!"any {m.threshold.getD 0} of its {m.keys.length} keys"
+  else if m.keys.length > 1 then some s!"{m.keys.length} keys, one signer" else none
+
+/-- `Member.plan`: the keys and the member's threshold. -/
+def BuildMember.plan (m : BuildMember) : List String × Option Nat := (m.keys.map (·.key), m.threshold)
 
 /-- MultisigBuildView's state. -/
 structure MultisigBuildForm where
   name : String := ""
-  otherKeys : List String := []
+  members : List BuildMember := []
   threshold : Nat := 2
   withRecovery : Bool := false
   /-- 0: fewer signers, 1: a recovery key. -/
   recoveryMode : Nat := 0
   recoveryThreshold : Nat := 1
   recoveryKey : String := ""
-  recoveryDays : Nat := 30
-  includeLedger : Bool := false
+  /-- The recovery delay in blocks: about six months by default (26,000 blocks; the stepper moves it a
+  day, 144 blocks, at a time). -/
+  recoveryBlocks : Nat := 26_000
   creating : Bool := false
   error : Option String := none
   /-- The account created: id and descriptor. -/
   created : Option (String × String) := none
+  /-- The paired Ledger's registration after Create: its name, or why it did not register. -/
+  registration : Option (Except String String) := none
+  /-- The preview line: the account these members make, or why they do not (none: fewer than two). -/
+  preview : Option (Except String String) := none
+  /-- The picker sheet: adding a new member (none) or a key to member `i`. -/
+  pickInto : Option Nat := none
+  pasteError : Option String := none
   deriving Repr, Inhabited
 
-def MultisigBuildForm.signerCount (f : MultisigBuildForm) : Nat :=
-  1 + f.otherKeys.length + (if f.includeLedger then 1 else 0)
+def MultisigBuildForm.usedKeys (f : MultisigBuildForm) : List String := f.members.flatMap (·.keys.map (·.key))
+
+/-- The paired Ledgers among the members, by name. -/
+def MultisigBuildForm.pairedLedgerNames (f : MultisigBuildForm) (ledgers : List SignerInfo) : List String :=
+  (ledgers.filter fun l => l.keys.any f.usedKeys.contains).map (·.name)
 
 /-- LedgerPairView's state. -/
 structure LedgerPairForm where
   name : String := ""
   pairing : Bool := false
+  error : Option String := none
+  deriving Repr, Inhabited
+
+/-- SignerKeysAddView's state ("Save keys someone sent"). -/
+structure SignerKeysForm where
+  name : String := ""
+  text : String := ""
+  saving : Bool := false
+  error : Option String := none
+  deriving Repr, Inhabited
+
+/-- SignerDetailView's state: the name being edited (renamed on submit and on leaving). -/
+structure SignerDetailForm where
+  id : String := ""
+  name : String := ""
   error : Option String := none
   deriving Repr, Inhabited
 
@@ -323,8 +395,11 @@ structure Model where
   tab : Nat := 0
   /-- Test mode's `WINNOW_E2E_NETWORK`: the network cannot be switched away from it. -/
   forcedNetwork : Option Network := none
-  /-- Pushed screens of the main navigation (beginner home, or the Wallet tab), innermost last. -/
+  /-- Pushed screens of the main navigation (beginner home, or the current tab), innermost last. -/
   routes : List Route := []
+  /-- Each Advanced-mode tab's own navigation stack while another tab shows (by tab index; the current
+  tab's stack is `routes`). -/
+  tabRoutes : List (List Route) := []
   /-- Presented sheets, innermost last (a sheet presents the next one over itself). -/
   sheets : List Sheet := []
   confirm : Option Confirm := none
@@ -351,7 +426,12 @@ structure Model where
   /-- MultisigAccountView's error. -/
   multisigAccountError : Option String := none
   ledgerPair : LedgerPairForm := {}
+  signerKeys : SignerKeysForm := {}
+  signerDetail : SignerDetailForm := {}
   ledgerVerify : LedgerVerify := {}
+  /-- LedgerRegisterButton: the account being registered, and the last failure per account. -/
+  ledgerRegistering : Option String := none
+  ledgerRegisterError : Option (String × String) := none
   multisigSpend : MultisigSpendForm := {}
   /-- Paper shown in the Design papers sheet. -/
   paper : Option Nat := none
@@ -409,8 +489,9 @@ inductive Host where
   | senderLookup (gen : Nat) (txid source : String) (addresses : List String)
   | multisig (gen : Nat) (o : MultisigOverview)
   | multisigChecked (gen : Nat) (text : String) (r : Except String MultisigCheck)
-  | multisigAdded (gen : Nat) (id : String)
-  | multisigCreated (gen : Nat) (id descriptor : String)
+  | multisigAdded (gen : Nat) (id : String) (registration : Option (Except String String))
+  | multisigCreated (gen : Nat) (id descriptor : String) (registration : Option (Except String String))
+  | ledgerRegistered (gen : Nat) (id : String) (r : Except String Unit)
   | multisigRemoved (gen : Nat) (id : String)
   /-- The medium fee rate, thousandths of sat/vB (MultisigPSBTView's `.task`). -/
   | multisigFeeRate (gen : Nat) (milli : Nat)
@@ -418,6 +499,9 @@ inductive Host where
   | multisigPSBT (gen epoch : Nat) (id : String) (p : MultisigPSBT) (pasted : Bool := false)
   | multisigBroadcast (gen epoch : Nat) (id txid : String)
   | ledgerPaired (gen : Nat) (id : String)
+  | signerSaved (gen : Nat) (id : String)
+  | signerRenamed (gen : Nat) (id : String)
+  | signerRemoved (gen : Nat) (id : String)
   | ledgerAddressShown (gen : Nat) (id : String) (index : Nat) (r : Except String String)
   | pasted (target : PasteTarget) (text : String)
   | copiedExpired (key : String)
@@ -516,6 +600,19 @@ inductive PeopleMsg where
   | remove (personID : String)
   deriving Inhabited
 
+inductive SignerMsg where
+  | openSigners
+  | openSigner (id : String)
+  | openKeysAdd
+  | setKeysName (s : String)
+  | pasteKeys
+  | saveKeys
+  | setSignerName (s : String)
+  | renameSigner
+  | removeSigner
+  | pop
+  deriving Inhabited
+
 inductive MultisigMsg where
   | openAdd
   | openBuild
@@ -529,8 +626,13 @@ inductive MultisigMsg where
   | save
   -- MultisigBuildView
   | buildSetName (s : String)
-  | pasteSignerKey
-  | removeSignerKey (i : Nat)
+  /-- "Add a member" (none) or ⊕ on member `i`: the picker. -/
+  | openPicker (into : Option Nat)
+  | pickSigner (id : String)
+  | pickAccount (id : String)
+  | pasteMemberKeys
+  | removeMemberKey (member key : Nat)
+  | removeMember (member : Nat)
   | setThreshold (n : Nat)
   | setWithRecovery (b : Bool)
   | setRecoveryMode (i : Nat)
@@ -539,6 +641,8 @@ inductive MultisigMsg where
   | removeRecoveryKey
   | setRecoveryDays (n : Nat)
   | create
+  /-- "Register on Ledger" (the builder's created screen, the account screen). -/
+  | registerLedger (id : String)
   -- MultisigAccountView
   | newAddress
   | askRemove
@@ -560,7 +664,6 @@ inductive MultisigMsg where
   | setLedgerName (s : String)
   | pairLedger
   | verifyAddress
-  | setIncludeLedger (b : Bool)
   deriving Inhabited
 
 inductive Msg where
@@ -596,6 +699,7 @@ inductive Msg where
   | backup (m : BackupMsg)
   | people (m : PeopleMsg)
   | multisig (m : MultisigMsg)
+  | signer (m : SignerMsg)
   | host (h : Host)
   deriving Inhabited
 
@@ -657,12 +761,16 @@ inductive Cmd where
   /-- Multisig accounts (`Backend.multisig*`). -/
   | multisigOverview (gen : Nat)
   | checkMultisigDescriptor (gen : Nat) (text : String)
-  | addMultisigAccount (gen : Nat) (name descriptor : String)
+  | addMultisigAccount (gen : Nat) (advanced : Bool) (name descriptor : String)
   | removeMultisigAccount (gen : Nat) (id : String)
   | newMultisigAddress (gen : Nat) (id : String)
-  | createMultisigAccount (gen : Nat) (advanced : Bool) (name : String) (threshold : Nat) (otherKeys : List String)
-      (includeLedger : Bool) (recovery : Option MultisigRecovery)
+  | createMultisigAccount (gen : Nat) (advanced : Bool) (name : String) (threshold : Nat)
+      (members : List (List String × Option Nat)) (recovery : Option MultisigRecovery)
+  | registerLedger (gen : Nat) (advanced : Bool) (id : String)
   | pairLedger (gen : Nat) (advanced : Bool) (name : String)
+  | addSignerKeys (gen : Nat) (advanced : Bool) (name text : String)
+  | renameSigner (gen : Nat) (id name : String)
+  | removeSigner (gen : Nat) (id : String)
   | verifyLedgerAddress (gen : Nat) (advanced : Bool) (id : String) (index : Nat)
   | signMultisigSpendWithLedger (gen epoch : Nat) (advanced : Bool) (id psbt : String)
   | multisigFeeRate (gen : Nat)
@@ -696,6 +804,16 @@ def Model.present (m : Model) (s : Sheet) : Model := { m with sheets := m.sheets
 def Model.isExpanded (m : Model) (key : String) : Bool := m.expanded.contains key
 def Model.person? (m : Model) (id : String) : Option Person := m.records.people.find? (·.id == id)
 def Model.historyItem? (m : Model) (txid : String) : Option HistoryItem := m.status.history.find? (·.txid == txid)
+
+/-- The saved stack of `tab` (empty when none was saved). -/
+def Model.savedRoutes (m : Model) (tab : Nat) : List Route := (m.tabRoutes[tab]?).getD []
+
+/-- Show tab `i`: the leaving tab keeps its stack, the entering tab gets its own back. -/
+def Model.switchTab (m : Model) (i : Nat) : Model :=
+  if i == m.tab then m else
+  let saved := (List.range (max (m.tabRoutes.length) (max m.tab i + 1))).map fun t =>
+    if t == m.tab then m.routes else m.savedRoutes t
+  { m with tab := i, routes := m.savedRoutes i, tabRoutes := saved.set i [] }
 
 /-- Leave the current wallet/network generation: every answer still in flight is dropped. -/
 def Model.nextGeneration (m : Model) : Model :=

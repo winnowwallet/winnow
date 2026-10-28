@@ -56,6 +56,7 @@ def sheetView (m : Model) (s : Sheet) (inner : List H) : H :=
   | .revealPhrase => revealSheet m inner
   | .papers => papersSheet m inner
   | .readSide => readSideSheet inner
+  | .signerPicker => signerPickerSheet m inner
 
 def cancel : H := .button "Cancel" .plain (some .dismissConfirm)
 
@@ -121,21 +122,32 @@ def onboardingView (m : Model) : H :=
         , .section "" "" [networkPicker m]
         , .section "" "" (errorRows m.onboarding.error) ] ] ++ overlays m)
 
+/-- The screen pushed on top of the current stack (any tab's), if any. -/
+def routedScreen (m : Model) : Option H :=
+  match m.routes.getLast? with
+  | some (.payment t) => some (.screen "Payment" (some (.home .pop)) ([.list (paymentSections m t)] ++ overlays m))
+  | some .backup => some (backupScreen m (overlays m))
+  | some .multisigAdd => some (multisigAddScreen m (overlays m))
+  | some .ledgerPair =>
+    some (.screen "Pair a Ledger" (some (.signer .pop)) ([.list (ledgerPairSections m)] ++ overlays m))
+  | some .multisigBuild =>
+    some (.screen "New multisig account" (some (.multisig .pop)) ([.list (multisigBuildSections m)] ++ overlays m))
+  | some (.multisigAccount id) =>
+    some (.screen ((m.multisigInfo? id).map (·.name) |>.getD "Multisig") (some (.multisig .pop))
+      ([.list (multisigAccountSections m id)] ++ overlays m))
+  | some (.multisigPSBT id) =>
+    some (.screen "Multisig PSBT" (some (.multisig .pop)) ([.list (multisigPSBTSections m id)] ++ overlays m))
+  | some .signers => some (.screen "Signers" (some (.signer .pop)) ([.list (signersSections m)] ++ overlays m))
+  | some (.signer id) =>
+    some (.screen ((m.signer? id).map (·.name) |>.getD "Signer") (some (.signer .pop))
+      ([.list (signerDetailSections m id)] ++ overlays m))
+  | some .signerKeysAdd => some (signerKeysScreen m (overlays m))
+  | none => none
+
 /-- Beginner home or the Wallet tab (both pull to refresh: `syncNow`), or the screen pushed on top of it. -/
 def mainScreen (m : Model) : H :=
-  match m.routes.getLast? with
-  | some (.payment t) => .screen "Payment" (some (.home .pop)) ([.list (paymentSections m t)] ++ overlays m)
-  | some .backup => backupScreen m (overlays m)
-  | some .multisigAdd => multisigAddScreen m (overlays m)
-  | some .ledgerPair =>
-    .screen "Pair a Ledger" (some (.multisig .pop)) ([.list (ledgerPairSections m)] ++ overlays m)
-  | some .multisigBuild =>
-    .screen "New multisig account" (some (.multisig .pop)) ([.list (multisigBuildSections m)] ++ overlays m)
-  | some (.multisigAccount id) =>
-    .screen ((m.multisigInfo? id).map (·.name) |>.getD "Multisig") (some (.multisig .pop))
-      ([.list (multisigAccountSections m id)] ++ overlays m)
-  | some (.multisigPSBT id) =>
-    .screen "Multisig PSBT" (some (.multisig .pop)) ([.list (multisigPSBTSections m id)] ++ overlays m)
+  match routedScreen m with
+  | some screen => screen
   | none =>
     if m.settings.advancedMode then
       .screen "Winnow" none
@@ -163,8 +175,8 @@ def view (m : Model) : H :=
   | .ready =>
     if m.settings.advancedMode then
       .tabs ["Wallet", "Send", "Settings"] ["bitcoinsign.circle", "arrow.up.circle", "gear"] m.tab Msg.selectTab
-        [if m.tab == 1 then .screen (sendTitle m) none ([.list (sendContent m)] ++ overlays m)
-         else if m.tab == 2 then .screen "Settings" none ([.list (settingsSections m)] ++ overlays m)
+        [if m.tab == 1 then (routedScreen m).getD (.screen (sendTitle m) none ([.list (sendContent m)] ++ overlays m))
+         else if m.tab == 2 then (routedScreen m).getD (.screen "Settings" none ([.list (settingsSections m)] ++ overlays m))
          else mainScreen m]
     else mainScreen m
 

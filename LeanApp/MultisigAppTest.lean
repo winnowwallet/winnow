@@ -1,4 +1,5 @@
 import WinnowApp.Real
+import WinnowApp.Signers
 
 /-! `multisig-app-test`: upstream 1cf93fb's app-side multisig tests, ported.
 
@@ -46,6 +47,9 @@ def refused {α} (name : String) (x : RM α) (kind : String := "") : IO Unit := 
   | .error e => check name (kind.isEmpty || e.name == kind) s!"got {e.name}: {e.description}"
 
 def runTest (name : String) (t : IO Unit) : IO Unit := do
+  -- `MULTISIG_APP_TEST_ONLY=<substring>` runs only the tests whose name contains it
+  if let some only ← IO.getEnv "MULTISIG_APP_TEST_ONLY" then
+    unless (name.splitOn only).length > 1 do return
   let start ← IO.monoMsNow
   try t catch e =>
     failures.modify (·.push name)
@@ -162,11 +166,14 @@ def S.watch (s : S) (network : BitcoinNetwork := signet) : RM (Array ByteArray) 
   let (scripts, next) ← st.watchScripts network
   return (next, scripts)
 
+def unsealedPayloadOf (data : ByteArray) : ByteArray :=
+  if !SealedStoreFile.isSealed data then data else
+  match SealedStoreFile.firstNewline data with
+  | some nl => data.extract (nl + 1) data.size
+  | none => data
+
 def unsealedPayload (path : System.FilePath) : IO ByteArray := do
-  let data ← IO.FS.readBinFile path
-  if !SealedStoreFile.isSealed data then return data
-  let some nl := SealedStoreFile.firstNewline data | return data
-  return data.extract (nl + 1) data.size
+  return unsealedPayloadOf (← IO.FS.readBinFile path)
 
 def spentOf (r : MultisigAccountRecord) (o : Transaction.Outpoint) : Option SpentMarker :=
   (r.allUtxos.find? (·.outpoint == o)).bind (·.spent)
@@ -443,11 +450,25 @@ def Phone.keyExpression (p : Phone) : IO String := Real.multisigKeyExpression p.
 def Phone.record (p : Phone) (id : String) : IO MultisigAccountRecord := Real.record p.multisig id
 def Phone.accounts (p : Phone) : IO (List MultisigInfo) := do return (← p.backend.multisigOverview).accounts
 
+/-- `createMultisigAccount(name:threshold:members:recovery:)` (Advanced mode): id and descriptor. -/
+def Phone.build (p : Phone) (name : String) (threshold : Nat) (members : List (List String))
+    (recovery : Option MultisigRecovery := none) (advanced := true) : IO (String × String) := do
+  let (id, d, _) ← p.backend.createMultisigAccount advanced name threshold (members.map (·, none)) recovery
+  return (id, d)
+
+/-- This phone and the other keys, each a member of its own. -/
+def Phone.buildWith (p : Phone) (name : String) (threshold : Nat) (others : List String)
+    (recovery : Option MultisigRecovery := none) (advanced := true) : IO (String × String) := do
+  p.build name threshold ([← p.keyExpression] :: others.map ([·])) recovery advanced
+
+def Phone.join (p : Phone) (name descriptor : String) : IO String := do
+  return (← p.backend.addMultisigAccount true name descriptor).1
+
 def testBuilderMakesAccountWithAnotherWinnowAndRecovery : IO Unit := do
   let phone ← phoneWith 0xA1
   let ms ← masters
   let otherWinnow ← keyExpression ms[2]!
-  let (id, descriptor) ← phone.backend.createMultisigAccount true "Family 2-of-2" 2 [s!" {otherWinnow} "] false (some (.fewerSigners 1 4320))
+  let (id, descriptor) ← phone.buildWith "Family 2-of-2" 2 [s!" {otherWinnow} "] (some (.fewerSigners 1 4320))
   let account ← needM "account" (MultisigAccount.parse descriptor signet)
   check "builder: 2 of 2 with a recovery path of 1 after 4320 blocks" (account.threshold == 2 && account.signers.size == 2 &&
     (account.recovery.map (·.blocks)) == some 4320 && (account.recovery.map (·.threshold)) == some 1)
@@ -460,12 +481,12 @@ def testBuilderMakesAccountWithAnotherWinnowAndRecovery : IO Unit := do
   let body := (descriptor.splitOn "#")[0]!
   let relabelled := body.replace (bare ++ "/<2;3>/*") ("[deadbeef" ++ (bare.drop 9).copy ++ "/<2;3>/*")
   check "the relabelled descriptor differs" (relabelled != body)
-  failsWith "joining refuses a recovery leaf that relabels a signer" (phone.backend.addMultisigAccount "Relabelled" relabelled)
+  failsWith "joining refuses a recovery leaf that relabels a signer" (phone.join "Relabelled" relabelled)
     (MultisigAccountError.invalidDescriptor "a signer reused for recovery must keep its own fingerprint and path there").description
   check "one account" ((← phone.accounts).length == 1)
   -- Phone and another Winnow with a separate recovery key.
   let recoveryKey ← keyExpression (← master 0xD4)
-  let (_, pair) ← phone.backend.createMultisigAccount true "Two phones" 2 [otherWinnow] false (some (.separateKey recoveryKey 144))
+  let (_, pair) ← phone.buildWith "Two phones" 2 [otherWinnow] (some (.separateKey recoveryKey 144))
   let pairAccount ← needM "pair" (MultisigAccount.parse pair signet)
   check "a separate recovery key" ((pairAccount.recovery.map (·.keys.size)) == some 1)
   check "two accounts" ((← phone.accounts).length == 2)
@@ -486,9 +507,9 @@ def testTwoPhonesSignACoSignersSpendWithBIP326Sequences : IO Unit := do
   let phone ← phoneWith 0xA1
   let otherPhone ← phoneWith 0xC3
   let recoveryKey ← keyExpression (← master 0xD4)
-  let (id, descriptor) ← phone.backend.createMultisigAccount true "Two phones" 2 [← otherPhone.keyExpression] false
+  let (id, descriptor) ← phone.buildWith "Two phones" 2 [← otherPhone.keyExpression]
     (some (.separateKey recoveryKey 144))
-  let otherID ← otherPhone.backend.addMultisigAccount "Two phones" descriptor
+  let otherID ← otherPhone.join "Two phones" descriptor
   check "the other phone joins the same account" (otherID == id)
   let account ← needM "account" (MultisigAccount.parse descriptor signet)
   let created ← phone.record id
@@ -534,7 +555,7 @@ def testTwoPhonesSignACoSignersSpendWithBIP326Sequences : IO Unit := do
 
 def testRecoveryPathRefusesCoinsThatAreTooYoung : IO Unit := do
   let phone ← phoneWith 0xA1
-  let (id, descriptor) ← phone.backend.createMultisigAccount true "Two phones" 2 [← keyExpression (← masters)[2]!] false
+  let (id, descriptor) ← phone.buildWith "Two phones" 2 [← keyExpression (← masters)[2]!]
     (some (.fewerSigners 1 1000))
   let account ← needM "account" (MultisigAccount.parse descriptor signet)
   let height := (← phone.record id).createdAtHeight + 1
@@ -554,7 +575,7 @@ def testRecoveryPathRefusesCoinsThatAreTooYoung : IO Unit := do
 def testBuilderIsAdvancedModeOnly : IO Unit := do
   let phone ← phoneWith 0xA1
   failsWith "the builder refuses Simple mode"
-    (phone.backend.createMultisigAccount false "Two phones" 2 [← keyExpression (← masters)[2]!] false none) Real.advancedModeOnlyText
+    (phone.buildWith "Two phones" 2 [← keyExpression (← masters)[2]!] (advanced := false)) Real.advancedModeOnlyText
 
 def flowTests : List (String × IO Unit) :=
   [ ("testBuilderMakesAccountWithAnotherWinnowAndRecovery", testBuilderMakesAccountWithAnotherWinnowAndRecovery)
@@ -581,10 +602,20 @@ def Phone.useLedger (p : Phone) (device : IO.Ref Ledger.Simulator) (relabelsLeav
 def simulator (entropyByte : UInt8) : IO (IO.Ref Ledger.Simulator) := do
   IO.mkRef (Ledger.Simulator.new (← master entropyByte))
 
+/-- `buildWithLedger`: pairs the simulator as "Nano X" and builds `threshold` of this phone, `otherKeys` and
+the Ledger, which then registers the account (the builder's registration step). -/
+def Phone.buildWithLedger (p : Phone) (name : String) (otherKeys : List String := []) (threshold := 2)
+    (recovery : Option MultisigRecovery := none) : IO (String × String × Option (Except String String)) := do
+  let ledgerID ← p.backend.pairLedger true "Nano X"
+  let some ledger := (← p.backend.multisigOverview).signers.find? (·.id == ledgerID) | throw (IO.userError "no Ledger")
+  p.backend.createMultisigAccount true name threshold
+    (([← p.keyExpression] :: otherKeys.map ([·]) ++ [ledger.keys]).map (·, none)) recovery
+
 def testLedgerSigningIsAdvancedModeOnly : IO Unit := do
   let phone ← phoneWith 0xA1
   phone.useLedger (← simulator 0xB2)
-  failsWith "pairing refuses Simple mode" (phone.backend.pairLedger false "Phone and Ledger") Real.advancedModeOnlyText
+  failsWith "pairing refuses Simple mode" (phone.backend.pairLedger false "Nano X") Real.advancedModeOnlyText
+  check "no signer" (← phone.backend.multisigOverview).signers.isEmpty
   check "no account" (← phone.accounts).isEmpty
 
 def screenOf (p : MultisigPSBT) : IO MultisigScreen := do
@@ -595,17 +626,32 @@ def testPairVerifyAndSpendWithBothSigners : IO Unit := do
   let phone ← phoneWith 0xA1
   let device ← simulator 0xB2
   phone.useLedger device
-  let id ← phone.backend.pairLedger true "Phone and Ledger"
+  -- Pairing files the Ledger among the signers; nothing is registered yet.
+  let ledgerID ← phone.backend.pairLedger true "Nano X"
+  let some ledger := (← phone.backend.multisigOverview).signers.find? (·.id == ledgerID) | throw (IO.userError "no Ledger")
+  check "paired: a Ledger signer" (ledger.isLedger && ledger.keysText == Descriptor.hex8 (← master 0xB2).fingerprint)
+  check "nothing registered by pairing" (← device.get).registeredNames.isEmpty
+  let againID ← phone.backend.pairLedger true "Nano X, renamed"
+  check "pairing again renames it" (againID == ledgerID &&
+    (← phone.backend.multisigOverview).signers.map (·.name) == ["Nano X, renamed"])
+  -- The 2-of-2 of this phone and the Ledger, which the Ledger then approves.
+  let members := [[← phone.keyExpression], ledger.keys]
+  let (id, _, registration) ← phone.backend.createMultisigAccount true "Phone and Ledger" 2 (members.map (·, none)) none
+  check "the paired Ledger approved it" (registration matches some (.ok "Nano X, renamed"))
   let record ← phone.record id
   let account ← needM "account" (MultisigAccount.parse record.descriptor signet)
-  check "paired: 2 of 2" (account.threshold == 2 && account.signers.size == 2)
+  check "paired: 2 of 2" (account.threshold == 2 && account.signers.size == 2 && !account.isNested)
   let ledgerFingerprint := (← master 0xB2).fingerprint
   check "the registration names the Ledger's master and BIP87 path" (match record.ledger with
     | some r => r.masterFingerprint == ledgerFingerprint && r.keyPath == Ledger.Multisig.keyPath .signet
     | none => false)
   check "the Ledger approved the account by name" ((← device.get).registeredNames == #["Phone and Ledger"])
-  let again ← phone.backend.pairLedger true "Phone and Ledger"
-  check "pairing again refiles the same account" (again == id && (← phone.accounts).length == 1)
+  check "the account names the Ledger" ((((← phone.accounts).find? (·.id == id)).bind (·.ledgerName)) ==
+    some s!"Nano X, renamed · {Descriptor.hex8 (← master 0xB2).fingerprint}")
+  -- Building the same account again yields it rather than a copy, and registers no further.
+  let (same, _, again) ← phone.backend.createMultisigAccount true "Phone and Ledger" 2 (members.map (·, none)) none
+  check "building again yields the same account" (same == id && (← phone.accounts).length == 1)
+  check "a registered account registers no further" (again.isNone && (← device.get).registeredNames.size == 1)
   let shown ← phone.backend.verifyLedgerAddress true id 0
   check "the Ledger shows the phone's first address" ((account.address 0).toOption == some shown)
   check "on its screen" ((← device.get).displayedAddresses == #[shown])
@@ -655,8 +701,7 @@ def testBuilderMakesTwoOfThreeWithAnotherWinnowALedgerAndRecovery : IO Unit := d
   phone.useLedger device
   let ms ← masters
   let otherWinnow ← keyExpression ms[2]!
-  let (id, descriptor) ← phone.backend.createMultisigAccount true "Family 2-of-3" 2 [s!" {otherWinnow} "] true
-    (some (.fewerSigners 1 4320))
+  let (id, descriptor, _) ← phone.buildWithLedger "Family 2-of-3" [s!" {otherWinnow} "] (recovery := some (.fewerSigners 1 4320))
   let account ← needM "account" (MultisigAccount.parse descriptor signet)
   check "2 of 3 with recovery" (account.threshold == 2 && account.signers.size == 3 &&
     (account.recovery.map (·.blocks)) == some 4320 && (account.recovery.map (·.threshold)) == some 1)
@@ -664,13 +709,14 @@ def testBuilderMakesTwoOfThreeWithAnotherWinnowALedgerAndRecovery : IO Unit := d
   let otherKey ← needE "other account key" (ms[2]!.derived "m/86'/1'/0'")
   check "the other Winnow's key is a signer" (account.includes otherKey.neutered)
   check "one account" ((← phone.accounts).length == 1)
-  failsWith "a name the Ledger cannot show" (phone.backend.createMultisigAccount true "Family é" 2 [otherWinnow] true none)
-    Real.invalidNameText
+  let some ledger := (← phone.backend.multisigOverview).ledgers.head? | throw (IO.userError "no Ledger")
+  failsWith "a name the Ledger cannot show"
+    (phone.build "Family é" 2 [[← phone.keyExpression], [otherWinnow], ledger.keys]) Real.invalidNameText
 
 def testStoreRefusesARegistrationForAnotherAccount : IO Unit := do
   let phone ← phoneWith 0xA1
   phone.useLedger (← simulator 0xB2)
-  let id ← phone.backend.pairLedger true "Phone and Ledger"
+  let (id, _, _) ← phone.buildWithLedger "Phone and Ledger"
   let record ← phone.record id
   let some registration := record.ledger | throw (IO.userError "no registration")
   let forged := { registration with policyID := zeros 32 0x11 }
@@ -720,6 +766,344 @@ def ledgerTests : List (String × IO Unit) :=
   , ("testBluetoothStatesStartFailOrWait", testBluetoothStatesStartFailOrWait)
   , ("testNotificationsReachOnlyTheStepInFlight", testNotificationsReachOnlyTheStepInFlight) ]
 
+/-! ## SignerRosterTests (upstream d2ca878) -/
+
+def failsStarting {α} (name : String) (x : IO α) (prefix_ : String) : IO Unit := do
+  match ← (x.toBaseIO) with
+  | .ok _ => check name false "accepted"
+  | .error e => check name ((toString e).startsWith prefix_) s!"got {e}"
+
+def Phone.signers (p : Phone) : IO (List SignerInfo) := do return (← p.backend.multisigOverview).signers
+def Phone.dir (p : Phone) : IO System.FilePath := do
+  let some d := (← p.env.get).dir | throw (IO.userError "no directory")
+  return System.FilePath.mk d
+/-- `importWallet(bundleJSON:)` with the scene going to the background as soon as the import builds its
+stack: the catch-up scan, which has no peer in this fixture, is not what these tests are about. -/
+def Phone.importOffline (p : Phone) (json : String) : IO String := do
+  let dir ← p.dir
+  let _stopper ← IO.asTask do
+    for _ in [0:600] do
+      IO.sleep 50
+      if (← p.env.get).stack.isSome then
+        p.backend.stopNetworking
+        return
+  p.backend.importBundle .signet dir.toString json
+
+/-- `configureSigners()`: the file read again. -/
+def Phone.reloadSigners (p : Phone) : IO Unit := do p.multisig.signers.configure signet (some (← p.dir))
+
+def testPairedLedgerAndSavedKeysPersistAndRefuseDuplicates : IO Unit := do
+  let phone ← phoneWith 0xA1
+  let ms ← masters
+  phone.useLedger (← simulator 0xB2)
+  let ledgerID ← phone.backend.pairLedger true "Nano X"
+  let some ledger := (← phone.signers).find? (·.id == ledgerID) | throw (IO.userError "no Ledger signer")
+  check "paired: a Ledger with one key" (ledger.isLedger && ledger.keys.length == 1)
+  check "its keys text is its fingerprint" (ledger.keysText == Descriptor.hex8 ms[1]!.fingerprint) ledger.keysText
+  -- Bob's phone and Ledger, sent together, are one signer.
+  let bobPhone ← keyExpression ms[2]!
+  let bobLedger ← keyExpression (← master 0xD4)
+  let bobID ← phone.backend.addSignerKeys true "Bob" s!" {bobPhone}\n{bobLedger} "
+  let some bob := (← phone.signers).find? (·.id == bobID) | throw (IO.userError "no Bob")
+  check "Bob's two keys" (bob.keys == [bobPhone, bobLedger] && !bob.isLedger)
+  check "the list" ((← phone.signers).map (·.name) == ["Nano X", "Bob"])
+  -- A key already held is refused, the Ledger's too; so are text that is no key and a mainnet key.
+  failsWith "a key saved twice" (phone.backend.addSignerKeys true "Bob again" bobLedger) "That key is already saved as Bob."
+  failsWith "the Ledger's key again" (phone.backend.addSignerKeys true "Me" ledger.keys[0]!) "That key is already saved as Nano X."
+  for text in ["tpubnonsense", bobPhone.replace "tpub" "xpub", s!"sortedmulti_a(2,{bobPhone})"] do
+    failsStarting s!"not a signer: {(text.take 20).toString}" (phone.backend.addSignerKeys true "Nobody" text)
+      "The multisig descriptor is invalid:"
+  check "still two" ((← phone.signers).length == 2)
+  -- Renamed, written sealed, and read back from disk.
+  phone.backend.renameSigner bobID "Bob and his Ledger"
+  phone.reloadSigners
+  let o ← phone.backend.multisigOverview
+  check "read back: no notice" o.signerNotice.isNone
+  check "read back: renamed" (o.signers.map (·.name) == ["Nano X", "Bob and his Ledger"])
+  check "read back: Bob's keys" ((o.signers.getLast?.map (·.keys)) == some [bobPhone, bobLedger])
+  let sealed ← IO.FS.readBinFile ((← phone.dir) / "signers.json")
+  check "the file is sealed" (SealedStoreFile.isSealed sealed)
+  -- An unsealed file put there by something else is refused, and the list stays empty.
+  IO.FS.writeBinFile ((← phone.dir) / "signers.json") (unsealedPayloadOf sealed)
+  phone.reloadSigners
+  let o ← phone.backend.multisigOverview
+  check "planted: a notice" o.signerNotice.isSome
+  check "planted: nothing trusted" o.signers.isEmpty
+  failsWith "a damaged list is not changed" (phone.backend.addSignerKeys true "Carol" bobPhone)
+    "Winnow could not safely read its signers, so they cannot be changed until the file is readable again."
+
+def testEveryBackupCarriesTheListAndAnImportMergesIt : IO Unit := do
+  let phone ← phoneWith 0xA1
+  let ms ← masters
+  phone.useLedger (← simulator 0xB2)
+  let ledgerID ← phone.backend.pairLedger true "Nano X"
+  let bobID ← phone.backend.addSignerKeys true "Bob" (← keyExpression ms[2]!)
+  let json ← phone.backend.exportBundle true
+  let bundle ← needE "bundle" (ImportBundle.decode json)
+  check "the export carries both" ((bundle.signers.map (·.toList.map (·.name))) == some ["Nano X", "Bob"])
+  check "with the Ledger's fingerprint" ((bundle.signers.bind (·[0]?)).bind (·.masterFingerprint) == some ms[1]!.fingerprint)
+  -- Restored on a phone that lost Bob and saved Carol since: Bob is back, Carol and the Ledger stay.
+  phone.backend.removeSigner bobID
+  let carolID ← phone.backend.addSignerKeys true "Carol" (← keyExpression (← master 0xE5))
+  discard <| phone.importOffline json
+  let signers ← phone.signers
+  check "merged: the phone's own first, the bundle's added" (signers.map (·.id) == [ledgerID, carolID, bobID])
+    s!"{signers.map (·.name)}"
+  check "merged names" (signers.map (·.name) == ["Nano X", "Carol", "Bob"])
+  -- A list the store refuses (a Ledger record without its own key) stops the import before anything.
+  let fake : SignerRecord := { id := "fake", kind := .ledger, name := "Not a Ledger", keys := #[← keyExpression ms[2]!],
+                               masterFingerprint := some ms[1]!.fingerprint, addedAt := 0 }
+  failsWith "a refused list stops the import" (phone.importOffline ({ bundle with signers := some #[fake] }).serialized)
+    "Invalid signer storage: a Ledger's record does not carry its own key"
+  check "the list unchanged" ((← phone.signers).length == 3)
+
+def testARestoredListJoinsThePhonesOwn : IO Unit := do
+  let ms ← masters
+  let keys ← memoryKeys
+  let (store, _) ← SignerStore.configure keys none signet
+  let bob ← keyExpression ms[2]!
+  let (store, local_) ← need "add" (store.addKeys keys writeAtomically "Bob" #[bob] "local-bob" 0)
+  let incoming : Array SignerRecord :=
+    #[{ id := "other-bob", kind := .keys, name := "Bob elsewhere", keys := #[bob], addedAt := 0 },
+      { id := "carol", kind := .keys, name := "Carol", keys := #[← keyExpression (← master 0xE5)], addedAt := 0 }]
+  let merged ← need "plan" (store.planRestore incoming)
+  check "the record here stays; the same key under another id is dropped; a new one joins"
+    (merged.toList.map (·.name) == ["Bob", "Carol"])
+  let store ← need "restore" (store.restore keys writeAtomically merged)
+  check "restored ids" (store.records.toList.map (·.id) == [local_.id, "carol"])
+  let fake : SignerRecord := { id := "fake", kind := .ledger, name := "Not a Ledger", keys := #[← keyExpression ms[1]!],
+                               masterFingerprint := some ms[1]!.fingerprint, addedAt := 0 }
+  refused "a Ledger record must carry its own key at the Ledger's path" (SignerStore.validateBackup #[fake] signet)
+    "invalidState"
+
+def testBuilderTakesMembersFromTheListAndAWholeAccountAsOne : IO Unit := do
+  let phone ← phoneWith 0xA1
+  let ms ← masters
+  let nanoX ← simulator 0xB2
+  phone.useLedger nanoX
+  let ledgerID ← phone.backend.pairLedger true "Nano X"
+  let o ← phone.backend.multisigOverview
+  let some ledger := o.signers.find? (·.id == ledgerID) | throw (IO.userError "no Ledger")
+  let phoneKey ← phone.keyExpression
+  let bobID ← phone.backend.addSignerKeys true "Bob" s!"{← keyExpression ms[2]!} {← keyExpression (← master 0xD4)}"
+  let carolMaster ← master 0xE5
+  let carolID ← phone.backend.addSignerKeys true "Carol" (← keyExpression carolMaster)
+  let signers ← phone.signers
+  let some bob := signers.find? (·.id == bobID) | throw (IO.userError "no Bob")
+  let some carol := signers.find? (·.id == carolID) | throw (IO.userError "no Carol")
+  -- The household: this phone and its Ledger, 2-of-2, which the Ledger approves.
+  let (householdID, householdD, reg) ← phone.backend.createMultisigAccount true "Household" 2
+    [([phoneKey], none), (ledger.keys, none)] none
+  check "the household is approved on the Ledger" (reg matches some (.ok "Nano X"))
+  let household ← needM "household" (MultisigAccount.parse householdD signet)
+  check "the household's preview" (previewText household == "2 of 2: any 2 of the 2 keys sign a spend.") (previewText household)
+  check "the household's keys" (household.signerExpressions.toList.mergeSort (· ≤ ·) == ([phoneKey] ++ ledger.keys).mergeSort (· ≤ ·))
+  -- The household's keys as one member of a 2-of-3 with Bob and Carol.
+  let (nestedID, nestedD, reg) ← phone.backend.createMultisigAccount true "Three households" 2
+    [(household.signerExpressions.toList, none), (bob.keys, none), (carol.keys, none)] none
+  let account ← needM "nested" (MultisigAccount.parse nestedD signet)
+  check "2 of 3 members" (account.policySummary == "2 of 3 members") account.policySummary
+  check "member sizes" ((account.members.map (·.groups.toList.map (·.size) |>.mergeSort (· ≤ ·))) == some [1, 2, 2])
+  check "the nested preview" (previewText account ==
+    "2 of 3 members: 3 ways to spend, each needing every key it lists, up to 4 keys. A member short of the keys it needs cannot help.")
+    (previewText account)
+  check "registered on the Ledger" (reg matches some (.ok "Nano X"))
+  check "the Ledger saw both names" ((← nanoX.get).registeredNames == #["Household", "Three households"])
+  let registered ← phone.record nestedID
+  check "the registration is the Ledger's" ((registered.ledger.map (·.masterFingerprint)) == some ms[1]!.fingerprint)
+  let names := Real.signerNames (← phone.multisig.signers.all) registered signet
+  check "names: the Ledger" (names.lookup ms[1]!.fingerprint == some "Nano X")
+  check "names: Bob" (names.lookup ms[2]!.fingerprint == some "Bob")
+  check "names: Carol" (names.lookup carolMaster.fingerprint == some "Carol")
+  -- A second Ledger of this phone in the same account is refused.
+  phone.useLedger (← simulator 0xE6)
+  let nanoSID ← phone.backend.pairLedger true "Nano S"
+  let some nanoS := (← phone.signers).find? (·.id == nanoSID) | throw (IO.userError "no Nano S")
+  check "two Ledgers listed" ((← phone.backend.multisigOverview).ledgers.map (·.name) == ["Nano X", "Nano S"])
+  failsWith "two of this phone's Ledgers" (phone.build "Two Ledgers" 2 [[phoneKey], ledger.keys, nanoS.keys])
+    Real.oneLedgerPerAccountText
+  failsWith "a Ledger account wants a name it can show" (phone.build "Ménage à trois" 2 [[phoneKey], ledger.keys, carol.keys])
+    Real.invalidNameText
+  check "two accounts" ((← phone.accounts).length == 2)
+  check "the household" (householdID != nestedID)
+
+/-! ## NestedMultisigFlowTests (upstream d2ca878) -/
+
+def destinationOf (m : Keys.HDKey) (index : UInt32) : IO String := do
+  let d ← needE "destination descriptor" (Descriptor.parse s!"tr({← keyExpression m})")
+  return (← needE "derived" (d.derived index signet))[0]!.address
+
+def completePaths (s : MultisigScreen) : List (Bool × Nat × Nat) := s.signatures.filter fun (_, a, t) => a ≥ t
+
+def testTwoPhonesWithLedgersAndAThirdMember : IO Unit := do
+  let phoneA ← phoneWith 0xA1
+  let phoneB ← phoneWith 0xC3
+  let ledgerA ← simulator 0xB2
+  let ledgerB ← simulator 0xD5
+  phoneA.useLedger ledgerA
+  phoneB.useLedger ledgerB
+  let third ← master 0xD4
+  let pairedA ← phoneA.backend.pairLedger true "Ledger A"
+  let pairedB ← phoneB.backend.pairLedger true "Ledger B"
+  let some ledgerAInfo := (← phoneA.signers).find? (·.id == pairedA) | throw (IO.userError "no Ledger A")
+  let some ledgerBInfo := (← phoneB.signers).find? (·.id == pairedB) | throw (IO.userError "no Ledger B")
+  let shareB := (← phoneB.keyExpression) ++ "\n" ++ ledgerBInfo.keys.headD ""
+  let savedB ← phoneA.backend.addSignerKeys true "Household B" shareB
+  let some savedBInfo := (← phoneA.signers).find? (·.id == savedB) | throw (IO.userError "no B")
+  check "B's share is two keys" (savedBInfo.keys.length == 2)
+  let savedThird ← phoneA.backend.addSignerKeys true "Carol" (← keyExpression third)
+  let some thirdInfo := (← phoneA.signers).find? (·.id == savedThird) | throw (IO.userError "no Carol")
+  let (id, descriptor, reg) ← phoneA.backend.createMultisigAccount true "Three households" 2
+    [((← phoneA.keyExpression) :: ledgerAInfo.keys, none), (savedBInfo.keys, none), (thirdInfo.keys, none)] none
+  let account ← needM "account" (MultisigAccount.parse descriptor signet)
+  check "nested" account.isNested
+  check "2 of 3 members" (account.policySummary == "2 of 3 members")
+  check "Ledger A registered it" (reg matches some (.ok "Ledger A"))
+  check "Ledger A saw the name" ((← ledgerA.get).registeredNames == #["Three households"])
+  check "phone A's record has the registration" (← phoneA.record id).ledger.isSome
+  let some infoA := (← phoneA.accounts).find? (·.id == id) | throw (IO.userError "no info")
+  let lines := infoA.memberLines
+  let has (needle : String) (line : String) := (line.splitOn needle).length > 1
+  check "names: this phone with Ledger A" (lines.any fun l => has "(this phone)" l && has "(Ledger A)" l) s!"{lines}"
+  check "names: Household B" (lines.any (has "(Household B)")) s!"{lines}"
+  check "names: Carol" (lines.any (has "(Carol)")) s!"{lines}"
+  check "the members header" (infoA.membersHeader == some "Members · any 2 of 3")
+  -- Phone B joins with the descriptor; its own paired Ledger registers it.
+  let (joined, regB) ← phoneB.backend.addMultisigAccount true "Three households" descriptor
+  check "B joined the same account" (joined == id)
+  check "Ledger B registered it" (regB matches some (.ok "Ledger B"))
+  check "Ledger B saw the name" ((← ledgerB.get).registeredNames == #["Three households"])
+  check "B's registration is Ledger B's" (((← phoneB.record id).ledger.map (·.masterFingerprint)) == some (← master 0xD5).fingerprint)
+  -- The same coin reaches both phones.
+  let height := (← phoneA.record id).createdAtHeight + 1
+  let funding := spend #[⟨zeros 32 0x36, 0⟩] #[{ value := 80_000, scriptPubKey := ← spk account 0 }]
+  for p in [phoneA, phoneB] do
+    discard <| p.multisig.applyMatch (fakeMatch height #[coinbaseAt height, funding]) signet
+  check "funded" ((← phoneA.record id).balance == 80_000)
+  -- Phone A creates the spend: three groups could finish it, none has.
+  let destination ← destinationOf third 1
+  let created ← Real.createMultisigSpend phoneA.env phoneA.multisig id destination 50_000 2.0 false
+  let screen ← screenOf created
+  check "three paths" (screen.signatures.length == 3)
+  check "the group titles" (screen.signatureTitles.map (·.1) == ["Group 1 signatures", "Group 2 signatures", "Group 3 signatures"])
+  check "both devices wanted" (screen.progress == { phoneHolds := true, phoneUnsigned := true, ledgerHolds := true, ledgerUnsigned := true })
+  -- Household A signs with both devices: one member, nothing finishes.
+  let signed ← Real.signMultisigSpend phoneA.env phoneA.multisig id created.psbt
+  let signed ← Real.signMultisigSpendWithLedger phoneA.env phoneA.multisig true id signed.psbt
+  let screen ← screenOf signed
+  check "one member is not enough" (!(screen.progress.complete || screen.progress.phoneUnsigned || screen.progress.ledgerUnsigned))
+  check "share it" (screen.progress.nextStep.startsWith "Share the PSBT")
+  -- Household B signs its copy with both devices; A combines it.
+  let copy ← Real.signMultisigSpend phoneB.env phoneB.multisig id signed.psbt
+  let copy ← Real.signMultisigSpendWithLedger phoneB.env phoneB.multisig true id copy.psbt
+  let combined ← Real.addPastedPSBT phoneA.env phoneA.multisig id (some signed.psbt) copy.psbt
+  let screen ← screenOf combined
+  check "two whole members: complete" screen.progress.complete
+  check "exactly one leaf finishes, of four keys" (completePaths screen == [(false, 4, 4)]) s!"{screen.signatures}"
+  let record ← phoneA.record id
+  let full ← needE "psbt" (PSBT.ofBase64 combined.psbt)
+  let (_, tx) ← needM "finalize" (account.finalizeSpend full record.utxos (Real.ownedCoordinates record) height)
+  check "four signatures, the leaf and its control block" (tx.inputs[0]!.witness.size == 6)
+
+def testAThresholdAccountAsOneMember : IO Unit := do
+  let phone ← phoneWith 0xA1
+  let ms ← masters
+  let ledger ← simulator 0xD5
+  phone.useLedger ledger
+  let nanoXID ← phone.backend.pairLedger true "Nano X"
+  let bobID ← phone.backend.addSignerKeys true "Bob" (← keyExpression ms[1]!)
+  let carolID ← phone.backend.addSignerKeys true "Carol" (← keyExpression ms[2]!)
+  let daveMaster ← master 0xE5
+  let daveID ← phone.backend.addSignerKeys true "Dave" (← keyExpression daveMaster)
+  let signers ← phone.signers
+  let keysOf (id : String) : List String := ((signers.find? (·.id == id)).map (·.keys)).getD []
+  let phoneKey ← phone.keyExpression
+  -- The family: this phone, Bob and Carol, any two.
+  let (familyID, _) ← phone.build "Family" 2 [[phoneKey], keysOf bobID, keysOf carolID]
+  let some family := (← phone.accounts).find? (·.id == familyID) | throw (IO.userError "no family")
+  check "picker: eligible" (pickerAccountText family true == "2 of 3: any 2 of its 3 keys") (pickerAccountText family true)
+  check "picker: not into a member" (pickerAccountText family false == "2 of 3: a member of its own only")
+  check "picker: into a member it is not eligible" (!pickerAccountEligible family false && pickerAccountEligible family true)
+  let member : BuildMember :=
+    { keys := family.signerExpressions.map fun k => { key := k, label := if k == phoneKey then phoneLabel else "Family" },
+      name := some "Family", threshold := some 2 }
+  check "member title" (member.title == "Family 2-of-3") member.title
+  check "member caption" (member.caption == some "any 2 of its 3 keys")
+  check "a threshold member" member.isThreshold
+  -- The estate: the family, the Ledger and Dave, any two members.
+  let (estateID, estateD, reg) ← phone.backend.createMultisigAccount true "Estate" 2
+    [member.plan, (keysOf nanoXID, none), (keysOf daveID, none)] none
+  let account ← needM "estate" (MultisigAccount.parse estateD signet)
+  check "nested, seven leaves" (account.isNested && account.signersLeaves.size == 7)
+  check "the summary" (account.policySummary == "2 of 3 members, one of them 2 of 3") account.policySummary
+  check "the preview" (previewText account ==
+    "2 of 3 members, one of them 2 of 3: 7 ways to spend, each needing every key it lists, up to 3 keys. A member short of the keys it needs cannot help.")
+  let some estate := (← phone.accounts).find? (·.id == estateID) | throw (IO.userError "no estate")
+  check "a nested account cannot be one member yet"
+    (pickerAccountText estate false == "2 of 3 members, one of them 2 of 3: cannot be one member yet")
+  check "member thresholds" ((account.members.map (·.thresholds.toList.mergeSort (· ≤ ·))) == some [1, 1, 2])
+  let has (needle : String) (line : String) := (line.splitOn needle).length > 1
+  let lines := estate.memberLines
+  check "the family line" (lines.any fun l => l.startsWith "any 2 of: " && has "(this phone)" l && has "(Bob)" l && has "(Carol)" l)
+    s!"{lines}"
+  check "the Ledger line" (lines.any fun l => has "(Nano X)" l && !l.startsWith "any") s!"{lines}"
+  check "the Dave line" (lines.any (has "(Dave)")) s!"{lines}"
+  check "registered" (reg matches some (.ok "Nano X"))
+  check "the Ledger saw the estate" ((← ledger.get).registeredNames == #["Estate"])
+  -- A coin, and a spend: the phone's family key and the Ledger are one whole member; Bob completes the family.
+  let height := (← phone.record estateID).createdAtHeight + 1
+  let funding := spend #[⟨zeros 32 0x37, 0⟩] #[{ value := 80_000, scriptPubKey := ← spk account 0 }]
+  discard <| phone.multisig.applyMatch (fakeMatch height #[coinbaseAt height, funding]) signet
+  let record ← phone.record estateID
+  check "funded" (record.balance == 80_000)
+  let owned := Real.ownedCoordinates record
+  let tip ← Real.chainTip phone.env
+  let destination ← destinationOf daveMaster 1
+  let created ← Real.createMultisigSpend phone.env phone.multisig estateID destination 50_000 2.0 false
+  check "seven paths" ((← screenOf created).signatures.length == 7)
+  let signed ← Real.signMultisigSpend phone.env phone.multisig estateID created.psbt
+  let signed ← Real.signMultisigSpendWithLedger phone.env phone.multisig true estateID signed.psbt
+  let screen ← screenOf signed
+  check "not yet" (!(screen.progress.complete || screen.progress.phoneUnsigned || screen.progress.ledgerUnsigned))
+  let psbt ← needE "psbt" (PSBT.ofBase64 signed.psbt)
+  let psbt ← needM "Bob signs" (account.sign psbt ms[1]! record.utxos owned tip (zeros 32))
+  let shown ← Real.reviewMultisigPSBT phone.env phone.multisig estateID psbt.base64
+  let screen ← screenOf shown
+  check "Bob completes the family: one leaf of three keys" (screen.progress.complete && completePaths screen == [(false, 3, 3)])
+    s!"{screen.signatures}"
+  let (_, tx) ← needM "finalize" (account.finalizeSpend psbt record.utxos owned tip)
+  check "three signatures, the leaf and its control block" (tx.inputs[0]!.witness.size == 5)
+  -- This phone and Dave: one family key and one whole member, nothing; Carol completes the family.
+  let other ← Real.createMultisigSpend phone.env phone.multisig estateID destination 50_000 2.0 false
+  let other ← Real.signMultisigSpend phone.env phone.multisig estateID other.psbt
+  let o ← needE "psbt" (PSBT.ofBase64 other.psbt)
+  let o ← needM "Dave signs" (account.sign o daveMaster record.utxos owned tip (zeros 32))
+  check "the phone and Dave are not enough"
+    (!((← screenOf (← Real.reviewMultisigPSBT phone.env phone.multisig estateID o.base64)).progress.complete))
+  let o ← needM "Carol signs" (account.sign o ms[2]! record.utxos owned tip (zeros 32))
+  let screen ← screenOf (← Real.reviewMultisigPSBT phone.env phone.multisig estateID o.base64)
+  check "Carol completes the family" (screen.progress.complete && (completePaths screen).length == 1)
+
+def testPairingSavingAndRegisteringAreAdvancedModeOnly : IO Unit := do
+  let phone ← phoneWith 0xA1
+  phone.useLedger (← simulator 0xB2)
+  failsWith "pairing in Simple mode" (phone.backend.pairLedger false "Nano X") Real.advancedModeOnlyText
+  failsWith "saving keys in Simple mode" (phone.backend.addSignerKeys false "Bob" (← keyExpression (← masters)[2]!))
+    Real.advancedModeOnlyText
+  failsWith "registering in Simple mode" (phone.backend.registerLedger false "x") Real.advancedModeOnlyText
+  check "no signers" (← phone.signers).isEmpty
+
+def nestedTests : List (String × IO Unit) :=
+  [ ("testTwoPhonesWithLedgersAndAThirdMember", testTwoPhonesWithLedgersAndAThirdMember)
+  , ("testAThresholdAccountAsOneMember", testAThresholdAccountAsOneMember)
+  , ("testPairingSavingAndRegisteringAreAdvancedModeOnly", testPairingSavingAndRegisteringAreAdvancedModeOnly) ]
+
+def signerTests : List (String × IO Unit) :=
+  [ ("testPairedLedgerAndSavedKeysPersistAndRefuseDuplicates", testPairedLedgerAndSavedKeysPersistAndRefuseDuplicates)
+  , ("testEveryBackupCarriesTheListAndAnImportMergesIt", testEveryBackupCarriesTheListAndAnImportMergesIt)
+  , ("testARestoredListJoinsThePhonesOwn", testARestoredListJoinsThePhonesOwn)
+  , ("testBuilderTakesMembersFromTheListAndAWholeAccountAsOne", testBuilderTakesMembersFromTheListAndAWholeAccountAsOne) ]
+
 /-! ## main -/
 
 def storeTests : List (String × IO Unit) :=
@@ -744,6 +1128,10 @@ def main : IO UInt32 := do
   for (name, t) in flowTests do runTest name t
   IO.println "LedgerPairingTests, LedgerBluetoothTests"
   for (name, t) in ledgerTests do runTest name t
+  IO.println "SignerRosterTests"
+  for (name, t) in signerTests do runTest name t
+  IO.println "NestedMultisigFlowTests"
+  for (name, t) in nestedTests do runTest name t
   try IO.FS.removeDirAll root catch _ => pure ()
   let failed ← failures.get
   IO.println s!"multisig-app-test: {← passed.get} passed, {failed.size} failed"

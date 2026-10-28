@@ -61,6 +61,13 @@ structure Hooks where
   multisigBackup : IO (Array MultisigAccountRecord) := pure #[]
   /-- `ownedMultisigScripts`: the scripts the accounts watch (a payment to one is not a recipient). -/
   multisigOwnedScripts : IO (Array ByteArray) := pure #[]
+  -- The signer list (`SignerStore`), which a bundle carries and an import merges.
+  /-- `SignerStore.validateBackup(_:network:)` of a bundle's signers, before anything is written. -/
+  signerValidate : Array SignerRecord → Tx.BitcoinNetwork → IO Unit := fun _ _ => pure ()
+  /-- `mergeRestoredSigners(_:)`: the phone's own list stays, the bundle's adds what it lacks. -/
+  signerMerge : Array SignerRecord → IO Unit := fun _ => pure ()
+  /-- `signerStore.backup()`. -/
+  signerBackup : IO (Array SignerRecord) := pure #[]
 
 instance : Inhabited Hooks := ⟨{}⟩
 

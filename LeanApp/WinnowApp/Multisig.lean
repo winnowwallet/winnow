@@ -2,6 +2,7 @@ import WinnowApp.Common
 import Winnow.Wallet.People
 import Winnow.Keys.Taproot
 import Winnow.Ledger.WalletPolicy
+import Winnow.Ledger.Multisig
 
 /-! MultisigViews.swift and MultisigBuildView.swift (upstream 1cf93fb): raw k-of-n multisig accounts in
 Advanced mode's Wallet tab only — the Multisig section, MultisigAddView ("Join with a descriptor"),
@@ -19,6 +20,8 @@ open ElmLean
 /-! ## Update -/
 
 def Model.multisigInfo? (m : Model) (id : String) : Option MultisigInfo := m.multisig.accounts.find? (·.id == id)
+
+def Model.signer? (m : Model) (id : String) : Option SignerInfo := m.multisig.signers.find? (·.id == id)
 
 def Model.multisigPSBTRoute? (m : Model) : Option String :=
   match m.routes.getLast? with
@@ -44,24 +47,111 @@ def oneDecimal (milli : Nat) : String :=
 /-- MultisigBuildView.blocks(forDays:): about 144 blocks a day; BIP68 counts at most 65,535 blocks. -/
 def recoveryBlocks (days : Nat) : Nat := min (days * 144) 0xFFFF
 
+/-- The days a delay of `blocks` comes to, to the nearest day (the stepper's value). -/
+def recoveryDays (blocks : Nat) : Nat := max 1 ((blocks + 72) / 144)
+
 /-- `recoveryPlan`. -/
 def MultisigBuildForm.recoveryPlan (f : MultisigBuildForm) : Option MultisigRecovery :=
   if !f.withRecovery then none
-  else if f.recoveryMode == 0 then some (.fewerSigners f.recoveryThreshold (recoveryBlocks f.recoveryDays))
-  else some (.separateKey f.recoveryKey.trimAscii.copy (recoveryBlocks f.recoveryDays))
+  else if f.recoveryMode == 0 then some (.fewerSigners f.recoveryThreshold f.recoveryBlocks)
+  else some (.separateKey f.recoveryKey.trimAscii.copy f.recoveryBlocks)
 
-/-- `.onChange(of: signerCount)`: both thresholds stay within 1 … signers. -/
-def MultisigBuildForm.clamp (f : MultisigBuildForm) : MultisigBuildForm :=
-  let n := f.signerCount
-  { f with threshold := min (max f.threshold 1) n, recoveryThreshold := min (max f.recoveryThreshold 1) n }
+/-- `MultisigRecovery` as WalletCore's plan. -/
+def MultisigRecovery.plan : MultisigRecovery → Winnow.MultisigAccount.RecoveryPlan
+  | .fewerSigners t b => .fewerSigners t b.toUInt32
+  | .separateKey key b => .separateKeys 1 #[Winnow.Keys.Unicode.trimWhitespace key] b.toUInt32
+
+def multisigFailureDescription : Winnow.MultisigFailure → String
+  | .account e => e.description
+  | .named n => s!"The operation could not be completed ({n})."
+
+/-- `MultisigBuildView.previewText`: "2 of 3 members, one of them 2 of 3: 7 ways to spend, each needing every
+key it lists, up to 3 keys." -/
+def previewText (account : Winnow.MultisigAccount) : String :=
+  if !account.isNested then
+    s!"{account.policySummary}: any {account.threshold} of the {account.signers.size} keys sign a spend."
+  else
+    let largest := account.signersLeaves.foldl (fun acc l => max acc l.keys.size) 0
+    s!"{account.policySummary}: {account.signersLeaves.size} ways to spend, each needing every key it lists, up to {largest} keys. A member short of the keys it needs cannot help."
+
+/-- `preview`: the account these members make, or why they do not, shown before Create; a recovery key
+not pasted yet is left out of it. An account naming a Ledger key must also fit a Ledger's policy. -/
+def MultisigBuildForm.computePreview (f : MultisigBuildForm) (network : Network) : Option (Except String String) :=
+  if f.members.length < 2 then none else
+  let recovery := if f.withRecovery && f.recoveryMode == 1 && f.recoveryKey.isEmpty then none else f.recoveryPlan
+  let members := f.members.toArray.map fun m =>
+    ({ keys := (m.keys.map (·.key)).toArray, threshold := (m.threshold.getD m.keys.length : Nat) } : Winnow.MultisigAccount.Member)
+  let net := match network with | .mainnet => Winnow.Tx.BitcoinNetwork.mainnet | .signet => .signet | .regtest => .regtest
+  let made := do
+    let d ← Winnow.MultisigAccount.makeNestedDescriptor members f.threshold (recovery.map MultisigRecovery.plan) net
+    Winnow.MultisigAccount.make d net
+  match made with
+  | .error e => some (.error (multisigFailureDescription e))
+  | .ok account =>
+    if Winnow.Ledger.Multisig.namesALedgerKey account then
+      match Winnow.Ledger.WalletPolicy.ofAccount "Preview" account with
+      | .ok _ => some (.ok (previewText account))
+      | .error e => some (.error e.description)
+    else some (.ok (previewText account))
+
+/-- `.onChange(of: members.count)`: both thresholds stay within 1 … members; the preview follows. -/
+def MultisigBuildForm.clamp (f : MultisigBuildForm) (network : Network) : MultisigBuildForm :=
+  let n := max f.members.length 1
+  let f := { f with threshold := min (max f.threshold 1) n, recoveryThreshold := min (max f.recoveryThreshold 1) n }
+  { f with preview := f.computePreview network }
 
 def MultisigBuildForm.canCreate (f : MultisigBuildForm) : Bool :=
-  !f.creating && (Winnow.DisplayName.normalized f.name).isSome && f.signerCount ≥ 2 &&
+  !f.creating && (Winnow.DisplayName.normalized f.name).isSome && (f.preview.any fun p => p matches .ok _) &&
     !(f.withRecovery && f.recoveryMode == 1 && f.recoveryKey.isEmpty)
 
-/-- LedgerPairView's `nameIsUsable`: a display name the Ledger can show. -/
+/-- `phoneMember`: this phone as a member of its own. -/
+def Model.phoneMember (m : Model) : Option BuildMember :=
+  m.multisig.keyExpression.map fun k => { keys := [{ key := k, label := phoneLabel }] }
+
+/-- `add(_:to:)`: a pick joins member `into`, or starts a member of its own. A whole account brings this
+phone's key with it, so the key leaves the member it was in. -/
+def MultisigBuildForm.addPick (f : MultisigBuildForm) (keys : List BuildKey) (name : Option String) (threshold : Option Nat)
+    (into : Option Nat) : MultisigBuildForm :=
+  let members := match keys.find? (·.label == phoneLabel) with
+    | some phone => (f.members.map fun m => { m with keys := m.keys.filter (·.key != phone.key) }).filter (!·.keys.isEmpty)
+    | none => f.members
+  let f := { f with members }
+  let used := f.usedKeys
+  let fresh := keys.filter (!used.contains ·.key)
+  if fresh.isEmpty then f else
+  match into with
+  | some i => if i < f.members.length then { f with members := f.members.modify i fun m => { m with keys := m.keys ++ fresh } } else f
+  | none => { f with members := f.members ++ [{ keys := fresh, name, threshold }] }
+
+/-- `removeMember(_:)`: a whole account goes as one; this phone comes back as a member of its own when the
+account held its key. -/
+def Model.removeBuildMember (m : Model) (i : Nat) : MultisigBuildForm :=
+  let f := m.multisigBuild
+  let f := { f with members := f.members.eraseIdx i }
+  match m.phoneMember with
+  | some phone => if f.usedKeys.contains phone.keys[0]!.key then f else { f with members := phone :: f.members }
+  | none => f
+
+/-- `remove(_:from:)`: a key out of a member (an empty member goes). -/
+def MultisigBuildForm.removeKey (f : MultisigBuildForm) (i k : Nat) : MultisigBuildForm :=
+  let members := f.members.modify i fun m => { m with keys := m.keys.eraseIdx k }
+  { f with members := members.filter (!·.keys.isEmpty) }
+
+/-- `SignerPickerSheet.accountText`: "2 keys, one signer"; "2 of 3: any 2 of its 3 keys"; why not. -/
+def pickerAccountText (a : MultisigInfo) (eligible : Bool) : String :=
+  let summary := a.policy.getD "?"
+  if !eligible then
+    if a.isNested then s!"{summary}: cannot be one member yet" else s!"{summary}: a member of its own only"
+  else if a.threshold < a.signerCount then s!"{summary}: any {a.threshold} of its {a.signerCount} keys"
+  else s!"{a.signerCount} keys, one signer"
+
+/-- Whether the picker can take the account: not nested, and (joining a member) one whose keys all sign. -/
+def pickerAccountEligible (a : MultisigInfo) (wholeMember : Bool) : Bool :=
+  a.policy.isSome && !a.isNested && (wholeMember || a.threshold ≥ a.signerCount)
+
+/-- LedgerPairView's Pair button: a usable display name (what this phone calls the Ledger). -/
 def LedgerPairForm.nameIsUsable (f : LedgerPairForm) : Bool :=
-  (Winnow.DisplayName.normalized f.name).any Winnow.Ledger.WalletPolicy.isValidName
+  (Winnow.DisplayName.normalized f.name).isSome
 
 /-- The descriptor text as MultisigAddView validates it (trimmed; nothing while empty). -/
 def MultisigAddForm.trimmed (f : MultisigAddForm) : String := Winnow.Keys.Unicode.trimWhitespace f.descriptor
@@ -110,7 +200,10 @@ def stepMultisig (msg : MultisigMsg) (m : Model) : Model × List Cmd :=
   let withSpend (f : MultisigSpendForm) : Model := { m with multisigSpend := f }
   match msg with
   | .openAdd => ({ m with routes := m.routes ++ [.multisigAdd], multisigAdd := {} }, [])
-  | .openBuild => ({ m with routes := m.routes ++ [.multisigBuild], multisigBuild := {} }, [])
+  | .openBuild =>
+    -- `seed()`: this phone is the first member; the user adds the rest
+    let f : MultisigBuildForm := { members := m.phoneMember.toList }
+    ({ m with routes := m.routes ++ [.multisigBuild], multisigBuild := f.clamp m.settings.network }, [])
   | .openAccount id =>
     ({ m with routes := m.routes ++ [.multisigAccount id], multisigAccountError := none, ledgerVerify := {} },
      [.multisigOverview g])
@@ -127,24 +220,49 @@ def stepMultisig (msg : MultisigMsg) (m : Model) : Model × List Cmd :=
   | .pasteDescriptor => (m, [.paste .multisigDescriptor])
   | .save =>
     if !add.canSave then (m, []) else
-    (withAdd { add with saving := true, error := none }, [.addMultisigAccount g add.name add.descriptor])
+    (withAdd { add with saving := true, error := none }, [.addMultisigAccount g m.settings.advancedMode add.name add.descriptor])
   -- MultisigBuildView
   | .buildSetName s => (withBuild { build with name := s }, [])
-  | .pasteSignerKey => (m, [.paste .multisigSignerKey])
-  | .removeSignerKey i => (withBuild { build with otherKeys := build.otherKeys.eraseIdx i }.clamp, [])
-  | .setThreshold n => (withBuild { build with threshold := n }, [])
-  | .setWithRecovery b => (withBuild { build with withRecovery := b }, [])
-  | .setRecoveryMode i => (withBuild { build with recoveryMode := if i == 1 then 1 else 0 }, [])
-  | .setRecoveryThreshold n => (withBuild { build with recoveryThreshold := n }, [])
+  | .openPicker into => ({ m with multisigBuild := { build with pickInto := into, pasteError := none } }.present .signerPicker, [])
+  | .pickSigner id =>
+    match m.signer? id with
+    | some s =>
+      if s.keys.any build.usedKeys.contains then (m, []) else
+      let f := build.addPick (s.keys.map fun k => { key := k, label := s.name }) none none build.pickInto
+      { m with multisigBuild := f.clamp m.settings.network }.closeSheet .signerPicker
+    | none => (m, [])
+  | .pickAccount id =>
+    match m.multisigInfo? id with
+    | some a =>
+      let whole := build.pickInto.isNone
+      let phone := m.multisig.keyExpression
+      if !pickerAccountEligible a whole || a.signerExpressions.any (fun k => some k != phone && build.usedKeys.contains k) then
+        (m, [])
+      else
+        let keys := a.signerExpressions.map fun k => ({ key := k, label := if some k == phone then phoneLabel else a.name } : BuildKey)
+        let threshold := if a.threshold < a.signerCount then some a.threshold else none
+        let f := build.addPick keys (some a.name) threshold build.pickInto
+        { m with multisigBuild := f.clamp m.settings.network }.closeSheet .signerPicker
+    | none => (m, [])
+  | .pasteMemberKeys => (m, [.paste .memberKeys])
+  | .removeMemberKey i k => (withBuild (build.removeKey i k |>.clamp m.settings.network), [])
+  | .removeMember i => ({ m with multisigBuild := (m.removeBuildMember i).clamp m.settings.network }, [])
+  | .setThreshold n => (withBuild ({ build with threshold := n }.clamp m.settings.network), [])
+  | .setWithRecovery b => (withBuild ({ build with withRecovery := b }.clamp m.settings.network), [])
+  | .setRecoveryMode i => (withBuild ({ build with recoveryMode := if i == 1 then 1 else 0 }.clamp m.settings.network), [])
+  | .setRecoveryThreshold n => (withBuild ({ build with recoveryThreshold := n }.clamp m.settings.network), [])
   | .pasteRecoveryKey => (m, [.paste .multisigRecoveryKey])
-  | .removeRecoveryKey => (withBuild { build with recoveryKey := "" }, [])
-  | .setRecoveryDays n => (withBuild { build with recoveryDays := min (max n 1) 455 }, [])
+  | .removeRecoveryKey => (withBuild ({ build with recoveryKey := "" }.clamp m.settings.network), [])
+  | .setRecoveryDays n =>
+    (withBuild ({ build with recoveryBlocks := recoveryBlocks (min (max n 1) 455) }.clamp m.settings.network), [])
   | .create =>
     if !build.canCreate then (m, []) else
-    (withBuild { build with creating := true, error := none },
-     [.createMultisigAccount g m.settings.advancedMode build.name build.threshold build.otherKeys build.includeLedger
+    (withBuild { build with creating := true, error := none, registration := none },
+     [.createMultisigAccount g m.settings.advancedMode build.name build.threshold (build.members.map (·.plan))
         build.recoveryPlan])
-  | .setIncludeLedger b => (withBuild { build with includeLedger := b }.clamp, [])
+  | .registerLedger id =>
+    if m.ledgerRegistering.isSome then (m, []) else
+    ({ m with ledgerRegistering := some id, ledgerRegisterError := none }, [.registerLedger g m.settings.advancedMode id])
   -- MultisigAccountView
   | .newAddress =>
     match m.routes.getLast? with
@@ -242,14 +360,31 @@ def Model.onMultisigHost (m : Model) (h : Host) : Model × List Cmd :=
   | .multisigChecked g text r =>
     if current g && m.multisigAdd.trimmed == text then ({ m with multisigAdd := { m.multisigAdd with check := some (text, r) } }, [])
     else (m, [])
-  | .multisigAdded g _ =>
+  | .multisigAdded g _ registration =>
     if !current g then (m, []) else
     let m' := { m with multisigAdd := { m.multisigAdd with saving := false } }
-    -- `dismiss()`
-    (if m'.routes.getLast? == some .multisigAdd then m'.popMultisig else m', [.multisigOverview g])
-  | .multisigCreated g id d =>
+    match registration with
+    | some (.error reason) =>
+      -- saved, but the paired Ledger did not register it: the screen stays, with Done
+      let text := s!"The account is on this phone, but the Ledger did not register it: {reason} Register on Ledger from the account screen."
+      ({ m' with multisigAdd := { m'.multisigAdd with saved := true, error := some text } }, [.multisigOverview g])
+    | _ =>
+      -- `dismiss()`
+      (if m'.routes.getLast? == some .multisigAdd then m'.popMultisig else m', [.multisigOverview g])
+  | .multisigCreated g id d registration =>
     if !current g then (m, []) else
-    ({ m with multisigBuild := { m.multisigBuild with creating := false, created := some (id, d) } }, [.multisigOverview g])
+    ({ m with multisigBuild := { m.multisigBuild with creating := false, created := some (id, d), registration } },
+     [.multisigOverview g])
+  | .ledgerRegistered g id r =>
+    if !current g then (m, []) else
+    let m' := { m with ledgerRegistering := none }
+    match r with
+    | .ok () =>
+      let b := m'.multisigBuild
+      let b := if b.created.any (·.1 == id) then
+          { b with registration := some (.ok ((b.pairedLedgerNames m.multisig.ledgers).head?.getD "the Ledger")) } else b
+      ({ m' with multisigBuild := b, ledgerRegisterError := none }, [.multisigOverview g])
+    | .error e => ({ m' with ledgerRegisterError := some (id, e) }, [.multisigOverview g])
   | .multisigRemoved g id =>
     if !current g then (m, []) else
     (if m.routes.getLast? == some (.multisigAccount id) then m.popMultisig else m, [.multisigOverview g])
@@ -287,19 +422,28 @@ def literalRow (m : Model) (key text : String) (id := "") : H :=
 
 /-- The Wallet tab's multisig section. -/
 def multisigSection (m : Model) : H :=
-  .section "Multisig" "k-of-n Taproot accounts with other Winnows, a Ledger or any signer, shared as a descriptor and spent with PSBTs. Any k signers spend at once; an optional recovery path lets fewer signers, or a separate key, spend a coin that has not moved for a set number of blocks."
+  .section "Multisig" "k-of-n Taproot accounts with other Winnows, a Ledger or any signer, shared as a descriptor and spent with PSBTs. Any k signers spend at once; a phone and its Ledger can count as one signer; an optional recovery path lets fewer signers, or a separate key, spend a coin that has not moved for a set number of blocks. Pair a Ledger and save other people's keys under Settings → Signers."
     ((match m.multisig.notice with | some n => [body n] | none => []) ++
      (m.multisig.accounts.map fun a =>
         .row [.identified s!"multisigAccount-{a.id}" (.button a.name .plain (some (.multisig (.openAccount a.id)))), .spacer,
               body (satsText a.balance)]) ++
      [ .identified "multisigBuildButton" (.button "New multisig account" .plain (some (.multisig .openBuild)))
-     , .identified "multisigAddButton" (.button "Join with a descriptor" .plain (some (.multisig .openAdd)))
-     , .identified "ledgerPairButton" (.button "Pair a Ledger (2-of-2)" .plain (some (.multisig .openLedgerPair))) ])
+     , .identified "multisigAddButton" (.button "Join with a descriptor" .plain (some (.multisig .openAdd))) ])
 
 def errorSection (e : Option String) : List H :=
   match e with
   | some text => [.section "" "" [body text]]
   | none => []
+
+/-- `LedgerRegisterButton`: registers the account on the Ledger connected now. -/
+def ledgerRegisterRows (m : Model) (id : String) : List H :=
+  let busy := m.ledgerRegistering == some id
+  [.identified "ledgerRegisterButton"
+    (.button (if busy then "Check the Ledger's screen…" else "Register on Ledger") .plain
+      (if m.ledgerRegistering.isSome then none else some (.multisig (.registerLedger id))))] ++
+  (match m.ledgerRegisterError with
+   | some (i, e) => if i == id then [.identified "ledgerRegisterError" (body e)] else []
+   | none => [])
 
 /-- MultisigAddView ("Add multisig account"). -/
 def multisigAddSections (m : Model) : List H :=
@@ -307,13 +451,19 @@ def multisigAddSections (m : Model) : List H :=
   let set (g : String → MultisigMsg) : String → Msg := fun s => .multisig (g s)
   [ .section "" "Winnow watches the account from the next block it scans. Coins the account received before that are not found."
       [.identified "multisigNameField" (.input .plain "" "Name" f.name (set .setName) none)]
-  , .section "This phone's key" "One signer must be this key. Every signer is an extended public key with its origin and the /<0;1>/* suffix; the internal key is the unspendable NUMS point."
+  , .section "This phone's key" "One signer must be this key. Every signer is an extended public key with its origin and the /<0;1>/* suffix; the internal key is the unspendable NUMS point. To count this phone and its Ledger as one signer of someone else's account, send both keys together."
       (match m.multisig.keyExpression with
        | some key =>
          [ literalRow m "multisig.key" key "multisigKeyText"
          , copyableIdentifier m "multisig.template"
              s!"tr({Winnow.hex Winnow.Keys.Taproot.unspendableInternalKey},sortedmulti_a(2,{key},OTHER_KEY))"
-             (abbreviated := true) (label := "Copy 2-of-2 template") ]
+             (abbreviated := true) (label := "Copy 2-of-2 template") ] ++
+         -- `MemberShareRows`: this phone's key with each paired Ledger's, as one signer
+         (if m.multisig.ledgers.isEmpty then
+           [caption "Pair a Ledger under Settings → Signers to share this phone's key and the Ledger's together, as one signer."]
+          else m.multisig.ledgers.map fun l =>
+            .col [caption s!"This phone and {l.name}, as one signer",
+                  literalRow m s!"multisig.share.{l.id}" (key ++ "\n" ++ l.keys.headD "") s!"multisigMemberShareCopy-{l.id}"])
        | none => [caption "This wallet has no shareable account key."])
   , .section "Descriptor" ""
       ([ .identified "multisigDescriptorField" (.input .multiline "" "tr(NUMS,sortedmulti_a(k,…))" f.descriptor (set .setDescriptor) none)
@@ -323,6 +473,9 @@ def multisigAddSections (m : Model) : List H :=
           [.identified "multisigAddPolicy" (.labeled "Policy" c.policy)] ++
           (match c.firstAddress with
            | some a => [.col [caption "First address", .identified "multisigFirstAddress" (caption a)]]
+           | none => []) ++
+          (match c.ledgerName with
+           | some l => [.identified "multisigJoinLedgerNotice" (caption s!"{l} holds a key of this account and approves it on its screen after Save.")]
            | none => [])
         | some (.error e) => [body e]
         | none => [])) ] ++
@@ -332,54 +485,85 @@ def multisigAddScreen (m : Model) (inner : List H) : H :=
   let f := m.multisigAdd
   .screen "Add multisig account" (some (.multisig .pop))
     ([ .toolbar [.identified "multisigSaveButton"
-                   (.button (if f.saving then "Saving…" else "Save") .primary (if f.canSave then some (.multisig .save) else none))]
+                   (if f.saved then .button "Done" .primary (some (.multisig .pop))
+                    else .button (if f.saving then "Saving…" else "Save") .primary (if f.canSave then some (.multisig .save) else none))]
      , .list (multisigAddSections m) ] ++ inner)
+
+/-- `MemberRow`: one member, its keys by fingerprint and name, ⊕ to add a key that signs with it (or −
+to take a whole account out), − on each key but this phone's. -/
+def memberRow (m : Model) (member : BuildMember) (i : Nat) : H :=
+  let network := m.settings.network
+  let fingerprint (k : String) : String :=
+    match Winnow.MultisigAccount.signerKey k (match network with | .mainnet => .mainnet | .signet => .signet | .regtest => .regtest) with
+    | .ok single => (single.origin.map (Winnow.Wallet.hex8 ·.fingerprint)).getD "?"
+    | .error _ => "?"
+  .identified s!"multisigBuildMember-{i}"
+    (.col ([.row [.text member.title .title, .spacer,
+                  if member.isThreshold then
+                    .identified s!"multisigBuildMemberRemove-{i}" (.button "Remove this member" .destructive (some (.multisig (.removeMember i))))
+                  else
+                    .identified s!"multisigBuildMemberAddKey-{i}" (.button "⊕ Add a key" .plain (some (.multisig (.openPicker (some i)))))]] ++
+           (member.keys.zipIdx.map fun (k, ki) =>
+              .row ([caption s!"{fingerprint k.key}  {k.label}", .spacer] ++
+                    (if k.label != phoneLabel && !member.isThreshold then
+                      [.button "−" .destructive (some (.multisig (.removeMemberKey i ki)))] else []))) ++
+           (match member.caption with | some c => [caption c] | none => [])))
 
 /-- MultisigBuildView ("New multisig account"). -/
 def multisigBuildSections (m : Model) : List H :=
   let f := m.multisigBuild
-  let n := f.signerCount
+  let n := f.members.length
+  let ledgers := f.pairedLedgerNames m.multisig.ledgers
   match f.created with
   | some (id, descriptor) =>
-    [.section "" "Every other signer adds this same descriptor under Join with a descriptor. Check that each one shows the same first address."
-      [ .identified "multisigCreated" (.text "Account created" .title), .qr descriptor,
-        copyableBlock m "multisig.created" descriptor "multisigCreatedDescriptor"
-      , .identified "multisigOpenAccountButton" (.button "Open the account" .plain (some (.multisig (.openAccount id)))) ]]
+    let info := m.multisigInfo? id
+    [.section "" "Every other signer adds this same descriptor under Join with a descriptor. Check that each one shows the same first address. A member whose Ledger is paired on their phone approves the account on it as they join."
+      ([ .identified "multisigBuildCreated" (.text "Account created" .title) ] ++
+       (match f.registration with
+        | some (.ok ledger) => [.identified "multisigBuildLedgerRegistered" (caption s!"Approved on {ledger}.")]
+        | some (.error reason) =>
+          [.identified "multisigBuildLedgerError" (body s!"The account is on this phone, but the Ledger did not register it: {reason}")] ++
+          (if info.any (·.needsLedgerRegistration) then ledgerRegisterRows m id else [])
+        | none => []) ++
+       [ .qr descriptor, copyableBlock m "multisig.created" descriptor "multisigCreatedDescriptor"
+       , .identified "multisigOpenAccountButton" (.button "Open the account" .plain (some (.multisig (.openAccount id)))) ])]
   | none =>
-    [ .section "" "" [.identified "multisigBuildNameField" (.input .plain "" "Name" f.name (fun s => .multisig (.buildSetName s)) none)]
-    , .section s!"Signers · {n}" "Another Winnow shows its key under Join with a descriptor → This phone's key. Any signer's key works: [fingerprint/path]xpub…/<0;1>/*."
-        ((match m.multisig.keyExpression with
-          | some key => [.col [caption "This phone", literalRow m "multisig.build.key" key "multisigBuildKeyText"]]
-          | none => []) ++
-         (f.otherKeys.zipIdx.map fun (k, i) =>
-            .col [caption k, .button "Remove" .destructive (some (.multisig (.removeSignerKey i)))]) ++
-         [ .identified "multisigPasteSignerButton" (.button "Paste a signer's key" .plain (some (.multisig .pasteSignerKey)))
-         , .identified "multisigIncludeLedgerToggle" (.toggle "Include a Ledger" f.includeLedger (fun b => .multisig (.setIncludeLedger b))) ])
+    [ .section "" "A Ledger shows the name when it registers the account: plain letters, digits and punctuation."
+        [.identified "multisigBuildNameField" (.input .plain "" "Name" f.name (fun s => .multisig (.buildSetName s)) none)]
+    , .section s!"Members · {n}" "A member is one signer: this phone, a paired Ledger, keys someone sent, or an account already on this phone. A member of several keys, such as a phone with its Ledger, spends only with all of them; a whole account spends as its own policy says. Pair Ledgers and save keys under Settings → Signers."
+        ((f.members.zipIdx.map fun (member, i) => memberRow m member i) ++
+         [.identified "multisigBuildAddMemberButton" (.button "Add a member" .plain (some (.multisig (.openPicker none))))])
     , .section "" ""
-        [.identified "multisigThresholdStepper"
-          (.stepper s!"Any {f.threshold} of {n} spend at once" f.threshold 1 (max n 1) (fun k => .multisig (.setThreshold k)) " ")]
-    , .section "" (if f.withRecovery then "The delay counts from when each coin is received. Once it passes, the recovery path can spend that coin without the other signers, so move coins before then if you do not want that." else "")
-        ([.identified "multisigRecoveryToggle" (.toggle "Recovery after a delay" f.withRecovery (fun b => .multisig (.setWithRecovery b)))] ++
+        ([.identified "multisigBuildThresholdStepper"
+          (.stepper s!"Any {f.threshold} of {n} members spend" f.threshold 1 (max n 1) (fun k => .multisig (.setThreshold k)) " ")] ++
+         [match f.preview with
+          | some (.ok text) => .identified "multisigBuildPolicyPreview" (caption text)
+          | some (.error e) => .identified "multisigBuildPolicyPreview" (body e)
+          | none => caption "Add at least one more member."])
+    , .section "" (if f.withRecovery then "The delay counts from when each coin is received. Once it passes, the recovery path can spend that coin without the other signers, so move coins before then if you do not want that. Fewer members of a nested account each sign as they do now, with every key or their own threshold of them." else "")
+        ([.identified "multisigBuildRecoveryToggle" (.toggle "Recovery after a delay" f.withRecovery (fun b => .multisig (.setWithRecovery b)))] ++
          (if !f.withRecovery then [] else
            [.identified "multisigRecoveryModePicker"
              (.picker "After the delay" ["Fewer signers", "A recovery key"] f.recoveryMode (fun i => .multisig (.setRecoveryMode i)))] ++
            (if f.recoveryMode == 0 then
-             [.identified "multisigRecoveryThresholdStepper"
-               (.stepper s!"Any {f.recoveryThreshold} of the {n} signers" f.recoveryThreshold 1 (max n 1)
+             [.identified "multisigBuildRecoveryThresholdStepper"
+               (.stepper s!"Any {f.recoveryThreshold} of the {n} members" f.recoveryThreshold 1 (max n 1)
                   (fun k => .multisig (.setRecoveryThreshold k)) " ")]
             else if f.recoveryKey.isEmpty then
-             [.button "Paste the recovery key" .plain (some (.multisig .pasteRecoveryKey))]
+             [.identified "multisigBuildPasteRecoveryKeyButton" (.button "Paste the recovery key" .plain (some (.multisig .pasteRecoveryKey)))]
             else
              [caption f.recoveryKey, .button "Remove the recovery key" .destructive (some (.multisig .removeRecoveryKey))]) ++
-           [.identified "multisigRecoveryDaysStepper"
-             (.stepper s!"After {f.recoveryDays} days ({recoveryBlocks f.recoveryDays} blocks)" f.recoveryDays 1 455
-                (fun k => .multisig (.setRecoveryDays k)) " ")]))
+           [.identified "multisigBuildRecoveryDaysStepper"
+             (.stepper s!"After about {recoveryDays f.recoveryBlocks} days ({groupDigits f.recoveryBlocks} blocks)"
+                (recoveryDays f.recoveryBlocks) 1 455 (fun k => .multisig (.setRecoveryDays k)) " ")]))
     , .section ""
-        (if f.includeLedger then "Open the Bitcoin app on the Ledger (Bitcoin Test on signet), version 2.2.1 or later for a recovery path. It reads the Ledger's key, then asks you to approve the account on the Ledger."
-         else "Winnow watches the account from the next block it scans.")
-        [.identified "multisigCreateAccountButton"
+        (if ledgers.isEmpty then "Winnow watches the account from the next block it scans."
+         else s!"Then open the Bitcoin app on {" and ".intercalate ledgers} (Bitcoin Test on signet; 2.2.1 or later for a recovery path or a nested account): the account is approved on its screen.")
+        [.identified "multisigBuildCreateButton"
           (.button (if f.creating then "Creating…" else "Create account") .primary (if f.canCreate then some (.multisig .create) else none))] ] ++
-    errorSection f.error
+    (match f.error with
+     | some e => [.section "" "" [.identified "multisigBuildError" (body e)]]
+     | none => [])
 
 /-- MultisigAccountView. -/
 def multisigAccountSections (m : Model) (id : String) : List H :=
@@ -391,8 +575,16 @@ def multisigAccountSections (m : Model) (id : String) : List H :=
           ([.identified "multisigBalance" (.labeled "Balance" (satsText a.balance)),
             .identified "multisigPolicy" (.labeled "Policy" policy)] ++
            (match a.recovery with | some r => [.identified "multisigRecovery" (.labeled "Recovery" r)] | none => []) ++
-           (match a.ledgerFingerprint with | some fp => [.labeled "Ledger" fp] | none => []))
-      , .section s!"Receive · index {a.nextReceiveIndex}" "The same address on every signer's device: check it there before sharing it."
+           (match a.ledgerName with
+            | some l => [.identified "multisigLedgerFingerprint" (.labeled "Ledger" l)]
+            | none => if a.needsLedgerRegistration then ledgerRegisterRows m a.id else []))] ++
+      (match a.membersHeader with
+       | some header =>
+         [.section header (if a.memberLines.isEmpty || header == "Ways to spend" then "" else
+             "A member signs with every key it has, or with its own threshold of them: any 2 of a 2-of-3 account's. Members together can spend; fewer cannot, whatever keys they hold.")
+           (a.memberLines.zipIdx.map fun (line, i) => .identified s!"multisigMember-{i}" (caption line))]
+       | none => []) ++
+      [ .section s!"Receive · index {a.nextReceiveIndex}" "The same address on every signer's device: check it there before sharing it."
           ((match a.receiveAddress with
             | some address => [.qr address, literalRow m "multisig.receive" address "multisigReceiveAddress"]
             | none => []) ++
@@ -458,9 +650,10 @@ def multisigPSBTSections (m : Model) (id : String) : List H :=
                 .col [.row [caption (if o.owned then "Back to this account" else "Pays"), .spacer, body (satsText o.amount)],
                       caption o.address]) ++
              [.labeled "Inputs" (satsText s.inputTotal), .identified "multisigFee" (.labeled "Fee" (satsText s.fee))] ++
-             (s.signatures.map fun (recovery, approved, threshold) =>
-                .identified (if recovery then "multisigRecoverySignatureCount" else "multisigSignatureCount")
-                  (.labeled (if recovery then "Recovery signatures" else "Signatures") s!"{approved} of {threshold}"))
+             (s.signatures.zipIdx.map fun ((recovery, approved, threshold), i) =>
+                let (title, id) := s.signatureTitles[i]?.getD
+                  (if recovery then ("Recovery signatures", "multisigRecoverySignatureCount") else ("Signatures", "multisigSignatureCount"))
+                .identified id (.labeled title s!"{approved} of {threshold}"))
            | none =>
              [ .row [.icon "exclamationmark.triangle.fill", body "Winnow cannot safely review this PSBT"]
              , body (w.reviewError.getD "The account or PSBT is unavailable.") ])] ++
@@ -481,20 +674,5 @@ def multisigPSBTSections (m : Model) (id : String) : List H :=
       | some text => [.section "PSBT to share" "" [copyableBlock m "multisig.psbt" text "multisigPSBTText"]]
       | none => []
     create ++ [paste] ++ review ++ errorSection f.error ++ output
-
-/-- LedgerPairView ("Pair a Ledger"). -/
-def ledgerPairSections (m : Model) : List H :=
-  let f := m.ledgerPair
-  [ .section "" "The Ledger shows this name when it signs: plain letters, digits and punctuation, at most 64."
-      [.identified "ledgerNameField" (.input .plain "" "Name" f.name (fun s => .multisig (.setLedgerName s)) none)]
-  , .section "Steps" "The account is tr(NUMS, sortedmulti_a(2, this phone, the Ledger)). Spending needs both: neither this phone nor the Ledger can pay alone, and losing either one loses the account."
-      [ body "1. Unlock the Ledger and open its Bitcoin app, version 2.1.2 or later (Bitcoin Test on signet)."
-      , body "2. Tap Pair. The first time, confirm the same pairing code on the phone and the Ledger."
-      , body "3. On the Ledger, check the account and both keys, then approve." ]
-  , .section "" ""
-      ([.identified "ledgerPairStartButton"
-         (.button (if f.pairing then "Pairing…" else "Pair") .primary (if f.pairing || !f.nameIsUsable then none else some (.multisig .pairLedger)))] ++
-       (if f.pairing then [.progress ""] else [])) ] ++
-  errorSection f.error
 
 end WinnowApp

@@ -77,14 +77,20 @@ end Real
 def Real.MultisigApp.install (a : Real.MultisigApp) (env : Real.Env) (base : Backend) : Backend :=
   { base with
     multisigOverview := Real.overview env a
-    checkMultisigDescriptor := Real.checkMultisigDescriptor env
-    addMultisigAccount := fun name d => do return (← Real.addMultisigAccount env a name d).id
+    checkMultisigDescriptor := Real.checkMultisigDescriptor env a
+    addMultisigAccount := fun adv name d => do
+      let r ← Real.addMultisigAccount env a name d
+      return (r.id, ← Real.registerAfterSaving env a adv r)
     removeMultisigAccount := Real.removeMultisigAccount a
     newMultisigReceiveAddress := Real.newMultisigReceiveAddress a
-    createMultisigAccount := fun adv name k keys ledger rec => do
-      let r ← Real.createMultisigAccount env a adv name k keys ledger rec
-      return (r.id, r.descriptor)
+    createMultisigAccount := fun adv name k members rec => do
+      let r ← Real.createMultisigAccount env a adv name k members rec
+      return (r.id, r.descriptor, ← Real.registerAfterSaving env a adv r)
+    registerLedger := fun adv id => discard <| Real.registerLedger env a adv id
     pairLedger := fun adv name => do return (← Real.pairLedger env a adv name).id
+    addSignerKeys := fun adv name text => do return (← Real.addSignerKeys env a adv name text).id
+    renameSigner := Real.renameSigner a
+    removeSigner := Real.removeSigner a
     verifyLedgerAddress := Real.verifyLedgerAddress env a
     signMultisigSpendWithLedger := Real.signMultisigSpendWithLedger env a
     createMultisigSpend := Real.createMultisigSpend env a

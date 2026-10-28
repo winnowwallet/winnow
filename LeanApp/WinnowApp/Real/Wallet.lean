@@ -273,11 +273,13 @@ def importBundle (env : Env) (n : WinnowApp.Network) (dir : String) (json : Stri
   -- before anything is written: a bundle whose multisig accounts cannot be restored must not replace the
   -- wallet half-way
   env.hooks.multisigValidate (bundle.vaults.getD #[]) (Network.tx n)
+  env.hooks.signerValidate (bundle.signers.getD #[]) (Network.tx n)
   env.journal "import.started" (bundleFields bundle)
   switchTo env n dir
   let w ← runWM (Wallet.importing bundle env.deps.keyStore (some (walletPath dir)) env.deps.random)
   adopt env w false
   env.hooks.multisigRestore (bundle.vaults.getD #[])
+  env.hooks.signerMerge (bundle.signers.getD #[])
   try
     buildStackIfNeeded env
     let c ← env.get
@@ -313,7 +315,9 @@ def exportBundle (env : Env) (includeMnemonic : Bool) : IO String := do
   if let some f := c.stack.bind (·.filters) then env.walletOp (w.recordScanHeight (← f.nextScanHeight))
   let b ← runWM (w.exportBundle includeMnemonic)
   let accounts ← env.hooks.multisigBackup
-  let b := { b with vaults := if accounts.isEmpty then none else some accounts }
+  let signers ← env.hooks.signerBackup
+  let b := { b with vaults := if accounts.isEmpty then none else some accounts,
+                    signers := if signers.isEmpty then none else some signers }
   let serialized := b.serialized
   env.journal "wallet.exported" (bundleFields b)
   return serialized

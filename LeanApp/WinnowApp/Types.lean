@@ -254,6 +254,18 @@ structure MultisigInfo where
   recovery : Option String := none
   /-- The paired Ledger's master fingerprint (`%08x`). -/
   ledgerFingerprint : Option String := none
+  /-- The registered Ledger as the account screen names it: "Nano X · 5992698d", or the fingerprint. -/
+  ledgerName : Option String := none
+  /-- `LedgerMultisig.namesALedgerKey` and no registration yet: "Register on Ledger". -/
+  needsLedgerRegistration : Bool := false
+  isNested : Bool := false
+  /-- A nested account's members section: its header and one line per member (or per leaf). -/
+  membersHeader : Option String := none
+  memberLines : List String := []
+  /-- `signerExpressions`, `threshold`, `signers.count`: the builder's picker offers the account as one member. -/
+  signerExpressions : List String := []
+  threshold : Nat := 0
+  signerCount : Nat := 0
   nextReceiveIndex : Nat := 0
   receiveAddress : Option String := none
   coins : List MultisigCoin := []
@@ -263,17 +275,38 @@ structure MultisigInfo where
 
 def MultisigInfo.hasRecovery (a : MultisigInfo) : Bool := a.recovery.isSome
 
-/-- `multisigAccounts`, `multisigStorageNotice` and this wallet's key expression (`multisigKeyExpression`). -/
+/-- A `SignerRecord` as Settings → Signers and the builder's picker show it. -/
+structure SignerInfo where
+  id : String
+  isLedger : Bool
+  name : String
+  /-- `[fp/path]xpub…/<0;1>/*`, one or more. -/
+  keys : List String
+  /-- `SignerLabel.keysText`: "5992698d" for a Ledger, "6824f543 · 1a2b3c4d" for saved keys. -/
+  keysText : String
+  deriving Repr, Inhabited, BEq
+
+/-- `multisigAccounts`, `multisigStorageNotice`, this wallet's key expression (`multisigKeyExpression`),
+and the signer list (`signers`, `signerStorageNotice`). -/
 structure MultisigOverview where
   accounts : List MultisigInfo := []
   notice : Option String := none
   keyExpression : Option String := none
+  /-- `SignerLabel.fingerprint` of this phone's key. -/
+  ownFingerprint : Option String := none
+  signers : List SignerInfo := []
+  signerNotice : Option String := none
   deriving Repr, Inhabited, BEq
+
+def MultisigOverview.ledgers (o : MultisigOverview) : List SignerInfo := o.signers.filter (·.isLedger)
+def MultisigOverview.savedKeys (o : MultisigOverview) : List SignerInfo := o.signers.filter (!·.isLedger)
 
 /-- What a pasted descriptor reads as (MultisigAddView's `validation`). -/
 structure MultisigCheck where
   policy : String
   firstAddress : Option String
+  /-- A paired Ledger holding a key of the account, which approves it after Save. -/
+  ledgerName : Option String := none
   deriving Repr, Inhabited, BEq
 
 /-- `MultisigBuildView.recoveryPlan`. -/
@@ -317,6 +350,8 @@ structure MultisigScreen where
   fee : Nat
   /-- Per usable path: is it the recovery path, verified signatures, threshold. -/
   signatures : List (Bool × Nat × Nat)
+  /-- Per usable path: the row's title and its UI-test identifier (`signaturesTitle`, `signatureCountIdentifier`). -/
+  signatureTitles : List (String × String) := []
   progress : MultisigProgress
   deriving Repr, Inhabited, BEq
 

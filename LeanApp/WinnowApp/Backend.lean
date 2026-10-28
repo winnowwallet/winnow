@@ -82,16 +82,25 @@ structure Backend where
   multisigOverview : IO MultisigOverview
   /-- `multisigAccount(validating:)` of a pasted descriptor. -/
   checkMultisigDescriptor : (text : String) → IO MultisigCheck
-  /-- `addMultisigAccount(name:descriptor:)`; the new account's id. -/
-  addMultisigAccount : (name descriptor : String) → IO String
+  /-- `addMultisigAccount(name:descriptor:)` then `registerPairedLedger`: the new account's id, and the
+  paired Ledger's registration (its name, or why it did not register) when one holds a key of it. -/
+  addMultisigAccount : (advanced : Bool) → (name descriptor : String) → IO (String × Option (Except String String))
   removeMultisigAccount : (id : String) → IO Unit
   newMultisigReceiveAddress : (id : String) → IO Unit
-  /-- `createMultisigAccount(name:threshold:otherKeys:includeLedger: false, recovery:)` (refused outside
-  Advanced mode); the account's id and descriptor. -/
-  createMultisigAccount : (advanced : Bool) → (name : String) → (threshold : Nat) → (otherKeys : List String) →
-    (includeLedger : Bool) → Option MultisigRecovery → IO (String × String)
-  /-- `pairLedger(name:)`: a new 2-of-2 with the Ledger, registered on it; the account's id. -/
+  /-- `createMultisigAccount(name:threshold:members:recovery:)` (refused outside Advanced mode) then
+  `registerPairedLedger`: the account's id and descriptor, and the paired Ledger's registration. -/
+  createMultisigAccount : (advanced : Bool) → (name : String) → (threshold : Nat) →
+    (members : List (List String × Option Nat)) → Option MultisigRecovery →
+    IO (String × String × Option (Except String String))
+  /-- `registerLedger(record:)`: the account registered on the Ledger connected now. -/
+  registerLedger : (advanced : Bool) → (id : String) → IO Unit
+  /-- `pairLedger(name:)`: the Ledger's signer key read over Bluetooth and filed among the signers; the
+  signer's id. Nothing is registered on the Ledger. -/
   pairLedger : (advanced : Bool) → (name : String) → IO String
+  /-- `addSignerKeys(name:text:)`: keys someone sent, as one signer; its id. -/
+  addSignerKeys : (advanced : Bool) → (name text : String) → IO String
+  renameSigner : (id name : String) → IO Unit
+  removeSigner : (id : String) → IO Unit
   /-- `verifyLedgerAddress(record:index:)`: the address the Ledger showed (the phone's own). -/
   verifyLedgerAddress : (advanced : Bool) → (id : String) → (index : Nat) → IO String
   /-- `signMultisigSpendWithLedger(_:record:)`. -/
@@ -154,11 +163,15 @@ def Backend.pending : Backend where
   lookupSender := fun _ _ => notPorted "Explorer lookups"
   multisigOverview := pure {}
   checkMultisigDescriptor := fun _ => notPorted "Multisig accounts"
-  addMultisigAccount := fun _ _ => notPorted "Multisig accounts"
+  addMultisigAccount := fun _ _ _ => notPorted "Multisig accounts"
   removeMultisigAccount := fun _ => notPorted "Multisig accounts"
   newMultisigReceiveAddress := fun _ => notPorted "Multisig accounts"
-  createMultisigAccount := fun _ _ _ _ _ _ => notPorted "Multisig accounts"
+  createMultisigAccount := fun _ _ _ _ _ => notPorted "Multisig accounts"
+  registerLedger := fun _ _ => notPorted "Ledger signing"
   pairLedger := fun _ _ => notPorted "Ledger signing"
+  addSignerKeys := fun _ _ _ => notPorted "Signers"
+  renameSigner := fun _ _ => notPorted "Signers"
+  removeSigner := fun _ => notPorted "Signers"
   verifyLedgerAddress := fun _ _ _ => notPorted "Ledger signing"
   signMultisigSpendWithLedger := fun _ _ _ => notPorted "Ledger signing"
   createMultisigSpend := fun _ _ _ _ _ => notPorted "Multisig accounts"

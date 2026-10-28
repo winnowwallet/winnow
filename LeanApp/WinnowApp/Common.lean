@@ -60,6 +60,8 @@ def Model.fail (m : Model) (context message : String) : Model :=
   | "multisigBuild" => { m with multisigBuild := { m.multisigBuild with creating := false, error := some message } }
   | "multisigAccount" => { m with multisigAccountError := some message }
   | "ledgerPair" => { m with ledgerPair := { m.ledgerPair with pairing := false, error := some message } }
+  | "signerKeys" => { m with signerKeys := { m.signerKeys with saving := false, error := some message } }
+  | "signer" => { m with signerDetail := { m.signerDetail with error := some message } }
   -- the overview keeps what it last showed; the fee-rate field stays empty for the user to fill
   | "multisigOverview" | "multisigRate" => m
   | _ => { m with status := { m.status with lastSyncError := some message } }
@@ -79,6 +81,7 @@ def Model.forgetSheet (m : Model) : Sheet → Model × List Cmd
   | .shareCard => ({ m with shareCard := {} }, [])
   | .savedRecipients => ({ m with recipientsError := none }, [])
   | .importWallet => ({ m with onboarding := { m.onboarding with importText := "", importReport := none } }, [])
+  | .signerPicker => ({ m with multisigBuild := { m.multisigBuild with pickInto := none, pasteError := none } }, [])
   | .mnemonic | .readSide => (m, [])
 
 /-- Close the sheets from index `i` up (an outer sheet takes the ones it presented with it). -/

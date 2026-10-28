@@ -38,7 +38,7 @@ def Model.sendTo (m : Model) (personID : Option String) : Model × List Cmd :=
   let inputs : SendInputs := { network := m.settings.network, walletID := m.walletID,
                                personID := p.map (·.id), paymentIndex := p.map (·.nextPaymentIndex) }
   let m := { m with send := { inputs } }
-  if m.settings.advancedMode then ({ m with tab := 1, routes := [] }, [.resolveRate m.generation inputs m.status.feeFloorMilli])
+  if m.settings.advancedMode then ({ m.switchTab 1 with routes := [] }, [.resolveRate m.generation inputs m.status.feeFloorMilli])
   else
     let m := if m.hasSheet .send then m else m.present .send
     (m, [.resolveRate m.generation inputs m.status.feeFloorMilli])

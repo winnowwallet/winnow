@@ -342,18 +342,32 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit := do
   | .checkMultisigDescriptor g text => discard <| IO.asTask do
       try fx.post (.multisigChecked g text (.ok (← b.checkMultisigDescriptor text)))
       catch e => fx.post (.multisigChecked g text (.error (toString e)))
-  | .addMultisigAccount g name d => background fx g "multisigAdd" do
-      return .multisigAdded g (← b.addMultisigAccount name d)
+  | .addMultisigAccount g adv name d => background fx g "multisigAdd" do
+      let (id, registration) ← b.addMultisigAccount adv name d
+      return .multisigAdded g id registration
   | .removeMultisigAccount g id => background fx g "multisigAccount" do
       b.removeMultisigAccount id
       return .multisigRemoved g id
   | .newMultisigAddress g id => background fx g "multisigAccount" do
       b.newMultisigReceiveAddress id
       return .multisig g (← b.multisigOverview)
-  | .createMultisigAccount g adv name k keys ledger rec => background fx g "multisigBuild" do
-      let (id, d) ← b.createMultisigAccount adv name k keys ledger rec
-      return .multisigCreated g id d
+  | .createMultisigAccount g adv name k members rec => background fx g "multisigBuild" do
+      let (id, d, registration) ← b.createMultisigAccount adv name k members rec
+      return .multisigCreated g id d registration
+  | .registerLedger g adv id => discard <| IO.asTask do
+      try
+        b.registerLedger adv id
+        fx.post (.ledgerRegistered g id (.ok ()))
+      catch e => fx.post (.ledgerRegistered g id (.error (toString e)))
   | .pairLedger g adv name => background fx g "ledgerPair" do return .ledgerPaired g (← b.pairLedger adv name)
+  | .addSignerKeys g adv name text => background fx g "signerKeys" do
+      return .signerSaved g (← b.addSignerKeys adv name text)
+  | .renameSigner g id name => background fx g "signer" do
+      b.renameSigner id name
+      return .signerRenamed g id
+  | .removeSigner g id => background fx g "signer" do
+      b.removeSigner id
+      return .signerRemoved g id
   | .verifyLedgerAddress g adv id index => discard <| IO.asTask do
       try fx.post (.ledgerAddressShown g id index (.ok (← b.verifyLedgerAddress adv id index)))
       catch e => fx.post (.ledgerAddressShown g id index (.error (toString e)))
