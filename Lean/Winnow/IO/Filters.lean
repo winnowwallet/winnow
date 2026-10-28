@@ -73,6 +73,13 @@ def nextScanHeight (f : FilterSyncIO) : BaseIO UInt32 := do return (← f.progre
 /-- Who corroborated the checkpoint answer the frontier stands on (`lastCrossCheck`). -/
 def lastCrossCheck (f : FilterSyncIO) : BaseIO (Option CrossCheckReceipt) := do return (← f.progress.get).crossCheck
 def lastScannedHeight (f : FilterSyncIO) : BaseIO (Option UInt32) := do return FilterSync.lastScannedHeight (← f.progress.get)
+
+/-- The next height to scan and the hash of the last block scanned (none before anything is scanned), read
+together so a caller can persist both (`Wallet.recordScanHeight`). -/
+def frontier (f : FilterSyncIO) : IO (UInt32 × Option ByteArray) := do
+  let next := (← f.progress.get).nextScanHeight
+  if next == 0 then return (next, none)
+  return (next, ← f.chain.blockHash (next - 1))
 def filterHeader (f : FilterSyncIO) (height : UInt32) : BaseIO (Option ByteArray) := do
   return filterHeader? (← f.progress.get).filterHeaders height
 def pinnedFilterHeaders (f : FilterSyncIO) : BaseIO (Std.HashMap String String) := do return (← f.progress.get).filterHeaders
@@ -254,8 +261,9 @@ private def pinFilterHeaders (f : FilterSyncIO) (batchStart batchStop : UInt32) 
 
 private def verifiedBlock (f : FilterSyncIO) (peer : PeerConnection) (height : UInt32) (blockHash : ByteArray)
     (timeoutMs : Nat := 120_000) : NetM Block := do
+  let limit := blockTimeoutMs timeoutMs peer.endpoint.isOverlay
   let response ← peer.request (.getdata { vectors := #[{ type := InventoryType.witnessBlock, hash := blockHash }] })
-    #["block", "notfound"] timeoutMs
+    #["block", "notfound"] limit
   match response with
   | .block b =>
     if !(b.hash == blockHash) then
@@ -294,7 +302,7 @@ private def scanChunk (f : FilterSyncIO) (chunkStart chunkStop : UInt32) (peer :
   let some stopHash ← f.chain.blockHash chunkStop | throw (.filters (.badPeerResponse s!"missing header at {chunkStop}"))
   let count := (chunkStop - chunkStart).toNat + 1
   let responses ← match ← (peer.requestMany (.getcfilters { startHeight := chunkStart, stopHash }) "cfilter" count
-      (chunkTimeoutSeconds count * 1000) (maxTotalBytes := some (chunkByteBound count))).toBaseIO with
+      (chunkTimeoutSeconds count peer.endpoint.isOverlay * 1000) (maxTotalBytes := some (chunkByteBound count))).toBaseIO with
     | .ok r => pure r
     | .error e@(.peer (.protocolViolation _)) => f.pool.misbehaving peer e.description; throw e
     | .error e => throw e

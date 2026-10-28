@@ -1,4 +1,4 @@
-import Winnow.IO.Base
+import Winnow.IO.Gateways
 
 /-! # The routed HTTP client (`Network/Transport/RoutedHTTPClient.swift`): policy in Lean, fetch injected
 
@@ -14,6 +14,10 @@ the client's policy, which is what the Swift code decides:
 * The response must be `200`; a declared `Content-Length` above the cap, or a body past it, is
   `tooLarge` (exactly `maximumBytes` bytes is accepted).
 * After `cancel` every request is refused with `unavailable`.
+* The routing gate (`RoutedHTTPClient(proxy:enabled:)`, `init(gateways:)`): a disabled client refuses
+  every request with `unavailable` before any fetch; a client with a SOCKS proxy (the Tor gateway when
+  clearnet is off) names it on every hop (`HttpRequest.socks`, resolved by the proxy) with URLSession's
+  longer 90 s / 180 s limits; a proxy that is not a plausible gateway disables the client.
 
 `HttpFetch` performs one hop and does not follow redirects (a capability that follows them itself under
 the same rule simply never returns `redirect`). At most 16 hops are followed. Not covered: in-flight
@@ -21,6 +25,7 @@ cancellation of a running fetch (Swift cancels the URLSession task), and progres
 per 64 KiB of the returned body rather than while it streams. -/
 
 namespace Winnow.IO
+open Winnow.Net (PeerEndpoint)
 
 structure HttpRequest where
   url : String
@@ -30,6 +35,8 @@ structure HttpRequest where
   /-- URLSession `timeoutIntervalForRequest` (inactivity) and `timeoutIntervalForResource`. -/
   requestTimeoutSeconds : Nat := 30
   resourceTimeoutSeconds : Nat := 120
+  /-- A SOCKS5 proxy to fetch through, the host named to it unresolved (`--socks5-hostname`). -/
+  socks : Option PeerEndpoint := none
   deriving Repr, Inhabited
 
 inductive HttpHop where
@@ -139,12 +146,24 @@ def followsRedirect (source target : ParsedURL) : Bool :=
 structure RoutedHTTPClient where
   fetch : HttpFetch
   closed : IO.Ref Bool
+  /-- The SOCKS5 gateway every request goes through (none: direct). -/
+  proxy : Option PeerEndpoint := none
+  /-- False when routing allows no HTTP at all (I2P alone, or an invalid proxy): every request is refused. -/
+  enabled : Bool := true
 
 namespace RoutedHTTPClient
 
 def maxHops : Nat := 16
 
-def new (fetch : HttpFetch) : IO RoutedHTTPClient := do return { fetch, closed := ← IO.mkRef false }
+/-- `RoutedHTTPClient(proxy:enabled:)`: a proxy that is not a plausible gateway disables the client. -/
+def new (fetch : HttpFetch) (proxy : Option PeerEndpoint := none) (enabled : Bool := true) : IO RoutedHTTPClient := do
+  return { fetch, closed := ← IO.mkRef false, proxy,
+           enabled := enabled && (proxy.isNone || PeerGatewayConfiguration.validProxy proxy) }
+
+/-- `RoutedHTTPClient(gateways:)`: direct with clearnet, through the Tor gateway without it, and no HTTP
+at all on I2P alone (its outproxy is never asked for a public host). -/
+def ofGateways (fetch : HttpFetch) (g : PeerGatewayConfiguration) : IO RoutedHTTPClient :=
+  new fetch (proxy := g.httpProxy) (enabled := g.permitsHTTP)
 
 def isCancelled (c : RoutedHTTPClient) : BaseIO Bool := c.closed.get
 /-- Once cancelled a client refuses every later request. -/
@@ -153,11 +172,13 @@ def cancel (c : RoutedHTTPClient) : BaseIO Unit := c.closed.set true
 def get (c : RoutedHTTPClient) (url : String) (maximumBytes : Nat) (accept : Option String := none)
     (progress : Option (Nat → IO Unit) := none) : NetM ByteArray := do
   let some start := parseURL url | throw (.http .unavailable)
-  if !permitsURL start || maximumBytes == 0 then throw (.http .unavailable)
+  if !c.enabled || !permitsURL start || maximumBytes == 0 then throw (.http .unavailable)
   if ← c.closed.get then throw (.http .unavailable)
+  let (requestTimeoutSeconds, resourceTimeoutSeconds) := if c.proxy.isSome then (90, 180) else (30, 120)
   let mut current := start
   for _ in [0:maxHops] do
-    match ← c.fetch { url := current.render, accept, maximumBytes } with
+    match ← c.fetch { url := current.render, accept, maximumBytes, requestTimeoutSeconds, resourceTimeoutSeconds,
+                      socks := c.proxy } with
     | .redirect status location =>
       match resolveLocation current location with
       | some target => if followsRedirect current target then current := target; continue
@@ -195,6 +216,9 @@ def curlFetch (curl : String := "curl") : HttpFetch := fun req => do
     "--connect-timeout", toString req.requestTimeoutSeconds, "--speed-limit", "1", "--speed-time",
     toString req.requestTimeoutSeconds, "--max-time", toString req.resourceTimeoutSeconds,
     "-D", hpath.toString, "-o", "-"] ++ (match req.accept with | some a => #["-H", s!"Accept: {a}"] | none => #[]) ++
+    (match req.socks with
+     | some p => #["--socks5-hostname", if p.host.contains ':' then s!"[{p.host}]:{p.port}" else s!"{p.host}:{p.port}"]
+     | none => #[]) ++
     #["--", req.url]
   let child ← IO.Process.spawn { cmd := curl, args, stdout := .piped, stderr := .piped, stdin := .null }
   let mut body := ByteArray.empty

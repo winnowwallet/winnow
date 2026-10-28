@@ -73,6 +73,7 @@ def fileBytes (j : Json) (store : String) (network : BitcoinNetwork) (key : Opti
 def payToJ : Option PersonPayTo → Json
   | some (.descriptor t) => arr [jstr "descriptor", jstr t]
   | some (.address t) => arr [jstr "address", jstr t]
+  | some (.silentPayment t) => arr [jstr "silentPayment", jstr t]
   | none => .null
 
 def personJ (p : PersonRecord) (ids : String → String := id) : Json :=

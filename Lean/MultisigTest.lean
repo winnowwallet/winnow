@@ -13,7 +13,8 @@ import Lean.Data.Json
   with simulated Ledgers in `ledger-test`,
 * upstream d2ca878's `HistoryLedgerTests.swift` (#259, all four) and `ImportBundleTests.signers`, with
   the account record's spend records (an old record encoding byte for byte, the v0 draft) and the new
-  bundle bounds.
+  bundle bounds,
+* upstream d2ca878's `WalletCursorTests.swift` (all six).
 
 Fixtures as `Tests/Support/TestKeys.swift`: masters from BIP39 over 16 repeated bytes (0xA1, 0xB2, 0xC3;
 0x0D a stranger; 0xD4–0xD6 recovery keys), signet keys at m/86'/1'/0', `testChainTip` 840 000, BIP340
@@ -1599,6 +1600,102 @@ def bundleSigners : TM Unit := do
     (match ImportBundle.decode { base with vaults := some #[{ record with history := #[entry] }] }.serialized with
      | .ok b => (b.vaults.map (·.map (·.history.size))) == some #[1] | _ => false)
 
+/-! ## WalletCursorTests (upstream d2ca878: wallet cursor reservations) -/
+
+def testWallet (storagePath : Option System.FilePath := none) (keyStore : Option (KeyStore IO) := none) : TM Wallet := do
+  let ks ← match keyStore with | some k => pure k | none => newKeyStore
+  wmT "create" (Wallet.create .signet ks storagePath (some (ByteArray.mk (Array.replicate 16 0))) 100 0 pinned)
+
+def failed {α} (x : WM α) : IO (Option String) := do
+  match ← x.run with | .ok _ => return none | .error e => return some e.name
+
+/-- Replaces the wallet file by a directory, so that every write of it fails. -/
+def blockWrites (file : System.FilePath) : IO Unit := do
+  IO.FS.removeFile file
+  IO.FS.createDir file
+
+def durableReservations : TM Unit := do
+  let file ← tempPath "wallet.json"
+  let store ← newKeyStore
+  let w ← testWallet (some file) (some store)
+  wmT "scan height" (w.recordScanHeight 500)
+  wmT "advance" (w.advanceCursors (some 12) (some 8))
+  let scripts ← wmT "watch" w.watchScripts
+  for (chain, cursor) in [(AddressChain.receive, (12 : UInt32)), (.change, 8)] do
+    let mut all := true
+    for i in [0:(cursor + Wallet.gapLimit).toNat] do
+      all := all && scripts.contains (← wmT "spk" (w.scriptPubKey chain i.toUInt32))
+    check s!"cursors: every reserved {repr chain} address and its lookahead is watched" all
+  let reopened ← wmT "open" (Wallet.open file store)
+  check "cursors: reopened keeps both cursors and the scan height"
+    ((← reopened.nextReceiveIndex) == 12 && (← reopened.nextChangeIndex) == 8 && (← reopened.nextScanHeight) == 500)
+  check "cursors: the next fresh address is past the reservation"
+    ((← wmT "fresh" reopened.freshReceiveAddress) == (← wmT "address" (w.address .receive 12)))
+  let bundle ← wmT "export" reopened.exportBundle
+  let restored ← wmT "import" (Wallet.importing bundle (← newKeyStore))
+  check "cursors: a restored backup reissues no reserved address"
+    ((← restored.nextReceiveIndex) == 13 && (← restored.nextChangeIndex) == 8 && (← restored.nextScanHeight) == 500)
+
+def monotonicNoOp : TM Unit := do
+  let file ← tempPath "wallet.json"
+  let w ← testWallet (some file)
+  wmT "advance" (w.advanceCursors (some 4) (some 9))
+  blockWrites file
+  -- a no-op works even when writing would fail
+  check "cursors: omitted cursors write nothing" (← failed (w.advanceCursors)).isNone
+  check "cursors: equal and lower cursors write nothing" (← failed (w.advanceCursors (some 4) (some 2))).isNone
+  check "cursors: neither chain rewinds" ((← w.nextReceiveIndex) == 4 && (← w.nextChangeIndex) == 9)
+
+def atomicFailure : TM Unit := do
+  let file ← tempPath "wallet.json"
+  let store ← newKeyStore
+  let w ← testWallet (some file) (some store)
+  let previous ← IO.FS.readBinFile file
+  blockWrites file
+  check "cursors: a failed write throws" (← failed (w.advanceCursors (some 12) (some 8))).isSome
+  check "cursors: a failed write moves neither cursor" ((← w.nextReceiveIndex) == 0 && (← w.nextChangeIndex) == 0)
+  IO.FS.removeDir file
+  IO.FS.writeBinFile file previous
+  let reopened ← wmT "open" (Wallet.open file store)
+  check "cursors: the file kept the old cursors" ((← reopened.nextReceiveIndex) == 0 && (← reopened.nextChangeIndex) == 0)
+  wmT "retry" (w.advanceCursors (some 12) (some 8))
+  let retried ← wmT "open" (Wallet.open file store)
+  check "cursors: the reservation can be retried" ((← retried.nextReceiveIndex) == 12 && (← retried.nextChangeIndex) == 8)
+
+def invalidCursor : TM Unit := do
+  for cursor in [HDKey.hardenedOffset - Wallet.gapLimit + 1, HDKey.hardenedOffset, (0xFFFF_FFFF : UInt32)] do
+    let w ← testWallet
+    let r1 ← failed (w.advanceCursors (some 3) (some cursor))
+    check s!"cursors: change cursor {cursor} is invalidPath" (r1 == some "invalidPath") s!"{r1}"
+    check s!"cursors: change cursor {cursor} changes nothing" ((← w.nextReceiveIndex) == 0 && (← w.nextChangeIndex) == 0)
+    let r2 ← failed (w.advanceCursors (some cursor) (some 3))
+    check s!"cursors: receive cursor {cursor} is invalidPath" (r2 == some "invalidPath") s!"{r2}"
+    check s!"cursors: receive cursor {cursor} changes nothing" ((← w.nextReceiveIndex) == 0 && (← w.nextChangeIndex) == 0)
+
+def concurrentReservations : TM Unit := do
+  let w ← testWallet
+  let tasks ← (List.range 20).mapM fun i =>
+    let index : UInt32 := (i + 1).toUInt32
+    IO.asTask (prio := .dedicated) (failed (w.advanceCursors (some index) (some (21 - index))))
+  let results ← (tasks.mapM fun t => IO.ofExcept t.get : IO (List (Option String)))
+  check "cursors: every concurrent reservation succeeds" (results.all (·.isNone))
+  check "cursors: concurrent reservations keep each chain's highest cursor"
+    ((← w.nextReceiveIndex) == 20 && (← w.nextChangeIndex) == 20)
+
+def cursorPastTheWindowIsDamage : TM Unit := do
+  let file ← tempPath "wallet.json"
+  let store ← newKeyStore
+  let w ← testWallet (some file) (some store)
+  wmT "advance" (w.advanceCursors (some 3))
+  let json : Lean.Json ← match Lean.Json.parse (← IO.FS.readFile file) with
+    | .ok j => pure j | .error e => throw s!"wallet.json: {e}"
+  IO.FS.writeFile file (json.setObjVal! "nextReceiveIndex" (0xFFFF_FFFF : Nat)).compress
+  check "cursors: a state file past the gap-limit window does not open" (← failed (Wallet.open file store)).isSome
+  let edge := HDKey.hardenedOffset - Wallet.gapLimit
+  IO.FS.writeFile file (json.setObjVal! "nextReceiveIndex" edge.toNat).compress
+  let reopened ← wmT "open" (Wallet.open file store)
+  check "cursors: the window's last cursor opens" ((← reopened.nextReceiveIndex) == edge)
+
 def main : IO UInt32 := do
   runTest "feeResolution" feeResolution
   runTest "twoOfThree" twoOfThree
@@ -1659,6 +1756,12 @@ def main : IO UInt32 := do
   runTest "recordWithoutSpendsEncodesAsBefore" recordWithoutSpendsEncodesAsBefore
   runTest "spendRecordsRoundTrip" spendRecordsRoundTrip
   runTest "bundleSigners" bundleSigners
+  runTest "durableReservations" durableReservations
+  runTest "monotonicNoOp" monotonicNoOp
+  runTest "atomicFailure" atomicFailure
+  runTest "invalidCursor" invalidCursor
+  runTest "concurrentReservations" concurrentReservations
+  runTest "cursorPastTheWindowIsDamage" cursorPastTheWindowIsDamage
   let f ← failures.get
   IO.println s!"multisig-test: {← passed.get} passed, {f.size} failed"
   return if f.isEmpty then 0 else 1

@@ -258,6 +258,25 @@ def offlineChecks (dir : String) : IO Unit := do
   check "census thin" (nameOf (CensusCatalog.decode (doc (civil today) ["9.9.9.9"]).toUTF8 (minimumEntries := 50)) == "thin")
   check "census bad date" (CensusCatalog.day "2026-02-30" == none && CensusCatalog.day "2026-10-26" == some 20752)
   check "no bundled census outside an app bundle" (← CensusCatalog.bundled).isNone
+  -- FilterSyncTests.overlayDeadlines: Tor and I2P peers get longer filter and block deadlines
+  check "deadline: 100 clearnet filters, 30 s" (FilterSync.chunkTimeoutSeconds 100 == 30)
+  check "deadline: 1000 clearnet filters, 120 s" (FilterSync.chunkTimeoutSeconds 1_000 == 120)
+  check "deadline: 100 overlay filters, 120 s" (FilterSync.chunkTimeoutSeconds 100 (overlay := true) == 120)
+  check "deadline: 1000 overlay filters, 1200 s" (FilterSync.chunkTimeoutSeconds 1_000 (overlay := true) == 1_200)
+  check "deadline: a clearnet block keeps its 120 s" (FilterSync.blockTimeoutMs 120_000 false == 120_000)
+  check "deadline: an overlay block gets at least 300 s" (FilterSync.blockTimeoutMs 30_000 true == 300_000)
+  check "deadline: a longer overlay block deadline stands" (FilterSync.blockTimeoutMs 600_000 true == 600_000)
+  -- FilterSync.frontier on a headers-only chain: nothing scanned, then the genesis block scanned
+  let pool ← PeerPool.new NetworkParams.regtest (seedResolver := some { lookup := fun _ _ _ => pure #[] })
+  let store ← match ← (HeaderStore.open NetworkParams.regtest none).toBaseIO with
+    | .ok s => pure s | .error e => throw (IO.userError s!"headers: {e}")
+  let open? (start : UInt32) : IO FilterSyncIO := do
+    match ← (FilterSyncIO.new pool store start).toBaseIO with
+    | .ok f => pure f | .error e => throw (IO.userError s!"filters: {e}")
+  check "frontier: nothing scanned has no hash" ((← (← open? 0).frontier) == (0, none))
+  check "frontier: the hash of the last block scanned" ((← (← open? 1).frontier) == (1, ← store.blockHash 0) &&
+    (← store.blockHash 0).isSome)
+  let _ := dir
 
 /-! ## Against the node -/
 
@@ -342,8 +361,121 @@ def fakePeer (mode : FakeMode) : IO UInt16 := do
     discard <| sock.shutdown.toIO
   return port
 
+/-- Upstream `PeerClosedRequestTests.closedPeerDoesNotWait` (#176): a request on a closed peer fails with
+`notConnected` within the polling budget, long before its 90 s response deadline. -/
+def closedPeerChecks : IO Unit := do
+  for collectMany in [false, true] do
+    let peer ← PeerConnection.new { host := "127.0.0.1", port := 1 } NetworkParams.signet
+    peer.disconnect
+    let outcome ← IO.mkRef (none : Option (Except NetError Unit))
+    spawn do
+      let r ← (if collectMany then
+          discard <| peer.requestMany (.ping 1) "pong" 1 (timeoutMs := 90_000)
+        else discard <| peer.request (.ping 1) #["pong"] (timeoutMs := 90_000)).attempt
+      outcome.set (some r)
+    let done ← waitUntil 5_000 (do return (← outcome.get).isSome)
+    let kind := if collectMany then "requestMany" else "request"
+    check s!"a closed peer fails without waiting for its response deadline ({kind})"
+      (done && (match ← outcome.get with | some (.error (.peer .notConnected)) => true | _ => false))
+      (match ← outcome.get with | some (.error e) => e.description | some (.ok ()) => "accepted" | none => "still waiting")
+
+/-- A fake node that accepts any number of connections and handshakes each (version with
+NODE_COMPACT_FILTERS, verack), or with `silent` accepts and never speaks; `params` picks the magic. -/
+def fakeNode (params : NetworkParams) (silent : Bool := false) : IO PeerEndpoint := do
+  let server ← Std.Async.TCP.Socket.Server.mk
+  server.bind (.v4 ⟨Std.Net.IPv4Addr.ofParts 127 0 0 1, 0⟩)
+  server.listen 16
+  let port := (← server.getSockName).port
+  spawn do
+    let keep := server
+    repeat
+      let sock ← keep.accept.block
+      spawn do
+        let send (m : PeerMessage) : IO Unit := (sock.send (MessageFramer.frame m.command m.payload params.magic)).block
+        let mut framer : MessageFramer := { magic := params.magic }
+        repeat
+          let some chunk ← (sock.recv? 65536).block | break
+          if chunk.isEmpty then break
+          framer := framer.append chunk
+          let mut alive := true
+          repeat
+            match framer.nextMessage with
+            | .ok (some (cmd, payload), f) =>
+              framer := f
+              if !silent then
+                match cmd with
+                | "version" =>
+                  send (.version { version := 70016, services := 64 ||| 1, timestamp := 0, receiver := .unspecified,
+                                   sender := .unspecified, nonce := 9, userAgent := "/fake-node:0/", startHeight := 0,
+                                   relay := false })
+                  send .verack
+                | "ping" =>
+                  if let .ok (.ping n) := PeerMessage.decode cmd payload then send (.pong n)
+                | _ => pure ()
+            | .ok (none, _) => break
+            | .error _ => alive := false; break
+          if !alive then break
+        discard <| sock.shutdown.toIO
+  return { host := "127.0.0.1", port }
+
+/-- Upstream `PeerPoolTests` for #175: discovery as one completion stream of dials and seed answers. -/
+def discoveryChecks (dir : String) : IO Unit := do
+  let seeded : NetworkParams := { regtest with dnsSeeds := #["seed-a.test", "seed-b.test", "seed-c.test"] }
+  -- localDialsDoNotWaitForSeeds
+  let gate ← IO.Promise.new (α := Unit)
+  let blocked : SeedResolver := { lookup := fun _ _ _ => do discard <| IO.wait gate.result?; pure #[] }
+  let first ← fakeNode seeded
+  let second ← fakeNode seeded
+  let pool ← PeerPool.new seeded (peerCount := 2) (manualPeers := #[first, second]) (seedResolver := some blocked)
+  spawn pool.start
+  let connected ← waitUntil 20_000 (do return (← pool.connectedPeers).size == 2)
+  gate.resolve ()
+  check "ready local peers are seated without waiting for DNS" connected
+  pool.stop
+  -- seedResultsAreConsumedAsTheyArrive
+  let gate2 ← IO.Promise.new (α := Unit)
+  let node ← fakeNode seeded
+  let halfBlocked : SeedResolver := { lookup := fun host _ _ => do
+    if host == "seed-a.test" then return #[node]
+    discard <| IO.wait gate2.result?
+    return #[] }
+  let pool2 ← PeerPool.new seeded (peerCount := 1) (seedResolver := some halfBlocked)
+  spawn pool2.start
+  let finished ← waitUntil 20_000 (do
+    let s ← pool2.connectionStatus
+    return s.connected == 1 && !s.dialing)
+  gate2.resolve ()
+  check "a usable seed result connects while other seeds are still waiting" finished
+  pool2.stop
+  -- diversityExhaustionStillResolvesSeeds
+  let nodes ← (List.range 4).mapM fun _ => fakeNode seeded
+  let file : System.FilePath := s!"{dir}/diversity-peers.json"
+  IO.FS.writeBinFile file (PersistedPeers.encode (nodes.take 3 |>.toArray.map ({ endpoint := ·, source := .census })))
+  let seedPeer := nodes[3]!
+  let pool3 ← PeerPool.new seeded (peerCount := 3) (peersFile := some file) (maxParallelDials := 1)
+    (seedResolver := some { lookup := fun _ _ _ => pure #[seedPeer] })
+  pool3.start
+  check "DNS still fills a seat after diversity skips remembered candidates"
+    ((← pool3.connectedPeers).size == 3 && (← pool3.source seedPeer) == some .dnsSeed &&
+     !(← pool3.connectionStatus).exhausted)
+    s!"{(← pool3.connectedPeers).size} seated, seed peer {repr (← pool3.source seedPeer)}"
+  pool3.stop
+  -- fullPoolDoesNotWaitForSilentDial
+  let good ← fakeNode regtest
+  let silent ← fakeNode regtest (silent := true)
+  let pool4 ← PeerPool.new regtest (peerCount := 1) (manualPeers := #[silent, good]) (seedResolver := some noSeeds)
+    (dialTimeoutMs := 90_000)
+  spawn pool4.start
+  let settled ← waitUntil 20_000 (do
+    let s ← pool4.connectionStatus
+    return s.connected == 1 && !s.dialing)
+  check "a full pool closes silent surplus dials immediately" settled
+  pool4.stop
+
 def fakeChecks (dir : String) : IO Unit := do
   say "transport and pool failure paths (fake peers)"
+  closedPeerChecks
+  discoveryChecks dir
   let ep (port : UInt16) : PeerEndpoint := { host := "127.0.0.1", port }
   let silent ← fakePeer .silent
   let c1 ← PeerConnection.new (ep silent) regtest
@@ -494,8 +626,10 @@ def fakeSocks (target : PeerEndpoint) (refuse : Bool := false) : IO (PeerEndpoin
           let b ← buf.get
           buf.set (b.extract n b.size)
           return some (b.extract 0 n)
-        let some hello ← take 3 | return
-        unless hello == ByteArray.mk #[5, 1, 0] do discard <| sock.shutdown.toIO; return
+        -- any greeting that offers no-authentication (curl also offers GSS-API)
+        let some hello ← take 2 | return
+        let some methods ← take hello[1]!.toNat | return
+        unless hello[0]! == 5 && methods.toList.contains 0 do discard <| sock.shutdown.toIO; return
         (sock.send (ByteArray.mk #[5, 0])).block
         let some head ← take 5 | return
         unless head[0]! == 5 && head[1]! == 1 && head[3]! == 3 do discard <| sock.shutdown.toIO; return
@@ -513,6 +647,51 @@ def fakeSocks (target : PeerEndpoint) (refuse : Bool := false) : IO (PeerEndpoin
         spawn (pump up sock)
         pump sock up
   return ({ host := "127.0.0.1", port }, asked)
+
+/-- The routing gate (`RoutingTests.i2pOnlyClientRefusesPublicHosts`,
+`PeerGatewayTests.torHTTPUsesTheGatewayForRemoteResolution`): I2P alone makes no HTTP request at all;
+Tor alone fetches through its gateway, which is asked for the URL's host by name. -/
+def routedHTTPChecks (dir : String) : IO Unit := do
+  say "routed HTTP (the gateway gate)"
+  let calls ← IO.mkRef 0
+  let counting : HttpFetch := fun _ => do calls.modify (· + 1); return .response 200 none "OK".toUTF8
+  let i2pOnly : PeerGatewayConfiguration := { networks := [.i2p], i2pProxy := some { host := "100.74.30.8", port := 4447 } }
+  let refusing ← RoutedHTTPClient.ofGateways counting i2pOnly
+  check "i2p only: the client is not enabled" (!refusing.enabled)
+  check "i2p only: a public host is unavailable"
+    (match ← (refusing.get "http://127.0.0.1:1/census/peers.json" 8).attempt with | .error (.http .unavailable) => true | _ => false)
+  check "i2p only: nothing was fetched" ((← calls.get) == 0)
+  let disabled ← RoutedHTTPClient.new counting (enabled := false)
+  check "a disabled client refuses" ((match ← (disabled.get "https://example.com" 1024).attempt with
+    | .error (.http .unavailable) => true | _ => false) && (← calls.get) == 0)
+  let badProxy ← RoutedHTTPClient.new counting (proxy := some { host := "a b", port := 9050 })
+  check "an implausible proxy disables the client" (!badProxy.enabled)
+  let torOnly : PeerGatewayConfiguration := { networks := [.tor], torProxy := some { host := "100.74.30.9", port := 9050 } }
+  let viaTor ← RoutedHTTPClient.ofGateways counting torOnly
+  let both : PeerGatewayConfiguration := { networks := [.clearnet, .tor], torProxy := some { host := "100.74.30.9", port := 9050 } }
+  check "tor only: through the gateway; with clearnet: direct"
+    (viaTor.enabled && viaTor.proxy == torOnly.torProxy && (← RoutedHTTPClient.ofGateways counting both).proxy.isNone)
+  let seen ← IO.mkRef (none : Option HttpRequest)
+  let recording : HttpFetch := fun r => do seen.set (some r); return .response 200 none "OK".toUTF8
+  discard <| ((← RoutedHTTPClient.ofGateways recording torOnly).get "https://example.com/x" 8).attempt
+  check "tor only: every hop names the proxy, with the longer limits" (match ← seen.get with
+    | some r => r.socks == torOnly.torProxy && r.requestTimeoutSeconds == 90 && r.resourceTimeoutSeconds == 180
+    | none => false)
+  -- The curl fetch through a SOCKS5 gateway to the local Python server (offlineChecks wrote its script).
+  let server ← IO.Process.spawn { cmd := "python3", args := #["-I", s!"{dir}/http_server.py"], stdout := .piped,
+                                  stderr := .null, stdin := .null }
+  try
+    let port := (← server.stdout.getLine).trimAscii.toString
+    let (gateway, asked) ← fakeSocks { host := "127.0.0.1", port := port.toNat!.toUInt16 }
+    let http ← RoutedHTTPClient.new (curlFetch "/usr/bin/curl") (proxy := some gateway)
+    let body ← (http.get "http://gateway-http.invalid/ok" 100).attempt
+    check "tor: the body arrives through the gateway" (match body with | .ok b => b == "hello".toUTF8 | _ => false)
+      (match body with | .error e => e.description | .ok b => s!"{b.size} bytes")
+    check "tor: the gateway was asked for the URL's host by name" ((← asked.get) == #["gateway-http.invalid"])
+      s!"{← asked.get}"
+    http.cancel
+  finally
+    server.kill
 
 /-- A MagicDNS answer for `host`: `addresses` as A records under a compression pointer to the question. -/
 def dnsAnswer (id : UInt16) (host : String) (addresses : List (List UInt8)) (flags : UInt16 := 0x8180) : ByteArray := Id.run do
@@ -660,6 +839,8 @@ def nodeChecks (dir : String) (n : Node) (swift : Option String) : IO Unit := do
   let ms ← matched.get
   check "filter sync matches the funded script's block" (ms.any fun (h, has) => h.toNat == fundHeight && has) s!"{ms.map (·.1)}"
   check "filter sync scans to the tip" ((← fs.nextScanHeight).toNat == tip + 1)
+  check "frontier after a sync: the tip's height and hash"
+    ((← fs.frontier) == ((tip + 1).toUInt32, some (ofDisplayHex! (← n.cli #["getblockhash", toString tip]))))
   let pinned ← fs.filterHeader tip.toUInt32
   check "pinned filter header equals the node's" ((pinned.map displayHex) == some (← nodeFilterHeader n tip))
   let receipt ← (fs.transaction (ofDisplayHex! fundTxid) fundHeight.toUInt32).attempt
@@ -867,6 +1048,7 @@ def main (args : List String) : IO UInt32 := do
   try
     offlineChecks dir
     fakeChecks dir
+    routedHTTPChecks dir
     nodeChecks dir n swift
     gatewayChecks n
   catch e =>

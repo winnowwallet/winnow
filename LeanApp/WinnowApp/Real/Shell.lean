@@ -53,11 +53,15 @@ def shellKeyStore (ask : Ask) (service : String := walletService) : KeyStore IO 
     let r ← (askNow ask "keychain.delete" (Json.mkObj (keyArgs service id)) : IO Json)
     unless (r.getObjValAs? Bool "ok").toOption.getD false do throw (.keychain (status r))
 
-/-- The `http.get` capability as the routed client's fetch. -/
+/-- The `http.get` capability as the routed client's fetch; a SOCKS gateway goes as
+`"socks": {"host", "port"}` (the shell answers `{"error":"bad-proxy"}` to a malformed one). -/
 def shellFetch (ask : Ask) : HttpFetch := fun req => do
   let args := Json.mkObj [("url", Json.str req.url), ("maxBytes", toJson req.maximumBytes),
                           ("timeout", toJson req.requestTimeoutSeconds)] |>.setObjVal! "accept"
                 (match req.accept with | some a => Json.str a | none => Json.null)
+  let args := match req.socks with
+    | some p => args.setObjVal! "socks" (Json.mkObj [("host", Json.str p.host), ("port", toJson p.port.toNat)])
+    | none => args
   let r ← (askNow ask "http.get" args : IO Json)
   match r.getObjValAs? Nat "status", r.getObjValAs? String "body" with
   | .ok status, .ok body =>
@@ -68,6 +72,7 @@ def shellFetch (ask : Ask) : HttpFetch := fun req => do
     match r.getObjValAs? String "error" with
     | .ok "tooLarge" => throw (.http .tooLarge)
     | .ok "response" => throw (.http .response)
+    | .ok "bad-proxy" => throw (.http .unavailable)
     | .ok e => throw (.http (.transport e))
     | .error _ => throw (.http .response)
 

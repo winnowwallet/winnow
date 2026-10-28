@@ -1,6 +1,7 @@
 import WinnowApp.Types
 import WinnowApp.Format
 import Winnow.Wallet.People
+import Winnow.IO.Base
 
 /-! AppModel's and the views' pure helpers, ported as they are (APP-SURVEY "port the already-pure
 helpers as-is"): sync wording, history order, payment titles, explorer URLs, label validation and fee
@@ -27,6 +28,24 @@ def filterScanText (p : SyncPhase) (fallbackScanned fallbackTip : Nat) : Option 
   match progress with
   | some (s, t) => if t == 0 then none else some s!"block {groupDigits (min s t)} of {groupDigits t}"
   | none => none
+
+/-- `AppModel.simpleSyncError` (upstream d2ca878, AppModel.swift:234): what Simple mode shows under the
+balance. A peer dropping mid-scan is routine and the next pass recovers on another peer, so one or two in
+a row stay quiet and a third is said in plain words; any other error shows at once. -/
+def simpleSyncError (lastError transientError : Option String) (failures : Nat) : Option String :=
+  match lastError with
+  | none => none
+  | some e => if some e != transientError then some e
+    else if failures ≥ 3 then some "Winnow keeps losing its connection to Bitcoin peers. It will keep trying."
+    else none
+
+/-- `AppModel.isTransientSyncError` (AppModel.swift:242): failures of the link rather than of a peer's
+answers — the pool moves to another peer and the next pass usually succeeds. Every error that is not a
+`PeerError` or a `FilterSyncError` in Swift (a file error, say: `.other` here) is not transient. -/
+def isTransientSyncError : Winnow.IO.NetError → Bool
+  | .peer e => e.isTransport
+  | .filters (.peersCoolingDown _) | .filters (.crossCheckUnavailable _) | .filters .noPeers => true
+  | _ => false
 
 /-! ## History -/
 

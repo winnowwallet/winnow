@@ -53,3 +53,9 @@ root = "LedgerTransportTest"
 [[lean_exe]]
 name = "multisig-app-test"
 root = "MultisigAppTest"
+
+# The encrypted iCloud recovery formats (Winnow/Wallet/CloudWalletBackup.lean, WinnowApp/Real/CloudAppState.lean),
+# with Swift's own backups and digests (../Lean/Vectors/cloud-backup.json). Run from LeanApp/.
+[[lean_exe]]
+name = "cloud-backup-test"
+root = "CloudBackupTest"
