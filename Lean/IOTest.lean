@@ -342,8 +342,27 @@ def fakePeer (mode : FakeMode) : IO UInt16 := do
     discard <| sock.shutdown.toIO
   return port
 
+/-- Upstream `PeerClosedRequestTests.closedPeerDoesNotWait` (#176): a request on a closed peer fails with
+`notConnected` within the polling budget, long before its 90 s response deadline. -/
+def closedPeerChecks : IO Unit := do
+  for collectMany in [false, true] do
+    let peer ← PeerConnection.new { host := "127.0.0.1", port := 1 } NetworkParams.signet
+    peer.disconnect
+    let outcome ← IO.mkRef (none : Option (Except NetError Unit))
+    spawn do
+      let r ← (if collectMany then
+          discard <| peer.requestMany (.ping 1) "pong" 1 (timeoutMs := 90_000)
+        else discard <| peer.request (.ping 1) #["pong"] (timeoutMs := 90_000)).attempt
+      outcome.set (some r)
+    let done ← waitUntil 5_000 (do return (← outcome.get).isSome)
+    let kind := if collectMany then "requestMany" else "request"
+    check s!"a closed peer fails without waiting for its response deadline ({kind})"
+      (done && (match ← outcome.get with | some (.error (.peer .notConnected)) => true | _ => false))
+      (match ← outcome.get with | some (.error e) => e.description | some (.ok ()) => "accepted" | none => "still waiting")
+
 def fakeChecks (dir : String) : IO Unit := do
   say "transport and pool failure paths (fake peers)"
+  closedPeerChecks
   let ep (port : UInt16) : PeerEndpoint := { host := "127.0.0.1", port }
   let silent ← fakePeer .silent
   let c1 ← PeerConnection.new (ep silent) regtest

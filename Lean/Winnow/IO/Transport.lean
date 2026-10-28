@@ -25,7 +25,9 @@ Differences the platform forces (deliberate, small):
   `Std.Async.TCP` has no `close`.
 * Swift's `connect` also tears down when its task is cancelled; Lean tasks are not cancelled here.
 * A subscriber registered after teardown gets a stream that has already ended (Swift's never ends).
-* A failed `request` send unregisters its waiter at once (Swift leaves it to its timeout). -/
+* A failed `request` send unregisters its waiter at once (Swift leaves it to its timeout).
+* A request on a closed peer is refused before the backlog is purged (Swift purges first; teardown has
+  already emptied the backlog, so nothing observable differs). -/
 
 namespace Winnow.IO
 open Winnow.Net Std.Net Std.Async
@@ -190,17 +192,26 @@ private def purge (st : ConnState) (pred : PeerMessage → Bool) : ConnState :=
   let (drop, keep) := st.backlog.partition (pred ·.1)
   { st with backlog := keep, backlogBytes := st.backlogBytes - drop.foldl (· + ·.2) 0 }
 
-/-- Registers a waiter for the first message among `commands` (the backlog is consulted first). -/
+/-- Swift's `guard connection != nil, !didTeardown`: a closed (or never opened) peer has no one left to
+resolve a waiter, so registering one would only sleep until its deadline (#176). -/
+private def isOpen (st : ConnState) : Bool := st.hasConnection && !st.didTeardown
+
+/-- Registers a waiter for the first message among `commands` (the backlog is consulted first); a
+closed peer refuses with `notConnected` instead of registering. -/
 private def register (c : PeerConnection) (commands : Array String) (purgeFirst : Bool) :
     NetM (Sum PeerMessage (Nat × IO.Promise (Except NetError PeerMessage))) := do
   let p ← IO.Promise.new
-  c.state.modifyGet fun st =>
+  let r ← c.state.modifyGet fun st =>
+    if !isOpen st then (none, st) else
     let st := if purgeFirst then purge st (commands.contains ·.command) else st
     match st.backlog.findIdx? (commands.contains ·.1.command) with
-    | some i => let (m, st) := takeFromBacklog st i; (.inl m, st)
+    | some i => let (m, st) := takeFromBacklog st i; (some (.inl m), st)
     | none =>
       let id := st.nextId
-      (.inr (id, p), { st with nextId := id + 1, pending := st.pending.push { id, commands, promise := p } })
+      (some (.inr (id, p)), { st with nextId := id + 1, pending := st.pending.push { id, commands, promise := p } })
+  match r with
+  | some r => return r
+  | none => throw (.peer .notConnected)
 
 private def waitFor (c : PeerConnection) (commands : Array String) (timeoutMs : Nat) : NetM PeerMessage := do
   match ← c.register commands false with
@@ -232,6 +243,7 @@ def requestMany (c : PeerConnection) (m : PeerMessage) (command : String) (count
   if count == 0 then throw (.other "requestMany: count must be positive")
   let p ← IO.Promise.new
   let r ← c.state.modifyGet fun st =>
+    if !isOpen st then (none, st) else
     let st := purge st (·.command == command)
     let id := st.nextId
     let st := { st with nextId := id + 1 }
@@ -247,12 +259,13 @@ def requestMany (c : PeerConnection) (m : PeerMessage) (command : String) (count
             drain st (got.push msg) (bytes + size) fuel
           | none => (st, got, bytes)
     let (st, got, bytes) := drain st #[] 0 (st.backlog.size + 1)
-    if maxTotalBytes.any (bytes > ·) then (Sum.inl (Sum.inl bytes), st)
-    else if got.size ≥ count then (Sum.inl (Sum.inr got), st)
+    if maxTotalBytes.any (bytes > ·) then (some (Sum.inl (Sum.inl bytes)), st)
+    else if got.size ≥ count then (some (Sum.inl (Sum.inr got)), st)
     else
       let col : PendingCollector :=
         { id, command, expected := count, received := got, promise := p, maxTotalBytes, receivedBytes := bytes }
-      (Sum.inr id, { st with collectors := st.collectors.push col })
+      (some (Sum.inr id), { st with collectors := st.collectors.push col })
+  let some r := r | throw (.peer .notConnected)
   match r with
   | .inl (.inl bytes) =>
     let e := burstTooLarge command bytes (maxTotalBytes.getD 0)
