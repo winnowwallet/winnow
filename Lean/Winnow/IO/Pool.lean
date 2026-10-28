@@ -10,10 +10,13 @@ import Winnow.IO.Gateways
 A small pool of outbound peers (default 3). Candidates: manual endpoints, the persisted good peers
 (`peers.json`, version 2 with source classes), the clearnet list of the census the app was built with
 (validated once, when the pool is made; no clock ages it), shuffled, with `avoidOnReset` endpoints last — and
-DNS seeds only when those cannot fill the pool. A round dials up to `maxParallelDials` (5) at once,
-each with `dialTimeout` (5 s), at most `maxDialAttempts` (50) per round, skipping candidates the
-diversity policy refuses (re-checked on arrival); stragglers are awaited and disconnected; a round
-that ends below target is `exhausted`. A monitor prunes dead connections and replenishes every 30 s.
+DNS seeds once the local queue is used up (#175): one lookup per seed, their answers joining the dials on
+one completion stream, so a ready connection or one seed's peers never wait on a slow seed; while manual
+peers are configured, seeds wait until no dial is running. A round dials up to `maxParallelDials` (5) at
+once, each with `dialTimeout` (5 s), at most `maxDialAttempts` (50) per round, skipping candidates the
+diversity policy refuses (re-checked on arrival); when the pool fills, surplus dials are disconnected at
+once and then drained (outstanding seed lookups are abandoned: Swift cancels them and waits, Lean tasks
+are not cancelled); a round that ends below target is `exhausted`. A monitor prunes dead connections and replenishes every 30 s.
 
 Gateways (#181, #190): only endpoints `gateways` permits are candidates, an overlay one dialled through
 its network's SOCKS5 gateway by name; DNS seeds are resolved only on a route that includes clearnet, and
@@ -227,17 +230,28 @@ def localCandidates (p : PeerPool) (excluded : Std.HashSet PeerEndpoint) : IO (A
       out := out.push c
   return out
 
-/-- Seeds only on a valid route that includes clearnet: an overlay-only pool resolves no DNS. -/
-private def seedCandidates (p : PeerPool) (excluded : Std.HashSet PeerEndpoint) : IO (Array PeerCandidate) := do
-  unless p.gateways.isValid && p.gateways.networks.contains .clearnet do return #[]
-  let seeds ← p.seedResolver.resolveSeeds p.params.dnsSeeds p.params.defaultPort p.params.allowsPrivateSeedAddresses
-  let mut seen := excluded
-  let mut out := #[]
-  for e in seeds do
-    if p.gateways.permits e && !seen.contains e then
-      seen := seen.insert e
-      out := out.push { endpoint := e, source := .dnsSeed }
-  return out
+/-- What a discovery round waits on: a dial's outcome, or one DNS seed's answer (`DiscoveryResult`). Both
+share one completion stream, so a slow seed cannot hide a ready connection or another seed's results. -/
+inductive DiscoveryResult where
+  | dial (endpoint : PeerEndpoint) (peer : Option PeerConnection)
+  | seeds (endpoints : Array PeerEndpoint)
+
+/-- Seed lookups start once the local queue is used up, and — while manual peers are configured — only
+when no dial is still running: explicitly configured peers get a chance to fill the pool without DNS. -/
+def shouldResolveSeeds (manualPeers : Bool) (next queued : Nat) (resolved : Bool) (running : Nat) : Bool :=
+  next ≥ queued && !resolved && (running == 0 || !manualPeers)
+
+/-- One lookup per seed, in shuffled order, each reporting on `done` when it answers; only on a valid
+route that includes clearnet (an overlay-only pool resolves no DNS). Returns how many were started. -/
+private def launchSeedLookups (p : PeerPool) (done : EventStream DiscoveryResult Unit) : IO Nat := do
+  unless p.gateways.isValid && p.gateways.networks.contains .clearnet do return 0
+  let seeds ← shuffle p.params.dnsSeeds
+  for seed in seeds do
+    spawn do
+      let found ← try p.seedResolver.resolve seed p.params.defaultPort p.params.allowsPrivateSeedAddresses
+        catch _ => pure #[]
+      done.yield (.seeds found)
+  return seeds.size
 
 /-! ## Unseating -/
 
@@ -303,17 +317,19 @@ partial def replenish (p : PeerPool) : IO Unit := do
   let excluded : Std.HashSet PeerEndpoint :=
     (s.peers.map (·.endpoint) ++ cooling).foldl (·.insert ·) s.rejectedForSession
   let mut queue ← p.localCandidates excluded
+  let mut seen := queue.foldl (fun acc c => acc.insert c.endpoint) excluded
   let mut resolvedSeeds := false
   let mut next := 0
   let mut running := 0
-  let done : EventStream (PeerEndpoint × Option PeerConnection) Unit ← EventStream.new 0 1_000_000
-  while (← p.state.get).peers.size < p.peerCount && (← p.state.get).started && (← p.state.get).mode == .full do
-    if next ≥ queue.size && !resolvedSeeds then
-      resolvedSeeds := true
-      let seen := queue.foldl (fun acc c => acc.insert c.endpoint) excluded
-      queue := queue ++ (← p.seedCandidates seen)
-    -- launchEligibleDials
-    while next < queue.size && running < p.maxParallelDials && (← p.state.get).attemptsThisRound < p.maxDialAttempts do
+  let mut seedLookups := 0
+  let done : EventStream DiscoveryResult Unit ← EventStream.new 0 1_000_000
+  let hasRoom : IO Bool := do
+    let st ← p.state.get
+    return st.started && st.mode == .full && st.peers.size < p.peerCount
+  while (← hasRoom) do
+    -- launchEligibleDials: candidates the diversity policy would refuse are skipped before the dial
+    while next < queue.size && running < p.maxParallelDials && (← p.state.get).attemptsThisRound < p.maxDialAttempts &&
+        (← p.state.get).mode == .full do
       let candidate := queue[next]!
       next := next + 1
       let st ← p.state.get
@@ -326,21 +342,39 @@ partial def replenish (p : PeerPool) : IO Unit := do
                                          inFlight := st.inFlight.push (endpoint, peer) }
       spawn do
         match ← (peer.connect p.dialTimeoutMs).attempt with
-        | .ok () => done.yield (endpoint, some peer)
-        | .error _ => done.yield (endpoint, none)
-    if running == 0 then break
-    let .value (endpoint, dialed) ← done.next | break
-    running := running - 1
-    p.state.modify fun st => { st with inFlight := st.inFlight.filter (·.1 != endpoint) }
-    let some peer := dialed | continue
-    let src := (queue.find? (·.endpoint == endpoint)).map (·.source) |>.getD .persisted
-    p.seatArrival peer endpoint src
-  -- The pool filled or stopped while other dials were in flight.
+        | .ok () => done.yield (.dial endpoint (some peer))
+        | .error _ => done.yield (.dial endpoint none)
+    if shouldResolveSeeds (!p.manualPeers.isEmpty) next queue.size resolvedSeeds running then
+      resolvedSeeds := true
+      seedLookups ← p.launchSeedLookups done
+    if !(running > 0 || seedLookups > 0) then break
+    let .value result ← done.next | break
+    match result with
+    | .seeds endpoints =>
+      seedLookups := seedLookups - 1
+      for e in endpoints do
+        if p.gateways.permits e && !seen.contains e then
+          seen := seen.insert e
+          queue := queue.push { endpoint := e, source := .dnsSeed }
+    | .dial endpoint dialed =>
+      running := running - 1
+      p.state.modify fun st => { st with inFlight := st.inFlight.filter (·.1 != endpoint) }
+      let some peer := dialed | continue
+      let src := (queue.find? (·.endpoint == endpoint)).map (·.source) |>.getD .persisted
+      p.seatArrival peer endpoint src
+  -- cancelSurplusDiscovery: the pool filled or stopped with dials in flight. Disconnecting resolves a
+  -- pending handshake at once, so a silent surplus dial does not hold the round for its timeout; then
+  -- only the running dials are drained (outstanding seed lookups are abandoned, their answers unread).
+  let surplus ← p.state.modifyGet fun st => (st.inFlight, st)
+  for (_, c) in surplus do c.disconnect
   while running > 0 do
-    let .value (endpoint, peer) ← done.next | break
-    running := running - 1
-    p.state.modify fun st => { st with inFlight := st.inFlight.filter (·.1 != endpoint) }
-    if let some c := peer then c.disconnect
+    let .value result ← done.next | break
+    match result with
+    | .dial endpoint peer =>
+      running := running - 1
+      p.state.modify fun st => { st with inFlight := st.inFlight.filter (·.1 != endpoint) }
+      if let some c := peer then c.disconnect
+    | .seeds _ => pure ()
   -- a round that ended because the pool narrowed is not one that came up short: a relay-only session
   -- neither evicts nor refills
   if (← p.state.get).mode != .full then

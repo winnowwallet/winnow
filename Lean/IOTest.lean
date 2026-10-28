@@ -379,9 +379,103 @@ def closedPeerChecks : IO Unit := do
       (done && (match ← outcome.get with | some (.error (.peer .notConnected)) => true | _ => false))
       (match ← outcome.get with | some (.error e) => e.description | some (.ok ()) => "accepted" | none => "still waiting")
 
+/-- A fake node that accepts any number of connections and handshakes each (version with
+NODE_COMPACT_FILTERS, verack), or with `silent` accepts and never speaks; `params` picks the magic. -/
+def fakeNode (params : NetworkParams) (silent : Bool := false) : IO PeerEndpoint := do
+  let server ← Std.Async.TCP.Socket.Server.mk
+  server.bind (.v4 ⟨Std.Net.IPv4Addr.ofParts 127 0 0 1, 0⟩)
+  server.listen 16
+  let port := (← server.getSockName).port
+  spawn do
+    let keep := server
+    repeat
+      let sock ← keep.accept.block
+      spawn do
+        let send (m : PeerMessage) : IO Unit := (sock.send (MessageFramer.frame m.command m.payload params.magic)).block
+        let mut framer : MessageFramer := { magic := params.magic }
+        repeat
+          let some chunk ← (sock.recv? 65536).block | break
+          if chunk.isEmpty then break
+          framer := framer.append chunk
+          let mut alive := true
+          repeat
+            match framer.nextMessage with
+            | .ok (some (cmd, payload), f) =>
+              framer := f
+              if !silent then
+                match cmd with
+                | "version" =>
+                  send (.version { version := 70016, services := 64 ||| 1, timestamp := 0, receiver := .unspecified,
+                                   sender := .unspecified, nonce := 9, userAgent := "/fake-node:0/", startHeight := 0,
+                                   relay := false })
+                  send .verack
+                | "ping" =>
+                  if let .ok (.ping n) := PeerMessage.decode cmd payload then send (.pong n)
+                | _ => pure ()
+            | .ok (none, _) => break
+            | .error _ => alive := false; break
+          if !alive then break
+        discard <| sock.shutdown.toIO
+  return { host := "127.0.0.1", port }
+
+/-- Upstream `PeerPoolTests` for #175: discovery as one completion stream of dials and seed answers. -/
+def discoveryChecks (dir : String) : IO Unit := do
+  let seeded : NetworkParams := { regtest with dnsSeeds := #["seed-a.test", "seed-b.test", "seed-c.test"] }
+  -- localDialsDoNotWaitForSeeds
+  let gate ← IO.Promise.new (α := Unit)
+  let blocked : SeedResolver := { lookup := fun _ _ _ => do discard <| IO.wait gate.result?; pure #[] }
+  let first ← fakeNode seeded
+  let second ← fakeNode seeded
+  let pool ← PeerPool.new seeded (peerCount := 2) (manualPeers := #[first, second]) (seedResolver := some blocked)
+  spawn pool.start
+  let connected ← waitUntil 20_000 (do return (← pool.connectedPeers).size == 2)
+  gate.resolve ()
+  check "ready local peers are seated without waiting for DNS" connected
+  pool.stop
+  -- seedResultsAreConsumedAsTheyArrive
+  let gate2 ← IO.Promise.new (α := Unit)
+  let node ← fakeNode seeded
+  let halfBlocked : SeedResolver := { lookup := fun host _ _ => do
+    if host == "seed-a.test" then return #[node]
+    discard <| IO.wait gate2.result?
+    return #[] }
+  let pool2 ← PeerPool.new seeded (peerCount := 1) (seedResolver := some halfBlocked)
+  spawn pool2.start
+  let finished ← waitUntil 20_000 (do
+    let s ← pool2.connectionStatus
+    return s.connected == 1 && !s.dialing)
+  gate2.resolve ()
+  check "a usable seed result connects while other seeds are still waiting" finished
+  pool2.stop
+  -- diversityExhaustionStillResolvesSeeds
+  let nodes ← (List.range 4).mapM fun _ => fakeNode seeded
+  let file : System.FilePath := s!"{dir}/diversity-peers.json"
+  IO.FS.writeBinFile file (PersistedPeers.encode (nodes.take 3 |>.toArray.map ({ endpoint := ·, source := .census })))
+  let seedPeer := nodes[3]!
+  let pool3 ← PeerPool.new seeded (peerCount := 3) (peersFile := some file) (maxParallelDials := 1)
+    (seedResolver := some { lookup := fun _ _ _ => pure #[seedPeer] })
+  pool3.start
+  check "DNS still fills a seat after diversity skips remembered candidates"
+    ((← pool3.connectedPeers).size == 3 && (← pool3.source seedPeer) == some .dnsSeed &&
+     !(← pool3.connectionStatus).exhausted)
+    s!"{(← pool3.connectedPeers).size} seated, seed peer {repr (← pool3.source seedPeer)}"
+  pool3.stop
+  -- fullPoolDoesNotWaitForSilentDial
+  let good ← fakeNode regtest
+  let silent ← fakeNode regtest (silent := true)
+  let pool4 ← PeerPool.new regtest (peerCount := 1) (manualPeers := #[silent, good]) (seedResolver := some noSeeds)
+    (dialTimeoutMs := 90_000)
+  spawn pool4.start
+  let settled ← waitUntil 20_000 (do
+    let s ← pool4.connectionStatus
+    return s.connected == 1 && !s.dialing)
+  check "a full pool closes silent surplus dials immediately" settled
+  pool4.stop
+
 def fakeChecks (dir : String) : IO Unit := do
   say "transport and pool failure paths (fake peers)"
   closedPeerChecks
+  discoveryChecks dir
   let ep (port : UInt16) : PeerEndpoint := { host := "127.0.0.1", port }
   let silent ← fakePeer .silent
   let c1 ← PeerConnection.new (ep silent) regtest
