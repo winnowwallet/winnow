@@ -469,6 +469,8 @@ structure Model where
   paper : Option Nat := none
   /-- Bumped on suspend, network switch and rebuild: an answer from an older generation is dropped. -/
   generation : Nat := 0
+  /-- `UIApplication.shared.backgroundRefreshStatus == .available` (the shell's `bgtask.refreshStatus`). -/
+  backgroundRefreshAvailable : Bool := true
   /-- `SensitivePresentationEpoch`: bumped whenever a sensitive presentation opens, resets or closes,
   and on background. A sensitive answer (phrase, export) counts only for its epoch. -/
   epoch : Nat := 0
@@ -547,6 +549,8 @@ inductive Host where
   | sceneInactive
   /-- The screen is being recorded or mirrored (UIScreen.isCaptured): phrase grids are hidden. -/
   | captured (on : Bool)
+  /-- Background App Refresh is available (`bgtask.refreshStatus`). -/
+  | backgroundRefresh (available : Bool)
   deriving Inhabited
 
 inductive SendMsg where
@@ -839,6 +843,8 @@ inductive Cmd where
   | abandonSpend (gen : Nat) (id txid : String)
   /-- `e2e?.journal(name, fields:)` for what happens in the Model (test mode only; nothing otherwise). -/
   | journal (name : String) (fields : List (String × String))
+  /-- Ask the shell whether Background App Refresh is on (`bgtask.refreshStatus`). -/
+  | backgroundRefreshStatus
   deriving Inhabited
 
 instance : Lean.ToJson Cmd := ⟨fun _ => Lean.Json.null⟩

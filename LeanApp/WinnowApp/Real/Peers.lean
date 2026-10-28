@@ -41,7 +41,7 @@ def retryPeers (env : Env) : IO Unit := do
   | none => activate env
 
 /-- `syncNow()`. -/
-def syncNow (env : Env) : IO Unit := syncOnce env
+def syncNow (env : Env) : IO Unit := discard <| syncOnce env
 
 /-- "977 candidates": the entries on the networks the current routing may dial. -/
 def candidateCount (c : CensusCatalog) (networks : List PeerNetwork := [.clearnet]) : String :=

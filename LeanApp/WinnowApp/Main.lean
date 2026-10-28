@@ -405,6 +405,9 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit := do
       b.abandonSpend id txid
       return .spendHandled g id txid
   | .journal name fields => journal name fields
+  | .backgroundRefreshStatus =>
+    fx.cap "bgtask.refreshStatus" Json.null fun r =>
+      .backgroundRefresh ((r.getObjValAs? String "status").toOption.getD "available" == "available")
   | .paste target => discard <| IO.asTask do
       -- `pasteboardText()`: the runner's control file under test mode, the pasteboard otherwise
       let fromControl ← match ← e2eRef.get with

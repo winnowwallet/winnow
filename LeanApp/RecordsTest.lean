@@ -477,12 +477,33 @@ def peerGatewayModel (t : T) : IO Unit := do
   t.check "background: Direct only as chosen" (backgroundRoutingAllowed "direct" {} true)
   t.check "background: Manual as chosen" (backgroundRoutingAllowed "manual" overlay true)
 
+/-- Sync bookkeeping as the screens show it (upstream 66c6a48): Simple mode waits out dropped peers, Advanced
+shows every error; Advanced's Sync section says when the chain was last checked. -/
+def syncBookkeepingScreens (t : T) : IO Unit := do
+  let dropped := (Winnow.IO.NetError.peer (.disconnected "closed")).description
+  let status (n : Nat) : Status := { lastSyncError := some dropped, transientSyncError := some dropped, transientSyncFailures := n }
+  let simple (n : Nat) := (ElmLean.Html.toWire (.list (beginnerSections { stage := .ready, status := status n }) : H)).toJson.compress
+  let advanced (n : Nat) := (ElmLean.Html.toWire (.list (walletSections { stage := .ready, settings := { advancedMode := true }, status := status n }) : H)).toJson.compress
+  t.check "Simple mode: a dropped peer stays quiet" (!contains (simple 1) "closed")
+  t.check "Simple mode: the third says so in plain words" (contains (simple 3) "Winnow keeps losing its connection to Bitcoin peers.")
+  t.check "Advanced mode: every error shows" (contains (advanced 1) dropped)
+  t.check "Advanced: never fully checked" (contains (advanced 0) "Chain not fully checked yet")
+  let st : Status := { lastCheckedAgo := some (relativeAgo 300) }
+  let mm : Model := { stage := .ready, settings := { advancedMode := true }, status := st, backgroundRefreshAvailable := false }
+  let checked := (ElmLean.Html.toWire (.list (walletSections mm) : H)).toJson.compress
+  t.check "Advanced: last checked" (contains checked "Chain last checked 5 min ago")
+  t.check "Advanced: Background App Refresh off" (contains checked "Background App Refresh is off, so Winnow checks the chain only while open.")
+  t.check "relative: under a minute" (relativeAgo 59 == "under a minute")
+  t.check "relative: hours and minutes" (relativeAgo (2 * 3600 + 3 * 60) == "2 hr, 3 min")
+  t.check "relative: days" (relativeAgo (3 * 86400 + 4 * 3600) == "3 days, 4 hr" && relativeAgo 86400 == "1 day")
+
 def main : IO UInt32 := do
   let t : T := { passed := ← IO.mkRef 0, failed := ← IO.mkRef #[] }
   let root ← IO.FS.createTempDir
   IO.println s!"records-test in {root}"
   syncErrorBookkeeping t
   peerGatewayModel t
+  syncBookkeepingScreens t
   try
     let a ← newPhone root "A"
     let b ← newPhone root "B"

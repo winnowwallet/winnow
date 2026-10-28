@@ -47,6 +47,19 @@ def isTransientSyncError : Winnow.IO.NetError → Bool
   | .filters (.peersCoolingDown _) | .filters (.crossCheckUnavailable _) | .filters .noPeers => true
   | _ => false
 
+/-- `Text(date, style: .relative)` for "Chain last checked … ago", to the minute (the snapshot that carries
+it is posted when it changes): "under a minute", "5 min", "2 hr, 3 min", "3 days, 4 hr". -/
+def relativeAgo (seconds : Nat) : String :=
+  let minutes := seconds / 60
+  let hours := minutes / 60
+  let days := hours / 24
+  if minutes == 0 then "under a minute"
+  else if hours == 0 then s!"{minutes} min"
+  else if days == 0 then if minutes % 60 == 0 then s!"{hours} hr" else s!"{hours} hr, {minutes % 60} min"
+  else
+    let d := if days == 1 then "1 day" else s!"{days} days"
+    if hours % 24 == 0 then d else s!"{d}, {hours % 24} hr"
+
 /-! ## Peer routing (`PeerRoutingBanner.swift`, `PeerGatewaysSection.swift`, upstream d2ca878) -/
 
 /-- `PeerRoutingState`: how this phone reaches Bitcoin peers, as one line a beginner can read. -/

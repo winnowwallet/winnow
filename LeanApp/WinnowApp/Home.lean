@@ -183,7 +183,8 @@ def balanceSection (m : Model) : H :=
                   (if m.settings.network == .mainnet then [peerRoutingBanner m] else []) ++
                   (if m.phase.summary m.status.syncing == .peersUnavailable then
                     [.identified "retryPeersButton" (.button "Retry" .plain (some .retryPeers))] else []) ++
-                  errorRows m.status.lastSyncError)
+                  -- Simple mode waits out a dropped peer or two; Advanced shows every error
+                  errorRows (simpleSyncError m.status.lastSyncError m.status.transientSyncError m.status.transientSyncFailures))
 
 def activitySection (m : Model) : H :=
   .section "Activity" ""
@@ -197,6 +198,16 @@ def beginnerSections (m : Model) : List H :=
   , activitySection m
   , .section "" "" [.button "Back up wallet" .plain (some (.home .openBackup)), caption "Backup file and recovery words"] ]
 
+/-- `ChainCheckStatus`: when a scan last reached the tip, and whether iOS may check in the background
+(background checks are requests; iOS decides when they run). -/
+def chainCheckStatus (m : Model) : List H :=
+  [ .identified "lastCompleteChainCheck" (caption (match m.status.lastCheckedAgo with
+      | some ago => s!"Chain last checked {ago} ago"
+      | none => "Chain not fully checked yet"))
+  , caption (if m.backgroundRefreshAvailable then
+      "iOS may also check while Winnow is closed, through the same routing. It cannot while the phone is off or after you force-quit Winnow."
+    else "Background App Refresh is off, so Winnow checks the chain only while open.") ]
+
 /-- Advanced mode's Sync section. -/
 def syncSection (m : Model) : H :=
   let statusText := syncStatusText m.phase
@@ -207,7 +218,7 @@ def syncSection (m : Model) : H :=
       | none => []) ++
      (match filterScanText m.phase m.status.nextScanHeight m.status.tipHeight with
       | some t => [.labeled "Filter scan" t] | none => []) ++
-     [.labeled "Peers" s!"{m.status.peerCount}"] ++
+     [.labeled "Peers" s!"{m.status.peerCount}"] ++ chainCheckStatus m ++
      (if m.status.syncing && statusText.isNone then [.progress "Scanning filters…"] else []) ++
      errorRows m.status.lastSyncError ++
      (match m.status.relayStoreQuarantined with | some q => [body q] | none => []) ++

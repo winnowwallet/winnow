@@ -177,6 +177,7 @@ def onHost (h : Host) (m : Model) : Model × List Cmd :=
     let m' := { m' with phase := SyncPhase.idle, confirm := none, sheets := [], routes := [], tabRoutes := [], tab := 0 }
     (m', [.stopNetworking])
   | .captured on => ({ m with captured := on }, [])
+  | .backgroundRefresh available => ({ m with backgroundRefreshAvailable := available }, [])
   | .scene active =>
     -- `scenePhaseChanged` journals the phase before acting on it
     let phase : Cmd := .journal "app.scenePhase" [("phase", if active then "active" else "background")]
@@ -184,7 +185,7 @@ def onHost (h : Host) (m : Model) : Model × List Cmd :=
       let m := { m with active := true }
       let resume := if m.stage == .ready then [.startNetworking m.generation m.settings, .refresh m.generation] else []
       let window := if m.hasSheet .receive && !m.receive.address.isEmpty then [.watchAddress m.generation m.receive.address] else []
-      (m, [phase] ++ resume ++ window)
+      (m, [phase] ++ resume ++ window ++ [.backgroundRefreshStatus])
     else
       let (m, cs) := m.background
       (m, phase :: cs)

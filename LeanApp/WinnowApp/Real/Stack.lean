@@ -289,7 +289,7 @@ def startPhasePolling (env : Env) (epoch : Nat) : IO Unit := do
 /-- `syncOnce()`: the wallet's and its multisig accounts' scripts in one filter stream (an account is
 just more watched scripts); matched blocks update the wallet and the accounts and confirm pending
 broadcasts; the frontier is recorded either way. -/
-def syncOnce (env : Env) : IO Unit := do
+def syncOnce (env : Env) (maxBlocks : Option UInt32 := none) : IO Bool := do
   let claim ← env.modifyGet fun c =>
     match c.wallet, c.stack with
     | some w, some s =>
@@ -299,12 +299,12 @@ def syncOnce (env : Env) : IO Unit := do
         else (some (w, s, f, c.generation, c.dir), { c with syncing := true, syncPasses := c.syncPasses + 1 })
       | none => (none, c)
     | _, _ => (none, c)
-  let some (w, s, f, gen, dir) := claim | return
+  let some (w, s, f, gen, dir) := claim | return false
   try
     let pass : NetM Unit := do
       let scripts := (← WM.toNet w.watchScripts) ++ (← (env.hooks.multisigWatchScripts w.network : IO _))
       let b := s.broadcaster
-      f.sync scripts (onReorg := some fun fork => (rollBackStores env dir w b fork : IO Unit)) (onMatch := fun m => do
+      f.sync scripts (maxBlocks := maxBlocks) (onReorg := some fun fork => (rollBackStores env dir w b fork : IO Unit)) (onMatch := fun m => do
         let effect ← env.walletOpNet (w.apply m)
         for discarded in effect.discardedReplacements do b.cancel discarded
         for discarded in ← (env.hooks.multisigApply m w.network : IO _) do b.cancel discarded
@@ -316,10 +316,28 @@ def syncOnce (env : Env) : IO Unit := do
       if let some d := dir then (finishRollback d : IO Unit)
     match ← pass.attempt with
     | .ok () =>
-      env.modify fun c => if c.generation == gen then { c with lastSyncError := none } else c
+      -- the scan reached the tip: when it did is what Advanced's Sync section shows
+      let complete := (← f.nextScanHeight) > (← s.chain.height)
+      let now ← unixNow
+      let current ← env.modifyGet fun c =>
+        if c.generation == gen then
+          (true, { c with lastSyncError := none, transientSyncFailures := 0, transientSyncError := none,
+                          lastCompleteCheck := if complete then some now else c.lastCompleteCheck })
+        else (false, c)
+      if complete && current then
+        if let some d := dir then
+          try IO.FS.writeFile (lastCompleteCheckPath d) (toString now) catch _ => pure ()
+      return complete
     | .error e =>
       try env.walletOp (w.recordScanHeight (← f.nextScanHeight)) catch _ => pure ()
-      env.modify fun c => if c.generation == gen then { c with lastSyncError := some e.description } else c
+      -- a suspend, network switch or expired background check ended this generation: nothing failed
+      let transient := isTransientSyncError e
+      env.modify fun c => if c.generation == gen then
+          { c with lastSyncError := some e.description,
+                   transientSyncFailures := if transient then c.transientSyncFailures + 1 else 0,
+                   transientSyncError := if transient then some e.description else none }
+        else c
+      return false
   finally
     env.modify fun c => { c with syncing := false }
 
@@ -334,7 +352,7 @@ def startSyncLoop (env : Env) : IO Unit := do
     try
       repeat
         if !alive (← env.get) then break
-        syncOnce env
+        discard <| syncOnce env
         if !(← env.sleepWhile env.deps.syncIntervalMs alive) then break
     finally
       env.modify fun c => if c.syncLoop == some token then { c with syncLoop := none } else c

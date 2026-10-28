@@ -166,6 +166,12 @@ structure Status where
   activeGateways : Winnow.IO.PeerGatewayConfiguration := {}
   /-- `discoveringGateways`: Automatic is asking the tailnet for its gateways. -/
   discoveringGateways : Bool := false
+  /-- `transientSyncError` / `transientSyncFailures`: the message the last dropped or slow peer left and how
+  many passes in a row ended so (`simpleSyncError`). -/
+  transientSyncError : Option String := none
+  transientSyncFailures : Nat := 0
+  /-- `lastCompleteCheck`, as "5 min" for "Chain last checked 5 min ago" (none: never fully checked). -/
+  lastCheckedAgo : Option String := none
   deriving Repr, Inhabited
 
 /-- AppModel's `SyncPhase`. -/

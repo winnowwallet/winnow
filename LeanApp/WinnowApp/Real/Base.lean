@@ -1,4 +1,5 @@
 import Std.Sync.Mutex
+import Std.Time
 import Winnow.IO
 import Winnow.Wallet.Wallet
 import Winnow.Wallet.FeePolicy
@@ -278,6 +279,12 @@ structure Core where
   /-- The generation the phase ticker (`phaseTask`) runs for. -/
   phaseLoop : Option Nat := none
   lastSyncError : Option String := none
+  /-- Sync passes in a row that a dropped or slow peer ended, and the message the last one left
+  (`simpleSyncError`). -/
+  transientSyncFailures : Nat := 0
+  transientSyncError : Option String := none
+  /-- `lastCompleteCheck`: when a scan last reached the tip (Unix seconds), foreground or background. -/
+  lastCompleteCheck : Option Nat := none
   relayStoreQuarantined : Option String := none
   phase : SyncPhase := .idle
   receiveWindow : Option Window := none
@@ -403,6 +410,14 @@ def Core.withSettings (c : Core) (s : Settings) : Core :=
 or I2P in the foreground, as a file beside the network directories. -/
 def gatewaysUsedPath (dir : String) : System.FilePath :=
   (System.FilePath.mk dir).parent.getD (System.FilePath.mk dir) / "peer-gateways.automatic-used"
+
+/-- `DefaultsKey.lastCompleteCheck(network)`, as a file in the network's directory (Unix seconds). -/
+def lastCompleteCheckPath (dir : String) : System.FilePath := System.FilePath.mk dir / "sync.last-complete"
+
+def readLastCompleteCheck (dir : String) : IO (Option Nat) := do
+  try return (← IO.FS.readFile (lastCompleteCheckPath dir)).trimAscii.copy.toNat? catch _ => return none
+
+def unixNow : IO Nat := do return (← Std.Time.Timestamp.now).toSecondsSinceUnixEpoch.val.toNat
 
 def readGatewaysUsed (dir : String) : IO Bool := do
   try return (← IO.FS.readFile (gatewaysUsedPath dir)).trimAscii.copy == "true" catch _ => return false

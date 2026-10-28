@@ -17,8 +17,10 @@ def switchTo (env : Env) (n : WinnowApp.Network) (dir : String) : IO Unit := do
   let c ← env.get
   if c.network == some n && c.dir == some dir then return
   suspendAndStop env false
+  let checked ← readLastCompleteCheck dir
   env.modify fun c => { c with network := some n, dir := some dir, wallet := none, reviews := #[], bumps := #[],
-                               lastSyncError := none, relayStoreQuarantined := none, phase := .idle }
+                               lastSyncError := none, relayStoreQuarantined := none, phase := .idle,
+                               transientSyncFailures := 0, transientSyncError := none, lastCompleteCheck := checked }
 
 def damagedWalletText : String :=
   "Winnow found local wallet data but could not safely read it. The files and protected key were left untouched. Retry; if this continues, restore from a known-good wallet bundle or ask for help before changing anything."
@@ -147,7 +149,11 @@ def snapshot (env : Env) : IO (Status × SyncPhase) := do
                   feeFloorMilli := ← feeFloorMilli stack.pool }
     if let some f := stack.filters then s := { s with nextScanHeight := (← f.nextScanHeight).toNat }
   s := { s with syncing := c.syncing, lastSyncError := c.lastSyncError, relayStoreQuarantined := c.relayStoreQuarantined,
-                activeGateways := c.activeGateways, discoveringGateways := c.discoveringGateways }
+                activeGateways := c.activeGateways, discoveringGateways := c.discoveringGateways,
+                transientSyncError := c.transientSyncError, transientSyncFailures := c.transientSyncFailures }
+  if let some at_ := c.lastCompleteCheck then
+    let now ← unixNow
+    s := { s with lastCheckedAgo := some (relativeAgo (now - at_)) }
   journalSnapshotIfChanged env s
   return (s, phase)
 
