@@ -3,6 +3,7 @@ import WinnowApp.Real.Stack
 import WinnowApp.Real.Wallet
 import WinnowApp.Real.Send
 import WinnowApp.Real.Peers
+import WinnowApp.Real.BackgroundSync
 import WinnowApp.Real.Shell
 import WinnowApp.Real.Assemble
 import WinnowApp.Real.Full
@@ -17,6 +18,7 @@ import WinnowApp.Real.MultisigStore
 | `Real/Wallet.lean` | open, create, adopt, import, export, reveal, destroy, receive, `refresh` (:470–1476) |
 | `Real/Send.lean` | fee rate, previews, send, fee bump, payment details, mempool windows (:899, :1539–1892, :2191) |
 | `Real/Peers.lean` | scene phase start/stop, reconnect, retry, the census line, peers, reset (:553, :2586–2665) |
+| `Real/BackgroundSync.lean` | background chain checks: `BackgroundSyncRun`, `runBackgroundSync` (BackgroundSyncScheduler.swift) |
 | `Real/Shell.lean` | the shell's `keychain.*` and `http.get` capabilities as `KeyStore IO` and `HttpFetch` |
 | `Real/Assemble.lean` | the core fields of the `Backend` record (`Backend.coreWithEnv`) |
 | `Real/Records*.lean` | people and labels (PeopleStore, ReceiveAddressLabelStore, AppModel) |

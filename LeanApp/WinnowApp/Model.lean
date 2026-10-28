@@ -476,7 +476,11 @@ structure Model where
   epoch : Nat := 0
   /-- `AppModel.exclusively(.spending)`: one payment is signed and broadcast at a time. -/
   spendingInFlight : Bool := false
-  active : Bool := true
+  /-- `isActive`: the scene is in the foreground (the shell's scene phase). A cold background launch has no
+  active scene, so boot opens the wallet without starting foreground networking. -/
+  active : Bool := false
+  /-- A background task iOS launched before the wallet was open (id, kind): it runs once boot lands. -/
+  pendingBackgroundTask : Option (String × String) := none
   deriving Repr, Inhabited
 
 /-! ## Messages -/
@@ -551,6 +555,10 @@ inductive Host where
   | captured (on : Bool)
   /-- Background App Refresh is available (`bgtask.refreshStatus`). -/
   | backgroundRefresh (available : Bool)
+  /-- iOS launched the background task `id` (`refresh` or `processing`). -/
+  | bgtask (id kind : String)
+  /-- iOS expired it. -/
+  | bgtaskExpired (id kind : String)
   deriving Inhabited
 
 inductive SendMsg where
@@ -845,6 +853,12 @@ inductive Cmd where
   | journal (name : String) (fields : List (String × String))
   /-- Ask the shell whether Background App Refresh is on (`bgtask.refreshStatus`). -/
   | backgroundRefreshStatus
+  /-- `BackgroundSyncScheduler.schedule()`: one refresh and one processing request, each replacing its own. -/
+  | scheduleBackgroundTasks
+  /-- Run the launched task `id` as one bounded background check (`BackgroundSyncRun`), then complete it. -/
+  | runBackgroundTask (id kind : String) (settings : Settings)
+  /-- The task's expiration handler: the run is cancelled and completes unsuccessfully once it drains. -/
+  | expireBackgroundTask (id : String)
   deriving Inhabited
 
 instance : Lean.ToJson Cmd := ⟨fun _ => Lean.Json.null⟩

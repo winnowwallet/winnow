@@ -20,6 +20,8 @@ initialize tmpDir : IO.Ref String ← IO.mkRef ""
 initialize backendRef : IO.Ref Backend ← IO.mkRef Backend.pending
 /-- The running status watcher's token: starting or stopping networking bumps it, ending the old one. -/
 initialize watcherToken : IO.Ref Nat ← IO.mkRef 0
+/-- The background checks running, by task identifier (`BackgroundSyncRun`). -/
+initialize backgroundRuns : IO.Ref (List (String × Real.BackgroundSyncRun)) ← IO.mkRef []
 /-- Test mode (`E2E.lean`), resolved at boot in a Debug build only. -/
 initialize e2eRef : IO.Ref (Option E2E.Mode) ← IO.mkRef none
 /-- `<Application Support>` itself: test mode's journal lives in its run directory there. -/
@@ -405,6 +407,25 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit := do
       b.abandonSpend id txid
       return .spendHandled g id txid
   | .journal name fields => journal name fields
+  | .scheduleBackgroundTasks => discard <| IO.asTask do
+      -- replacing our own requests keeps one of each pending; a refused request (Background App Refresh
+      -- off, or the simulator) changes nothing: Settings shows when the chain was last checked
+      discard <| fx.ask "bgtask.schedule" (Json.mkObj [("id", Json.str Real.backgroundRefreshID), ("kind", Json.str "refresh"),
+        ("after", toJson (900 : Nat))])
+      discard <| fx.ask "bgtask.schedule" (Json.mkObj [("id", Json.str Real.backgroundProcessingID), ("kind", Json.str "processing"),
+        ("after", toJson (900 : Nat)), ("requiresNetwork", Json.bool true), ("requiresPower", Json.bool false)])
+  | .runBackgroundTask id kind s => do
+      let complete (success : Bool) : IO Unit := do
+        backgroundRuns.modify (·.filter (·.1 != id))
+        discard <| fx.ask "bgtask.complete" (Json.mkObj [("id", Json.str id), ("success", Json.bool success)])
+      let run ← Real.BackgroundSyncRun.new (Real.backgroundBudgetMs kind) (b.runBackgroundSync s) b.cancelBackgroundSync complete
+      backgroundRuns.modify ((id, run) :: ·)
+      run.start
+  | .expireBackgroundTask id => do
+      match (← backgroundRuns.get).lookup id with
+      | some run => run.expire
+      -- expired before it started: it completes unsuccessfully
+      | none => discard <| fx.ask "bgtask.complete" (Json.mkObj [("id", Json.str id), ("success", Json.bool false)])
   | .backgroundRefreshStatus =>
     fx.cap "bgtask.refreshStatus" Json.null fun r =>
       .backgroundRefresh ((r.getObjValAs? String "status").toOption.getD "available" == "available")
@@ -418,19 +439,6 @@ def perform (c : Cmd) (fx : Effects Host) : IO Unit := do
       | none =>
         let j ← IO.wait (← fx.ask "clipboard.get" Json.null)
         fx.post (.pasted target ((j.getObjValAs? String "text").toOption.getD ""))
-
-/-- The shell's system events: scene phase as `scenePhaseChanged` reads it (`active` activates,
-`background` suspends; `inactive` is still foreground: a system prompt such as Face ID or paste must
-neither stop syncing nor discard the result it is waiting for) and screen capture. The privacy cover
-over an inactive scene is the shell's. -/
-def system (j : Json) : Option Host :=
-  match j.getObjValAs? String "scene", j.getObjValAs? Bool "captured" with
-  | .ok "active", _ => some (.scene true)
-  | .ok "background", _ => some (.scene false)
-  | .ok "inactive", _ => some .sceneInactive
-  | .ok _, _ => none
-  | _, .ok on => some (.captured on)
-  | _, _ => none
 
 def app : Native.App Model Msg Cmd Host :=
   { init := {}, update, view, cmds, host := Msg.host, perform := fun c fx => do

@@ -268,6 +268,9 @@ structure Core where
   generation : Nat := 0
   /-- `isActive`: networking was asked for and not stopped. -/
   active : Bool := false
+  /-- `backgroundRunning`: a background check owns networking; `backgroundCancelled`: it was told to stop. -/
+  backgroundRunning : Bool := false
+  backgroundCancelled : Bool := false
   buildingStack : Bool := false
   /-- `status.syncing` -/
   syncing : Bool := false

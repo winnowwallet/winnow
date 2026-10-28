@@ -1,6 +1,7 @@
 import WinnowApp.Real.RecordsBackend
 import WinnowApp.Real
 import WinnowApp.View
+import WinnowApp.E2E
 import ElmLean.Erase
 import ElmLean.Json
 
@@ -497,6 +498,103 @@ def syncBookkeepingScreens (t : T) : IO Unit := do
   t.check "relative: hours and minutes" (relativeAgo (2 * 3600 + 3 * 60) == "2 hr, 3 min")
   t.check "relative: days" (relativeAgo (3 * 86400 + 4 * 3600) == "3 days, 4 hr" && relativeAgo 86400 == "1 day")
 
+/-! ## Background checks (upstream d2ca878 `BackgroundSyncTests`) -/
+
+/-- Waits (up to `ms`) for `cond`. -/
+def waitFor (ms : Nat) (cond : IO Bool) : IO Bool := do
+  let deadline := (← IO.monoMsNow) + ms
+  repeat
+    if ← cond then return true
+    if (← IO.monoMsNow) ≥ deadline then return false
+    IO.sleep 5
+  return false
+
+/-- Sleeps `ms` unless the task is cancelled first (`Task.sleep` throwing `CancellationError`). -/
+def cancellableSleep (ms : Nat) : IO Unit := do
+  let deadline := (← IO.monoMsNow) + ms
+  while (← IO.monoMsNow) < deadline do
+    if ← IO.checkCanceled then return
+    IO.sleep 5
+
+def backgroundRuns (t : T) : IO Unit := do
+  -- testCompletionOccursOnceAndCancelsDeadline
+  let completions ← IO.mkRef (#[] : Array Bool)
+  let cancellations ← IO.mkRef 0
+  let run ← Real.BackgroundSyncRun.new 20 (pure true) (cancellations.modify (· + 1)) fun ok => completions.modify (·.push ok)
+  run.start; run.start
+  discard <| waitFor 1000 do return !(← completions.get).isEmpty
+  run.expire
+  IO.sleep 40
+  t.check "background run: completes once, successfully" ((← completions.get) == #[true] && (← cancellations.get) == 0)
+  -- testExpirationDrainsWorkAndCannotReportSuccess
+  let completions ← IO.mkRef (#[] : Array Bool)
+  let cancellations ← IO.mkRef 0
+  let started ← IO.mkRef false
+  let drained ← IO.mkRef false
+  let drainedAtCompletion ← IO.mkRef false
+  let run ← Real.BackgroundSyncRun.new 10_000 (do started.set true; cancellableSleep 10_000; drained.set true; return true)
+    (cancellations.modify (· + 1)) fun ok => do drainedAtCompletion.set (← drained.get); completions.modify (·.push ok)
+  run.start
+  discard <| waitFor 1000 started.get
+  run.expire; run.expire
+  discard <| waitFor 1000 do return !(← completions.get).isEmpty
+  IO.sleep 20
+  t.check "background run: an expired run drains, then fails once" ((← completions.get) == #[false] && (← drainedAtCompletion.get))
+  t.check "background run: one cancellation" ((← cancellations.get) == 1)
+  -- testDeadlineCancelsHungWork
+  let completions ← IO.mkRef (#[] : Array Bool)
+  let run ← Real.BackgroundSyncRun.new 10 (do cancellableSleep 10_000; return true) (pure ()) fun ok => completions.modify (·.push ok)
+  run.start
+  t.check "background run: the deadline cancels hung work" (← waitFor 1000 do return (← completions.get) == #[false])
+  -- testBackgroundAndForegroundCannotOwnNetworkingTogether
+  let env ← gatewayEnv none
+  env.modify fun c => { c with active := true }
+  t.check "background: refused while the scene is active" (!(← Real.runBackgroundSync env {}) && !(← env.get).backgroundRunning)
+  -- testColdBackgroundRunOpensTheWalletScansAndTearsDown (a custom signet, an unreachable peer)
+  let vars := [("WINNOW_E2E", "1"), ("WINNOW_E2E_RUN", "background"), ("WINNOW_E2E_ENTROPY", "000102030405060708090a0b0c0d0e0f"),
+               ("WINNOW_E2E_PEER", "127.0.0.1:1"), ("WINNOW_E2E_CHALLENGE", "51")]
+  match WinnowApp.E2E.resolve (fun k => vars.lookup k) with
+  | .active mode =>
+    let root ← IO.FS.createTempDir
+    let dir := (root / "signet").toString
+    IO.FS.createDirAll dir
+    let ks := Winnow.inMemoryKeyStore (← IO.mkRef {})
+    discard <| (Wallet.create .signet ks (some (System.FilePath.mk dir / "wallet.json")) mode.entropy).run
+    let env ← Real.Env.new { keyStore := ks, fetch := fun _ => throw (.other "offline"), networkParams := mode.networkParams, peerCount := 1 }
+    let booted ← Real.openWallet env .signet dir
+    t.check "cold background run: boot opens the wallet without networking" ((booted matches .opened _) && (← env.get).stack.isNone)
+    let settings : Settings := { network := .signet, signet := { manualPeers := ["127.0.0.1:1"] } }
+    let complete ← Real.runBackgroundSync env settings
+    let c ← env.get
+    t.check "cold background run: an unreachable peer cannot finish a check" (!complete)
+    t.check "cold background run: no networking left running" (c.stack.isNone && !c.backgroundRunning && !c.active)
+    t.check "cold background run: never fully checked" c.lastCompleteCheck.isNone
+    Real.startNetworking env settings
+    t.check "cold background run: the foreground still starts normally" ((← env.get).stack.bind (·.filters)).isSome
+    Real.stopNetworking env
+    IO.FS.removeDirAll root
+  | _ => t.check "cold background run: test mode resolves" false
+  -- testBackgroundIdentifiersAreDeclaredInBuiltApplication: the project the app is built from
+  let project ← IO.FS.readFile "ios/project.yml"
+  t.check "background: the identifiers are permitted in Info.plist"
+    (contains project s!"- {Real.backgroundRefreshID}" && contains project s!"- {Real.backgroundProcessingID}")
+  t.check "background: fetch and processing modes" (contains project "UIBackgroundModes: [fetch, processing]")
+  -- the Model: a cold launch's task waits for boot, boot without a scene starts no networking
+  let (m, cs) := onHost (.bgtask Real.backgroundRefreshID "refresh") ({} : Model)
+  t.check "Model: a task launched during boot waits for the wallet" (m.pendingBackgroundTask == some (Real.backgroundRefreshID, "refresh") &&
+    cs.any (· matches .scheduleBackgroundTasks) && !cs.any (· matches .runBackgroundTask ..))
+  let (m, cs) := onHost (.booted 0 (.opened "w")) m
+  t.check "Model: boot runs it, without foreground networking" (cs.any (· matches .runBackgroundTask ..) &&
+    !cs.any (· matches .startNetworking ..) && m.pendingBackgroundTask.isNone)
+  let (m, cs) := onHost (.scene true) m
+  t.check "Model: the scene becoming active starts networking" (cs.any (· matches .startNetworking ..) && m.active)
+  let (_, cs) := onHost (.scene false) m
+  t.check "Model: backgrounding asks for the next checks" (cs.any (· matches .scheduleBackgroundTasks) && cs.any (· matches .stopNetworking))
+  let (_, cs) := onHost (.bgtaskExpired Real.backgroundRefreshID "refresh") m
+  t.check "Model: an expired task is cancelled" (cs.any (· matches .expireBackgroundTask _))
+  t.check "system events: a launched task" ((system (Lean.Json.mkObj [("bgtask", Lean.Json.mkObj [("id", "x"), ("kind", "processing")])])) matches some (.bgtask "x" "processing"))
+  t.check "system events: an expired task" ((system (Lean.Json.mkObj [("bgtaskExpired", Lean.Json.mkObj [("id", "x"), ("kind", "refresh")])])) matches some (.bgtaskExpired "x" "refresh"))
+
 def main : IO UInt32 := do
   let t : T := { passed := ← IO.mkRef 0, failed := ← IO.mkRef #[] }
   let root ← IO.FS.createTempDir
@@ -504,6 +602,7 @@ def main : IO UInt32 := do
   syncErrorBookkeeping t
   peerGatewayModel t
   syncBookkeepingScreens t
+  backgroundRuns t
   try
     let a ← newPhone root "A"
     let b ← newPhone root "B"

@@ -124,6 +124,11 @@ structure Backend where
   rebroadcastSpend : (id txid : String) → IO Unit
   /-- `abandonMultisigSpend(record:txid:)`. -/
   abandonSpend : (id txid : String) → IO Unit
+  /-- `runBackgroundSync()`: one bounded background check with these settings; whether it reached the tip.
+  Refused (false) while the scene is active. -/
+  runBackgroundSync : Settings → IO Bool
+  /-- `cancelBackgroundSync()`: stop a running background check and wait for it to drain. -/
+  cancelBackgroundSync : IO Unit
 
 def notPorted (what : String) : IO α := throw (IO.userError s!"{what}: this part of Winnow is still being ported to Lean.")
 
@@ -191,6 +196,8 @@ def Backend.pending : Backend where
   createDraft := fun _ _ _ _ _ => notPorted "Multisig accounts"
   rebroadcastSpend := fun _ _ => notPorted "Multisig accounts"
   abandonSpend := fun _ _ => notPorted "Multisig accounts"
+  runBackgroundSync := fun _ => pure false
+  cancelBackgroundSync := pure ()
 
 instance : Nonempty Backend := ⟨Backend.pending⟩
 

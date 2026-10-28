@@ -1,4 +1,4 @@
-import WinnowApp.Real.Peers
+import WinnowApp.Real.BackgroundSync
 
 /-! # `Backend.real`: the core half of AppModel behind the `Backend` record
 
@@ -71,7 +71,9 @@ def Env.backend (env : Env) : Backend :=
     connectedPeers := connectedPeers env
     resetPeers := resetPeers env
     exportBundle := fun withPhrase => exportBundle env withPhrase
-    revealMnemonic := revealMnemonic env }
+    revealMnemonic := revealMnemonic env
+    runBackgroundSync := fun s => runBackgroundSync env s
+    cancelBackgroundSync := cancelBackgroundSync env }
 
 end Real
 

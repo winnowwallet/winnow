@@ -49,6 +49,12 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         # Automatic routing asks Tailscale's MagicDNS and probes the gateways it names (upstream's text)
         NSLocalNetworkUsageDescription: "Winnow checks your Tailscale gateways and connects to Bitcoin nodes you configure."
+        # background chain checks (WinnowApp/Real/BackgroundSync.lean): iOS decides when they run; each is one
+        # bounded scan with the foreground's routing. The shell registers a handler for each identifier.
+        UIBackgroundModes: [fetch, processing]
+        BGTaskSchedulerPermittedIdentifiers:
+          - com.btcswift.winnow.chain-refresh
+          - com.btcswift.winnow.chain-processing
     settings:
       base:
         # the Swift app's identity, which this app replaces on TestFlight: the same bundle identifier and team,

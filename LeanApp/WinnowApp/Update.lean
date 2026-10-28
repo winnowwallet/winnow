@@ -27,7 +27,8 @@ def Model.background (m : Model) : Model × List Cmd :=
   let (m2, cs) := match m1.sheets.findIdx? Sheet.isSensitive with
     | some i => m1.closeFrom i
     | none => (m1, [])
-  (m2, [.stopNetworking, .stopWatchingAddress] ++ m.discardExport ++ cs)
+  -- `BackgroundSyncScheduler.shared.schedule()` on every trip to the background
+  (m2, [.stopNetworking, .stopWatchingAddress, .scheduleBackgroundTasks] ++ m.discardExport ++ cs)
 
 def onHost (h : Host) (m : Model) : Model × List Cmd :=
   let current (g : Nat) := g == m.generation
@@ -39,14 +40,21 @@ def onHost (h : Host) (m : Model) : Model × List Cmd :=
     (m, [.openWallet m.generation s.network true])
   | .booted g r =>
     if !current g then (m, []) else
+    -- networking runs only while the scene is active (a cold background launch has no scene); a background
+    -- task iOS launched during boot runs now
+    let start : List Cmd := if m.active then [.startNetworking g m.settings] else []
+    let pending : List Cmd := match m.pendingBackgroundTask with
+      | some (id, kind) => [.runBackgroundTask id kind m.settings]
+      | none => []
+    let m := { m with pendingBackgroundTask := none }
     match r with
-    | .opened id => ({ m with stage := .ready, walletID := some id }, [.refresh g, .startNetworking g m.settings])
+    | .opened id => ({ m with stage := .ready, walletID := some id }, [.refresh g] ++ start ++ pending)
     | .backupPending id =>
       ({ m with stage := .onboarding, walletID := some id, onboarding := { m.onboarding with busy := true, error := none } },
-       [.refresh g, .startNetworking g m.settings, .resumeBackup g])
-    -- `boot` activates networking whatever the stage, so a new wallet is dated at a synced tip
-    | .missing => ({ m with stage := .onboarding, walletID := none }, [.startNetworking g m.settings])
-    | .damaged msg => ({ m with stage := .storageDamaged msg }, [])
+       [.refresh g] ++ start ++ [.resumeBackup g] ++ pending)
+    -- activation builds the stack whatever the stage, so a new wallet is dated at a synced tip
+    | .missing => ({ m with stage := .onboarding, walletID := none }, start ++ pending)
+    | .damaged msg => ({ m with stage := .storageDamaged msg }, pending)
   | .created g words =>
     if !current g then (m, []) else
     ({ m with onboarding := { m.onboarding with busy := false, words, writtenDown := false, error := none } }.present .mnemonic, [])
@@ -178,12 +186,20 @@ def onHost (h : Host) (m : Model) : Model × List Cmd :=
     (m', [.stopNetworking])
   | .captured on => ({ m with captured := on }, [])
   | .backgroundRefresh available => ({ m with backgroundRefreshAvailable := available }, [])
+  | .bgtask id kind =>
+    -- `handle(_:)`: ask for the next checks first; a task launched before the wallet opened waits for boot
+    if m.stage == .loading then ({ m with pendingBackgroundTask := some (id, kind) }, [.scheduleBackgroundTasks])
+    else (m, [.scheduleBackgroundTasks, .runBackgroundTask id kind m.settings])
+  | .bgtaskExpired id _ =>
+    if m.pendingBackgroundTask.any (·.1 == id) then ({ m with pendingBackgroundTask := none }, [.expireBackgroundTask id])
+    else (m, [.expireBackgroundTask id])
   | .scene active =>
     -- `scenePhaseChanged` journals the phase before acting on it
     let phase : Cmd := .journal "app.scenePhase" [("phase", if active then "active" else "background")]
     if active then
       let m := { m with active := true }
-      let resume := if m.stage == .ready then [.startNetworking m.generation m.settings, .refresh m.generation] else []
+      let resume := if m.stage == .ready then [.startNetworking m.generation m.settings, .refresh m.generation]
+        else if m.stage == .onboarding then [.startNetworking m.generation m.settings] else []
       let window := if m.hasSheet .receive && !m.receive.address.isEmpty then [.watchAddress m.generation m.receive.address] else []
       (m, [phase] ++ resume ++ window ++ [.backgroundRefreshStatus])
     else
@@ -266,6 +282,26 @@ def step (msg : Msg) (m : Model) : Model × List Cmd :=
   | .multisig mm => stepMultisig mm m
   | .signer sm => stepSigner sm m
   | .host h => onHost h m
+
+/-- The shell's system events: background tasks launched and expired, scene phase as `scenePhaseChanged` reads it (`active` activates,
+`background` suspends; `inactive` is still foreground: a system prompt such as Face ID or paste must
+neither stop syncing nor discard the result it is waiting for) and screen capture. The privacy cover
+over an inactive scene is the shell's. -/
+def system (j : Lean.Json) : Option Host :=
+  let task (key : String) : Option (String × String) := do
+    let t ← (j.getObjVal? key).toOption
+    let id ← (t.getObjValAs? String "id").toOption
+    return (id, (t.getObjValAs? String "kind").toOption.getD "refresh")
+  match j.getObjValAs? String "scene", j.getObjValAs? Bool "captured", task "bgtask", task "bgtaskExpired" with
+  | .ok "active", _, _, _ => some (.scene true)
+  | .ok "background", _, _, _ => some (.scene false)
+  | .ok "inactive", _, _, _ => some .sceneInactive
+  | .ok _, _, _, _ => none
+  | _, .ok on, _, _ => some (.captured on)
+  -- background tasks: launched (`{"bgtask":{"id","kind"}}`) and expired (`{"bgtaskExpired":…}`)
+  | _, _, some (id, kind), _ => some (.bgtask id kind)
+  | _, _, _, some (id, kind) => some (.bgtaskExpired id kind)
+  | _, _, _, _ => none
 
 def update (msg : Msg) (m : Model) : Model := (step msg m).1
 def cmds (msg : Msg) (m : Model) : List Cmd := (step msg m).2

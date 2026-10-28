@@ -360,7 +360,7 @@ def startSyncLoop (env : Env) : IO Unit := do
 /-- `activate()`: build the stack if needed, start the phase ticker, the pool, then the sync loop. -/
 def activate (env : Env) : IO Unit := do
   let c ← env.get
-  if !c.active || c.dir.isNone then return
+  if !c.active || c.backgroundRunning || c.dir.isNone then return
   let epoch := c.generation
   buildStackIfNeeded env
   let c ← env.get

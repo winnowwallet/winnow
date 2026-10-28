@@ -10,9 +10,25 @@ Refresh button) and peer rows. -/
 namespace WinnowApp.Real
 open Winnow Winnow.IO Winnow.Net
 
+/-- `cancelBackgroundSync()`: closing the pool's sockets interrupts pending peer reads; returns once the
+check has drained. -/
+def cancelBackgroundSync (env : Env) : IO Unit := do
+  let c ← env.modifyGet fun c => (c, if c.backgroundRunning then { c with backgroundCancelled := true } else c)
+  if !c.backgroundRunning then return
+  if let some s := c.stack then s.pool.stop
+  repeat
+    if !(← env.get).backgroundRunning then break
+    IO.sleep 20
+
 /-- The scene became active (`activate`), with these settings. A stack built for other settings
 (manual peers, verify-from-genesis) is torn down first so the change takes effect. -/
 def startNetworking (env : Env) (s : Settings) : IO Unit := do
+  -- foreground networking and a background check never run together
+  cancelBackgroundSync env
+  let checked ← match (← env.get).dir with
+    | some d => readLastCompleteCheck d
+    | none => pure none
+  env.modify fun c => { c with lastCompleteCheck := checked.or c.lastCompleteCheck }
   let restart ← env.modifyGet fun c =>
     let c := { c.withSettings s with active := true }
     match c.stack, c.network with
@@ -22,7 +38,13 @@ def startNetworking (env : Env) (s : Settings) : IO Unit := do
   activate env
 
 /-- The scene went to the background: suspend, then stop (nothing of this generation keeps running). -/
-def stopNetworking (env : Env) : IO Unit := suspendAndStop env false
+def stopNetworking (env : Env) : IO Unit := do
+  -- a cold background launch can deliver the scene's phase after its check started: that phase must not
+  -- tear down the check's own scan
+  if (← env.get).backgroundRunning then
+    env.modify fun c => { c with active := false }
+    return
+  suspendAndStop env false
 
 /-- `reconnect()`: rebuild the stack so changed peer settings take effect. -/
 def reconnect (env : Env) (s : Settings) : IO Unit := do
