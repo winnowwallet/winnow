@@ -1,6 +1,6 @@
 # Winnow in Lean: the port of Sources/WalletCore and Sources/WinnowApp (see ../PORT.md).
 name = "winnow"
-defaultTargets = ["Secp", "Winnow", "oracle-crypto", "oracle-keys", "oracle-tx", "oracle-net", "oracle-wallet", "io-test", "multisig-test", "ledger-test"]
+defaultTargets = ["Secp", "Winnow", "oracle-crypto", "oracle-keys", "oracle-tx", "oracle-net", "oracle-wallet", "io-test", "multisig-test", "ledger-test", "crypto-test"]
 
 [[lean_lib]]
 name = "Secp"
@@ -58,3 +58,9 @@ root = "LedgerTest"
 [[lean_exe]]
 name = "silent-payment-test"
 root = "SilentPaymentTest"
+
+# AES and AES-GCM (Winnow/Crypto/AES*.lean): FIPS 197, every Wycheproof AES-GCM test and CryptoKit's own
+# output (Vectors/). Run from Lean/.
+[[lean_exe]]
+name = "crypto-test"
+root = "CryptoTest"
