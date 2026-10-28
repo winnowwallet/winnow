@@ -1,31 +1,30 @@
-Winnow: 2-of-3 multisig with recovery paths, a Ledger signer, silent payment codes (internal test)
+Winnow: one wallet view for multisig, Send from an account, drafts that survive, silent payment codes (internal test)
 
-Send accepts a BIP352 silent payment code (sp1…/tsp1…) and derives the recipient's address from the coins it spends; the receipt shows both. Advanced mode builds k-of-n Taproot multisig accounts from Winnows, a Ledger or any signer, with an optional recovery path. There is no MuSig2 and no shared savings. Compact-filter sync, peer routing, people, labels and backups are unchanged.
+Send accepts a BIP352 silent payment code (sp1…/tsp1…). Advanced mode builds k-of-n Taproot multisig accounts from the signers under Settings → Signers: this phone, paired Ledgers, keys other people sent, or a whole account as one member. New in this build: the headline balance counts accounts, one Transactions list shows the wallet's and every account's payments, and an account is a source in Send. No MuSig2 or shared savings. Do not install on a phone holding funds in MuSig2 accounts (build 0.8.8) or vaults: it cannot see them.
 
-Do not install this build on a phone that holds funds in MuSig2 accounts (build 0.8.8) or shared-account vaults. It cannot see them, and its automatic iCloud backup leaves them out.
+One wallet view (Advanced and Simple)
 
-2-of-3 with two Winnows and a Ledger, on signet
+1. With an account that holds coins: the Wallet balance is wallet plus accounts, with a line "of which … in N multisig accounts, needs co-signers". Simple mode shows the same line and the same list.
+2. Transactions lists the account's receives and spends with the account's name under the title. A payment from the wallet to one of your accounts is one row, "Moved to <account>", never two.
+3. A payment's screen shows the account; for one the phone broadcast that has not confirmed it offers Rebroadcast and Give up on this payment (frees the coins).
 
-1. On every phone, turn on Advanced mode and switch to signet (Advanced → Settings → Signet).
-2. On the second phone: Wallet → Multisig → Join with a descriptor, and copy This phone's key. Send it to the first phone.
-3. On the first phone: Wallet → Multisig → New multisig account. Name it, paste the second phone's key, turn on Include a Ledger, keep "Any 2 of 3", and optionally turn on Recovery after a delay (try Fewer signers, 1 of 3, after 1 day). Open Bitcoin Test on the Ledger (version 2.2.1 or later for a recovery path) and tap Create account; approve the account on the Ledger.
-4. Copy the descriptor it shows and paste it on the second phone under Join with a descriptor. Both phones must show the same first address; Verify on Ledger shows it on the Ledger too.
-5. Fund the address from a signet faucet and wait for it to confirm.
-6. Spend with any two: create the PSBT on one phone, add its signature, then Sign with Ledger, or paste the PSBT on the other phone and sign there, and paste it back. Finalize and broadcast.
-7. After the delay (144 blocks a day), New or pasted PSBT → Recovery path: one signer alone can spend a coin that has not moved. Before the delay it must refuse.
+Send from an account, on signet
 
-Also try: a separate recovery key instead of fewer signers, a 2-of-3 of three phones without a Ledger, declining on the Ledger, and joining the same descriptor twice (the same account comes back, not a copy). None of this appears in Simple mode.
+1. Two phones, Advanced mode, Settings → Signet; a 2-of-2 or 2-of-3 built under Wallet → Multisig → New multisig account (members from Settings → Signers), joined on the other phone with the descriptor, funded from a faucet.
+2. First phone: Send → From: pick the account (the note names the policy). Paste an address, amount, Review payment: "Signatures: needs 2 of n". Sign and continue: authenticate, then the Collect signatures screen shows 1 of 2 and the PSBT to share.
+3. Leave the screen. Wallet → Transactions shows "Awaiting signatures · <account>" on top with "1 of 2 signed"; tap it to resume. Trying a second payment from the account must be refused until this one is done or discarded.
+4. Copy the PSBT to the second phone: Wallet → Multisig → the account → Payment awaiting signatures → paste it (Use this PSBT), Add this phone's signature, copy it back. Or Sign with Ledger, with a paired Ledger among the signers.
+5. First phone: paste the signed copy (Combine): 2 of 2. Finalize and broadcast: the ordinary receipt. The row shows the account's name and confirms with the next block.
+6. A silent payment code with an account picked must be refused. Discard draft frees the coins.
 
-Silent payment codes
+Backup mid-payment
 
-In Send, paste a BIP352 code (tsp1… on signet, sp1… on mainnet) from any wallet that gives one out. The review must name the code and say the address is created for this transaction; after sending, the receipt and the payment's details must show the code and the bc1p… address it paid, and the recipient's wallet must find the payment. Paste a mainnet code while on signet: it must be refused where it was typed, naming the network. Save a code as a person and pay them twice: two different on-chain addresses, no address counter. A code cannot be paid from a multisig account.
+With a draft or an unconfirmed account spend in place: Settings → Back up wallet (file) and the iCloud copy both succeed. Restore the file on a fresh install: the draft is back under Transactions; an unconfirmed spend shows with Rebroadcast.
 
-Ordinary wallet
+Recovery path and nested accounts (unchanged)
 
-Receive from a faucet, send a payment and watch it confirm. Restore the same recovery words in the App Store Winnow on another device: the first receive address must match. Pay a saved person and a pasted address. Bump the fee on a pending payment.
+Recovery after a delay still runs from the account's PSBT page: Recovery path, one signer alone spends a coin older than the delay; earlier it must refuse. A phone and its Ledger as one signer, and a 2-of-3 account as one member, build as before (Create approves the policy on the Ledger, app 2.2.1 or later); spends from them now also start under Send with the account picked.
 
-Backups
+Silent payment codes: in Send, paste a BIP352 code (tsp1… on signet) with Wallet as the source. The review names the code; the receipt shows the address paid. A mainnet code on signet must be refused.
 
-A backup from this build carries its multisig accounts and Ledger pairings. A file carrying MuSig2 accounts or vaults must be refused with a clear message, never restored partially.
-
-Report bugs publicly at https://github.com/winnowwallet/winnow/issues. Include the app version, device, Ledger model and app version, network and steps to reproduce. Never include recovery words, private keys, or wallet backup files.
+Report bugs at https://github.com/winnowwallet/winnow/issues with app version, device, Ledger model, network and steps. Never include recovery words, private keys or backup files.
