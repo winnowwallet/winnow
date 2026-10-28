@@ -91,8 +91,9 @@ third-party dependency.
 Scope, as the user set it on 2026-10-27: the Ledger signer and the Taproot multisig ("ledger, and the fancy
 multi, no need for musig2 right now"). The other upstream changes in this range are deferred, not ported
 yet: automatic iCloud backup (CloudKit), background sync, Tor/I2P peer
-gateways over Tailscale, RangeScan, the peer-pool and broadcaster changes, and Onboarding/Home/Settings
-changes outside multisig. **The census shipped with the build is done** (2026-10-27): `project.yml`
+gateways over Tailscale, the peer-pool and broadcaster changes, and Onboarding/Home/Settings
+changes outside multisig. **Restore-only range scans (RangeScan, upstream #226) are done** (091b35e:
+`Winnow/Net/RangeScan.lean`, `FilterSyncIO.scanRange` in `Winnow/IO/Filters.lean`). **The census shipped with the build is done** (2026-10-27): `project.yml`
 bundles `build/census/peers.json` (fetched by `scripts/import-census`, which `scripts/build-ios` runs when
 the list is missing), `CensusCatalog.bundled` reads it, and the UI test `testShippedCensus` requires
 Settings on mainnet to show the list's date and count. **Silent-payment sending is done** (2026-10-27):
@@ -118,6 +119,42 @@ address on it.
 
 The simulator has no Bluetooth, so phases D and E are verified with a test-mode fake and the pure oracles.
 A device run with a Ledger is not claimed until one happens.
+
+## Tracking upstream "one wallet" (#259, with #256 nested multisig)
+
+The next upstream step is winnowwallet/winnow#259 at d2ca878, which includes #256 (nested multisig).
+Oracle: the Swift at d2ca878, checked out read-only at `~/src/winnow-onewallet`; the diff against the
+previous oracle is `git -C ~/src/winnow-ledger diff 1cf93fb d2ca878 -- Sources/WalletCore Tests`. The merge
+commit db4cb1d brings the docs and release scripts; the Swift is ported in the commits after it.
+
+| Piece | Upstream Swift | Status | Verified by |
+|---|---|---|---|
+| #256 nested multisig, WalletCore | MultisigAccount (`Member`, `descriptor(members:…)`, `SpendPath` with leaf positions, `signersLeaves`/`recoveryLeaves`, `members`/`recoveryMembers`, `policySummary`, `signerKey`, `signerExpressions`, 32 leaves at most), LedgerMultisig (`hasLedgerSigner`, `namesALedgerKey`, the signer looked up over every key), LedgerWalletPolicy (any tree, 512-character template, 15 keys), the simulator's limits, SignerRecord, ImportBundle.signers | **done** (`Wallet/MultisigAccount.lean`, `Wallet/SignerRecord.lean`, `Ledger/`) | `multisig-test`: all of NestedMultisigTests without a Ledger, ImportBundleTests.signers; `ledger-test`: the three Ledger cases (one and two simulated Ledgers, the 335- and 368-character policies, 27 leaves refused); `multisig-differential` against Bitcoin Core v31.1.0 (default seed, 24 cases, five of them nested, among them 2-of-3 and 1-of-3 members and a 1-of-2 of pairs): 1,321 agreements, 0 disagreements |
+| #259 one wallet, WalletCore | HistoryLedger (lifted out of Wallet, which calls it), MultisigSpendDraft and InFlightSpend, MultisigAccountRecord's `history`/`draft`/`inFlight` (each omitted when empty), ImportBundle's account bounds | **done** (`Wallet/HistoryLedger.lean`, `Wallet/MultisigSpendRecords.lean`) | `multisig-test`: HistoryLedgerTests, an old record encoding byte for byte, the spend records' coding and refusals, the bounds. Counts on this tree: multisig-test 664, ledger-test 230; records-test 99, multisig-app-test 150, ledger-transport-test 13 unchanged |
+| #256/#259 app | MultisigStore's history/drafts/in-flight, SignerStore and the signer views, the builder for members, Send from an account, DisplayedPayment | not ported (a later stage); `LeanApp/` only compiles against the new WalletCore | |
+
+### Fixed upstream bugs
+
+Bugs in upstream d2ca878 that the port fixes rather than copies:
+
+1. **The PSBT given to share must be BIP174 v0.** #259 writes `psbt.base64` (the v2 envelope) into the
+   account's draft (`AppModel.signAndDraftMultisigSpend`, `updateMultisigDraft`, Sources/WinnowApp/AppModel.swift
+   2522 and 2559) and shares the draft's text as "PSBT to share" (MultisigViews.swift 695); before #259 it
+   shared `base64V0()`. Bitcoin Core and most other signers read only v0. Here `MultisigSpendDraft.ofPSBT`
+   writes the v0 envelope (`PSBT.base64V0`), and the app's drafts must be made through it; multisig-test
+   checks that a draft's text is v0 and reads back as the same spend, signatures included.
+2. **Draft signature counts are compared by number.** Upstream's `draftRow` (Sources/WinnowApp/DisplayedPayment.swift
+   93–109) picks the "best leaf" text with `.max { lhs.count < rhs.count }` over strings like "2 of 3": the
+   longest text wins, so an untouched twelve-key leaf ("0 of 12") is shown over a leaf that is two of
+   three signed ("2 of 3"); it must compare the approval counts (then thresholds) as numbers. App side,
+   for the stage that ports DisplayedPayment.
+3. **A person's address index advances when the account spend confirms, whoever broadcast it.** Upstream
+   advances it only in `broadcastMultisigDraft` (AppModel.swift 2572–2576), i.e. when this phone
+   broadcasts; when a co-signer broadcasts, `MultisigStore.pruneDraft` (MultisigStore.swift 488–500) drops
+   the draft, with its `personID` and `paymentIndex`, once its inputs stop being live coins, and the index
+   never moves, so the next payment reuses the address. The draft keeps both fields (WalletCore); the app
+   must advance the index when the draft's txid confirms in the account's history (or leaves its inputs
+   spent by that txid), not only on its own broadcast. App side, for the stage that ports MultisigStore.
 
 ## Tests, UI tests, CI and TestFlight
 
