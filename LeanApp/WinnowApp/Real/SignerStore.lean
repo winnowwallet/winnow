@@ -51,12 +51,6 @@ def toRecords (e : SignerStorageError) : RecordsError := .named e.name e.descrip
 
 end SignerStorageError
 
-/-- `Date()` as `SignerRecord.addedAt` keeps it: seconds since 2001-01-01 00:00 UTC. -/
-def referenceDateNow : IO Float := do
-  let t ← Std.Time.Timestamp.now
-  let ns : Int := t.toNanosecondsSinceUnixEpoch.val
-  return Float.ofInt ns / 1_000_000_000 - SignerRecord.unixEpochOffset
-
 /-- `SignerStore`. -/
 structure SignerStore where
   records : Array SignerRecord := #[]
