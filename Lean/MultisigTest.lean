@@ -8,7 +8,9 @@ import Lean.Data.Json
 * `Tests/WalletCoreTests/TimelockedMultisigTests.swift` (all 10),
 * the script-path half of `SighashBIP341Tests.swift` over `bip341-scriptpath-test-vectors.json` (shape,
   sighash, signatures, BIP387 witness), since `Multisig.parse` and `Signer.multisigWitness` changed,
-* `core-timelocked-multisig.json` (Bitcoin Core 31.1's checksums and addresses).
+* `core-timelocked-multisig.json` (Bitcoin Core 31.1's checksums and addresses),
+* upstream d2ca878's `NestedMultisigTests.swift` (#256): all ten tests without a Ledger here, the three
+  with simulated Ledgers in `ledger-test`.
 
 Fixtures as `Tests/Support/TestKeys.swift`: masters from BIP39 over 16 repeated bytes (0xA1, 0xB2, 0xC3;
 0x0D a stranger; 0xD4–0xD6 recovery keys), signet keys at m/86'/1'/0', `testChainTip` 840 000, BIP340
@@ -1031,6 +1033,366 @@ def feeResolution : TM Unit := do
   check "fee: no seats" (FeePolicy.seatMajorityFloor #[] 0 == none)
   check "fee: NaN counts as zero" (FeePolicy.seatMajorityFloor #[nan, 200] 3 == none)
 
+/-! ## NestedMultisigTests (upstream d2ca878, #256; the three Ledger cases are in `ledger-test`) -/
+
+def hasText (s t : String) : Bool := (s.splitOn t).length > 1
+def sortedNats (xs : Array Nat) : List Nat := xs.toList.mergeSort
+def sortedInts (xs : Array Int) : List Int := xs.toList.mergeSort
+
+/-- Members of a nested test account: the masters, the members' key expressions, the account. -/
+structure Family where
+  masters : Array HDKey
+  members : Array (Array String)
+  account : MultisigAccount
+
+/-- The signers' leaf whose keys are exactly these masters', by position. -/
+def Family.leafOf (f : Family) (holders : List Nat) : TM SpendPath := do
+  let wanted := MultisigAccount.asSet (← holders.toArray.mapM fun h => return (← accountKeyOf f.masters[h]!).publicKey)
+  let some position := f.account.signersLeaves.findIdx? fun leaf =>
+      MultisigAccount.asSet (leaf.keys.map MultisigAccount.identity) == wanted
+    | throw s!"no leaf of {holders}"
+  return .signers position
+
+/-- The pairs `holder`'s key takes in the leaves it sits in, signers' or recovery, in tree order. -/
+def Family.appearances (f : Family) (holder : Nat) : TM (Array Nat) := do
+  let id := (← accountKeyOf f.masters[holder]!).publicKey
+  return (f.account.allKeys.filter (MultisigAccount.identity · == id)).filterMap
+    (MultisigAccount.appearance? ·.derivation.elements)
+
+/-- Member A holds two keys (a phone and its Ledger, both software here), B and C one each. -/
+def nestedFamily (threshold : Int := 2) (recovery : Option RecoveryPlan := none) : TM Family := do
+  let ms ← #[0xA1, 0xB2, 0xC3, 0xD4].mapM master
+  let keys ← ms.mapM keyExpression
+  let members := #[#[keys[0]!, keys[1]!], #[keys[2]!], #[keys[3]!]]
+  let d ← need "nested descriptor" (MultisigAccount.makeNestedDescriptor (members.map .all) threshold recovery .signet)
+  return { masters := ms, members, account := ← need "nested account" (MultisigAccount.make d .signet) }
+
+/-- Member A is a 2-of-3 account (masters 0, 1 and 2), B and C one key each (3 and 4). -/
+def estate (threshold : Int := 2) (recovery : Option RecoveryPlan := none) : TM Family := do
+  let ms ← #[0xA1, 0xB2, 0xC3, 0xD4, 0xE5].mapM master
+  let keys ← ms.mapM keyExpression
+  let members : Array MultisigAccount.Member :=
+    #[{ keys := keys.extract 0 3, threshold := 2 }, .all #[keys[3]!], .all #[keys[4]!]]
+  let d ← need "estate descriptor" (MultisigAccount.makeNestedDescriptor members threshold recovery .signet)
+  return { masters := ms, members := members.map (·.keys), account := ← need "estate account" (MultisigAccount.make d .signet) }
+
+def nfunding (a : MultisigAccount) : TM WalletUTXO := funding a 100_000 .receive 0 100 0x6E
+
+def nspend (a : MultisigAccount) (coin : WalletUTXO) (path : SpendPath := .signers) (tip : UInt32 := 101) : MAM PSBT :=
+  a.createSpend #[coin] #[{ amount := 40_000, scriptPubKey := destination }] 0 2 tip path (0.5, 0.5)
+
+/-- The paths among `paths` with their threshold of verified signatures. -/
+def finished (a : MultisigAccount) (p : PSBT) (coin : WalletUTXO) (paths : Array SpendPath) : TM (Array SpendPath) :=
+  paths.filterM fun path => do return ((← need "ap" (a.approvals p #[coin] path)).size : Int) ≥ a.thresholdOn path
+
+def nestedBuilder : TM Unit := do
+  let f ← nestedFamily
+  let a := f.account
+  check "nested builder: nested" a.isNested
+  check "nested builder: three leaves" (a.signersLeaves.size == 3)
+  check "nested builder: leaf sizes" (sortedNats (a.signersLeaves.map (·.keys.size)) == [2, 3, 3])
+  check "nested builder: each leaf needs every key, sorted" (a.signersLeaves.all fun l => l.threshold == l.keys.size && l.isSorted)
+  check "nested builder: four signers, no recovery" (a.signers.size == 4 && a.recovery.isNone)
+  check "nested builder: summary" (a.policySummary == "2 of 3 members") a.policySummary
+  let some members := a.members | throw "no members"
+  check "nested builder: members" (members.threshold == 2 && sortedNats (members.groups.map (·.size)) == [1, 1, 2])
+  -- Each key sits in two leaves: on /<0;1>/* first, /<2;3>/* after.
+  let mut appearances : Array (ByteArray × Array Nat) := #[]
+  for leaf in a.signersLeaves do
+    for key in leaf.keys do
+      let some n := MultisigAccount.appearance? key.derivation.elements | throw "a key on no pair"
+      let id := MultisigAccount.identity key
+      appearances := match appearances.findIdx? (·.1 == id) with
+        | some j => appearances.modify j fun (k, ns) => (k, ns.push n)
+        | none => appearances.push (id, #[n])
+  check "nested builder: pairs in turn" (appearances.size == 4 && appearances.all (·.2 == #[0, 1]))
+  let text := a.descriptor.serialized
+  check "nested builder: text" (text.startsWith "tr(tpub" && hasText text "{{sortedmulti_a(" && hasText text "/<2;3>/*") text
+  let again ← need "reparse" (MultisigAccount.parse text .signet)
+  check "nested builder: round trip" (again.signersLeaves == a.signersLeaves)
+  check "nested builder: same addresses" ((← need "a" (again.address 3 1)) == (← need "a" (a.address 3 1)))
+  check "nested builder: includes" (a.includes (← accountKeyOf f.masters[3]!).neutered)
+  check "nested builder: hasSigner" (a.hasSigner f.masters[1]!)
+
+def nestedOrderDoesNotMatter : TM Unit := do
+  let f ← nestedFamily
+  let keys := f.members
+  let shuffled := #[keys[2]!, #[keys[0]![1]!, keys[0]![0]!], keys[1]!]
+  let other ← need "other" (MultisigAccount.makeNestedDescriptor (shuffled.map .all) 2 none .signet)
+  check "nested order: one descriptor" (other.serialized == f.account.descriptor.serialized)
+  let flat ← need "flat" (MultisigAccount.makeNestedDescriptor (#[#[keys[0]![0]!], keys[1]!, keys[2]!].map .all) 2 none .signet)
+  let plain ← need "plain" (MultisigAccount.makeDescriptor 2 #[keys[0]![0]!, keys[1]![0]!, keys[2]![0]!] none .signet)
+  check "nested order: single-key members are the ordinary account" (flat.serialized == plain.serialized)
+  check "nested order: not nested" (!(← need "flat account" (MultisigAccount.make flat .signet)).isNested)
+
+def thresholdMember : TM Unit := do
+  let e ← estate
+  let a := e.account
+  check "threshold member: nested, seven leaves" (a.isNested && a.signersLeaves.size == 7)
+  check "threshold member: leaf sizes" (sortedNats (a.signersLeaves.map (·.keys.size)) == [2, 3, 3, 3, 3, 3, 3])
+  check "threshold member: each leaf needs every key" (a.signersLeaves.all fun l => l.threshold == l.keys.size && l.isSorted)
+  check "threshold member: five signers" (a.signers.size == 5 && a.recovery.isNone)
+  check "threshold member: summary" (a.policySummary == "2 of 3 members, one of them 2 of 3") a.policySummary
+  let some members := a.members | throw "no members"
+  check "threshold member: members" (members.threshold == 2 && sortedNats (members.groups.map (·.size)) == [1, 1, 3])
+  check "threshold member: thresholds" (sortedNats members.thresholds == [1, 1, 2])
+  let some family := members.thresholdGroups[0]? | throw "no threshold group"
+  check "threshold member: one threshold group of three" (members.thresholdGroups.size == 1 && members.groups[family]!.size == 3)
+  let familyKeys ← (e.masters.extract 0 3).mapM fun m => return (← accountKeyOf m).publicKey
+  check "threshold member: the family's keys"
+    (MultisigAccount.asSet (members.groups[family]!.map MultisigAccount.identity) == MultisigAccount.asSet familyKeys)
+  for pair in [[0, 1], [0, 2], [1, 2]] do
+    discard (e.leafOf (pair ++ [3]))
+    discard (e.leafOf (pair ++ [4]))
+  discard (e.leafOf [3, 4])
+  for holder in [0:5] do
+    check s!"threshold member: holder {holder} takes four pairs" ((← e.appearances holder) == #[0, 1, 2, 3])
+  let again ← need "reparse" (MultisigAccount.parse a.descriptor.serialized .signet)
+  check "threshold member: round trip" (again.signersLeaves == a.signersLeaves && again.members == some members)
+  check "threshold member: same addresses" ((← need "a" (again.address 2 1)) == (← need "a" (a.address 2 1)))
+  check "threshold member: control block depths"
+    (sortedNats ((← need "leaves" (a.leaves 0 0)).map (·.controlBlock.path.size)) == [2, 3, 3, 3, 3, 3, 3])
+
+def thresholdOrderDoesNotMatter : TM Unit := do
+  let e ← estate
+  let keys := e.members
+  let shuffled : Array MultisigAccount.Member :=
+    #[.all keys[2]!, { keys := #[keys[0]![2]!, keys[0]![0]!, keys[0]![1]!], threshold := 2 }, .all keys[1]!]
+  let other ← need "other" (MultisigAccount.makeNestedDescriptor shuffled 2 none .signet)
+  check "threshold order: one descriptor" (other.serialized == e.account.descriptor.serialized)
+  let whole ← need "whole" (MultisigAccount.makeNestedDescriptor #[{ keys := keys[0]!, threshold := 3 }, .all keys[1]!, .all keys[2]!] 2 none .signet)
+  let plainNested ← need "plain nested" (MultisigAccount.makeNestedDescriptor (keys.map .all) 2 none .signet)
+  check "threshold order: a member needing every key is the plain nested account" (whole.serialized == plainNested.serialized)
+  check "threshold order: three leaves" ((← need "whole account" (MultisigAccount.make whole .signet)).signersLeaves.size == 3)
+  let both ← need "both" (do
+    MultisigAccount.make (← MultisigAccount.makeNestedDescriptor #[{ keys := keys[0]!, threshold := 2 }, .all keys[1]!] 2 none .signet) .signet)
+  check "threshold order: the family and B" (both.signersLeaves.size == 3 && both.policySummary == "2 of 2 members, one of them 2 of 3")
+    both.policySummary
+  check "threshold order: thresholds" ((both.members.map (·.thresholds)) == some #[2, 1] || (both.members.map (·.thresholds)) == some #[1, 2])
+
+def nestedBuilderRefusals : TM Unit := do
+  let pairs ← (Array.range 15).mapM fun i => do keyExpression (← master (0x10 + i.toUInt8))
+  let members := (Array.range 7).map fun i => #[pairs[2 * i]!, pairs[2 * i + 1]!]
+  refusedWith "nested refusals: 35 leaves" (MultisigAccount.makeNestedDescriptor (members.map .all) 4 none .signet)
+    (.invalidDescriptor "these members would make 35 leaves, and an account has at most 32")
+  let six ← need "six" (do MultisigAccount.make (← MultisigAccount.makeNestedDescriptor ((members.extract 0 6).map .all) 3 none .signet) .signet)
+  check "nested refusals: 3 of 6 pairs, 20 leaves" (six.signersLeaves.size == 20 && (six.members.map (·.threshold)) == some 3)
+  let triples : Array MultisigAccount.Member := (Array.range 5).map fun i => { keys := pairs.extract (3 * i) (3 * i + 3), threshold := 2 }
+  let threeFamilies ← need "three families" (do
+    MultisigAccount.make (← MultisigAccount.makeNestedDescriptor (triples.extract 0 3) 2 none .signet) .signet)
+  check "nested refusals: three families, 27 leaves"
+    (threeFamilies.signersLeaves.size == 27 && threeFamilies.policySummary == "2 of 3 members, three of them 2 of 3")
+    threeFamilies.policySummary
+  check "nested refusals: three groups of three" ((threeFamilies.members.map (·.groups.map (·.size))) == some #[3, 3, 3])
+  refusedWith "nested refusals: 36 leaves"
+    (MultisigAccount.makeNestedDescriptor (triples.extract 0 3) 2 (some (.fewerSigners 1 10)) .signet)
+    (.invalidDescriptor "these members would make 36 leaves, and an account has at most 32")
+  refusedWith "nested refusals: 270 leaves" (MultisigAccount.makeNestedDescriptor triples 3 none .signet)
+    (.invalidDescriptor "these members would make 270 leaves, and an account has at most 32")
+  check "nested refusals: leafCount saturates" (MultisigAccount.leafCount (Array.replicate 15 6_435) 8 == MultisigAccount.intMax)
+  refusedWith "nested refusals: member threshold above its keys"
+    (MultisigAccount.makeNestedDescriptor #[{ keys := pairs.extract 0 3, threshold := 4 }, .all #[pairs[3]!]] 2 none .signet)
+    (.invalidDescriptor "a member's threshold must be between one and its number of keys")
+  refused "nested refusals: one member alone, one key signing"
+    (MultisigAccount.makeNestedDescriptor #[{ keys := pairs.extract 0 3, threshold := 1 }, .all #[pairs[3]!, pairs[4]!]] 1 none .signet)
+    (account := true)
+  let anyFamily ← need "any family" (do
+    MultisigAccount.make (← MultisigAccount.makeNestedDescriptor #[{ keys := pairs.extract 0 3, threshold := 2 }, .all #[pairs[3]!, pairs[4]!]] 1 none .signet) .signet)
+  check "nested refusals: one of two members" (anyFamily.signersLeaves.size == 4 && anyFamily.policySummary == "1 of 2 members, one of them 2 of 3")
+    anyFamily.policySummary
+  let separate ← nestedFamily (recovery := some (.separateKeys 1 #[← keyExpression (← master 0xE5)] 10))
+  check "nested refusals: a separate recovery key" ((separate.account.recovery.map (·.keys.size)) == some 1 && separate.account.signersLeaves.size == 3)
+  check "nested refusals: four leaves" ((← need "leaves" (separate.account.leaves 0 0)).size == 4)
+  let f ← nestedFamily
+  refused "nested refusals: a member's key as the separate recovery key"
+    (MultisigAccount.makeNestedDescriptor (f.members.map .all) 2 (some (.separateKeys 1 #[f.members[1]![0]!] 10)) .signet) (account := true)
+  refused "nested refusals: a key in two members"
+    (MultisigAccount.makeNestedDescriptor (#[#[pairs[0]!, pairs[1]!], #[pairs[1]!]].map .all) 1 none .signet) (account := true)
+  refused "nested refusals: one member"
+    (MultisigAccount.makeNestedDescriptor (#[#[pairs[0]!, pairs[1]!]].map .all) 1 none .signet) (account := true)
+  refused "nested refusals: one of three, one-key members"
+    (MultisigAccount.makeNestedDescriptor (#[#[pairs[0]!, pairs[1]!], #[pairs[2]!], #[pairs[3]!]].map .all) 1 none .signet) (account := true)
+  let anyPair ← need "any pair" (do MultisigAccount.make (← MultisigAccount.makeNestedDescriptor ((members.extract 0 3).map .all) 1 none .signet) .signet)
+  check "nested refusals: any one of three pairs" (anyPair.signersLeaves.size == 3 && (anyPair.members.map (·.threshold)) == some 1)
+  let everyone ← need "everyone" (do MultisigAccount.make (← MultisigAccount.makeNestedDescriptor ((members.extract 0 2).map .all) 2 none .signet) .signet)
+  check "nested refusals: every member is the ordinary account"
+    (!everyone.isNested && everyone.threshold == 4 && everyone.signers.size == 4)
+  let flat ← need "flat" (MultisigAccount.makeDescriptor 4 (pairs.extract 0 4) none .signet)
+  check "nested refusals: the same descriptor" (everyone.descriptor.serialized == flat.serialized)
+
+def nestedAdmissionRefusals : TM Unit := do
+  let ms ← #[0xA1, 0xB2, 0xC3].mapM master
+  let keys ← ms.mapM bareKeyExpression
+  let nums := hex Taproot.unspendableInternalKey
+  let k0 := keys[0]!
+  let k1 := keys[1]!
+  let k2 := keys[2]!
+  let good := s!"tr({nums},\{sortedmulti_a(2,{k0}/<0;1>/*,{k1}/<0;1>/*),sortedmulti_a(2,{k0}/<2;3>/*,{k2}/<0;1>/*)})"
+  let a ← need "good" (MultisigAccount.parse good .signet)
+  check "nested admission: summary" (a.isNested && a.policySummary == "2 of 2 members, one of them 1 of 2") a.policySummary
+  check "nested admission: members"
+    ((a.members.map (·.groups.map (·.size))) == some #[1, 2] && (a.members.map (·.thresholds)) == some #[1, 1])
+  let shapeless := s!"tr({nums},\{sortedmulti_a(2,{k0}/<0;1>/*,{k1}/<0;1>/*),sortedmulti_a(3,{k0}/<2;3>/*,{k1}/<2;3>/*,{k2}/<0;1>/*)})"
+  let odd ← need "shapeless" (MultisigAccount.parse shapeless .signet)
+  check "nested admission: not a tree of members" (odd.isNested && odd.members.isNone && odd.policySummary == "2 signing groups")
+    odd.policySummary
+  let relabelled := "[deadbeef" ++ String.ofList (k0.toList.drop 9)
+  let refusedTrees := [
+    s!"\{sortedmulti_a(2,{k0}/<0;1>/*,{k1}/<0;1>/*),sortedmulti_a(2,{k0}/<0;1>/*,{k2}/<0;1>/*)}",
+    s!"\{sortedmulti_a(2,{k0}/<0;1>/*,{k1}/<0;1>/*),sortedmulti_a(2,{k0}/<4;5>/*,{k2}/<0;1>/*)}",
+    s!"\{sortedmulti_a(2,{k0}/<0;1>/*,{k1}/<0;1>/*),sortedmulti_a(2,{k0}/<2;3>/*,{k1}/<2;3>/*)}",
+    s!"\{sortedmulti_a(2,{k0}/<0;1>/*,{k1}/<0;1>/*),multi_a(1,{k2}/<0;1>/*)}",
+    s!"\{sortedmulti_a(2,{k0}/<0;1>/*,{k1}/<0;1>/*),sortedmulti_a(2,{relabelled}/<2;3>/*,{k2}/<0;1>/*)}",
+    s!"\{\{sortedmulti_a(2,{k0}/<0;1>/*,{k1}/<0;1>/*),and_v(v:pk({k2}/<0;1>/*),older(10))},and_v(v:pk({k2}/<2;3>/*),older(20))}",
+    s!"\{\{sortedmulti_a(2,{k0}/<0;1>/*,{k1}/<0;1>/*),and_v(v:pk({k2}/<0;1>/*),older(10))},and_v(v:pk({k2}/<2;3>/*),older(10))}",
+    s!"\{\{sortedmulti_a(2,{k0}/<0;1>/*,{k1}/<0;1>/*),and_v(v:pk({k2}/<0;1>/*),older(10))},and_v(v:pk({k0}/<4;5>/*),older(10))}"]
+  for (tree, n) in refusedTrees.zipIdx do
+    refused s!"nested admission: refused {n}" (MultisigAccount.parse s!"tr({nums},{tree})" .signet) (account := true)
+  let withRecovery := s!"tr({nums},\{\{sortedmulti_a(2,{k0}/<0;1>/*,{k1}/<0;1>/*),sortedmulti_a(2,{k0}/<2;3>/*,{k2}/<0;1>/*)},and_v(v:pk({k0}/<4;5>/*),older(10))})"
+  let recovering ← need "with recovery" (MultisigAccount.parse withRecovery .signet)
+  check "nested admission: a recovery leaf beside two signers' leaves"
+    ((recovering.recovery.map (·.blocks)) == some 10 && recovering.signersLeaves.size == 2)
+  check "nested admission: leaf kinds" ((← need "leaves" (recovering.leaves 0 0)).map (·.isRecovery) == #[false, false, true])
+  let twoLeaves := s!"tr({nums},\{\{sortedmulti_a(2,{k0}/<0;1>/*,{k1}/<0;1>/*),sortedmulti_a(2,{k0}/<2;3>/*,{k2}/<0;1>/*)},\{and_v(v:pk({k0}/<4;5>/*),older(10)),and_v(v:multi_a(2,{k1}/<2;3>/*,{k2}/<2;3>/*),older(10))}})"
+  let twice ← need "two recovery leaves" (MultisigAccount.parse twoLeaves .signet)
+  check "nested admission: two recovery leaves" (twice.recoveryLeaves.size == 2 && twice.recoveryPaths == #[.recovery, .recovery 1])
+  check "nested admission: the second recovery leaf" ((twice.keysOn (.recovery 1)).size == 2 && twice.thresholdOn (.recovery 1) == 2)
+  check "nested admission: recovery members"
+    ((twice.recoveryMembers.map (·.threshold)) == some 1 && (twice.recoveryMembers.map (·.groups.map (·.size))) == some #[1, 2])
+  check "nested admission: every key, no third recovery leaf" (twice.allKeys.size == 7 && (twice.keysOn (.recovery 2)).isEmpty)
+  check "nested admission: path text" ((SpendPath.recovery 1).description == "recovery(1)" && (SpendPath.recovery).isRecovery)
+
+def nestedSpends : TM Unit := do
+  let f ← nestedFamily
+  let a := f.account
+  let coin ← nfunding a
+  let mut psbt ← need "create" (nspend a coin)
+  check "nested spends: three leaves on the input" (psbt.inputs[0]!.tapLeafScripts.size == 3)
+  let some changeTree := psbt.outputs.findSome? (·.tapTree) | throw "no change tree"
+  let leaves ← need "leaves" (a.leaves 1 0)
+  check "nested spends: change tree scripts" (changeTree.map (·.2.2) == (leaves.map (·.script)).reverse)
+  check "nested spends: change tree depths" (changeTree.map (·.1.toNat) == (leaves.map (·.controlBlock.path.size)).reverse)
+  check "nested spends: depths" (sortedNats (changeTree.map (·.1.toNat)) == [1, 2, 2])
+  let ab ← f.leafOf [0, 1, 2]
+  let ac ← f.leafOf [0, 1, 3]
+  let bc ← f.leafOf [2, 3]
+  let ap (p : PSBT) (path : SpendPath) : TM (Array Nat) := need "ap" (a.approvals p #[coin] path)
+  psbt ← need "sign 0" (sign a psbt f.masters[0]! #[coin] 101)
+  check "nested spends: A's phone on both of A's leaves"
+    ((← ap psbt ab).size == 1 && (← ap psbt ac).size == 1 && (← ap psbt bc).isEmpty)
+  check "nested spends: nothing finishes" (!psbt.finalize.toBool)
+  psbt ← need "sign 1" (sign a psbt f.masters[1]! #[coin] 101)
+  check "nested spends: one whole member is one member" ((← ap psbt ab).size == 2 && !psbt.finalize.toBool)
+  psbt ← need "sign 2" (sign a psbt f.masters[2]! #[coin] 101)
+  check "nested spends: B completes A and B" ((← ap psbt ab).size == 3 && (← ap psbt bc).size == 1)
+  let tx ← need "finalize" (finalize a psbt #[coin] 101)
+  let w := tx.inputs[0]!.witness
+  check "nested spends: three signatures" (w.size == 5 && (w.extract 0 3).all (·.size == 64))
+  let receiveLeaves ← need "leaves" (a.leaves 0 0)
+  let some abLeaf := receiveLeaves.find? (·.path == ab) | throw "no ab leaf"
+  check "nested spends: the A-and-B leaf" (w[3]! == abLeaf.script)
+  check "nested spends: its control block" (w[4]!.size == 33 + 32 * abLeaf.controlBlock.path.size)
+  check "nested spends: estimate covers it" ((witnessSize w : Int) ≤ (← need "w" (a.witnessBytesPerInput .signers)))
+  let mut other ← need "create" (nspend a coin)
+  for holder in [2, 3] do other ← need "sign" (sign a other f.masters[holder]! #[coin] 101)
+  check "nested spends: B and C" ((← ap other bc) == #[0, 1])
+  let second ← need "finalize" (finalize a other #[coin] 101)
+  let some bcLeaf := receiveLeaves.find? (·.path == bc) | throw "no bc leaf"
+  check "nested spends: B and C's witness" (second.inputs[0]!.witness.size == 4 && second.inputs[0]!.witness[2]! == bcLeaf.script)
+
+def thresholdMemberSpends : TM Unit := do
+  let e ← estate
+  let a := e.account
+  let coin ← nfunding a
+  let mut psbt ← need "create" (nspend a coin)
+  check "threshold spends: seven leaves on the input" (psbt.inputs[0]!.tapLeafScripts.size == 7)
+  let signAs (holder : Nat) (p : PSBT) : TM PSBT := need s!"sign {holder}" (sign a p e.masters[holder]! #[coin] 101)
+  psbt ← signAs 0 psbt
+  psbt ← signAs 3 psbt
+  check "threshold spends: one family key and B finish nothing" ((← finished a psbt coin a.signersPaths).isEmpty && !psbt.finalize.toBool)
+  let mut familyOnly ← need "create" (nspend a coin)
+  for holder in [0, 1, 2] do familyOnly ← signAs holder familyOnly
+  check "threshold spends: the whole family alone finishes nothing"
+    ((← finished a familyOnly coin a.signersPaths).isEmpty && !familyOnly.finalize.toBool)
+  psbt ← signAs 1 psbt
+  let complete ← finished a psbt coin a.signersPaths
+  check "threshold spends: exactly the leaf of those keys and B" (complete == #[← e.leafOf [0, 1, 3]])
+  let tx ← need "finalize" (finalize a psbt #[coin] 101)
+  let w := tx.inputs[0]!.witness
+  check "threshold spends: three signatures" (w.size == 5 && (w.extract 0 3).all (·.size == 64))
+  let some leaf := (← need "leaves" (a.leaves 0 0)).find? (·.path == complete[0]!) | throw "no leaf"
+  check "threshold spends: that leaf's script" (w[3]! == leaf.script)
+  check "threshold spends: estimate covers it" ((witnessSize w : Int) ≤ (← need "w" (a.witnessBytesPerInput .signers)))
+  let mut generous ← need "create" (nspend a coin)
+  for holder in [0, 1, 2, 4] do generous ← signAs holder generous
+  check "threshold spends: three leaves could finish" ((← finished a generous coin a.signersPaths).size == 3)
+  check "threshold spends: one leaf's three signatures" ((← need "finalize" (finalize a generous #[coin] 101)).inputs[0]!.witness.size == 5)
+
+def fewerMembersRecovery : TM Unit := do
+  let e ← estate (recovery := some (.fewerSigners 1 10))
+  let a := e.account
+  check "fewer members: 7 and 5 leaves" (a.signersLeaves.size == 7 && a.recoveryLeaves.size == 5)
+  check "fewer members: every recovery leaf after 10, every key" (a.recoveryLeaves.all fun r => r.blocks == 10 && r.threshold == r.keys.size)
+  check "fewer members: recovery leaf sizes" (sortedNats (a.recoveryLeaves.map (·.keys.size)) == [1, 1, 2, 2, 2])
+  check "fewer members: leaf kinds"
+    ((← need "leaves" (a.leaves 0 0)).map (·.isRecovery) == Array.replicate 7 false ++ Array.replicate 5 true)
+  let some members := a.recoveryMembers | throw "no recovery members"
+  check "fewer members: recovery members"
+    (members.threshold == 1 && members.groups.size == 3 && sortedNats members.thresholds == [1, 1, 2])
+  check "fewer members: summary" (a.policySummary == "2 of 3 members, one of them 2 of 3") a.policySummary
+  check "fewer members: a family key's pairs" ((← e.appearances 0) == #[0, 1, 2, 3, 4, 5])
+  check "fewer members: B's pairs" ((← e.appearances 3) == #[0, 1, 2, 3, 4])
+  let again ← need "reparse" (MultisigAccount.parse a.descriptor.serialized .signet)
+  check "fewer members: round trip" (again.recoveryLeaves == a.recoveryLeaves && again.recoveryMembers == some members)
+  let text := a.descriptor.serialized
+  check "fewer members: text" (hasText text "and_v(v:multi_a(2," && hasText text "/<10;11>/*")
+  let coin ← nfunding a
+  refused "fewer members: no recovery yet" (nspend a coin .recovery) (account := true)
+  let recoverySpend : TM PSBT := need "create recovery" (nspend a coin .recovery 109)
+  let signAs (holder : Nat) (p : PSBT) : TM PSBT := need s!"sign {holder}" (sign a p e.masters[holder]! #[coin] 109)
+  let mut later ← recoverySpend
+  check "fewer members: review path" ((← need "review" (a.reviewSpend later #[coin] owned 109)).path == .recovery)
+  check "fewer members: twelve leaves on the input" (later.inputs[0]!.tapLeafScripts.size == 12)
+  later ← signAs 2 later
+  let holding ← a.recoveryPaths.filterM fun path => return !(← need "ap" (a.approvals later #[coin] path)).isEmpty
+  check "fewer members: one family key on its two recovery leaves" (holding.size == 2)
+  check "fewer members: neither complete" ((← finished a later coin a.recoveryPaths).isEmpty && !later.finalize.toBool)
+  later ← signAs 1 later
+  let complete ← finished a later coin a.recoveryPaths
+  check "fewer members: exactly one recovery leaf" (complete.size == 1 && (a.keysOn complete[0]!).size == 2)
+  check "fewer members: no signers' leaf" (← finished a later coin a.signersPaths).isEmpty
+  let tx ← need "finalize" (finalize a later #[coin] 109)
+  check "fewer members: sequence and witness" (tx.inputs[0]!.sequence == 10 && tx.inputs[0]!.witness.size == 4)
+  check "fewer members: estimate covers it"
+    ((witnessSize tx.inputs[0]!.witness : Int) ≤ (← need "w" (a.witnessBytesPerInput .recovery)))
+  let mut bob ← recoverySpend
+  bob ← signAs 3 bob
+  let bobFingerprint := e.masters[3]!.fingerprint
+  let some bobLeaf := a.recoveryPaths.find? fun path =>
+      (a.keysOn path).size == 1 && ((a.keysOn path)[0]!.origin.map (·.fingerprint)) == some bobFingerprint
+    | throw "no leaf of B's"
+  check "fewer members: B alone recovers" ((← finished a bob coin a.recoveryPaths) == #[bobLeaf])
+  check "fewer members: B's witness" ((← need "finalize" (finalize a bob #[coin] 109)).inputs[0]!.witness.size == 3)
+  let mut twoMembers ← recoverySpend
+  for holder in [3, 4] do twoMembers ← signAs holder twoMembers
+  check "fewer members: two members after the delay" ((← finished a twoMembers coin a.signersPaths).size == 1)
+  let pair ← estate (recovery := some (.fewerSigners 2 10))
+  check "fewer members: two-member recovery"
+    (pair.account.recoveryLeaves.size == 7 && (pair.account.recoveryMembers.map (·.threshold)) == some 2)
+
+def nestedSeparateRecovery : TM Unit := do
+  let recoveryMaster ← master 0xE5
+  let f ← nestedFamily (recovery := some (.separateKeys 1 #[← keyExpression recoveryMaster] 10))
+  let a := f.account
+  let coin ← nfunding a
+  refused "nested recovery: not yet" (nspend a coin .recovery) (account := true)
+  let later ← need "create" (nspend a coin .recovery 109)
+  check "nested recovery: review path" ((← need "review" (a.reviewSpend later #[coin] owned 109)).path == .recovery)
+  let later ← need "sign" (sign a later recoveryMaster #[coin] 109)
+  check "nested recovery: approvals" ((← need "ap" (a.approvals later #[coin] .recovery)) == #[0])
+  let tx ← need "finalize" (finalize a later #[coin] 109)
+  check "nested recovery: sequence and witness" (tx.inputs[0]!.sequence == 10 && tx.inputs[0]!.witness.size == 3)
+
 def main : IO UInt32 := do
   runTest "feeResolution" feeResolution
   runTest "twoOfThree" twoOfThree
@@ -1074,6 +1436,16 @@ def main : IO UInt32 := do
   runTest "contradictedImportedMetadataIsDropped" contradictedImportedMetadataIsDropped
   runTest "accountSecrets" accountSecrets
   runTest "accountKeyWallet" accountKeyWallet
+  runTest "nestedBuilder" nestedBuilder
+  runTest "nestedOrderDoesNotMatter" nestedOrderDoesNotMatter
+  runTest "thresholdMember" thresholdMember
+  runTest "thresholdOrderDoesNotMatter" thresholdOrderDoesNotMatter
+  runTest "nestedBuilderRefusals" nestedBuilderRefusals
+  runTest "nestedAdmissionRefusals" nestedAdmissionRefusals
+  runTest "nestedSpends" nestedSpends
+  runTest "thresholdMemberSpends" thresholdMemberSpends
+  runTest "fewerMembersRecovery" fewerMembersRecovery
+  runTest "nestedSeparateRecovery" nestedSeparateRecovery
   let f ← failures.get
   IO.println s!"multisig-test: {← passed.get} passed, {f.size} failed"
   return if f.isEmpty then 0 else 1

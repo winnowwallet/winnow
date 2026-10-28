@@ -5,7 +5,8 @@ open Winnow Winnow.Ledger Winnow.Keys Winnow.SwiftJSON
 
 Ports `Tests/WalletCoreTests/LedgerTests.swift` (upstream 1cf93fb), all of it (pairAndSpend,
 storedRegistration, twoOfThreeWithRecovery, ledgerSignsFirst, refusals, wrongKeyRefused and the pure
-tests), and checks the port against Swift itself through recorded sessions:
+tests), the three Ledger cases of upstream d2ca878's `NestedMultisigTests.swift` (`nestedLedgerTests`),
+and checks the port against Swift itself through recorded sessions:
 
 * `Vectors/ledger-bitcoin-app.json` — Ledger's own vectors (policy ids, Taproot addresses), copied
   unchanged from upstream's `Tests/WalletCoreTests/Vectors` (provenance in its README there).
@@ -659,6 +660,143 @@ def accountTests (dir : String) : IO Unit := do
   check "client replay over the account: sign (2-of-2)" (used4 && match r4 with
     | .ok (.ok (signed, _)) => hex signed.serialized == str (field sf "signed") | _ => false)
 
+/-! ## Nested accounts with Ledgers (upstream d2ca878's NestedMultisigTests: ledgerPolicy,
+thresholdMemberLedgerPolicy, twoLedgers) -/
+
+def occurrences (s t : String) : Nat := (s.splitOn t).length - 1
+
+def nestedCoin (a : MultisigAccount) : WalletUTXO :=
+  { txid := ByteArray.mk (Array.replicate 32 0x6E), vout := 0, amount := 100_000,
+    scriptPubKey := mam (a.scriptPubKey 0 0), chain := .receive, index := 0, height := 100 }
+
+def nestedSpend (a : MultisigAccount) (coin : WalletUTXO) : PSBT :=
+  mam (a.createSpend #[coin] #[{ amount := 40_000, scriptPubKey := destination }] 0 2 101)
+
+def finishedPaths (a : MultisigAccount) (p : PSBT) (coin : WalletUTXO) : Array MultisigAccount.SpendPath :=
+  a.signersPaths.filter fun path => match a.approvals p #[coin] path with
+    | .ok ap => (ap.size : Int) ≥ a.thresholdOn path
+    | .error _ => false
+
+def phoneSign (a : MultisigAccount) (p : PSBT) (m : HDKey) (coin : WalletUTXO) : PSBT :=
+  mam (a.sign p m #[coin] ownedChange 101 aux0)
+
+def nestedLedgerTests : IO Unit := do
+  say "nested: the Ledger policy carries the whole tree; a Ledger signs both leaves it is in"
+  let ms := #[master 0xA1, master 0xB2, master 0xC3, master 0xD4]
+  let sim := Simulator.new ms[1]!
+  let .ok ((ledgerKey, fingerprint), sim) := runSim (Multisig.signerExpression .signet) sim | check "nested: signer" false; return
+  let keys := ms.map keyExpression
+  let .ok d := MultisigAccount.makeNestedDescriptor (#[#[keys[0]!, ledgerKey], #[keys[2]!], #[keys[3]!]].map .all) 2 none .signet
+    | check "nested: descriptor" false; return
+  let account := mam (MultisigAccount.make d .signet)
+  let policy := get! (WalletPolicy.ofAccount "Three households" account)
+  check "nested: five policy keys" (policy.keys.size == 5)
+  check "nested: the template" (policy.template.startsWith "tr(@0/**,{{sortedmulti_a(") policy.template
+  check "nested: five keys on /**, four on /<2;3>/*"
+    (occurrences policy.template "/**" == 5 && occurrences policy.template "/<2;3>/*" == 4) policy.template
+  check "nested: hasLedgerSigner" (Multisig.hasLedgerSigner account fingerprint)
+  check "nested: namesALedgerKey" (Multisig.namesALedgerKey account)
+  let .ok (registration, sim) := runSim (Multisig.register account "Three households" fingerprint) sim
+    | check "nested: register" false; return
+  match runSim (Multisig.displayAddress account registration 0 2) sim with
+  | .ok (shown, _) => check "nested: the Ledger shows the phone's address" (some shown == (account.address 2).toOption)
+  | .error e => check "nested: display" false e.name
+  let record : MultisigAccountRecord :=
+    { id := account.id, name := "Three households", descriptor := d.serialized, createdAtHeight := 0, ledger := some registration }
+  check "nested: the stored registration belongs" (mamOk (record.checkLedgerRegistration account))
+  check "nested: another key path does not"
+    (!mamOk (MultisigAccountRecord.checkLedgerRegistration { record with ledger := some { registration with
+      keyPath := #[HDKey.hardenedOffset + 86, HDKey.hardenedOffset + 1, HDKey.hardenedOffset] } } account))
+  let coin := nestedCoin account
+  let psbt := phoneSign account (nestedSpend account coin) ms[0]! coin
+  match runSim (Multisig.sign psbt account registration) sim with
+  | .ok (.ok (signed, added), _) =>
+    check "nested: the Ledger signs both of its leaves" (added == 2) s!"{added}"
+    check "nested: one member is not enough" (!signed.finalize.toBool)
+    let signed := phoneSign account signed ms[3]! coin
+    match account.finalizeSpend signed #[coin] ownedChange 101 with
+    | .ok (_, tx) => check "nested: the phone's, the Ledger's and C's signatures" (tx.inputs[0]!.witness.size == 5)
+    | .error e => check "nested: finalize" false e.name
+  | _ => check "nested: the Ledger signs" false
+
+  say "nested: a Ledger inside the 2-of-3 member: the policy fits 512 characters; 27 leaves do not"
+  let ms := #[master 0xA1, master 0xB2, master 0xC3, master 0xD4, master 0xE5]
+  let sim := Simulator.new ms[1]!
+  let .ok ((ledgerKey, fingerprint), sim) := runSim (Multisig.signerExpression .signet) sim | check "estate: signer" false; return
+  let keys := ms.map keyExpression
+  let members : Array MultisigAccount.Member :=
+    #[{ keys := #[keys[0]!, ledgerKey, keys[2]!], threshold := 2 }, .all #[keys[3]!], .all #[keys[4]!]]
+  let account := mam (do MultisigAccount.make (← MultisigAccount.makeNestedDescriptor members 2 none .signet) .signet)
+  let policy := get! (WalletPolicy.ofAccount "Estate" account)
+  check "estate: six policy keys" (policy.keys.size == 6)
+  check "estate: 335 characters" (policy.template.utf8ByteSize == 335) s!"{policy.template.utf8ByteSize}"
+  check "estate: within the limit" (policy.template.utf8ByteSize ≤ WalletPolicy.maximumTemplateLength)
+  check "estate: seven leaves" (occurrences policy.template "sortedmulti_a(" == 7)
+  check "estate: pairs up to /<6;7>/*" ((policy.template.splitOn "/<6;7>/*").length > 1 && (policy.template.splitOn "/<8;9>/*").length == 1)
+  let .ok (registration, sim) := runSim (Multisig.register account "Estate" fingerprint) sim
+    | check "estate: register" false; return
+  match runSim (Multisig.displayAddress account registration 0 1) sim with
+  | .ok (shown, _) => check "estate: the Ledger shows the phone's address" (some shown == (account.address 1).toOption)
+  | .error e => check "estate: display" false e.name
+  let coin := nestedCoin account
+  let psbt := phoneSign account (nestedSpend account coin) ms[0]! coin
+  match runSim (Multisig.sign psbt account registration) sim with
+  | .ok (.ok (signed, added), _) =>
+    check "estate: the Ledger's key is in four leaves" (added == 4) s!"{added}"
+    check "estate: nothing finishes yet" (finishedPaths account signed coin).isEmpty
+    let signed := phoneSign account signed ms[3]! coin
+    check "estate: one leaf finishes" ((finishedPaths account signed coin).size == 1)
+    match account.finalizeSpend signed #[coin] ownedChange 101 with
+    | .ok (_, tx) => check "estate: five witness items" (tx.inputs[0]!.witness.size == 5)
+    | .error e => check "estate: finalize" false e.name
+  | _ => check "estate: the Ledger signs" false
+  let more := (Array.range 4).map fun i => keyExpression (master (0x20 + i.toUInt8))
+  let families : Array MultisigAccount.Member := #[members[0]!, { keys := #[keys[3]!, keys[4]!, more[0]!], threshold := 2 },
+    { keys := more.extract 1 4, threshold := 2 }]
+  let large := mam (do MultisigAccount.make (← MultisigAccount.makeNestedDescriptor families 2 none .signet) .signet)
+  check "estate: three families, 27 leaves" (large.signersLeaves.size == 27)
+  check "estate: their policy is refused" (errName (WalletPolicy.ofAccount "Estate" large) == "mismatch")
+  check "estate: registering it is refused before the device is asked"
+    (match runSim (Multisig.register large "Estate" fingerprint) sim with | .error (.mismatch _) => true | _ => false)
+  let recovering := mam (do
+    MultisigAccount.make (← MultisigAccount.makeNestedDescriptor members 2 (some (.fewerSigners 1 4_320)) .signet) .signet)
+  check "estate: five recovery leaves" (recovering.recoveryLeaves.size == 5)
+  check "estate: twelve leaves are refused" (errName (WalletPolicy.ofAccount "Estate" recovering) == "mismatch")
+  let separate := mam (do
+    MultisigAccount.make (← MultisigAccount.makeNestedDescriptor members 2 (some (.separateKeys 1 #[more[0]!] 4_320)) .signet) .signet)
+  check "estate: a separate recovery key fits, 368 characters"
+    ((WalletPolicy.ofAccount "Estate" separate).toOption.map (·.template.utf8ByteSize) == some 368)
+  check "estate: registered once" (sim.registeredNames == #["Estate"])
+
+  say "nested: two phones, each with its Ledger, and a third key"
+  let phones := #[master 0xA1, master 0xC3]
+  let sims := #[Simulator.new (master 0xB2), Simulator.new (master 0xD5)]
+  let mut ledgerKeys : Array (String × UInt32) := #[]
+  for s in sims do
+    let .ok (key, _) := runSim (Multisig.signerExpression .signet) s | check "two ledgers: signer" false; return
+    ledgerKeys := ledgerKeys.push key
+  let third := master 0xD4
+  let members := #[#[keyExpression phones[0]!, ledgerKeys[0]!.1], #[keyExpression phones[1]!, ledgerKeys[1]!.1], #[keyExpression third]]
+  let account := mam (do MultisigAccount.make (← MultisigAccount.makeNestedDescriptor (members.map .all) 2 none .signet) .signet)
+  let mut registrations : Array Registration := #[]
+  for (s, (_, fp)) in sims.zip ledgerKeys do
+    let .ok (r, _) := runSim (Multisig.register account "Two households" fp) s | check "two ledgers: register" false; return
+    registrations := registrations.push r
+  let coin := nestedCoin account
+  let psbt := phoneSign account (nestedSpend account coin) phones[0]! coin
+  let .ok (.ok (psbt, _), _) := runSim (Multisig.sign psbt account registrations[0]!) sims[0]!
+    | check "two ledgers: the first Ledger signs" false; return
+  let psbt := phoneSign account psbt phones[1]! coin
+  check "two ledgers: not yet" (!psbt.finalize.toBool)
+  let .ok (.ok (psbt, _), _) := runSim (Multisig.sign psbt account registrations[1]!) sims[1]!
+    | check "two ledgers: the second Ledger signs" false; return
+  let complete := account.signersPaths.filter fun path =>
+    ((account.approvals psbt #[coin] path).toOption.map (·.size : Array Nat → Int)) == some (account.thresholdOn path)
+  check "two ledgers: one four-key leaf finishes" (complete.size == 1 && (account.keysOn complete[0]!).size == 4)
+  match account.finalizeSpend psbt #[coin] ownedChange 101 with
+  | .ok (_, tx) => check "two ledgers: six witness items" (tx.inputs[0]!.witness.size == 6)
+  | .error e => check "two ledgers: finalize" false e.name
+
 def main (args : List String) : IO UInt32 := do
   let dir := args.headD "Vectors"
   ioTests
@@ -669,6 +807,7 @@ def main (args : List String) : IO UInt32 := do
   unitTests
   sessionTests dir
   accountTests dir
+  nestedLedgerTests
   let fails ← failures.get
   say s!"ledger-test: {← passes.get} passed, {fails.size} failed"
   return if fails.isEmpty then 0 else 1
