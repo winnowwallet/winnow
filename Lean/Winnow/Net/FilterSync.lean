@@ -345,8 +345,17 @@ def chunks (batchStart batchStop filtersPerChunk : UInt32) : Array (UInt32 × UI
     start := stop + 1
   return out
 
-/-- A chunk's deadline in seconds: its share of 120 s per 1000 filters, at least 30 s. -/
-def chunkTimeoutSeconds (filters : Nat) : Nat := max 30 (120 * filters / maxRangePerRequest.toNat)
+/-- A chunk's deadline in seconds: its share of 120 s per 1000 filters, at least 30 s. A Tor or I2P peer
+gets ten times that share and at least two minutes (a chunk of mainnet filters is megabytes, and an I2P
+tunnel carried the census at about half a megabit a second). -/
+def chunkTimeoutSeconds (filters : Nat) (overlay : Bool := false) : Nat :=
+  if overlay then max 120 (1_200 * filters / maxRangePerRequest.toNat)
+  else max 30 (120 * filters / maxRangePerRequest.toNat)
+
+/-- A matched block's deadline in milliseconds: whole blocks are megabytes too, so an overlay peer gets
+at least five minutes. -/
+def blockTimeoutMs (timeoutMs : Nat) (overlay : Bool) : Nat :=
+  if overlay then max timeoutMs 300_000 else timeoutMs
 
 /-- How many peers the cfcheckpt comparison asks (1 … 3 of those connected). -/
 def checkpointPeerCount (requiredCheckpointPeers connected : Nat) : Nat :=

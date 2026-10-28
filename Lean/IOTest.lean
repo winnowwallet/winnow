@@ -258,6 +258,25 @@ def offlineChecks (dir : String) : IO Unit := do
   check "census thin" (nameOf (CensusCatalog.decode (doc (civil today) ["9.9.9.9"]).toUTF8 (minimumEntries := 50)) == "thin")
   check "census bad date" (CensusCatalog.day "2026-02-30" == none && CensusCatalog.day "2026-10-26" == some 20752)
   check "no bundled census outside an app bundle" (← CensusCatalog.bundled).isNone
+  -- FilterSyncTests.overlayDeadlines: Tor and I2P peers get longer filter and block deadlines
+  check "deadline: 100 clearnet filters, 30 s" (FilterSync.chunkTimeoutSeconds 100 == 30)
+  check "deadline: 1000 clearnet filters, 120 s" (FilterSync.chunkTimeoutSeconds 1_000 == 120)
+  check "deadline: 100 overlay filters, 120 s" (FilterSync.chunkTimeoutSeconds 100 (overlay := true) == 120)
+  check "deadline: 1000 overlay filters, 1200 s" (FilterSync.chunkTimeoutSeconds 1_000 (overlay := true) == 1_200)
+  check "deadline: a clearnet block keeps its 120 s" (FilterSync.blockTimeoutMs 120_000 false == 120_000)
+  check "deadline: an overlay block gets at least 300 s" (FilterSync.blockTimeoutMs 30_000 true == 300_000)
+  check "deadline: a longer overlay block deadline stands" (FilterSync.blockTimeoutMs 600_000 true == 600_000)
+  -- FilterSync.frontier on a headers-only chain: nothing scanned, then the genesis block scanned
+  let pool ← PeerPool.new NetworkParams.regtest (seedResolver := some { lookup := fun _ _ _ => pure #[] })
+  let store ← match ← (HeaderStore.open NetworkParams.regtest none).toBaseIO with
+    | .ok s => pure s | .error e => throw (IO.userError s!"headers: {e}")
+  let open? (start : UInt32) : IO FilterSyncIO := do
+    match ← (FilterSyncIO.new pool store start).toBaseIO with
+    | .ok f => pure f | .error e => throw (IO.userError s!"filters: {e}")
+  check "frontier: nothing scanned has no hash" ((← (← open? 0).frontier) == (0, none))
+  check "frontier: the hash of the last block scanned" ((← (← open? 1).frontier) == (1, ← store.blockHash 0) &&
+    (← store.blockHash 0).isSome)
+  let _ := dir
 
 /-! ## Against the node -/
 
@@ -679,6 +698,8 @@ def nodeChecks (dir : String) (n : Node) (swift : Option String) : IO Unit := do
   let ms ← matched.get
   check "filter sync matches the funded script's block" (ms.any fun (h, has) => h.toNat == fundHeight && has) s!"{ms.map (·.1)}"
   check "filter sync scans to the tip" ((← fs.nextScanHeight).toNat == tip + 1)
+  check "frontier after a sync: the tip's height and hash"
+    ((← fs.frontier) == ((tip + 1).toUInt32, some (ofDisplayHex! (← n.cli #["getblockhash", toString tip]))))
   let pinned ← fs.filterHeader tip.toUInt32
   check "pinned filter header equals the node's" ((pinned.map displayHex) == some (← nodeFilterHeader n tip))
   let receipt ← (fs.transaction (ofDisplayHex! fundTxid) fundHeight.toUInt32).attempt

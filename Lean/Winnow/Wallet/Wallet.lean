@@ -9,6 +9,7 @@ import Winnow.Keys.KeyStore
 import Winnow.Keys.SilentPayments
 import Winnow.Tx.FundingSources
 import Winnow.Net.FilterSync
+import Std.Sync.Mutex
 
 /-! # The single-sig wallet (port of `actor Wallet` in `Sources/WalletCore/Wallet/Wallet.swift`, plus
 `Wallet.importing` / `verifyImport` from `ImportBundle.swift`)
@@ -112,6 +113,9 @@ structure Wallet where
   stateRef : IO.Ref WalletState
   /-- Derived outputs per index (a pure function of the descriptor, kept because derivation is costly). -/
   derivedCache : IO.Ref (Std.HashMap UInt32 (Array Descriptor.DerivedOutput))
+  /-- Serialises `advanceCursors` (the Swift actor's guarantee): concurrent reservations keep each chain's
+  highest cursor instead of the last writer's. -/
+  cursorLock : Std.Mutex Unit
 
 /-- A fully signed send whose selection is not yet committed. -/
 structure PreparedSend where
@@ -183,7 +187,7 @@ def make (network : BitcoinNetwork) (descriptor : Descriptor) (accountKey : HDKe
     (storagePath : Option System.FilePath) (random : Randomness) (state : WalletState) : WM Wallet := do
   let o ← WM.wallet (origin descriptor)
   return { id := hex8 o.fingerprint, network, descriptor, accountKey, keyStore, storagePath, random,
-           stateRef := ← IO.mkRef state, derivedCache := ← IO.mkRef {} }
+           stateRef := ← IO.mkRef state, derivedCache := ← IO.mkRef {}, cursorLock := ← Std.Mutex.new () }
 
 /-! ### Persistence -/
 
@@ -376,15 +380,16 @@ def scannedThroughHash (w : Wallet) : IO (Option ByteArray) := return (← w.sta
 
 /-- Reserves every address below the supplied cursors (neither moves backwards), persisting both before
 the live state changes. Cursors must leave room for the gap-limit lookahead (`invalidPath`). -/
-def advanceCursors (w : Wallet) (nextReceiveIndex nextChangeIndex : Option UInt32 := none) : WM Unit := do
-  let s ← w.state
-  let candidate := { s with nextReceiveIndex := max s.nextReceiveIndex (nextReceiveIndex.getD 0),
-                            nextChangeIndex := max s.nextChangeIndex (nextChangeIndex.getD 0) }
-  let maximum := HDKey.hardenedOffset - gapLimit
-  unless candidate.nextReceiveIndex ≤ maximum && candidate.nextChangeIndex ≤ maximum do throw (.named "invalidPath")
-  if candidate.nextReceiveIndex == s.nextReceiveIndex && candidate.nextChangeIndex == s.nextChangeIndex then return
-  w.persist candidate
-  w.stateRef.set candidate
+def advanceCursors (w : Wallet) (nextReceiveIndex nextChangeIndex : Option UInt32 := none) : WM Unit :=
+  w.cursorLock.atomically (m := WM) do
+    let s ← w.state
+    let candidate := { s with nextReceiveIndex := max s.nextReceiveIndex (nextReceiveIndex.getD 0),
+                              nextChangeIndex := max s.nextChangeIndex (nextChangeIndex.getD 0) }
+    let maximum := HDKey.hardenedOffset - gapLimit
+    unless candidate.nextReceiveIndex ≤ maximum && candidate.nextChangeIndex ≤ maximum do throw (.named "invalidPath")
+    if candidate.nextReceiveIndex == s.nextReceiveIndex && candidate.nextChangeIndex == s.nextChangeIndex then return
+    w.persist candidate
+    w.stateRef.set candidate
 
 /-- The wallet's history entry index for `txid`. -/
 def historyIndex (s : WalletState) (txid : ByteArray) : Option Nat := s.history.findIdx? (·.txid == txid)
