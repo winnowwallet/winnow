@@ -4,20 +4,19 @@ import Winnow.Wallet.MultisigAccount
 
 /-! # BIP388 wallet policies as Ledger's Bitcoin app registers them
 
-Port of `Sources/WalletCore/Ledger/LedgerWalletPolicy.swift` (upstream 1cf93fb): a name, a descriptor
+Port of `Sources/WalletCore/Ledger/LedgerWalletPolicy.swift` (upstream d2ca878): a name, a descriptor
 template over key placeholders, and the keys. The device keeps nothing; registration returns an HMAC
 the phone stores and sends with every later request for this account.
 
 `init(name:account:)` is `ofAccount` (and `ofDescriptor` for the descriptor alone): the account's
-`tr(K,TREE)` with its `sortedmulti_a`/`multi_a` signers' leaf and, optionally, a timelocked recovery
-leaf.-/
+`tr(K,TREE)` with its `sortedmulti_a`/`multi_a` signers' leaves and timelocked recovery leaves, the tree
+in the descriptor's shape. The Bitcoin app takes a template of at most 512 characters and 15 keys. -/
 
 namespace Winnow.Ledger
 open Keys
 
-/-- `MultisigAccount.signerSuffix` (`/<0;1>/*`) and `recoverySuffix` (`/<2;3>/*`). -/
+/-- `MultisigAccount.signerSuffix` (`/<0;1>/*`). -/
 abbrev signerSuffix : Array Descriptor.Element := MultisigAccount.signerSuffix
-abbrev recoverySuffix : Array Descriptor.Element := MultisigAccount.recoverySuffix
 
 /-- A BIP388 wallet policy (`LedgerWalletPolicy`). -/
 structure WalletPolicy where
@@ -31,6 +30,12 @@ structure WalletPolicy where
 
 namespace WalletPolicy
 
+/-- The longest descriptor template the Bitcoin app registers: `MAX_DESCRIPTOR_TEMPLATE_LENGTH_V2` in its
+`src/common/wallet.h`, checked in `read_wallet_policy_header` (app-bitcoin-new, 2.2.x). -/
+def maximumTemplateLength : Nat := 512
+/-- The most keys in a policy, `MAX_N_KEYS_IN_WALLET_POLICY`, the internal key included. -/
+def maximumKeys : Nat := 15
+
 /-- Names are shown on the Ledger: 1 to 64 printable ASCII characters, with no space at either end. -/
 def isValidName (name : String) : Bool :=
   let bytes := name.toUTF8
@@ -41,15 +46,18 @@ def isValidName (name : String) : Bool :=
 def make (name template : String) (keys : Array String) : Except LedgerError WalletPolicy := do
   unless isValidName name do
     throw (.mismatch "an account name must be 1 to 64 plain characters with no space at either end")
-  unless !keys.isEmpty && keys.size ≤ 252 do throw (.mismatch "a policy needs 1 to 252 keys")
+  unless !keys.isEmpty && keys.size ≤ maximumKeys do
+    throw (.mismatch s!"a Ledger policy holds at most {maximumKeys - 1} signer keys")
+  unless template.utf8ByteSize ≤ maximumTemplateLength do
+    throw (.mismatch s!"this account's policy is {template.utf8ByteSize} characters and a Ledger takes at most {maximumTemplateLength}; fewer members, or members needing fewer of their keys, make it smaller")
   return { name, template, keys }
 
 /-- `keyInformation(_:)`: `[fingerprint/86'/1'/0']tpub…` with the derivation suffix removed. -/
 def keyInformation (key : Descriptor.SingleKey) : Except LedgerError String := do
   let .extended xpub network := key.base
-    | throw (.mismatch "every policy key must be an extended public key under /<0;1>/* or /<2;3>/*")
-  unless xpub.privateKey.isNone && (key.derivation.elements == signerSuffix || key.derivation.elements == recoverySuffix) do
-    throw (.mismatch "every policy key must be an extended public key under /<0;1>/* or /<2;3>/*")
+    | throw (.mismatch "every policy key must be an extended public key under /<2n;2n+1>/*")
+  unless xpub.privateKey.isNone && (MultisigAccount.appearance? key.derivation.elements).isSome do
+    throw (.mismatch "every policy key must be an extended public key under /<2n;2n+1>/*")
   let mut text := ""
   if let some origin := key.origin then
     text := text ++ "[" ++ Descriptor.hex8 origin.fingerprint
@@ -64,7 +72,9 @@ def placeholder (keys : Array String) (key : Descriptor.SingleKey) : Except Ledg
   let (keys, index) := match keys.findIdx? (· == information) with
     | some i => (keys, i)
     | none => (keys.push information, keys.size)
-  let text := if key.derivation.elements == signerSuffix then s!"@{index}/**" else s!"@{index}/<2;3>/*"
+  let some appearance := MultisigAccount.appearance? key.derivation.elements
+    | throw (.mismatch "every policy key must be an extended public key under /<2n;2n+1>/*")
+  let text := if appearance == 0 then s!"@{index}/**" else s!"@{index}{MultisigAccount.pairSuffixText appearance}"
   return (keys, text)
 
 def placeholders (keys : Array String) (leafKeys : Array Descriptor.SingleKey) :
@@ -88,22 +98,24 @@ def leafTemplate (keys : Array String) : Descriptor.Leaf → Except LedgerError 
     return (keys, s!"and_v(v:multi_a({t},{p}),older({blocks}))")
   | .pk _ => throw (.mismatch "a plain pk() leaf is not an account leaf")
 
+/-- The tree's template, keeping the descriptor's shape; keys are numbered left to right. -/
+def nodeTemplate (keys : Array String) : Descriptor.ScriptTree → Except LedgerError (Array String × String)
+  | .leaf l => leafTemplate keys l
+  | .branch left right => do
+    let (keys, l) ← nodeTemplate keys left
+    let (keys, r) ← nodeTemplate keys right
+    return (keys, "{" ++ l ++ "," ++ r ++ "}")
+
 /-- `init(name:account:)` over the account's internal key and tree: the internal key is `@0`, each
 distinct key after it gets the next placeholder in descriptor order, `/<0;1>/*` becomes `/**` and a
-reused signer's `/<2;3>/*` stays as it is. The template therefore derives exactly the account's
-addresses. -/
+reused signer's `/<2;3>/*`, `/<4;5>/*`… stays as it is. The tree keeps the descriptor's shape. The
+template therefore derives exactly the account's addresses. -/
 def ofTree (name : String) (internalKey : Descriptor.SingleKey) (tree : Descriptor.ScriptTree) :
     Except LedgerError WalletPolicy := do
   let .extended .. := internalKey.base
     | throw (.mismatch "only accounts whose internal key is an extended key can be registered")
   let keys := #[← keyInformation internalKey]
-  let (keys, body) ← match tree with
-    | .leaf only => leafTemplate keys only
-    | .branch (.leaf left) (.leaf right) => do
-      let (keys, l) ← leafTemplate keys left
-      let (keys, r) ← leafTemplate keys right
-      pure (keys, "{" ++ l ++ "," ++ r ++ "}")
-    | _ => throw (.mismatch "only one- and two-leaf accounts can be registered")
+  let (keys, body) ← nodeTemplate keys tree
   make name s!"tr(@0/**,{body})" keys
 
 /-- `init(name:account:)` from the account's descriptor. -/

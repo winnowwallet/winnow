@@ -188,6 +188,10 @@ def policy (serialized : ByteArray) : H Policy := do
     let keyCount ← Reader.compact
     let keysRoot ← Reader.bytes 32
     return (name, templateLength.toNat, templateHash, keyCount.toNat, keysRoot)) serialized (exact := true)
+  -- The app's wallet.h limits: a template of at most 512 bytes (read_wallet_policy_header refuses the
+  -- header), at most 15 keys (register_wallet answers SW_NOT_SUPPORTED).
+  unless templateLength ≤ 512 do fail 0x6A80
+  unless keyCount ≤ 15 do fail 0x6A82
   let templateBytes ← preimage templateHash
   let some template := ascii? templateBytes | fail 0x6A80
   unless templateBytes.size == templateLength do fail 0x6A80

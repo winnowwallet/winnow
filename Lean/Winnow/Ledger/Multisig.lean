@@ -57,8 +57,8 @@ def signerExpression (network : Tx.BitcoinNetwork) : Program (String × UInt32) 
   let origin := "/".intercalate (path.toList.map fun s => s!"{(s &&& ~~~HDKey.hardenedOffset).toNat}'")
   return (s!"[{Descriptor.hex8 fingerprint}/{origin}]{text}/<0;1>/*", fingerprint)
 
-/-- `ledgerSigner(of:fingerprint:path:)` over the account's signers: the one whose origin is the
-Ledger's fingerprint and key path. -/
+/-- `ledgerSigner(of:fingerprint:path:)` over the account's keys (`allKeys`): the key, on any leaf, whose
+origin is the Ledger's fingerprint and key path. -/
 def ledgerSigner (signers : Array Descriptor.SingleKey) (fingerprint : UInt32) (path : Array UInt32) :
     Option Descriptor.SingleKey :=
   signers.find? fun s => match s.origin with
@@ -149,16 +149,26 @@ own error here; an account that `MultisigAccount.make` accepted derives every ad
 def accountAddress (account : MultisigAccount) (index : UInt32) (choice : Nat) : Except LedgerError String :=
   (account.address index choice).mapError fun _ => .mismatch "this phone cannot derive the account's address"
 
-/-- `ledgerSigner(of:fingerprint:path:)`. -/
+/-- `ledgerSigner(of:fingerprint:path:)`: the key, on any leaf, whose origin is the Ledger's. -/
 def accountLedgerSigner (account : MultisigAccount) (fingerprint : UInt32) (path : Array UInt32) :
     Option Descriptor.SingleKey :=
-  ledgerSigner account.signers fingerprint path
+  ledgerSigner account.allKeys fingerprint path
+
+/-- `hasLedgerSigner(_:fingerprint:)`: whether a Ledger with `fingerprint` holds a key of the account, so a
+phone joining it can register it on that Ledger. -/
+def hasLedgerSigner (account : MultisigAccount) (fingerprint : UInt32) : Bool :=
+  (accountLedgerSigner account fingerprint (keyPath account.network)).isSome
+
+/-- `namesALedgerKey(_:)`: whether any key of the account sits at a Ledger's key path, whoever holds it. -/
+def namesALedgerKey (account : MultisigAccount) : Bool :=
+  let path := keyPath account.network
+  account.allKeys.any fun k => (k.origin.map (·.path)) == some path
 
 /-- `register(_:name:fingerprint:client:)`: registers the account on the Ledger after the user approves
 it there, then checks that the Ledger derives the same first receive address. -/
 def register (account : MultisigAccount) (name : String) (fingerprint : UInt32) : Program Registration := do
   let path := keyPath account.network
-  if (ledgerSigner account.signers fingerprint path).isNone then
+  if (accountLedgerSigner account fingerprint path).isNone then
     throw (LedgerError.mismatch "this account has no signer for this Ledger")
   let policy ← Program.ofExcept (WalletPolicy.ofAccount name account)
   let (id, hmac) ← Client.register policy
@@ -202,7 +212,7 @@ and name one of its signers. -/
 def checkLedgerRegistration (r : MultisigAccountRecord) (account : MultisigAccount) : MAM Unit := do
   let some ledger := r.ledger | return
   let belongs := ledger.policyID.size == 32 && ledger.hmac.size == 32
-    && (Ledger.Multisig.ledgerSigner account.signers ledger.masterFingerprint ledger.keyPath).isSome
+    && (Ledger.Multisig.accountLedgerSigner account ledger.masterFingerprint ledger.keyPath).isSome
     && ((Ledger.WalletPolicy.ofAccount ledger.policyName account).toOption.map (·.id)) == some ledger.policyID
   unless belongs do
     MultisigAccount.invalid "the stored Ledger registration does not belong to this account"

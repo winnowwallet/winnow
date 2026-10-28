@@ -441,8 +441,10 @@ def sessionTests (dir : String) : IO Unit := do
   check "timelocked pk leaf" ((WalletPolicy.ofTree name (singleKey (keys[0]! ++ "/<0;1>/*"))
     (.branch (.leaf (.multiA 1 (signerKeys.extract 0 2))) (.leaf (.timelocked (.pk recoveryKeys[2]!) 144)))).toOption.map (·.template) ==
     some "tr(@0/**,{multi_a(1,@1/**,@2/**),and_v(v:pk(@3/<2;3>/*),older(144))})")
-  check "a three-leaf tree is refused" (errName (WalletPolicy.ofTree name (singleKey (keys[0]! ++ "/<0;1>/*"))
-    (.branch (.leaf (.multiA 1 signerKeys)) (.branch (.leaf (.multiA 1 signerKeys)) (.leaf (.multiA 1 signerKeys))))) == "mismatch")
+  -- Upstream d2ca878 (nested accounts): any tree is templated in the descriptor's shape.
+  check "a three-leaf tree keeps its shape" ((WalletPolicy.ofTree name (singleKey (keys[0]! ++ "/<0;1>/*"))
+    (.branch (.leaf (.multiA 1 signerKeys)) (.branch (.leaf (.multiA 1 recoveryKeys)) (.leaf (.multiA 1 signerKeys))))).toOption.map (·.template) ==
+    some "tr(@0/**,{multi_a(1,@1/**,@2/**,@3/**),{multi_a(1,@1/<2;3>/*,@2/<2;3>/*,@3/<2;3>/*),multi_a(1,@1/**,@2/**,@3/**)}})")
   check "a plain pk leaf is refused" (errName (WalletPolicy.ofTree name (singleKey (keys[0]! ++ "/<0;1>/*")) (.leaf (.pk signerKeys[0]!))) == "mismatch")
   check "a key under another suffix is refused" (errName (WalletPolicy.ofTree name (singleKey (keys[0]! ++ "/0/*"))
     (.leaf (.multiA 1 signerKeys))) == "mismatch")
