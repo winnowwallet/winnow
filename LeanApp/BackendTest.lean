@@ -466,6 +466,43 @@ def testReceiverCode : IO String := IO.ofExcept ((do
 def testReceiverScript (n : Node) (tx : Json) : IO ByteArray := do
   receiverScript n tx testScanSecret (← IO.ofExcept ((Keys.publicKeyOf testSpendSecret).mapError (·.name)))
 
+/-- 2b and 2c of the flow (its own definition: the flow's `do` block is at Lean's recursion limit). -/
+def routingAndBackground (a : Backend) (envA : Real.Env) (n : Node) (settings : Settings) (mineAddr : String) : IO Unit := do
+  -- 2b. Peer routing (upstream #181, #190): Manual with only a Tor gateway never dials the clearnet node;
+  -- Direct only and Automatic (no gateway answers here) reach it again.
+  let torGateway : Net.PeerEndpoint := { host := "127.0.0.1", port := 9 }
+  let torManual : Winnow.IO.PeerGatewayConfiguration := { networks := [.tor], torProxy := some torGateway }
+  a.reconnect { settings with peerGatewaySettings := { mode := "manual", manual := torManual } }
+  IO.sleep 3_000
+  let (sTor, _) ← a.snapshot
+  check "Manual Tor only: the clearnet node is never dialled" (sTor.peerCount == 0 && sTor.activeGateways == torManual)
+    s!"peers {sTor.peerCount}"
+  check "Manual Tor only: Simple mode says private through Tor"
+    (PeerRoutingState.current "manual" sTor.activeGateways sTor.discoveringGateways == .overlay true false)
+  a.reconnect { settings with peerGatewaySettings := { mode := "direct" } }
+  let (sDirect, _) ← syncUntil a 30_000 fun s _ => s.peerCount > 0
+  check "Direct only: the node is reached" (sDirect.peerCount > 0 && sDirect.activeGateways == {})
+  a.reconnect settings
+  let (sAuto, _) ← syncUntil a 30_000 fun s p => s.peerCount > 0 && p == .synced
+  check "Automatic with no gateway answering: clearnet, and the banner says so"
+    (sAuto.peerCount > 0 && PeerRoutingState.current "automatic" sAuto.activeGateways sAuto.discoveringGateways == .direct true)
+  -- 2c. A background check (upstream #192): with the scene in the background, one bounded scan reaches the
+  -- node's new tip through the same routing, then nothing keeps running.
+  a.stopNetworking
+  n.mine 1 mineAddr
+  n.waitFilterIndex
+  let tip2 ← n.height
+  let complete ← a.runBackgroundSync settings
+  let (sBg, _) ← a.snapshot
+  check "background check: reaches the new tip" (complete && sBg.nextScanHeight == tip2 + 1)
+    s!"complete {complete}, next scan {sBg.nextScanHeight}, tip {tip2}"
+  check "background check: networking torn down, the check recorded"
+    (sBg.peerCount == 0 && sBg.lastCheckedAgo == some "under a minute" &&
+     (← waitUntil 5_000 do return (← envA.diagnostics).liveLoops == 0))
+  a.startNetworking settings
+  check "background check: refused while the scene is active" (!(← a.runBackgroundSync settings))
+
+set_option maxRecDepth 4096 in
 def flow (dir : String) (n : Node) : IO Unit := do
   say s!"node: bitcoind regtest pid {n.pid}, p2p {n.p2p}"
   discard <| n.cli #["createwallet", "w"]
@@ -506,6 +543,7 @@ def flow (dir : String) (n : Node) : IO Unit := do
   -- Core sends its (bucketed) relay floor as BIP133 feefilter, in sat/kvB: the app's milli-sat/vB.
   check "fee floor from the peer's feefilter" (match s0.feeFloorMilli with | some f => 0 < f && f ≤ 1000 | none => false)
     s!"{s0.feeFloorMilli}"
+  routingAndBackground a envA n settings mineAddr
   -- 3. Receive and fund.
   let addr ← a.receiveAddress false
   check "receive address is a regtest taproot address" (addr.startsWith "bcrt1p") addr
@@ -737,6 +775,7 @@ def flow (dir : String) (n : Node) : IO Unit := do
   checkJournal "wallet.created" ["walletID", "height", "headersContinueInBackground"]
     (fun f => field f "walletID" == walletID && (field f "height").toNat?.isSome && field f "headersContinueInBackground" == "true")
   checkJournal "import.onboardingCompleted" ["walletID"] (field · "walletID" == walletID) "creation finishes onboarding by itself"
+  checkJournal "background.completed" ["complete"] (field · "complete" == "true")
   checkJournal "wallet.ready" ["walletID", "balance", "utxoCount", "historyCount", "nextScanHeight"]
     (fun f => field f "walletID" == walletID && field f "balance" == "0")
   let receives ← journaled "address.receive"

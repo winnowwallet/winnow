@@ -89,10 +89,9 @@ third-party dependency.
 | E. Shell capability | Bluetooth LE (GATT) for the Ledger: generic `ble.state/connect/subscribe/write/read/close` rows in ElmLean's shell (`framework/lean/ElmShell/Capabilities.lean`, Objective-C/CoreBluetooth), not Winnow code | **done** (framework 015dc2d) | both apps build with no Swift; in the simulator (no Bluetooth) `ble.state` answers `unsupported` and the app shows Swift's text. Not run on a device with a radio |
 
 Scope, as the user set it on 2026-10-27: the Ledger signer and the Taproot multisig ("ledger, and the fancy
-multi, no need for musig2 right now"). The other upstream changes in this range are deferred, not ported
-yet: automatic iCloud backup (CloudKit), background sync, Tor/I2P peer
-gateways over Tailscale, the peer-pool and broadcaster changes, and Onboarding/Home/Settings
-changes outside multisig. **Restore-only range scans (RangeScan, upstream #226) are done** (091b35e:
+multi, no need for musig2 right now"). The other upstream changes in this range were deferred then;
+automatic iCloud backup, background checks, the app side of the Tor/I2P gateways and the onboarding
+without a phrase checklist are ported since (see "The rest of the app" below). **Restore-only range scans (RangeScan, upstream #226) are done** (091b35e:
 `Winnow/Net/RangeScan.lean`, `FilterSyncIO.scanRange` in `Winnow/IO/Filters.lean`). **The census shipped with the build is done** (2026-10-27): `project.yml`
 bundles `build/census/peers.json` (fetched by `scripts/import-census`, which `scripts/build-ios` runs when
 the list is missing), `CensusCatalog.bundled` reads it, and the UI test `testShippedCensus` requires
@@ -167,6 +166,48 @@ seeds this phone as the first member (see the #256 row), so the default account 
 keeps 2 (`MultisigBuildForm.clamp`; multisig-app-test `testTheBuilderStartsAtAnyTwoMembers`); the UI
 journey found it.
 
+## The rest of the app: gateways, sync bookkeeping, background checks, iCloud backup, onboarding
+
+Ported 2026-10-28 from d2ca878 (the app side of upstream a02727c, 2f983db, 66c6a48, 0eeae72 and 4228c6b), on
+ElmLean fbce4c5 (the shell's SOCKS `http.get`, `bgtask.*`, `cloudkit.*`, synchronizable `keychain.*`).
+
+| Piece | Upstream Swift | Lean | Verified by |
+|---|---|---|---|
+| Peer gateways | PeerGatewaysSection, PeerRoutingBanner, `preparePeerGateways`, `setPeerGatewaySettings`, the settings' `peerGatewaySettings` (an unreadable value is offline), `candidateCount(networks:)`, the peers' network labels, the Tor-removed notice, `WINNOW_E2E_LIVE_GATEWAYS`, `NSLocalNetworkUsageDescription` | `Real/Stack.lean` (`preparePeerGateways`: once per generation, one shared discovery, the pool's gateways and dial timeout, `RoutedHTTPClient.ofGateways`), `Settings.lean`, `Home.lean`, `Pure.lean` | records-test: PeerGatewayModelTests (all seven), the banner on the Simple screen; backend-test: Manual Tor-only never dials the regtest node, Direct only and Automatic reach it |
+| Sync bookkeeping | `recordSyncFailure`, `simpleSyncError`, `lastCompleteCheck`, ChainCheckStatus | `Real/Stack.lean` (`syncOnce` returns completeness, counts transient failures), `Home.lean` | records-test: the Simple/Advanced screens, `relativeAgo`; backend-test: a background check records the time |
+| Background checks | BackgroundSyncScheduler (identifiers, 15-minute requests, the 25/120 s budgets), BackgroundSyncRun, `runBackgroundSync`, `backgroundRoutingAllowed`, `UIBackgroundModes`, `BGTaskSchedulerPermittedIdentifiers` | `Real/BackgroundSync.lean`, the model's `bgtask` events and scene-driven networking | records-test: BackgroundSyncTests (all nine; the two sync-error ones were ported before); backend-test: a bounded background scan reaches the node's new tip and leaves nothing running, refused while active |
+| iCloud backup | CloudBackupController, ICloudBackupStore, ICloudBackupKeys, CloudBackupView, CloudRestoreView, AppModel's iCloud extension, CloudAppState's signers, the entitlements | `Real/CloudBackup.lean`, `Real/CloudApp.lean`, `Backup.lean` | cloud-backup-test: CloudBackupTests (all twelve controller cases), AutomaticCloudBackupTests (all three), a restore from iCloud end to end, the screens |
+| Onboarding | OnboardingView without the phrase checklist, BeginnerHomeView's backup line, BackupSection (iCloud and the words in Advanced) | `View.lean`, `Backup.lean`, `Real/Wallet.lean` (the legacy flag cleared at open) | cloud-backup-test: WalletStartupTests' creation, the onboarding and restore screens; backend-test: creation without a checklist and its journal |
+
+Deviations, all forced by the Lean app's shape or the renderer:
+
+* The routing banner has no tint (the renderer's text has no colour); its icon differs per state as upstream's.
+* "Chain last checked … ago" is rendered by the backend to the minute ("under a minute", "5 min", "2 hr, 3 min")
+  rather than SwiftUI's live relative text. `lastCompleteCheck` (per network) and `automaticUsedGateways`
+  (global) are small files beside the wallet and the network directories, not UserDefaults keys.
+* Apply routing returns at once (the settings are saved and networking is rebuilt in the background), so
+  "Applying…" is never seen.
+* Foreground networking now starts only when the shell reports the scene active (upstream's `isActive`):
+  a cold background launch opens the wallet without the foreground loop.
+* CloudKit failures show the shell's `detail` (not CKError's own localized text); `missingEntitlement` and
+  `notAuthenticated` show `ICloudBackupError.unavailable`'s text. Dates are "M/d/yyyy, h:mm AM/PM" in the
+  phone's time zone (Std.Time; UTC when the zone cannot be read), not locale-formatted.
+* `cloud-backup.json` is written atomically in the backup-excluded directory without Swift's explicit
+  `completeFileProtection` (it holds only ciphertext).
+* Updates are scheduled on each `refresh` command and when the status watcher sees a changed snapshot
+  (upstream schedules in every `refresh()`).
+* The model now learns the wallet id after creation and import (before, only at boot).
+* BackupSection's, the reveal sheet's and the export sheet's footers follow d2ca878 (upstream #184's
+  wording, which the earlier port had missed).
+
+Needs a real device and iCloud account: CloudKit save/list/load and the iCloud Keychain key (the simulator
+build carries the entitlement and answers that iCloud is unavailable, which the onboarding shows), a
+second device restoring, background task launches and expiry (the simulator refuses `bgtask.schedule`),
+Background App Refresh's status, and Tailscale gateway discovery over a real tailnet (UDP to MagicDNS and the
+SOCKS probe; upstream's `LiveGatewayDeviceTests`). Not ported: upstream's UI tests for these screens
+(`PeerGatewaySettingsUITests`, `LiveGatewayDeviceTests`); the journey's creation step was updated for the
+onboarding without a checklist.
+
 ## Tests, UI tests, CI and TestFlight
 
 Upstream's Swift tests, UI tests and workflows went with the Swift code; their Lean replacements:
@@ -199,7 +240,8 @@ Upstream's Swift tests, UI tests and workflows went with the Swift code; their L
   wallet (the same Keychain service and storage names, read in place) has not been tried; it must be
   before a tag reaches testers. The tag must also be above the last version uploaded for the app, or App
   Store Connect refuses the build. `asc-jwt` replaces `asc-jwt.swift`;
-  `verify-signed-archive` no longer requires the iCloud container (iCloud backup is not ported).
+  `verify-signed-archive` requires the iCloud container with CloudKit again (production iCloud for
+  distribution), now that automatic iCloud backup is ported.
 
 ## Layers and status
 
