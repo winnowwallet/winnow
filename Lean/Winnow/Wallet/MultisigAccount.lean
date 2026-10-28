@@ -2,6 +2,8 @@ import Winnow.Wallet.Types
 import Winnow.Wallet.CoinSelection
 import Winnow.Wallet.Descriptor
 import Winnow.Wallet.PSBTRoles
+import Winnow.Wallet.MultisigSpendRecords
+import Winnow.Keys.Unicode
 
 /-! # Taproot multisig accounts (port of `Sources/WalletCore/Wallet/MultisigAccount.swift`, upstream d2ca878)
 
@@ -113,9 +115,11 @@ end LedgerRegistration
 
 /-! ## The stored record -/
 
-/-- One stored multisig account: the descriptor, its address frontiers and the coins the wallet's filter
-scan found for it (spent ones kept as tombstones). JSON keys match the shared-account Winnow's vault
-records (`utxos` for `allUtxos`). -/
+/-- One stored multisig account: the descriptor, its address frontiers, the coins the wallet's filter scan
+found for it (spent ones kept as tombstones), what happened to them, and the spend this phone is
+collecting signatures for or has broadcast. JSON keys match the shared-account Winnow's vault records
+(`utxos` for `allUtxos`); a record without history, a draft or in-flight spends encodes exactly as it did
+before they existed. -/
 structure MultisigAccountRecord where
   /-- The descriptor's BIP380 checksum. -/
   id : String
@@ -127,6 +131,14 @@ structure MultisigAccountRecord where
   allUtxos : Array WalletUTXO := #[]
   /-- Present when a Ledger is one of the signers and has registered this account. -/
   ledger : Option LedgerRegistration := none
+  /-- What happened to the account's coins, as the wallet keeps its own: receives and spends the scan
+  found, and this phone's broadcasts while they are pending. Absent in records written before. -/
+  history : Array HistoryEntry := #[]
+  /-- The one spend this phone is collecting signatures for, if any. -/
+  draft : Option MultisigSpendDraft := none
+  /-- Spends this phone broadcast that no block has confirmed, with the bytes a restored phone needs to
+  announce them again. -/
+  inFlight : Array InFlightSpend := #[]
   deriving Inhabited, BEq
 
 namespace MultisigAccountRecord
@@ -137,9 +149,13 @@ def toJV (r : MultisigAccountRecord) : JV :=
   obj [("id", some (.str r.id)), ("name", some (.str r.name)), ("descriptor", some (.str r.descriptor)),
     ("createdAtHeight", some (ofInt r.createdAtHeight.toNat)), ("nextReceiveIndex", some (ofInt r.nextReceiveIndex.toNat)),
     ("nextChangeIndex", some (ofInt r.nextChangeIndex.toNat)), ("utxos", some (.arr (r.allUtxos.map WalletUTXO.toJV))),
-    ("ledger", r.ledger.map LedgerRegistration.toJV)]
+    ("ledger", r.ledger.map LedgerRegistration.toJV),
+    ("history", if r.history.isEmpty then none else some (.arr (r.history.map HistoryEntry.toJV))),
+    ("draft", r.draft.map MultisigSpendDraft.toJV),
+    ("inFlight", if r.inFlight.isEmpty then none else some (.arr (r.inFlight.map InFlightSpend.toJV)))]
 
-/-- The synthesized decoder, in declaration order: every key but `ledger` is required. -/
+/-- The custom decoder, in declaration order: every key but `ledger`, `history`, `draft` and `inFlight` is
+required (the last three absent from records written before they existed). -/
 def ofJV (v : JV) : D MultisigAccountRecord := do
   let kvs ← asObject v
   let id ← key kvs "id" asString
@@ -150,7 +166,11 @@ def ofJV (v : JV) : D MultisigAccountRecord := do
   let nextChangeIndex ← key kvs "nextChangeIndex" asUInt32
   let allUtxos ← key kvs "utxos" (asArray WalletUTXO.ofJV)
   let ledger ← keyIfPresent kvs "ledger" LedgerRegistration.ofJV
-  return { id, name, descriptor, createdAtHeight, nextReceiveIndex, nextChangeIndex, allUtxos, ledger }
+  let history := (← keyIfPresent kvs "history" (asArray HistoryEntry.ofJV)).getD #[]
+  let draft ← keyIfPresent kvs "draft" MultisigSpendDraft.ofJV
+  let inFlight := (← keyIfPresent kvs "inFlight" (asArray InFlightSpend.ofJV)).getD #[]
+  return { id, name, descriptor, createdAtHeight, nextReceiveIndex, nextChangeIndex, allUtxos, ledger, history, draft,
+           inFlight }
 end MultisigAccountRecord
 
 /-! ## The account -/

@@ -1,4 +1,5 @@
 import Winnow.Wallet.ImportBundle
+import Winnow.Wallet.HistoryLedger
 import Winnow.Wallet.CoinSelection
 import Winnow.Wallet.Descriptor
 import Winnow.Wallet.PSBTRoles
@@ -497,33 +498,19 @@ def applyOutputs (s : WalletState) (tx : Transaction) (txid : ByteArray) (map : 
       if chain == .change && index ≥ s.nextChangeIndex then s := { s with nextChangeIndex := index + 1 }
   return (s, effect, received)
 
-/-- The breakdown an entry may keep once its bytes are known: one the transaction contradicts is dropped. -/
-def outputsAgreeing (outputs : Option HistoryEntry.Outputs) (tx : Transaction) : Option HistoryEntry.Outputs :=
-  outputs.filter fun o => (o.validateAgainst tx).toOption.isSome
-
-/-- Confirms the transaction into history and samples its feerate when the fee is exact. -/
+/-- Confirms the transaction into history through `HistoryLedger` (a known pending send confirms in place,
+anything else is appended), retires its pending record, and samples the feerate when the fee is exact:
+only when every input was ours. -/
 def recordConfirmedHistory (s : WalletState) (tx : Transaction) (txid : ByteArray) (height : UInt32) (blockHash : ByteArray)
     (received spent : Int64) (feeIsExact : Bool) : WalletState := Id.run do
   let mut s := s
-  let mut fee : Option Int64 := none
-  if feeIsExact && spent > 0 then
-    let candidate := spent - tx.outputs.foldl (fun a o => a + o.value) 0
-    if candidate > 0 then
-      fee := some candidate
-      let vsize := TransactionBuilder.vsize tx
-      if vsize > 0 then
-        let rates := s.observedFeeRates.push (Float.ofInt candidate.toInt / vsize.toFloat)
-        s := { s with observedFeeRates := if rates.size > 20 then rates.eraseIdx! 0 else rates }
-  let raw := tx.serialized false
-  let funding := FundingSources.fundingScripts tx
-  match historyIndex s txid with
-  | some k =>
-    s := { s with history := s.history.modify k fun e =>
-      { e with height, blockHash := some blockHash, rawTransaction := some raw, fundingScripts := funding,
-               outputs := outputsAgreeing e.outputs tx } }
-  | none =>
-    s := { s with history := s.history.push { txid := txid, height := height, received := received, spent := spent, fee := fee,
-                                              rawTransaction := some raw, fundingScripts := funding, blockHash := some blockHash } }
+  let fee := HistoryLedger.exactFee spent tx feeIsExact
+  if let some fee := fee then
+    let vsize := TransactionBuilder.vsize tx
+    if vsize > 0 then
+      let rates := s.observedFeeRates.push (Float.ofInt fee.toInt / vsize.toFloat)
+      s := { s with observedFeeRates := if rates.size > 20 then rates.eraseIdx! 0 else rates }
+  s := { s with history := (HistoryLedger.record s.history tx txid height blockHash received spent fee).1 }
   return { s with pendingSends := s.pendingSends.filter fun p => pendingTxid p != some txid }
 
 def checkWalletTotalInvariant (s : WalletState) : Except WalletError Unit := do
@@ -713,15 +700,7 @@ def buildSend (w : Wallet) (payments : Array Payment) (feeRateSatPerVByte : Floa
 (outputs to the wallet's own receive addresses are neither). -/
 def classifyOutputs (w : Wallet) (s : WalletState) (tx : Transaction) : WM HistoryEntry.Outputs := do
   let map ← w.watchMap s
-  let mut result : HistoryEntry.Outputs := {}
-  for h : vout in [0:tx.outputs.size] do
-    let o := tx.outputs[vout]
-    if !(o.value > 0) then continue
-    match map[o.scriptPubKey]? with
-    | some (.change, _) => result := { result with change := result.change.push vout.toUInt32 }
-    | some (.receive, _) => continue
-    | none => result := { result with external := result.external.push { vout := vout.toUInt32, amount := o.value, scriptPubKey := o.scriptPubKey } }
-  return result
+  return HistoryLedger.classifyOutputs tx fun script => map[script]?.map (·.1)
 
 def tombstonePending (selected : Array WalletUTXO) (txid : ByteArray) (u : WalletUTXO) : WalletUTXO :=
   if selected.any (fun c => c.outpoint == u.outpoint) then { u with spent := some { spentBy := txid, height := none } } else u
@@ -919,26 +898,25 @@ def rewindCoins (forkHeight : UInt32) (coins : Array WalletUTXO) : Array WalletU
     !(c.height > forkHeight && !reserved)
   kept.map fun c => if c.height > forkHeight then { c with height := 0 } else c
 
-/-- Rewinds every chain-derived fact to `forkHeight` (idempotent; address indices untouched). -/
-def rollBack (w : Wallet) (forkHeight : UInt32) : WM Unit := do
-  let s ← w.state
-  let mut repended : Std.HashSet ByteArray := {}
-  let mut history := s.history
-  for k in [0:history.size] do
-    let e := history[k]!
-    if e.height > forkHeight && e.spent > 0 then
-      repended := repended.insert e.txid
-      history := history.set! k { e with height := 0, blockHash := none }
-  let allUtxos := s.allUtxos.map fun u => match u.spent with
+/-- A disconnected spender is still live in mempools (`HistoryLedger.rewind` re-pended its entry): its input
+reservations are retained before the coins rewind. Spent by something that fell with the fork entirely:
+restored. -/
+def keepReservations (repended : Array ByteArray) (forkHeight : UInt32) (coins : Array WalletUTXO) : Array WalletUTXO :=
+  coins.map fun u => match u.spent with
     | some m => match m.height with
       | some h => if h > forkHeight then
           { u with spent := if repended.contains m.spentBy then some { spentBy := m.spentBy, height := none } else none }
         else u
       | none => u
     | none => u
+
+/-- Rewinds every chain-derived fact to `forkHeight` (idempotent; address indices untouched). -/
+def rollBack (w : Wallet) (forkHeight : UInt32) : WM Unit := do
+  let s ← w.state
+  let (history, repended) := HistoryLedger.rewind s.history forkHeight
   let mut candidate := { s with
-    allUtxos := rewindCoins forkHeight allUtxos
-    history := history.filter fun e => !(e.height > forkHeight)
+    allUtxos := rewindCoins forkHeight (keepReservations repended forkHeight s.allUtxos)
+    history
     nextScanHeight := min s.nextScanHeight (if forkHeight == 0xFFFF_FFFF then forkHeight else forkHeight + 1) }
   -- A frontier that moved back names a block this rewind just doubted.
   if candidate.nextScanHeight != s.nextScanHeight then candidate := { candidate with scannedThroughHash := none }

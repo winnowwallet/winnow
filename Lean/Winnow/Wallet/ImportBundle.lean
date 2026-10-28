@@ -1,6 +1,7 @@
 import Winnow.Wallet.Types
 import Winnow.Wallet.Characters
 import Winnow.Wallet.MultisigAccount
+import Winnow.Wallet.SignerRecord
 
 /-! # Import bundles (port of `Sources/WalletCore/Wallet/ImportBundle.swift`, data half)
 
@@ -53,6 +54,10 @@ structure ImportBundle where
   /-- Multisig accounts, under the key the shared-account Winnow used for all its accounts. Script-path
   k-of-n accounts restore; a bundle carrying any other kind (a MuSig2 one) is refused (`decodeData`). -/
   vaults : Option (Array MultisigAccountRecord) := none
+  /-- The signers the phone knows (`SignerRecord`): paired Ledgers and keys other people sent, so a restored
+  phone builds its next account from the same list. Public keys only. Old files omit it; the app merges it
+  with the phone's own on restore rather than replacing that. -/
+  signers : Option (Array SignerRecord) := none
   nextReceiveIndex : Option UInt32 := none
   nextChangeIndex : Option UInt32 := none
   deriving Inhabited, BEq
@@ -117,7 +122,8 @@ def toJV (b : ImportBundle) : JV :=
     ("lastKnownHeight", some (ofInt b.lastKnownHeight.toNat)), ("lastKnownBlockHash", b.lastKnownBlockHash.map .str),
     ("utxos", some (.arr (b.utxos.map UTXO.toJV))),
     ("transactions", some (.arr (b.transactions.map KnownTransaction.toJV))),
-    ("nextReceiveIndex", b.nextReceiveIndex.map (ofInt ·.toNat)), ("nextChangeIndex", b.nextChangeIndex.map (ofInt ·.toNat)), ("vaults", b.vaults.map (.arr ∘ Array.map MultisigAccountRecord.toJV))]
+    ("nextReceiveIndex", b.nextReceiveIndex.map (ofInt ·.toNat)), ("nextChangeIndex", b.nextChangeIndex.map (ofInt ·.toNat)), ("vaults", b.vaults.map (.arr ∘ Array.map MultisigAccountRecord.toJV)),
+    ("signers", b.signers.map (.arr ∘ Array.map SignerRecord.toJV))]
 
 def ofJV (v : JV) : D ImportBundle := do
   let kvs ← asObject v
@@ -130,10 +136,11 @@ def ofJV (v : JV) : D ImportBundle := do
   let utxos ← key kvs "utxos" (asArray UTXO.ofJV)
   let transactions ← key kvs "transactions" (asArray KnownTransaction.ofJV)
   let vaults ← keyIfPresent kvs "vaults" (asArray MultisigAccountRecord.ofJV)
+  let signers ← keyIfPresent kvs "signers" (asArray SignerRecord.ofJV)
   let nextReceiveIndex ← keyIfPresent kvs "nextReceiveIndex" asUInt32
   let nextChangeIndex ← keyIfPresent kvs "nextChangeIndex" asUInt32
   return { version, network, descriptor, mnemonic, lastKnownHeight, lastKnownBlockHash, utxos, transactions, vaults,
-           nextReceiveIndex, nextChangeIndex }
+           signers, nextReceiveIndex, nextChangeIndex }
 
 /-- Decoding failures: a `WalletError` (`invalidBundle`, `unsupportedWalletData`, …) or a
 `DecodingError` case name. -/
@@ -143,6 +150,28 @@ inductive Failure where
   deriving Inhabited
 
 def Failure.name : Failure → String | .wallet e => e.name | .decoding n => n
+
+/-- `checkAccountsAndSigners(of:)`: the multisig accounts and the signer list, bounded and parsed on the
+bundle's network before anything of them is kept. -/
+def checkAccountsAndSigners (b : ImportBundle) : Except Failure Unit := do
+  let vs := b.vaults.getD #[]
+  unless vs.size ≤ maximumVaults && vs.foldl (fun t r => t + r.allUtxos.size) 0 ≤ maximumEntries do
+    throw (.wallet (.invalidBundle "too many multisig accounts or account coins"))
+  unless vs.foldl (fun t r => t + r.history.size) 0 ≤ maximumEntries &&
+      vs.all (fun r => ((r.draft.map (·.psbtBase64.utf8ByteSize)).getD 0) ≤ MultisigSpendDraft.maximumBytes) do
+    throw (.wallet (.invalidBundle "too many multisig account transactions, or a draft too large"))
+  let network := Tx.BitcoinNetwork.ofString? b.network
+  -- MuSig2 accounts from the shared-account Winnow have no home here; their coins must not vanish
+  -- from a restore, so a bundle with any account that is not a script-path multisig one is refused.
+  unless vs.isEmpty do
+    let some network := network | throw (.wallet .unsupportedWalletData)
+    unless vs.all (fun r => (MultisigAccount.parse r.descriptor network).toOption.isSome) do
+      throw (.wallet .unsupportedWalletData)
+  -- A signer list that is not one is refused with the file, never restored in part.
+  if let some signers := b.signers then
+    unless signers.isEmpty do
+      let some network := network | throw (.wallet (.invalidBundle s!"signers for an unknown network {b.network}"))
+      (SignerRecord.checkShape signers network).mapError .wallet
 
 /-- `decode(_ data:)`: the byte ceiling first, then the JSON, then the entry ceilings. -/
 def decodeData (data : ByteArray) : Except Failure ImportBundle := do
@@ -155,15 +184,7 @@ def decodeData (data : ByteArray) : Except Failure ImportBundle := do
     throw (.wallet (.invalidBundle s!"bundle declares {b.utxos.size} coins, above the {maximumEntries} limit"))
   if b.transactions.size > maximumEntries then
     throw (.wallet (.invalidBundle s!"bundle declares {b.transactions.size} transactions, above the {maximumEntries} limit"))
-  let vs := b.vaults.getD #[]
-  unless vs.size ≤ maximumVaults && vs.foldl (fun t r => t + r.allUtxos.size) 0 ≤ maximumEntries do
-    throw (.wallet (.invalidBundle "too many multisig accounts or account coins"))
-  -- MuSig2 accounts from the shared-account Winnow have no home here; their coins must not vanish
-  -- from a restore, so a bundle with any account that is not a script-path multisig one is refused.
-  unless vs.isEmpty do
-    let some network := Tx.BitcoinNetwork.ofString? b.network | throw (.wallet .unsupportedWalletData)
-    unless vs.all (fun r => (MultisigAccount.parse r.descriptor network).toOption.isSome) do
-      throw (.wallet .unsupportedWalletData)
+  checkAccountsAndSigners b
   return b
 
 /-- `decode(json:)`. -/

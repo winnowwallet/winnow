@@ -10,7 +10,10 @@ import Lean.Data.Json
   sighash, signatures, BIP387 witness), since `Multisig.parse` and `Signer.multisigWitness` changed,
 * `core-timelocked-multisig.json` (Bitcoin Core 31.1's checksums and addresses),
 * upstream d2ca878's `NestedMultisigTests.swift` (#256): all ten tests without a Ledger here, the three
-  with simulated Ledgers in `ledger-test`.
+  with simulated Ledgers in `ledger-test`,
+* upstream d2ca878's `HistoryLedgerTests.swift` (#259, all four) and `ImportBundleTests.signers`, with
+  the account record's spend records (an old record encoding byte for byte, the v0 draft) and the new
+  bundle bounds.
 
 Fixtures as `Tests/Support/TestKeys.swift`: masters from BIP39 over 16 repeated bytes (0xA1, 0xB2, 0xC3;
 0x0D a stranger; 0xD4–0xD6 recovery keys), signet keys at m/86'/1'/0', `testChainTip` 840 000, BIP340
@@ -1393,6 +1396,209 @@ def nestedSeparateRecovery : TM Unit := do
   let tx ← need "finalize" (finalize a later #[coin] 109)
   check "nested recovery: sequence and witness" (tx.inputs[0]!.sequence == 10 && tx.inputs[0]!.witness.size == 3)
 
+/-! ## HistoryLedgerTests (upstream d2ca878, #259) -/
+
+def hlTransaction (outpoints : Array Transaction.Outpoint := #[]) (values : Array Int64) : Transaction :=
+  { version := 2,
+    inputs := outpoints.map fun o => { previousOutput := o, scriptSig := .empty, sequence := 0xFFFF_FFFD },
+    outputs := values.zipIdx.map fun (value, position) =>
+      { value, scriptPubKey := ByteArray.mk (#[0x51, 0x20] ++ Array.replicate 32 (position + 1).toUInt8) },
+    locktime := 0 }
+
+def historyExactFee : TM Unit := do
+  let tx := hlTransaction (values := #[40_000, 9_000])
+  check "history fee: exact" (HistoryLedger.exactFee 50_000 tx true == some 1_000)
+  check "history fee: not every input ours" (HistoryLedger.exactFee 50_000 tx false).isNone
+  check "history fee: nothing spent" (HistoryLedger.exactFee 0 tx true).isNone
+  check "history fee: inputs below outputs" (HistoryLedger.exactFee 49_000 tx true).isNone
+
+def historyRecord : TM Unit := do
+  let tx := hlTransaction #[⟨ByteArray.mk (Array.replicate 32 1), 0⟩] #[40_000, 9_000]
+  let block := ByteArray.mk (Array.replicate 32 0xbb)
+  let (history, known) := HistoryLedger.record #[] tx tx.txid 500 block 40_000 0 none
+  check "history record: appended, not known" (!known && history.size == 1)
+  check "history record: height, block, no breakdown"
+    (history[0]!.height == 500 && history[0]!.blockHash == some block && history[0]!.outputs.isNone)
+  check "history record: bytes" (history[0]!.rawTransaction == some (tx.serialized false))
+  check "history record: funding scripts" (history[0]!.fundingScripts == FundingSources.fundingScripts tx)
+  let agreeing : HistoryEntry.Outputs :=
+    { external := #[{ vout := 0, amount := 40_000, scriptPubKey := tx.outputs[0]!.scriptPubKey }], change := #[1] }
+  let (pending, known) := HistoryLedger.record
+    #[{ txid := tx.txid, height := 0, received := 9_000, spent := 50_000, fee := some 1_000, outputs := some agreeing }]
+    tx tx.txid 501 block 0 50_000 (some 1_000)
+  check "history record: a pending entry confirms in place" (known && pending.size == 1)
+  check "history record: keeps an agreeing breakdown"
+    (pending[0]!.height == 501 && pending[0]!.blockHash == some block && pending[0]!.outputs == some agreeing)
+  check "history record: keeps its amounts"
+    (pending[0]!.received == 9_000 && pending[0]!.spent == 50_000 && pending[0]!.fee == some 1_000)
+  let contradicting : HistoryEntry.Outputs :=
+    { external := #[{ vout := 0, amount := 1, scriptPubKey := tx.outputs[0]!.scriptPubKey }] }
+  let (imported, _) := HistoryLedger.record
+    #[{ txid := tx.txid, height := 0, received := 0, spent := 50_000, outputs := some contradicting }]
+    tx tx.txid 501 block 0 50_000 none
+  check "history record: contradicted metadata dropped" imported[0]!.outputs.isNone
+
+def historyClassifyOutputs : TM Unit := do
+  let tx := hlTransaction (values := #[40_000, 9_000, 0, 5_000])
+  let outputs := HistoryLedger.classifyOutputs tx fun script =>
+    if script == tx.outputs[1]!.scriptPubKey then some .change
+    else if script == tx.outputs[3]!.scriptPubKey then some .receive
+    else none
+  check "history classify: change" (outputs.change == #[1])
+  check "history classify: external, zero-value nobody's"
+    (outputs.external == #[{ vout := 0, amount := 40_000, scriptPubKey := tx.outputs[0]!.scriptPubKey }])
+
+def historyRewind : TM Unit := do
+  let kept : HistoryEntry := { txid := ByteArray.mk (Array.replicate 32 1), height := 600, received := 1_000, spent := 0,
+                               blockHash := some (ByteArray.mk (Array.replicate 32 6)) }
+  let spender : HistoryEntry := { txid := ByteArray.mk (Array.replicate 32 2), height := 601, received := 0, spent := 1_000,
+                                  blockHash := some (ByteArray.mk (Array.replicate 32 7)) }
+  let receive : HistoryEntry := { txid := ByteArray.mk (Array.replicate 32 3), height := 602, received := 2_000, spent := 0 }
+  let (history, repended) := HistoryLedger.rewind #[kept, spender, receive] 600
+  check "history rewind: the spender re-pends" (repended == #[spender.txid])
+  check "history rewind: the receive drops" (history.map (·.txid) == #[kept.txid, spender.txid])
+  check "history rewind: below the fork untouched" (history[0]! == kept)
+  check "history rewind: pending again"
+    (history[1]!.height == 0 && history[1]!.blockHash.isNone && history[1]!.spent == 1_000)
+  let (again, repended) := HistoryLedger.rewind history 600
+  check "history rewind: a repeat changes nothing" (repended.isEmpty && again == history)
+
+/-! ## Spend records on the account record (upstream d2ca878, #259) -/
+
+def recordWithoutSpendsEncodesAsBefore : TM Unit := do
+  let (account, _) ← accountWith
+  let coin ← funding account 5_000
+  let registration : LedgerRegistration :=
+    { policyName := "Household", policyID := ByteArray.mk (Array.replicate 32 1),
+      hmac := ByteArray.mk (Array.replicate 32 2), masterFingerprint := 0xF5ACC2FD,
+      keyPath := #[0x8000_0057, 0x8000_0001, 0x8000_0000] }
+  for (ledger, n) in [(none, "no Ledger"), (some registration, "a Ledger")] do
+    let record : MultisigAccountRecord :=
+      { id := account.id, name := "Household", descriptor := account.descriptor.serialized,
+        createdAtHeight := 100, nextReceiveIndex := 3, nextChangeIndex := 1, allUtxos := #[coin], ledger }
+    -- multisig.json as 1cf93fb wrote it: these keys and no others.
+    let legacy := obj [("id", some (.str record.id)), ("name", some (.str record.name)),
+      ("descriptor", some (.str record.descriptor)), ("createdAtHeight", some (SwiftJSON.ofInt 100)),
+      ("nextReceiveIndex", some (SwiftJSON.ofInt 3)), ("nextChangeIndex", some (SwiftJSON.ofInt 1)),
+      ("utxos", some (.arr #[coin.toJV])), ("ledger", ledger.map LedgerRegistration.toJV)]
+    let old := SwiftJSON.write (.arr #[legacy])
+    check s!"spend records: an old record encodes byte for byte ({n})" (SwiftJSON.write (.arr #[record.toJV]) == old)
+    check s!"spend records: pretty form too ({n})" (SwiftJSON.writePretty "" record.toJV == SwiftJSON.writePretty "" legacy)
+    match SwiftJSON.decodeText old (SwiftJSON.asArray MultisigAccountRecord.ofJV) with
+    | .ok #[r] =>
+      check s!"spend records: an old file reads with none of them ({n})" (r.history.isEmpty && r.draft.isNone && r.inFlight.isEmpty && r == record)
+      check s!"spend records: and writes back the same bytes ({n})" (SwiftJSON.write (.arr #[r.toJV]) == old)
+    | _ => check s!"spend records: an old file reads ({n})" false
+
+def spendRecordsRoundTrip : TM Unit := do
+  let (account, ms) ← accountWith
+  let coin ← funding account 100_000
+  let psbt ← need "create" (spend account coin)
+  let draft ← needE "draft" (·.name) (MultisigSpendDraft.ofPSBT psbt 100 (some "carol") (some 4))
+  let raw ← needE "base64" (fun _ => "base64") (match Base64.decode? draft.psbtBase64 with | some b => .ok b | none => .error ())
+  -- Fixed upstream bug: the draft, which the app shares, is BIP174 v0 (PSBT_GLOBAL_UNSIGNED_TX first), not v2.
+  check "draft: BIP174 v0 text" (raw.size > 7 && raw.extract 0 5 == ByteArray.mk #[0x70, 0x73, 0x62, 0x74, 0xFF]
+    && raw[5]! == 0x01 && raw[6]! == 0x00)
+  check "draft: not the v2 text" (draft.psbtBase64 != psbt.base64)
+  let tx ← needE "unsigned" (·.name) psbt.unsignedTransaction
+  check "draft: txid" (draft.txid.toOption == some tx.txid)
+  check "draft: inputs" (draft.inputs.toOption == some #[coin.outpoint])
+  check "draft: reads back as the same spend"
+    (match draft.psbt with | .ok p => (p.unsignedTransaction.toOption.map (·.txid)) == some tx.txid | .error _ => false)
+  let signed ← need "sign" (sign account psbt ms[0]! #[coin])
+  let signedDraft ← needE "draft" (·.name) (MultisigSpendDraft.ofPSBT signed 100)
+  check "draft: a signed copy keeps its signature in v0"
+    (match signedDraft.psbt with
+     | .ok p => (account.approvals p #[coin]).toOption == some #[0]
+     | .error _ => false)
+  let plain : MultisigSpendDraft := { psbtBase64 := "cHNidP8=", createdAtHeight := 7 }
+  check "draft: optionals omitted" (SwiftJSON.write plain.toJV == "{\"createdAtHeight\":7,\"psbtBase64\":\"cHNidP8=\"}")
+    (SwiftJSON.write plain.toJV)
+  let huge : MultisigSpendDraft := { plain with psbtBase64 := String.ofList (List.replicate (MultisigSpendDraft.maximumBytes + 1) 'A') }
+  check "draft: too large" (match huge.psbt with | .error (.inl (.invalidBundle _)) => true | _ => false)
+  let sent := makeFakeSegwitTx
+  let inFlight := InFlightSpend.ofTransaction sent 120
+  check "in flight: bytes with the witness" (inFlight.rawTransaction == sent.serialized true && inFlight.txid == sent.txid)
+  check "in flight: display-hex txid"
+    (match inFlight.toJV with | .obj kvs => SwiftJSON.lookup kvs "txid" == some (.str (displayHex sent.txid)) | _ => false)
+  let entry : HistoryEntry := { txid := sent.txid, height := 0, received := 0, spent := 50_000 }
+  let record : MultisigAccountRecord :=
+    { id := account.id, name := "Household", descriptor := account.descriptor.serialized, createdAtHeight := 100,
+      allUtxos := #[coin], history := #[entry], draft := some draft, inFlight := #[inFlight] }
+  let text := SwiftJSON.write record.toJV
+  check "spend records: keys" (hasText text "\"history\":" && hasText text "\"draft\":" && hasText text "\"inFlight\":")
+  check "spend records: round trip" ((SwiftJSON.decodeText text MultisigAccountRecord.ofJV).toOption == some record)
+  let mismatched := { inFlight with txid := ByteArray.mk (Array.replicate 32 9) }
+  let decodeOne (s : InFlightSpend) := SwiftJSON.decodeText (SwiftJSON.write s.toJV) InFlightSpend.ofJV
+  check "in flight: refused unless the bytes are the transaction named"
+    (match decodeOne mismatched with | .error e => e == "invalidBundle" | .ok _ => false)
+  check "in flight: a short txid is refused"
+    (match SwiftJSON.decodeText "{\"txid\":\"abcd\",\"rawTransaction\":\"\",\"broadcastHeight\":1}" InFlightSpend.ofJV with
+     | .error e => e == "dataCorrupted" | .ok _ => false)
+  check "in flight: too large"
+    (match ({ inFlight with rawTransaction := ByteArray.mk (Array.replicate (InFlightSpend.maximumBytes + 1) 0) }).transaction with
+     | .error (.inl (.invalidBundle _)) => true | _ => false)
+  check "spend records: a record with a bad in-flight spend is refused"
+    (match SwiftJSON.decodeText (SwiftJSON.write { record with inFlight := #[mismatched] }.toJV) MultisigAccountRecord.ofJV with
+     | .error e => e == "invalidBundle" | .ok _ => false)
+
+/-! ## ImportBundleTests.signers (upstream d2ca878) and the new bundle bounds -/
+
+def bundleSigners : TM Unit := do
+  let base : ImportBundle :=
+    { network := "signet", lastKnownHeight := 500,
+      transactions := #[{ txid := displayHex (ByteArray.mk (Array.replicate 32 0x50)), height := 490, received := 100_000, spent := 0 }] }
+  let key ← keyExpression (← master 0xE5)
+  let carol : SignerRecord :=
+    { id := "carol", kind := .keys, name := "Carol", keys := #[key], addedAt := 1_700_000_000 - SignerRecord.unixEpochOffset }
+  let bundle := { base with signers := some #[carol] }
+  let text := bundle.serialized
+  check "signers: carried" (hasText text "\"signers\"")
+  check "signers: addedAt as Date's seconds since 2001" (hasText text "721692800") text
+  check "signers: kind as its raw value, no fingerprint" (hasText text "\"keys\"" && !hasText text "masterFingerprint")
+  check "signers: decoded" (match ImportBundle.decode text with | .ok b => b.signers == some #[carol] | .error _ => false)
+  check "signers: absent from an older file"
+    (match ImportBundle.decode base.serialized with | .ok b => b.signers.isNone | .error _ => false)
+  let ledger : SignerRecord := { carol with id := "ledger", kind := .ledger, masterFingerprint := some 0xF5ACC2FD }
+  check "signers: a Ledger's record round-trips"
+    (match ImportBundle.decode { base with signers := some #[ledger] }.serialized with
+     | .ok b => b.signers == some #[ledger] | .error _ => false)
+  let brokenKeys : List (Array String) :=
+    [#[], Array.replicate (SignerRecord.maximumKeysPerSigner + 1) key, #["tpubnonsense"], #[s!"sortedmulti_a(1,{key})"]]
+  for (keys, n) in brokenKeys.zipIdx do
+    let broken := { base with signers := some #[{ id := "x", kind := .keys, name := "X", keys, addedAt := 0 }] }
+    check s!"signers: refused {n}" (match ImportBundle.decode broken.serialized with | .error (.wallet _) => true | _ => false)
+  let crowd := { base with signers := some ((Array.range (SignerRecord.maximumSigners + 1)).map fun i =>
+    { id := s!"s{i}", kind := .keys, name := s!"S{i}", keys := #[key], addedAt := 0 }) }
+  check "signers: a list over the ceiling" (match ImportBundle.decode crowd.serialized with | .error (.wallet _) => true | _ => false)
+  check "signers: an unknown network"
+    (match ImportBundle.decode { bundle with network := "testnet4" }.serialized with
+     | .error (.wallet (.invalidBundle r)) => r == "signers for an unknown network testnet4" | _ => false)
+  check "signers: another network's keys" (match ImportBundle.decode { bundle with network := "mainnet" }.serialized with
+     | .error (.wallet (.invalidBundle r)) => r == "a signer key does not parse for mainnet" | _ => false)
+  check "signers: an empty list is fine anywhere"
+    (match ImportBundle.decode { base with network := "testnet4", signers := some #[] }.serialized with | .ok _ => true | _ => false)
+  check "signerKey: trims, and refuses a policy or whitespace inside"
+    ((MultisigAccount.signerKey s!"  {key}\n" .signet).toBool && !(MultisigAccount.signerKey s!"{key} x" .signet).toBool)
+  -- The account bounds: history entries, and a draft's size.
+  let (account, _) ← accountWith
+  let record : MultisigAccountRecord :=
+    { id := account.id, name := "Household", descriptor := account.descriptor.serialized, createdAtHeight := 90 }
+  let bigDraft : MultisigSpendDraft := { psbtBase64 := String.ofList (List.replicate (MultisigSpendDraft.maximumBytes + 1) 'A'), createdAtHeight := 1 }
+  check "bundle: a draft too large"
+    (match ImportBundle.decode { base with vaults := some #[{ record with draft := some bigDraft }] }.serialized with
+     | .error (.wallet (.invalidBundle r)) => r == "too many multisig account transactions, or a draft too large" | _ => false)
+  let entry : HistoryEntry := { txid := ByteArray.mk (Array.replicate 32 0x44), height := 3, received := 1, spent := 0 }
+  let many := Array.replicate (ImportBundle.maximumEntries / 2 + 1) entry
+  -- Compact JSON, so that 50,001 entries stay under the 8 MiB byte ceiling, which is checked first.
+  let crowded := { base with vaults := some #[{ record with history := many }, { record with history := many }] }
+  check "bundle: too many account transactions"
+    (match ImportBundle.decode (SwiftJSON.write crowded.toJV) with
+     | .error (.wallet (.invalidBundle r)) => r == "too many multisig account transactions, or a draft too large" | _ => false)
+  check "bundle: within the bounds"
+    (match ImportBundle.decode { base with vaults := some #[{ record with history := #[entry] }] }.serialized with
+     | .ok b => (b.vaults.map (·.map (·.history.size))) == some #[1] | _ => false)
+
 def main : IO UInt32 := do
   runTest "feeResolution" feeResolution
   runTest "twoOfThree" twoOfThree
@@ -1446,6 +1652,13 @@ def main : IO UInt32 := do
   runTest "thresholdMemberSpends" thresholdMemberSpends
   runTest "fewerMembersRecovery" fewerMembersRecovery
   runTest "nestedSeparateRecovery" nestedSeparateRecovery
+  runTest "historyExactFee" historyExactFee
+  runTest "historyRecord" historyRecord
+  runTest "historyClassifyOutputs" historyClassifyOutputs
+  runTest "historyRewind" historyRewind
+  runTest "recordWithoutSpendsEncodesAsBefore" recordWithoutSpendsEncodesAsBefore
+  runTest "spendRecordsRoundTrip" spendRecordsRoundTrip
+  runTest "bundleSigners" bundleSigners
   let f ← failures.get
   IO.println s!"multisig-test: {← passed.get} passed, {f.size} failed"
   return if f.isEmpty then 0 else 1
