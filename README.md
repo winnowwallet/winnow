@@ -10,6 +10,12 @@ account, and the curve arithmetic behind every signature is Winnow's own Swift.
 [User guides](https://winnowwallet.com) ·
 [Report a bug](https://github.com/winnowwallet/winnow/issues)
 
+**This repository is the Swift app, whose last release is 0.8.21.** Winnow has
+since been rewritten in Lean 4. Releases from 0.9.0, current development and
+bug reports for those builds are in
+[winnowwallet/winnow-lean](https://github.com/winnowwallet/winnow-lean). What
+follows describes the Swift app.
+
 ## Using the wallet
 
 Winnow starts on mainnet in Simple mode. One screen holds your balance,
